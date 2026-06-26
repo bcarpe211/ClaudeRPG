@@ -5,65 +5,56 @@ import { asyncHandler } from '../async';
 import { ingestTokenUsage } from '../../domain/ingest';
 import { getSetting } from '../../domain/settings';
 
+const MAX_BODY_BYTES = 16 * 1024 * 1024; // 16 MB safety cap
+
 /**
- * Read the raw request body and parse it as JSON, inflating gzip if needed.
+ * Collect the raw request body and parse it as OTLP/JSON, transparently
+ * gunzipping when the client sent gzip (real OTLP exporters set
+ * `Content-Encoding: gzip`; we also sniff the gzip magic bytes defensively).
  *
- * express.json's built-in gzip inflation works fine with real OTLP exporters,
- * but test clients (supertest) may JSON-serialize a Buffer as
- * `{"type":"Buffer","data":[...]}` when Content-Encoding: gzip is set.
- * This middleware handles both the real binary-gzip case and the serialized-Buffer
- * case so the gzip test passes alongside the live exporter path.
- *
- * On any parse failure req.body is set to undefined so the handler can safely
- * return 200 with no-op (nothing to ingest).
+ * Robust by design: any oversized, truncated, or malformed body results in
+ * `req.body = undefined` (the handler then returns 200 with nothing ingested),
+ * so a bad payload can never crash the server or 4xx/5xx the exporter.
  */
 function otlpBodyParser(
   req: express.Request,
-  res: express.Response,
+  _res: express.Response,
   next: express.NextFunction,
 ): void {
   const chunks: Buffer[] = [];
-  req.on('data', (chunk: Buffer) => chunks.push(chunk));
+  let size = 0;
+  let aborted = false;
+  req.on('data', (chunk: Buffer) => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) {
+      aborted = true;
+      req.body = undefined;
+      next();
+      return;
+    }
+    chunks.push(chunk);
+  });
   req.on('end', () => {
+    if (aborted) return;
     try {
       let buf = Buffer.concat(chunks);
-      const encoding = (req.headers['content-encoding'] ?? '').toLowerCase();
-      if (encoding === 'gzip') {
-        // Real binary gzip: first two bytes are 0x1f 0x8b (gzip magic)
-        if (buf[0] === 0x1f && buf[1] === 0x8b) {
-          buf = gunzipSync(buf);
-        } else {
-          // Supertest serializes Buffers as JSON: {"type":"Buffer","data":[...]}
-          // Reconstruct and inflate if that's what arrived.
-          try {
-            const maybe = JSON.parse(buf.toString()) as unknown;
-            if (
-              maybe !== null &&
-              typeof maybe === 'object' &&
-              (maybe as Record<string, unknown>)['type'] === 'Buffer' &&
-              Array.isArray((maybe as Record<string, unknown>)['data'])
-            ) {
-              const reconstructed = Buffer.from(
-                (maybe as { type: string; data: number[] }).data,
-              );
-              if (reconstructed[0] === 0x1f && reconstructed[1] === 0x8b) {
-                buf = gunzipSync(reconstructed);
-              } else {
-                buf = reconstructed;
-              }
-            }
-          } catch {
-            // Not a serialized Buffer — leave buf as-is and try to parse below
-          }
-        }
+      const gzipHeader = (req.headers['content-encoding'] ?? '')
+        .toString()
+        .toLowerCase()
+        .includes('gzip');
+      const gzipMagic = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+      if (gzipHeader || gzipMagic) {
+        buf = gunzipSync(buf);
       }
-      req.body = JSON.parse(buf.toString()) as unknown;
+      req.body = buf.length ? (JSON.parse(buf.toString()) as unknown) : undefined;
     } catch {
       req.body = undefined;
     }
     next();
   });
   req.on('error', () => {
+    if (aborted) return;
     req.body = undefined;
     next();
   });

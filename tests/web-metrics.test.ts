@@ -55,7 +55,8 @@ describe('POST /v1/metrics', () => {
       .post('/v1/metrics')
       .set('Content-Type', 'application/json')
       .set('Content-Encoding', 'gzip')
-      .send(gzipSync(raw));
+      .serialize((d: unknown) => d as string) // send the Buffer as-is, no JSON re-encoding
+      .send(gzipSync(raw) as unknown as string);
     expect(res.status).toBe(200);
     expect(getPlayerById(db, p.id)!.effective_tokens).toBe(77);
   });
