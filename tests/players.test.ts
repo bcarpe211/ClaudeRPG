@@ -58,4 +58,12 @@ describe('players', () => {
     deletePlayer(db, p.id);
     expect(getPlayerById(db, p.id)).toBeUndefined();
   });
+
+  it('rejects an unknown column in updatePlayer', () => {
+    const p = createPlayer(db, base, 1000);
+    expect(() =>
+      // @ts-expect-error - intentionally passing an illegal key at runtime
+      updatePlayer(db, p.id, { id: 999 }),
+    ).toThrow(/illegal column/);
+  });
 });

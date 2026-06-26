@@ -78,13 +78,29 @@ export type PlayerPatch = Partial<
   >
 >;
 
+const PLAYER_PATCH_COLUMNS = new Set<keyof PlayerPatch>([
+  'name',
+  'class_key',
+  'gender',
+  'level',
+  'gold',
+  'disabled',
+  'total_tokens',
+  'effective_tokens',
+]);
+
 export function updatePlayer(
   db: Database.Database,
   id: number,
   patch: PlayerPatch,
 ): void {
-  const keys = Object.keys(patch);
+  const keys = Object.keys(patch) as (keyof PlayerPatch)[];
   if (keys.length === 0) return;
+  for (const k of keys) {
+    if (!PLAYER_PATCH_COLUMNS.has(k)) {
+      throw new Error(`updatePlayer: illegal column "${String(k)}"`);
+    }
+  }
   const set = keys.map((k) => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE players SET ${set} WHERE id = @id`).run({ ...patch, id });
 }
