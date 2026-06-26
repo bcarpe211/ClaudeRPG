@@ -55,6 +55,7 @@ function otlpBodyParser(
   });
   req.on('error', () => {
     if (aborted) return;
+    aborted = true;
     req.body = undefined;
     next();
   });
