@@ -1,2 +1,8 @@
 .superpowers/
 .DS_Store
+node_modules/
+dist/
+data/
+*.db
+*.db-wal
+*.db-shm

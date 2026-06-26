@@ -1,0 +1,31 @@
+<div class="panel">
+  <h1>Edit <%= player.name %></h1>
+  <form method="post" action="/admin/players/<%= player.id %>">
+    <label>Name</label>
+    <input name="name" value="<%= player.name %>" maxlength="40" required />
+    <label>Class key</label>
+    <select name="class_key">
+      <% classes.forEach(function(c) { %>
+        <option value="<%= c.key %>" <%= c.key === player.class_key ? 'selected' : '' %>><%= c.name %></option>
+      <% }) %>
+    </select>
+    <label>Gender</label>
+    <select name="gender">
+      <option value="M" <%= player.gender === 'M' ? 'selected' : '' %>>Male</option>
+      <option value="F" <%= player.gender === 'F' ? 'selected' : '' %>>Female</option>
+    </select>
+    <label>Level</label>
+    <input name="level" type="number" min="1" value="<%= player.level %>" />
+    <label>Gold</label>
+    <input name="gold" type="number" min="0" value="<%= player.gold %>" />
+    <label>Effective tokens (XP)</label>
+    <input name="effective_tokens" type="number" min="0" value="<%= player.effective_tokens %>" />
+    <label><input type="checkbox" name="disabled" value="1" <%= player.disabled ? 'checked' : '' %> /> Disabled</label>
+    <button type="submit">Save</button>
+  </form>
+  <form method="post" action="/admin/players/<%= player.id %>/delete"
+        onsubmit="return confirm('Delete this player?');" style="margin-top:16px;">
+    <button type="submit" style="background:#c0564a;color:#fff;">Delete player</button>
+  </form>
+  <p style="margin-top:16px;"><a href="/admin">← Back to players</a></p>
+</div>
