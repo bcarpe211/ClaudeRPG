@@ -69,4 +69,18 @@ describe('POST /v1/metrics', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({});
   });
+
+  it('rejects a gzip bomb without crashing (returns 200, ingests nothing)', async () => {
+    const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
+    // ~80 MB of zeros compresses to a tiny gzip but would blow past the output cap.
+    const huge = Buffer.alloc(80 * 1024 * 1024, 0);
+    const res = await request(app)
+      .post('/v1/metrics')
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'gzip')
+      .serialize((d: unknown) => d as string)
+      .send(gzipSync(huge) as unknown as string);
+    expect(res.status).toBe(200);
+    expect(getPlayerById(db, p.id)!.effective_tokens).toBe(0); // nothing ingested
+  });
 });

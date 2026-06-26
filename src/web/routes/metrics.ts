@@ -6,6 +6,7 @@ import { ingestTokenUsage } from '../../domain/ingest';
 import { getSetting } from '../../domain/settings';
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024; // 16 MB safety cap
+const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024; // 64 MB cap on inflated output
 
 /**
  * Collect the raw request body and parse it as OTLP/JSON, transparently
@@ -45,7 +46,7 @@ function otlpBodyParser(
         .includes('gzip');
       const gzipMagic = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
       if (gzipHeader || gzipMagic) {
-        buf = gunzipSync(buf);
+        buf = gunzipSync(buf, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
       }
       req.body = buf.length ? (JSON.parse(buf.toString()) as unknown) : undefined;
     } catch {
