@@ -8,6 +8,7 @@ import type { Config } from '../config';
 import { registerRegistrationRoutes } from './routes/registration';
 import { registerCharacterRoutes } from './routes/character';
 import { registerAdminRoutes } from './routes/admin';
+import { registerMetricsRoutes } from './routes/metrics';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -49,6 +50,7 @@ export function createApp({ db, config }: AppDeps): Express {
   registerRegistrationRoutes(app, { db, config });
   registerCharacterRoutes(app, { db, config });
   registerAdminRoutes(app, { db, config });
+  registerMetricsRoutes(app, { db, config });
 
   // Final safety net: turn any handler error into a 500 instead of crashing.
   app.use(

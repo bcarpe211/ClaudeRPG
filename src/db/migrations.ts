@@ -32,4 +32,24 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '003_token_ingestion',
+    sql: `
+      CREATE TABLE token_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL,
+        ts INTEGER NOT NULL,
+        effective_delta INTEGER NOT NULL,
+        total_delta INTEGER NOT NULL,
+        FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE
+      );
+      CREATE INDEX idx_token_events_player_ts ON token_events (player_id, ts);
+
+      CREATE TABLE metric_series (
+        series_key TEXT PRIMARY KEY,
+        last_value INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
