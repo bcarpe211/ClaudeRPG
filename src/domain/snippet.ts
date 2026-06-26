@@ -11,6 +11,7 @@ export OTEL_METRICS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://${host}:${port}
 export OTEL_METRIC_EXPORT_INTERVAL=5000
+export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
 export OTEL_RESOURCE_ATTRIBUTES=claude_rpg_token=${token}
 
 # Toggle your contribution on/off while on the office network:
