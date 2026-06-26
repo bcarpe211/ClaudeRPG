@@ -1,0 +1,25 @@
+<div class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h1>Players (<%= players.length %>)</h1>
+    <span>
+      <a class="btn" href="/admin/settings" style="background:#6aa9e8;padding:8px 12px;border-radius:6px;color:#10131a;">Settings</a>
+      <form method="post" action="/admin/logout" style="display:inline;">
+        <button type="submit" style="margin:0;">Log out</button>
+      </form>
+    </span>
+  </div>
+  <table>
+    <tr><th>Name</th><th>Class</th><th>Lvl</th><th>Eff. tokens</th><th>Gold</th><th>Disabled</th><th></th></tr>
+    <% players.forEach(function(p) { %>
+      <tr>
+        <td><%= p.name %></td>
+        <td><%= p.class_key %> (<%= p.gender %>)</td>
+        <td><%= p.level %></td>
+        <td><%= p.effective_tokens %></td>
+        <td><%= p.gold %></td>
+        <td><%= p.disabled ? 'yes' : 'no' %></td>
+        <td><a href="/admin/players/<%= p.id %>">edit</a></td>
+      </tr>
+    <% }) %>
+  </table>
+</div>
