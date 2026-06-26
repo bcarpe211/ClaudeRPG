@@ -7,6 +7,7 @@ import type Database from 'better-sqlite3';
 import type { Config } from '../config';
 import { registerRegistrationRoutes } from './routes/registration';
 import { registerCharacterRoutes } from './routes/character';
+import { registerAdminRoutes } from './routes/admin';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -47,7 +48,7 @@ export function createApp({ db, config }: AppDeps): Express {
 
   registerRegistrationRoutes(app, { db, config });
   registerCharacterRoutes(app, { db, config });
-  // registerAdminRoutes(app, { db, config });        // Tasks 11-13
+  registerAdminRoutes(app, { db, config });
 
   // Final safety net: turn any handler error into a 500 instead of crashing.
   app.use(

@@ -1,0 +1,13 @@
+<div class="panel">
+  <h1>Admin login</h1>
+  <% if (typeof error !== 'undefined' && error) { %>
+    <p class="flash err"><%= error %></p>
+  <% } %>
+  <form method="post" action="/admin/login">
+    <label for="username">Username</label>
+    <input id="username" name="username" required />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required />
+    <button type="submit">Log in</button>
+  </form>
+</div>
