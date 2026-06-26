@@ -214,9 +214,26 @@ duration, `PAUSE_AFTER` (default ~15 min).
 - Players enable Claude Code OpenTelemetry and point it at the Pi. The server
   exposes an OTLP receiver at **`POST /v1/metrics`** accepting **`http/json`**
   (no protobuf dependency; we control the env block we hand out).
-- The server parses the `claude_code.token.usage` counter, sums
-  `input + output + cacheCreation` per export, and routes by a **custom resource
-  attribute** the player sets: `claude_rpg_token=<their auth token>`.
+- The server parses the `claude_code.token.usage` counter (an OTLP `sum` with
+  per-data-point `type` attribute = `input`/`output`/`cacheRead`/`cacheCreation`),
+  and routes each export by a **custom resource attribute** the player sets:
+  `claude_rpg_token=<their auth token>` (carried on `resourceMetrics[].resource`).
+  Per export, **effective tokens = input + output + cacheCreation** (+
+  `cacheRead × cache_read_weight`, default weight 0).
+- **Counter temporality (robust to both modes):** the counter is reported
+  cumulatively by default. The snippet sets
+  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` so each export carries
+  the *increment*, but the server does **not** rely on that — it reads each
+  metric's `aggregationTemporality`: **delta** data points are applied directly;
+  **cumulative** data points are diffed against a small `metric_series` table
+  (last value per `token|type|model|startTimeUnixNano`, with counter-reset
+  handling) to recover the increment. Either configuration yields correct counts.
+- Each ingested increment updates the player's `total_tokens`, `effective_tokens`
+  (XP), and `last_token_at`, and appends a `token_events` row that the game engine
+  (Plan C) reads to compute the recent-activity `tokenModifier`. Unknown tokens
+  and **disabled** players are ignored. The endpoint always returns `200 {}`
+  (OTLP success), accepts `application/json` (gzip-inflated if sent), and never
+  lets a malformed body crash the server.
 - **Player setup snippet** (generated per player on the character sheet, with the
   token baked in):
 
@@ -226,6 +243,7 @@ duration, `PAUSE_AFTER` (default ~15 min).
   export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
   export OTEL_EXPORTER_OTLP_ENDPOINT=http://claude-rpg.local:PORT
   export OTEL_METRIC_EXPORT_INTERVAL=5000        # ~5s, near real-time
+  export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
   export OTEL_RESOURCE_ATTRIBUTES=claude_rpg_token=<AUTH_TOKEN>
   # easy opt-out / opt-in while on-network:
   rpg_off() { export CLAUDE_CODE_ENABLE_TELEMETRY=0; }
@@ -300,6 +318,10 @@ The token is the player's "login." Once entered they can:
   creature_key, footprint, max_hp, current_hp, status, started_at, ended_at)`
 - `damage_events(id, encounter_id, player_id, amount, ts)` — drives per-fight
   stats and gold split
+- `token_events(id, player_id, ts, effective_delta, total_delta)` — per-ingest
+  token increments; the engine sums recent rows for the `tokenModifier`
+- `metric_series(series_key, last_value, updated_at)` — last cumulative counter
+  value per series, to recover increments when temporality is cumulative
 - `settings(key, value)` — all tunable knobs
 - `game_state(singleton: current_dungeon_id, current_encounter_id, paused,
   paused_at, last_activity_at)`
