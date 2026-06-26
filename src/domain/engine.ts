@@ -47,16 +47,44 @@ export class GameEngine {
   }
 
   private applyHit(encId: number, playerId: number, dmg: number): void {
-    this.db.prepare('UPDATE encounters SET current_hp = MAX(0, current_hp - ?) WHERE id=?')
-      .run(dmg, encId);
-    this.db.prepare(
-      `INSERT INTO encounter_damage (encounter_id, player_id, damage_total, hits, max_hit)
-       VALUES (?, ?, ?, 1, ?)
-       ON CONFLICT(encounter_id, player_id) DO UPDATE SET
-         damage_total = damage_total + excluded.damage_total,
-         hits = hits + 1,
-         max_hit = MAX(max_hit, excluded.max_hit)`,
-    ).run(encId, playerId, dmg, dmg);
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE encounters SET current_hp = MAX(0, current_hp - ?) WHERE id=?')
+        .run(dmg, encId);
+      this.db.prepare(
+        `INSERT INTO encounter_damage (encounter_id, player_id, damage_total, hits, max_hit)
+         VALUES (?, ?, ?, 1, ?)
+         ON CONFLICT(encounter_id, player_id) DO UPDATE SET
+           damage_total = damage_total + excluded.damage_total,
+           hits = hits + 1,
+           max_hit = MAX(max_hit, excluded.max_hit)`,
+      ).run(encId, playerId, dmg, dmg);
+    })();
+  }
+
+  private resolveKillIfDead(encId: number, now: number, cfg: EngineConfig): void {
+    const enc = this.db.prepare('SELECT * FROM encounters WHERE id=?').get(encId) as any;
+    if (!enc || enc.status !== 'active' || enc.current_hp > 0) return;
+
+    const dungeon = this.db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
+    const goldPool = Math.round(enc.max_hp * dungeon.level * cfg.goldFactor);
+    const rows = this.db.prepare(
+      'SELECT player_id, damage_total FROM encounter_damage WHERE encounter_id=?',
+    ).all(encId) as { player_id: number; damage_total: number }[];
+    const total = rows.reduce((s, r) => s + r.damage_total, 0) || 1;
+    const award = this.db.prepare('UPDATE players SET gold = gold + ? WHERE id=?');
+    const tx = this.db.transaction(() => {
+      this.db.prepare("UPDATE encounters SET status='defeated', ended_at=? WHERE id=?")
+        .run(now, encId);
+      for (const r of rows) {
+        const gold = Math.round(goldPool * (r.damage_total / total));
+        if (gold > 0) award.run(gold, r.player_id);
+      }
+      this.db.prepare(
+        'UPDATE game_state SET defeat_until=?, last_defeat_encounter_id=?, current_encounter_id=NULL WHERE id=1',
+      ).run(now + cfg.popupDurationS * 1000, encId);
+    });
+    tx();
+    this.wasPaused = true;
   }
 
   /** Advance the game by one tick. `now` is epoch ms. */
@@ -105,6 +133,6 @@ export class GameEngine {
         this.nextAttackAt.set(p.id, next);
       }
     }
-    // Kill resolution is added in Task 8.
+    this.resolveKillIfDead(encId, now, cfg);
   }
 }
