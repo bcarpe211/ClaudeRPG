@@ -316,8 +316,11 @@ The token is the player's "login." Once entered they can:
 - `dungeons(id, level, theme, seed, created_at)`
 - `encounters(id, dungeon_id, index_in_dungeon, kind {single|pack|boss},
   creature_key, footprint, max_hp, current_hp, status, started_at, ended_at)`
-- `damage_events(id, encounter_id, player_id, amount, ts)` — drives per-fight
-  stats and gold split
+- `encounter_damage(encounter_id, player_id, damage_total, hits, max_hit)` —
+  aggregated per-player damage for a fight (gold split, MVP, biggest-strike);
+  one row per player per encounter (upserted), not one per swing
+- `level_ups(id, player_id, new_level, ts)` — records level-ups so a defeat
+  popup can show which players levelled during the fight
 - `token_events(id, player_id, ts, effective_delta, total_delta)` — per-ingest
   token increments; the engine sums recent rows for the `tokenModifier`
 - `metric_series(series_key, last_value, updated_at)` — last cumulative counter
