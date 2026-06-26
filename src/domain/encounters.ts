@@ -94,17 +94,21 @@ function spawnEncounter(
     (isBoss ? cfg.bossHpMult : 1);
   const dpm = estimateOfficeDamagePerMinute(db, cfg, now);
   const hp = calibrateHp(dpm, cfg.targetBattleMinutes, difficulty, cfg.minEncounterHp);
-  const info = db.prepare(
-    `INSERT INTO encounters
-       (dungeon_id, index_in_dungeon, kind, creature_index, footprint, pack_count,
-        max_hp, current_hp, status, started_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
-  ).run(dungeon.id, index, kind, creature.creatureIndex, creature.footprint,
-        packCount, hp, hp, now);
-  const encId = Number(info.lastInsertRowid);
-  db.prepare(
-    'UPDATE game_state SET current_dungeon_id=?, current_encounter_id=?, defeat_until=NULL WHERE id=1',
-  ).run(dungeon.id, encId);
+  let encId = 0;
+  const tx = db.transaction(() => {
+    const info = db.prepare(
+      `INSERT INTO encounters
+         (dungeon_id, index_in_dungeon, kind, creature_index, footprint, pack_count,
+          max_hp, current_hp, status, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+    ).run(dungeon.id, index, kind, creature.creatureIndex, creature.footprint,
+          packCount, hp, hp, now);
+    encId = Number(info.lastInsertRowid);
+    db.prepare(
+      'UPDATE game_state SET current_dungeon_id=?, current_encounter_id=?, defeat_until=NULL WHERE id=1',
+    ).run(dungeon.id, encId);
+  });
+  tx();
   return encId;
 }
 
