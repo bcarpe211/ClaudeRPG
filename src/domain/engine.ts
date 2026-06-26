@@ -4,6 +4,92 @@ import { isIdle, setPaused, getGameState } from './gamestate';
 import { levelForXp } from './leveling';
 import { tokenModifier, attackDamage } from './combat';
 import { sumEffectiveSince } from './ingest';
+import { getAllSettings } from './settings';
+
+export interface DefeatParticipant {
+  playerId: number;
+  name: string;
+  damage: number;
+  hits: number;
+  maxHit: number;
+  gold: number;
+  tokensDuringFight: number;
+  leveledTo: number | null;
+}
+
+export interface DefeatSummary {
+  encounterId: number;
+  creatureIndex: number;
+  kind: string;
+  footprint: number;
+  maxHp: number;
+  totalDamage: number;
+  durationMs: number;
+  mvpPlayerId: number | null;
+  biggestStrike: { playerId: number; amount: number } | null;
+  participants: DefeatParticipant[];
+}
+
+export function buildDefeatSummary(
+  db: Database.Database,
+  encounterId: number,
+): DefeatSummary {
+  const settings = getAllSettings(db);
+  const goldFactor = settings['gold_factor'] !== undefined ? Number(settings['gold_factor']) : 0.01;
+
+  const enc = db.prepare('SELECT * FROM encounters WHERE id=?').get(encounterId) as any;
+  const dungeon = db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
+  const goldPool = Math.round(enc.max_hp * dungeon.level * goldFactor);
+
+  const dmgRows = db.prepare(
+    'SELECT * FROM encounter_damage WHERE encounter_id=? ORDER BY damage_total DESC',
+  ).all(encounterId) as any[];
+  const totalDamage = dmgRows.reduce((s, r) => s + r.damage_total, 0);
+
+  const start = enc.started_at;
+  const end = enc.ended_at ?? start;
+
+  const participants: DefeatParticipant[] = dmgRows.map((r) => {
+    const player = db.prepare('SELECT name FROM players WHERE id=?').get(r.player_id) as any;
+    const tok = db.prepare(
+      'SELECT COALESCE(SUM(effective_delta),0) AS s FROM token_events WHERE player_id=? AND ts>=? AND ts<=?',
+    ).get(r.player_id, start, end) as any;
+    const lvl = db.prepare(
+      'SELECT MAX(new_level) AS m FROM level_ups WHERE player_id=? AND ts>=? AND ts<=?',
+    ).get(r.player_id, start, end) as any;
+    const gold = totalDamage > 0 ? Math.round(goldPool * (r.damage_total / totalDamage)) : 0;
+    return {
+      playerId: r.player_id,
+      name: player?.name ?? `#${r.player_id}`,
+      damage: r.damage_total,
+      hits: r.hits,
+      maxHit: r.max_hit,
+      gold,
+      tokensDuringFight: tok.s,
+      leveledTo: lvl.m ?? null,
+    };
+  });
+
+  let mvpPlayerId: number | null = null;
+  let biggest: { playerId: number; amount: number } | null = null;
+  for (const r of dmgRows) {
+    if (mvpPlayerId === null) mvpPlayerId = r.player_id; // rows are damage-desc
+    if (!biggest || r.max_hit > biggest.amount) biggest = { playerId: r.player_id, amount: r.max_hit };
+  }
+
+  return {
+    encounterId,
+    creatureIndex: enc.creature_index,
+    kind: enc.kind,
+    footprint: enc.footprint,
+    maxHp: enc.max_hp,
+    totalDamage,
+    durationMs: end - start,
+    mvpPlayerId,
+    biggestStrike: biggest,
+    participants,
+  };
+}
 
 export interface EngineDeps {
   rng?: () => number;
