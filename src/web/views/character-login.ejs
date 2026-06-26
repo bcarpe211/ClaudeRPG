@@ -1,0 +1,12 @@
+<div class="panel">
+  <h1>Character login</h1>
+  <p>Enter your auth token to view your character sheet.</p>
+  <% if (typeof error !== 'undefined' && error) { %>
+    <p class="flash err"><%= error %></p>
+  <% } %>
+  <form method="get" action="/character">
+    <label for="token">Auth token</label>
+    <input id="token" name="token" required />
+    <button type="submit">View character</button>
+  </form>
+</div>

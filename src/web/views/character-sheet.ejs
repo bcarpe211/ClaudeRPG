@@ -1,0 +1,36 @@
+<div class="panel">
+  <h1><%= player.name %></h1>
+  <img src="<%= avatarUrl %>" alt="avatar" style="image-rendering:pixelated;width:96px;height:96px;" />
+  <table>
+    <tr><th>Class</th><td><%= className %> (<%= player.gender === 'M' ? 'Male' : 'Female' %>)</td></tr>
+    <tr><th>Level</th><td><%= player.level %></td></tr>
+    <tr><th>XP (effective tokens)</th><td><%= player.effective_tokens %></td></tr>
+    <tr><th>Total tokens</th><td><%= player.total_tokens %></td></tr>
+    <tr><th>Gold</th><td><%= player.gold %></td></tr>
+    <tr><th>Status</th><td><%= connected ? 'Connected' : 'Not seen yet' %></td></tr>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Your setup snippet</h2>
+  <pre><%= snippet %></pre>
+</div>
+
+<div class="panel">
+  <h2>Rename</h2>
+  <form method="post" action="/character/rename">
+    <input type="hidden" name="token" value="<%= player.auth_token %>" />
+    <label for="name">New name</label>
+    <input id="name" name="name" maxlength="40" value="<%= player.name %>" required />
+    <button type="submit">Rename</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Delete character</h2>
+  <form method="post" action="/character/delete"
+        onsubmit="return confirm('Delete this character permanently?');">
+    <input type="hidden" name="token" value="<%= player.auth_token %>" />
+    <button type="submit" style="background:#c0564a;color:#fff;">Delete</button>
+  </form>
+</div>

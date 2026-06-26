@@ -6,6 +6,7 @@ import ejs from 'ejs';
 import type Database from 'better-sqlite3';
 import type { Config } from '../config';
 import { registerRegistrationRoutes } from './routes/registration';
+import { registerCharacterRoutes } from './routes/character';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -45,7 +46,7 @@ export function createApp({ db, config }: AppDeps): Express {
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   registerRegistrationRoutes(app, { db, config });
-  // registerCharacterRoutes(app, { db, config });   // Task 10
+  registerCharacterRoutes(app, { db, config });
   // registerAdminRoutes(app, { db, config });        // Tasks 11-13
 
   return app;
