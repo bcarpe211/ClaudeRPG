@@ -1,0 +1,9 @@
+<div class="panel">
+  <h1>Welcome, <%= player.name %>!</h1>
+  <p>Your class: <strong><%= className %></strong></p>
+  <p>Your auth token (this is your login — keep it safe):</p>
+  <pre><%= player.auth_token %></pre>
+  <p>Add this to your shell config to start contributing:</p>
+  <pre><%= snippet %></pre>
+  <p><a class="btn" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Go to your character sheet →</a></p>
+</div>
