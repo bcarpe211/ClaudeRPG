@@ -194,14 +194,16 @@ sheet (`assets/oryx_16-bit_fantasy_1.1/oryx_16bit_mockup.png`).
 Admin settings expose: `BASE`, `GROWTH`, level-multiplier slope, `BASE_HIT`,
 attack interval + jitter, `K` (token-modifier scale), `targetBattleMinutes`,
 difficulty ramp, boss multiplier, `GOLD_FACTOR`, `cacheRead` weight, popup
-duration, `PAUSE_AFTER`.
+duration, `PAUSE_AFTER` (default ~15 min).
 
 ## 6. Off-hours pause & throughput balancing
 
 - **Inactivity pause:** if no effective tokens arrive office-wide for
-  `PAUSE_AFTER` (default ~7 min), the dungeon **freezes** — attack timers, HP,
+  `PAUSE_AFTER` (default ~15 min), the dungeon **freezes** — attack timers, HP,
   and the battle clock stop. The first incoming token **resumes** it. Nights and
-  weekends pause automatically.
+  weekends pause automatically. The default exceeds the ~10-min token-modifier
+  window so every player's `tokenModifier` has decayed to its 1.0 floor before
+  the freeze, leaving no inflated modifiers hanging at pause.
 - **Active-time accounting:** "battle length" and the `activeTokenRate` used for
   HP calibration are measured over **unpaused** time only, so off-hours never
   skew difficulty. A battle remains a ~30-minute *engagement* even if it spans a
