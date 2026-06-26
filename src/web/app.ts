@@ -1,4 +1,4 @@
-import express, { type Express } from 'express';
+import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import session from 'express-session';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +48,20 @@ export function createApp({ db, config }: AppDeps): Express {
   registerRegistrationRoutes(app, { db, config });
   registerCharacterRoutes(app, { db, config });
   // registerAdminRoutes(app, { db, config });        // Tasks 11-13
+
+  // Final safety net: turn any handler error into a 500 instead of crashing.
+  app.use(
+    (
+      err: unknown,
+      _req: Request,
+      res: Response,
+      _next: NextFunction,
+    ) => {
+      console.error('[ClaudeRPG] request error:', err);
+      if (res.headersSent) return;
+      res.status(500).send('Internal Server Error');
+    },
+  );
 
   return app;
 }

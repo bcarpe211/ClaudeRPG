@@ -2,6 +2,7 @@ import type { Express } from 'express';
 import { z } from 'zod';
 import type { AppDeps } from '../app';
 import { renderPage } from '../app';
+import { asyncHandler } from '../async';
 import {
   getPlayerByToken,
   renamePlayer,
@@ -20,7 +21,7 @@ export function registerCharacterRoutes(
   app: Express,
   { db, config }: AppDeps,
 ): void {
-  app.get('/character', async (req, res) => {
+  app.get('/character', asyncHandler(async (req, res) => {
     const token = typeof req.query.token === 'string' ? req.query.token : '';
     if (!token) {
       res.send(await renderPage('character-login', { title: 'Character Login' }));
@@ -50,7 +51,7 @@ export function registerCharacterRoutes(
         }),
       }),
     );
-  });
+  }));
 
   app.post('/character/rename', (req, res) => {
     const parsed = RenameInput.safeParse(req.body);

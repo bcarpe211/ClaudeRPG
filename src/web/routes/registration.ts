@@ -2,6 +2,7 @@ import type { Express } from 'express';
 import { z } from 'zod';
 import type { AppDeps } from '../app';
 import { renderPage } from '../app';
+import { asyncHandler } from '../async';
 import { CLASSES, getClass, classSpriteUrl } from '../../domain/classes';
 import { createPlayer } from '../../domain/players';
 import { buildSetupSnippet } from '../../domain/snippet';
@@ -16,16 +17,16 @@ export function registerRegistrationRoutes(
   app: Express,
   { db, config }: AppDeps,
 ): void {
-  app.get('/', async (_req, res) => {
+  app.get('/', asyncHandler(async (_req, res) => {
     const classes = CLASSES.map((c) => ({
       key: c.key,
       name: c.name,
       spriteM: classSpriteUrl(c.key, 'M'),
     }));
     res.send(await renderPage('register', { title: 'Register', classes }));
-  });
+  }));
 
-  app.post('/register', async (req, res) => {
+  app.post('/register', asyncHandler(async (req, res) => {
     const parsed = RegisterInput.safeParse(req.body);
     if (!parsed.success) {
       const classes = CLASSES.map((c) => ({
@@ -59,5 +60,5 @@ export function registerRegistrationRoutes(
         snippet,
       }),
     );
-  });
+  }));
 }

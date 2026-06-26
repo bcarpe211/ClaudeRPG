@@ -51,4 +51,12 @@ describe('character sheet', () => {
     expect(res.status).toBe(302);
     expect(getPlayerById(db, p.id)).toBeUndefined();
   });
+
+  it('returns 500 (not a crash) when a player has a corrupt class_key', async () => {
+    const p = createPlayer(db, { name: 'Brokie', class_key: 'knight', gender: 'M' }, 1000);
+    // Corrupt the class_key directly so classSpriteUrl() will throw inside the async handler.
+    db.prepare('UPDATE players SET class_key = ? WHERE id = ?').run('not_a_class', p.id);
+    const res = await request(app).get('/character').query({ token: p.auth_token });
+    expect(res.status).toBe(500);
+  });
 });
