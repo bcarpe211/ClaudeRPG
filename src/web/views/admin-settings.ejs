@@ -1,0 +1,12 @@
+<div class="panel">
+  <h1>Game settings</h1>
+  <p>These knobs are read by the game engine (Plan C onward). Changes save immediately.</p>
+  <form method="post" action="/admin/settings">
+    <% Object.keys(settings).sort().forEach(function(key) { %>
+      <label for="<%= key %>"><%= key %></label>
+      <input id="<%= key %>" name="<%= key %>" value="<%= settings[key] %>" />
+    <% }) %>
+    <button type="submit">Save settings</button>
+  </form>
+  <p style="margin-top:16px;"><a href="/admin">← Back to players</a></p>
+</div>

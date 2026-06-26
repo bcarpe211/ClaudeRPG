@@ -11,6 +11,11 @@ import {
   deletePlayer,
 } from '../../domain/players';
 import { CLASSES, getClass } from '../../domain/classes';
+import {
+  DEFAULT_SETTINGS,
+  getAllSettings,
+  setSetting,
+} from '../../domain/settings';
 
 // Augment the session type with our admin flag.
 declare module 'express-session' {
@@ -143,5 +148,27 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
   app.post('/admin/players/:id/delete', requireAdmin, (req, res) => {
     deletePlayer(db, Number(req.params.id));
     res.redirect('/admin');
+  });
+
+  app.get(
+    '/admin/settings',
+    requireAdmin,
+    asyncHandler(async (_req, res) => {
+      const all = getAllSettings(db);
+      // Only expose the known game knobs, never admin_* credential keys.
+      const settings: Record<string, string> = {};
+      for (const key of Object.keys(DEFAULT_SETTINGS)) {
+        settings[key] = all[key] ?? DEFAULT_SETTINGS[key];
+      }
+      res.send(await renderPage('admin-settings', { title: 'Settings', settings }));
+    }),
+  );
+
+  app.post('/admin/settings', requireAdmin, (req, res) => {
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      const v = req.body?.[key];
+      if (typeof v === 'string' && v.length > 0) setSetting(db, key, v);
+    }
+    res.redirect('/admin/settings');
   });
 }
