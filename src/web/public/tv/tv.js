@@ -35,8 +35,10 @@ function computeScale() {
 function resize() {
   canvas.width = window.innerWidth * (window.devicePixelRatio || 1);
   canvas.height = window.innerHeight * (window.devicePixelRatio || 1);
+  ctx.imageSmoothingEnabled = false; // reapply: setting canvas.width resets context state
   computeScale();
-  bg = null; // force background rebuild at new scale
+  bg = null;
+  buildBackground(); // rebuild at new scale; no-ops if layout not yet received
 }
 window.addEventListener('resize', resize);
 
