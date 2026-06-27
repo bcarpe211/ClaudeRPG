@@ -30,9 +30,11 @@ const app = createApp({ db, config });
 
 const engine = new GameEngine(db);
 const tickMs = loadEngineConfig(db).tickIntervalMs;
+const tvHub = (app as unknown as { tvHub: import('./web/tvhub').TvHub }).tvHub;
 setInterval(() => {
   try {
     engine.tick(Date.now());
+    tvHub.broadcast(Date.now());
   } catch (err) {
     console.error('[ClaudeRPG] engine tick error:', err);
   }
