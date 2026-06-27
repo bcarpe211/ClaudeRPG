@@ -1,4 +1,6 @@
+import type Database from 'better-sqlite3';
 import { themeTiles } from './tilemanifest';
+import { getGameState } from './gamestate';
 
 export interface Pos { x: number; y: number; }
 export interface Cell { type: 'wall' | 'floor' | 'door'; sprite: string; }
@@ -121,4 +123,14 @@ export function generateDungeon(
   }
 
   return { width, height, theme, seed, cells, doors, monster, heroSlots, decor };
+}
+
+/** Generate the layout for the currently-active dungeon, or null if none. */
+export function currentLayout(db: Database.Database): DungeonLayout | null {
+  const gs = getGameState(db);
+  if (!gs.current_dungeon_id) return null;
+  const d = db.prepare('SELECT theme, seed FROM dungeons WHERE id=?')
+    .get(gs.current_dungeon_id) as { theme: string; seed: number } | undefined;
+  if (!d) return null;
+  return generateDungeon(d.theme, d.seed);
 }
