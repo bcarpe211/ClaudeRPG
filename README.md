@@ -4,6 +4,12 @@ An office co-op RPG that gamifies Claude Code token usage on a Raspberry Pi 5 TV
 kiosk. See `docs/superpowers/specs/` for the design and `docs/superpowers/plans/`
 for implementation plans.
 
+## Run it on a Raspberry Pi 5 (TV kiosk)
+
+To deploy as an unattended office TV display (auto-start server + Chromium kiosk
+on `/tv`, reachable at `claude-rpg.local`), see **[docs/PI_SETUP.md](docs/PI_SETUP.md)**:
+clone the repo on the Pi and run `bash scripts/pi/setup.sh`.
+
 ## Plan A: Server foundation + player management (this milestone)
 
 ### Requirements

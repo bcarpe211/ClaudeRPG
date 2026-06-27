@@ -1,0 +1,2 @@
+# ClaudeRPG kiosk (labwc autostart). __REPO__ replaced by setup.sh.
+__REPO__/scripts/pi/kiosk.sh &
