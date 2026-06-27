@@ -290,8 +290,11 @@ The token is the player's "login." Once entered they can:
 
 ### Real-time
 
-- The TV kiosk page receives state via **WebSocket** (attacks, HP, kills,
-  level-ups, popups, dungeon regen, pause).
+- The TV kiosk page receives state via **Server-Sent Events (SSE)** — a
+  receive-only stream is all the TV needs, it adds no dependency, and
+  `EventSource` auto-reconnects. The server pushes a `layout` event on dungeon
+  change and a `state` event each engine tick (HP, attacks via damage deltas,
+  level-ups, gold, pause, defeat popup).
 
 ## 9. Architecture
 
@@ -301,12 +304,17 @@ The token is the player's "login." Once entered they can:
      progression, gold, pause).
   3. Web app (registration, character sheet, admin) — server-rendered or light
      SPA.
-  4. WebSocket push to the kiosk.
+  4. SSE push to the kiosk (`/tv/stream`).
 - **Storage:** SQLite (WAL mode), single file.
-- **TV rendering:** PixiJS (WebGL, batched sprites, nearest-neighbor scaling) for
-  crisp 4K pixel art.
-- *Alternative considered:* Python/Pygame — rejected; Node lets one language
-  drive the browser kiosk and serve the websites.
+- **TV rendering:** HTML5 **Canvas 2D** with `imageSmoothingEnabled = false`
+  (crisp nearest-neighbor pixel art). The static dungeon (tiles/decor/doors) is
+  pre-rendered once per dungeon to an offscreen canvas and blitted each frame;
+  only the monster, heroes, HP bar, numbers, and overlays redraw — so the per-
+  frame cost is ~30 sprites, well within the Pi 5's budget at 4K.
+- *Alternatives considered:* PixiJS/WebGL — rejected for Phase 1: it needs a
+  vendored UMD build (no bundler in this project) for no real benefit at this
+  scene size. Python/Pygame — rejected; Node lets one language drive the browser
+  kiosk and serve the websites.
 
 ### Data model (sketch)
 
