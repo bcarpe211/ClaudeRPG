@@ -58,3 +58,37 @@ different views:
 - [ ] Show more/better player stats (e.g. current token-usage streak)
 - [ ] Rotating leaderboards (~30s): daily win streaks, daily token usage,
       overall leaderboard, and other fun leaderboards
+
+## 9. Damage modifier should not decay during active play
+The "damage modifier" is `tokenModifier = 1 + recent/k` (`src/domain/combat.ts`),
+where `recent` = effective tokens within a **trailing rolling window**
+(`recent_window_minutes`, default 10) summed via `sumEffectiveSince`
+(`src/domain/engine.ts`, `src/domain/encounters.ts`). Because the window slides,
+tokens older than the window continuously drop off — so the modifier decays
+*while the player is still actively burning tokens*, which caps the big numbers
+from ever landing on the monster.
+
+Desired: while there is token activity, the modifier should hold/accumulate; it
+should only start decaying after a configurable threshold of **token
+inactivity**.
+- [ ] Add a setting, e.g. `decay_after_minutes` (minutes of no tokens before
+      decay begins), with a sensible default
+- [ ] Rework the modifier so it does not shrink during continuous activity —
+      only after `decay_after_minutes` of inactivity (design: track modifier as
+      decaying state keyed off `last_token_at`, vs. the pure sliding window)
+- [ ] Make sure this composes with the existing office-idle pause
+
+## 10. Public landing page
+Visitors to the site (the registration/root page) need a real landing page that
+explains what the game is, how it works, and — importantly — that it **only
+reflects Claude Code token usage** (nothing else is tracked/affected).
+- [ ] Landing page with game description + "what this does / doesn't do"
+- [ ] Clarify scope: affects only Claude Code usage; how to join/register
+
+## 11. Admin settings: human-readable descriptions
+The admin settings page shows raw variable names (`base_hit`, `token_modifier_k`,
+`recent_window_minutes`, etc. — see `src/domain/settings.ts`). Hard to tell what
+each does or how changing it impacts the game.
+- [ ] For each setting: a plain-language description of what it controls
+- [ ] Show the default value and the effect/direction of changing it
+- [ ] (Optional) units and sane min/max hints
