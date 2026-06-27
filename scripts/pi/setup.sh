@@ -33,9 +33,14 @@ sudo apt-get install -y --no-install-recommends \
   sudo apt-get install -y --no-install-recommends \
   chromium avahi-daemon curl build-essential python3
 
-# --- 2. App dependencies ----------------------------------------------------
-echo "-- installing app dependencies --"
-( cd "$REPO_DIR" && npm install --include=dev )
+# --- 2. App dependencies (clean install) ------------------------------------
+# Wipe node_modules first so a directory carried over from another machine
+# (e.g. a macOS/x64 better-sqlite3 native binary) can't survive — npm won't
+# rebuild a native module it thinks is already installed, which would crash the
+# server with ERR_DLOPEN_FAILED ("invalid ELF header"). A clean install fetches
+# the correct linux-arm64 prebuilt (or compiles it via build-essential/python3).
+echo "-- installing app dependencies (clean) --"
+( cd "$REPO_DIR" && rm -rf node_modules && npm install --include=dev )
 mkdir -p "$REPO_DIR/data"
 
 # --- 3. Hostname + mDNS -----------------------------------------------------
