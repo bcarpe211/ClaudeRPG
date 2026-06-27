@@ -30,9 +30,13 @@ fi
 
 # 4) Launch kiosk. --app gives a chrome-less window; flags suppress dialogs and
 #    updates; ozone=wayland matches labwc/wayfire on Bookworm.
+#    --password-store=basic stops Chromium from using the GNOME keyring (Secret
+#    Service), which under autologin is locked and would pop an "Unlock Keyring"
+#    dialog on boot. The kiosk stores no real passwords, so basic is fine.
 exec "$CHROME" \
   --kiosk \
   --app="$URL" \
+  --password-store=basic \
   --ozone-platform=wayland \
   --start-fullscreen \
   --noerrdialogs \
