@@ -12,10 +12,16 @@ boot, Chromium opens full-screen on `/tv`, and the Pi is reachable on the LAN as
 
 ## 2. Get the code onto the Pi
 ```bash
-git clone <your-repo-url> ~/ClaudeRPG    # or copy the folder over
+git clone <your-repo-url> ~/ClaudeRPG
 cd ~/ClaudeRPG
 ```
 The Oryx art pack must be present under `assets/oryx_16-bit_fantasy_1.1/Sliced/`.
+
+> **Prefer a fresh `git clone`.** If you copy the folder from another machine,
+> do **not** copy its `node_modules/` — a native `better-sqlite3` binary built
+> for a different OS/arch will crash the server with `ERR_DLOPEN_FAILED`.
+> (`setup.sh` now wipes `node_modules` and reinstalls cleanly, so it self-heals,
+> but copying it just wastes time.)
 
 ## 3. Run the installer
 ```bash
