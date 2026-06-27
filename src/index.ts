@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { GameEngine } from './domain/engine';
 import { loadEngineConfig } from './domain/encounters';
+import { gracefulShutdown } from './web/shutdown';
 
 const config = loadConfig(process.env);
 
@@ -47,24 +48,20 @@ const server = app.listen(config.port, () => {
 });
 
 // Graceful shutdown: on a clean stop (systemd SIGTERM, Ctrl-C) stop ticking,
-// stop accepting connections, then checkpoint the WAL back into the main DB
-// file and close. synchronous=FULL already protects against power loss; this
-// just keeps clean restarts tidy (small main file, no lingering WAL).
+// force-close connections (the kiosk's SSE stream never drains on its own),
+// then checkpoint the WAL back into the main DB file and close. synchronous=FULL
+// already protects against power loss; this just keeps clean restarts tidy.
 let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[ClaudeRPG] ${signal} received, shutting down...`);
-  clearInterval(tickTimer);
-  server.close(() => {
-    try {
-      db.pragma('wal_checkpoint(TRUNCATE)');
-      db.close();
-    } catch (err) {
-      console.error('[ClaudeRPG] error during db shutdown:', err);
-    }
-    process.exit(0);
+  gracefulShutdown(signal, {
+    db,
+    server,
+    timer: tickTimer,
+    log: (msg) => console.log(`[ClaudeRPG] ${msg}`),
   });
+  process.exit(0);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
