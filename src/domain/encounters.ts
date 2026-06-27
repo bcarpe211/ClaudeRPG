@@ -18,7 +18,10 @@ export interface EngineConfig {
 
 export function loadEngineConfig(db: Database.Database): EngineConfig {
   const s = getAllSettings(db);
-  const n = (k: string, d: number) => (s[k] !== undefined ? Number(s[k]) : d);
+  const n = (k: string, d: number) => {
+    const v = s[k] !== undefined ? Number(s[k]) : NaN;
+    return Number.isFinite(v) ? v : d;
+  };
   return {
     baseXp: n('base_xp', 50000), xpGrowth: n('xp_growth', 1.5),
     levelMultSlope: n('level_mult_slope', 0.1),

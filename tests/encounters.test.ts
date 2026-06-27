@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb } from '../src/db/db';
-import { seedSettings } from '../src/domain/settings';
+import { seedSettings, setSetting } from '../src/domain/settings';
 import { createPlayer } from '../src/domain/players';
 import {
   estimateOfficeDamagePerMinute,
@@ -11,6 +11,17 @@ import {
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
+
+describe('loadEngineConfig robustness', () => {
+  it('falls back to defaults for unparseable or non-finite knob values', () => {
+    setSetting(db, 'attack_interval_ms', 'abc'); // NaN -> should use default 4000
+    setSetting(db, 'base_hit', '');              // Number('') = 0 (finite) -> 0 kept
+    const cfg = loadEngineConfig(db);
+    expect(Number.isFinite(cfg.attackIntervalMs)).toBe(true);
+    expect(cfg.attackIntervalMs).toBe(4000); // default
+    expect(Number.isFinite(cfg.baseHit)).toBe(true);
+  });
+});
 
 describe('calibrateHp', () => {
   it('is officeDpm * minutes * difficulty, floored at minHp', () => {
