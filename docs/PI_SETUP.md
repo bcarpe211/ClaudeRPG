@@ -62,6 +62,11 @@ is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
       new token resumes it.
 
 ## Troubleshooting
+- **"Unlock Keyring" dialog on boot before the game shows:** Chromium tried to
+  use the GNOME keyring, which autologin leaves locked. `kiosk.sh` passes
+  `--password-store=basic` to avoid it; if you still see the prompt, confirm that
+  flag is present in `scripts/pi/kiosk.sh` and reboot. (Belt-and-suspenders: you
+  can also set an empty keyring password via `seahorse`, but the flag is enough.)
 - **Server logs:** `journalctl -u claude-rpg -f`
 - **`npm install` fails on `better-sqlite3`:** ensure Node ≥ 20 (`node -v`) and
   `build-essential python3` are installed (the installer does this); re-run setup.
