@@ -16,6 +16,12 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   cache_read_weight: '0',      // weight applied to cacheRead tokens
   popup_duration_s: '120',     // defeat popup on-screen seconds
   pause_after_minutes: '15',   // office-wide inactivity before pause
+  min_encounter_hp: '2000',              // floor so battles are never trivial
+  difficulty_ramp_per_encounter: '0.15', // +15% HP per encounter within a dungeon
+  difficulty_ramp_per_dungeon: '0.25',   // +25% HP per dungeon level
+  regular_encounters_min: '2',           // regular encounters before the boss
+  regular_encounters_max: '3',
+  tick_interval_ms: '1000',              // engine tick cadence (production loop)
 };
 
 export function seedSettings(db: Database.Database): void {
