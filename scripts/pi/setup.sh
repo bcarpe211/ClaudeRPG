@@ -35,7 +35,7 @@ sudo apt-get install -y --no-install-recommends \
 
 # --- 2. App dependencies ----------------------------------------------------
 echo "-- installing app dependencies --"
-( cd "$REPO_DIR" && npm install --omit=dev=false )
+( cd "$REPO_DIR" && npm install --include=dev )
 mkdir -p "$REPO_DIR/data"
 
 # --- 3. Hostname + mDNS -----------------------------------------------------
@@ -97,4 +97,4 @@ echo "  1) sudo nano $ENV_FILE   # set ADMIN_PASSWORD"
 echo "  2) sudo systemctl restart claude-rpg   # pick up the password"
 echo "  3) sudo reboot           # boot into the kiosk"
 echo "  Server:  http://claude-rpg.local:$(grep -E '^PORT=' "$ENV_FILE" | cut -d= -f2)/"
-echo "  TV:      http://claude-rpg.local:.../tv   (shown on the Pi's HDMI)"
+echo "  TV:      http://claude-rpg.local:$(grep -E '^PORT=' "$ENV_FILE" | cut -d= -f2)/tv   (shown on the Pi's HDMI)"
