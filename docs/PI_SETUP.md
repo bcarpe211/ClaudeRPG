@@ -80,6 +80,16 @@ is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
   client supports mDNS (most do); otherwise use the Pi's IP address.
 - **Wrong/blurry resolution:** the renderer adapts to any resolution; to force
   4K use `wlr-randr` or Screen Configuration on the Pi.
+- **Mouse cursor showing on the TV:** the installer hides it with a transparent
+  XCURSOR theme (`setup.sh` step 7b). To temporarily bring the pointer back (e.g.
+  to operate the Pi directly) and hide it again:
+  ```bash
+  ssh rluser@claude-rpg.local 'cd ~/ClaudeRPG && bash scripts/pi/cursor.sh show'  # reboots to apply
+  ssh rluser@claude-rpg.local 'cd ~/ClaudeRPG && bash scripts/pi/cursor.sh hide'
+  ```
+  Add `--no-reboot` to stage the change without rebooting. (CSS `cursor:none`
+  alone doesn't work: Chromium only hides the pointer once it moves over the
+  page, which never happens on a kiosk; and `unclutter` is X11-only.)
 
 ## Updating the game
 ```bash

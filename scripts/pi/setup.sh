@@ -96,6 +96,18 @@ if [ -f "$HOME/.config/wayfire.ini" ] && ! grep -q "claude_rpg" "$HOME/.config/w
   sed "s#__REPO__#$REPO_DIR#g" "$REPO_DIR/deploy/wayfire-kiosk.ini" >> "$HOME/.config/wayfire.ini"
 fi
 
+# --- 7b. Hide the mouse cursor on the kiosk display -------------------------
+# No mouse is used on the TV; a stray idle pointer otherwise sits on screen.
+# Install a transparent XCURSOR theme and point labwc at it (Chromium, launched
+# from the session, inherits the env). Toggle later with scripts/pi/cursor.sh.
+echo "-- hiding mouse cursor (transparent XCURSOR theme) --"
+python3 "$SCRIPT_DIR/gen-transparent-cursor.py"
+LABWC_ENV="$HOME/.config/labwc/environment"
+touch "$LABWC_ENV"
+grep -vE '^XCURSOR_(THEME|SIZE)=' "$LABWC_ENV" > "$LABWC_ENV.tmp" 2>/dev/null || true
+mv "$LABWC_ENV.tmp" "$LABWC_ENV"
+printf 'XCURSOR_THEME=transparent\nXCURSOR_SIZE=24\n' >> "$LABWC_ENV"
+
 echo ""
 echo "== Done. Next steps =="
 echo "  1) sudo nano $ENV_FILE   # set ADMIN_PASSWORD"
