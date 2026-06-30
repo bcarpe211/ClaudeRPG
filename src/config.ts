@@ -8,6 +8,7 @@ export interface Config {
   sessionSecret: string;
   otelHost: string;
   spritesDir: string;
+  enableCatalog: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -20,5 +21,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     otelHost: env.OTEL_ENDPOINT_HOST ?? 'claude-rpg.local',
     spritesDir:
       env.SPRITES_DIR ?? 'assets/oryx_16-bit_fantasy_1.1/Sliced',
+    enableCatalog:
+      env.ENABLE_CATALOG === '1' || env.ENABLE_CATALOG === 'true',
   };
 }
