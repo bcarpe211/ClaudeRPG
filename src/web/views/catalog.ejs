@@ -44,7 +44,25 @@
     </div>
   </div>
 <% } %>
-<% section('Creatures', view.creatures, 'creatures_24x24') %>
+<div class="cat-section">
+  <h2>Creatures (<%= view.creaturePairs.length %>)</h2>
+  <div class="cat-controls">
+    <input class="cat-filter" placeholder="filter by name / index / role…" oninput="catApply(this)">
+    <label><input type="checkbox" class="cat-unused" onchange="catApply(this)"> only unused</label>
+  </div>
+  <div class="cat-grid">
+    <% view.creaturePairs.forEach(function(p){ %>
+      <div class="cat-cell"
+           data-search="<%= (p.aIndex + ' ' + p.bIndex + ' ' + (p.aName || '') + ' ' + (p.bName || '') + ' ' + p.annotation.join(' ')).toLowerCase() %>"
+           data-unused="<%= p.annotation.some(function(a){ return a.indexOf('unused') === 0; }) %>">
+        <img src="/sprites/creatures_24x24/<%= p.aFile %>" loading="lazy" alt="<%= p.aFile %>">
+        <div class="cat-idx">#<%= p.aIndex %> ↔ #<%= p.bIndex %></div>
+        <div class="cat-name"><%= p.aName || '—' %> / <%= p.bName || '—' %></div>
+        <div><%- p.annotation.map(badge).join('') %></div>
+      </div>
+    <% }) %>
+  </div>
+</div>
 <% section('World tiles', view.worldTiles, 'world_24x24') %>
 <% section('Class sheet', view.classSheet, 'classes_26x28') %>
 <script>
