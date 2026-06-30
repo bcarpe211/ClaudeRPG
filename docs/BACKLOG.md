@@ -17,6 +17,23 @@ This likely underpins items 6 and 7.
 - [ ] Catalog tiles (`world_24x24`, etc.) — meaning + intended use
 - [ ] Catalog creatures (`creatures_24x24`) — meaning + intended use
 
+**Finding (2026-06-29, via the `/catalog` tool):** `creatures_24x24` is a 22×18 = 396
+sheet of **animation A/B pairs** — odd rows (files 1–18, 37–54, 73–90, …) are the
+real creatures (frame A); each even row is the **same creature's animation frame
+(frame-A index + 18)**. Verified visually: #1↔#19, #37↔#55, #217↔#235. This is the
+mechanism behind the offset bug: the current naive `name[i] → file i+1` mapping
+assigns names straight down all 396 files, so every B-frame row gets a wrong name
+and everything shifts. `creature_key.doc` is only a rough guide — its blank-line
+sections are thematic groups of irregular size (18,18,18,18,36,36,18,18,18), it
+lists animation frames as near-duplicate entries, and it omits the 18 class
+B-frames (files 19–36). Phase-2 fix: pin names to the **frame-A files** visually
+via the catalog (treat B-frames as animation dupes, not separate creatures), then
+fix `MONSTER_TIERS`/`BOSSES` against the corrected mapping.
+- [ ] Phase 2: teach the catalog about A/B frames (label/dim B-frames, show the
+      `+18` animation partner) so only the ~198 real creatures need naming
+- [ ] Phase 2: correct `spritenames.ts` / the name→file mapping to frame-A files
+- [ ] Phase 2: fix `MONSTER_TIERS`/`BOSSES` to real creature indices
+
 ## 2. Gender selection drives creature/class sprites
 Choosing gender at registration should select the correct class sprite variant.
 There are female versions of each class; currently only male variants are shown.
@@ -107,3 +124,14 @@ well.
       it's stable across renders/reconnects
 - [ ] Render the `<adjective> <creature>` label on the TV near the monster
 - [ ] (Stretch) broader name flare for other entities
+
+## 13. Animate sprites (two-frame loop) for a livelier dungeon
+Every creature/class sprite in `creatures_24x24` ships as a **two-frame animation
+pair**: frame A at file index N, frame B at **N + 18** (see the #1 finding). The TV
+renderer currently shows a single static frame. Alternating A/B on a slow timer
+would make monsters and heroes look alive. Pairs with #6/#7 (lively dungeon) and
+depends on the #1 frame-A/B mapping being curated.
+- [ ] Record each creature's animation partner (frame-A index + 18)
+- [ ] Renderer toggles A/B frames on a timer (e.g. ~0.5–1s), independent per
+      sprite or globally
+- [ ] Confirm world-tile/decor sprites for any animated tiles (torches, etc.)
