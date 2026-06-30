@@ -27,6 +27,7 @@ describe('floorEdgeMask', () => {
 describe('resolve', () => {
   const skin: Skin = {
     name: 't', floorBase: { col: 10, row: 20 }, wall: { col: 1, row: 2 },
+    floors: [{ col: 4, row: 2 }], crackedFloors: [{ col: 2, row: 2 }],
     door: { col: 3, row: 4 }, decor: [{ col: 5, row: 6 }],
   };
   it('resolveFloor adds the FLOOR_EDGES offset to floorBase', () => {

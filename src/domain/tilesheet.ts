@@ -28,30 +28,42 @@ export const FLOOR_EDGES: Record<number, TileCoord> = {
 
 export interface Skin {
   name: string;
-  floorBase: TileCoord;        // origin of this skin's floor block (the full tile)
-  wall: TileCoord;             // solid wall block
+  wall: TileCoord;             // solid wall block (wall-pack col 1)
   wallVariants?: TileCoord[];
+  floors: TileCoord[];         // themed dungeon floor tiles (wall-pack cols 4-7)
+  crackedFloors: TileCoord[];  // sporadic cracked accents (wall-pack cols 2-3)
   door: TileCoord;             // first pass: a floor tile (reads as an opening)
   decor: TileCoord[];
+  // Kept for the (currently unused) blob-floor path / future open-world floors.
+  floorBase: TileCoord;
 }
 
-// Proof skins (decoded from oryx_16bit_fantasy_world_trans.png; bases refined in
-// the /dungeon-preview pass). Wall solids sit at col 1 of each wall band; floor
-// blocks are the 2-row bands starting at col 29.
+// Proof skins (decoded from oryx_16bit_fantasy_world_trans.png). Each wall pack
+// is a horizontal band: col 1 = solid wall, cols 2-3 = cracked variants, cols
+// 4-7 = themed floor tiles. crypt = grey-stone band (row 1); cave = brown band
+// (row 3).
 export const SKINS: Skin[] = [
   {
     name: 'crypt',
-    wall: { col: 1, row: 1 },     // grey stone
-    floorBase: { col: 30, row: 20 }, // olive/stone floor band
-    door: { col: 30, row: 20 },
+    wall: { col: 1, row: 1 },
+    floors: [
+      { col: 4, row: 1 }, { col: 5, row: 1 }, { col: 6, row: 1 }, { col: 7, row: 1 },
+    ],
+    crackedFloors: [{ col: 2, row: 1 }, { col: 3, row: 1 }],
+    door: { col: 4, row: 1 },
     decor: [],
+    floorBase: { col: 4, row: 1 },
   },
   {
     name: 'cave',
-    wall: { col: 1, row: 3 },     // brown stone
-    floorBase: { col: 30, row: 16 }, // green floor band
-    door: { col: 30, row: 16 },
+    wall: { col: 1, row: 3 },
+    floors: [
+      { col: 4, row: 3 }, { col: 5, row: 3 }, { col: 6, row: 3 }, { col: 7, row: 3 },
+    ],
+    crackedFloors: [{ col: 2, row: 3 }, { col: 3, row: 3 }],
+    door: { col: 4, row: 3 },
     decor: [],
+    floorBase: { col: 4, row: 3 },
   },
 ];
 
