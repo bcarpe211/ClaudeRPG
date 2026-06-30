@@ -35,5 +35,8 @@ describe('catalog route gating', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('Sprite Catalog');
     expect(res.text).toContain('oryx_16bit_fantasy_creatures_01.png');
+    expect(res.text).toContain('oryx_16bit_fantasy_creatures_19.png'); // frame-B image
+    expect(res.text).toContain('/static/anim.js');                     // animation module
+    expect(res.text).toContain('sprite-anim');
   });
 });

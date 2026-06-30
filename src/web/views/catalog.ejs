@@ -3,6 +3,11 @@
   .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
   .cat-cell { background:#1b1726; border:1px solid #2c2740; border-radius:6px; padding:6px; text-align:center; font:11px monospace; color:#cfc8e6; }
   .cat-cell img { width:48px; height:48px; image-rendering: pixelated; background:#000; }
+  .sprite-anim { position: relative; width: 48px; height: 48px; margin: 0 auto; }
+  .sprite-anim img { position: absolute; top: 0; left: 0; }
+  .sprite-anim .frame-b { visibility: hidden; }
+  .sprite-anim.show-b .frame-a { visibility: hidden; }
+  .sprite-anim.show-b .frame-b { visibility: visible; }
   .cat-idx { color:#8a83a6; }
   .cat-name { color:#fff; word-break:break-word; }
   .badge { display:inline-block; margin:1px; padding:0 4px; border-radius:4px; font-size:10px; }
@@ -55,7 +60,10 @@
       <div class="cat-cell"
            data-search="<%= (p.aIndex + ' ' + p.bIndex + ' ' + (p.aName || '') + ' ' + (p.bName || '') + ' ' + p.annotation.join(' ')).toLowerCase() %>"
            data-unused="<%= p.annotation.some(function(a){ return a.indexOf('unused') === 0; }) %>">
-        <img src="/sprites/creatures_24x24/<%= p.aFile %>" loading="lazy" alt="<%= p.aFile %>">
+        <div class="sprite-anim">
+          <img class="frame-a" src="/sprites/creatures_24x24/<%= p.aFile %>" loading="lazy" alt="<%= p.aFile %>">
+          <% if (p.bFile) { %><img class="frame-b" src="/sprites/creatures_24x24/<%= p.bFile %>" loading="lazy" alt="<%= p.bFile %>"><% } %>
+        </div>
         <div class="cat-idx">#<%= p.aIndex %> ↔ #<%= p.bIndex %></div>
         <div class="cat-name"><%= p.aName || '—' %> / <%= p.bName || '—' %></div>
         <div><%- p.annotation.map(badge).join('') %></div>
@@ -76,4 +84,8 @@
       c.style.display = (matchText && matchUnused) ? '' : 'none';
     });
   }
+</script>
+<script type="module">
+  import { start } from '/static/anim.js';
+  start({ periodMs: 1000 });
 </script>
