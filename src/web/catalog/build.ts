@@ -56,25 +56,17 @@ function isFrameA(index: number): boolean {
   return Math.floor((index - 1) / ROW) % 2 === 0;
 }
 
-// Doc names fill the frame-A rows in reading order, PLUS the one townsfolk
-// B-row the doc explicitly lists (files 55-72). creature_key.doc double-lists
-// only the townsfolk group (frame A then frame B); every other group is listed
-// once, so all their B-frames are unnamed animation dupes. NAMED_ROW_STARTS[i]
-// is the first file index of the i-th named 18-file row; that row receives
-// name-block names[i*18 .. i*18+17]. (Verified in /catalog: names line up
-// through the named rows; unnamed B-frames show "—".)
-const NAMED_ROW_STARTS = [1, 37, 55, 73, 109, 145, 181, 217, 253, 289, 325];
-
-/** Doc-name for a creature file, or null for unnamed (animation B-frame /
- *  uncatalogued) files. See NAMED_ROW_STARTS above. */
+// The 198 creature_key.doc names map 1:1, in reading order, to the 198 frame-A
+// files (odd sheet rows: 1-18, 37-54, 73-90, ...). Every even row is that
+// creature's animation frame (frame-A index + 18) and carries no separate doc
+// name. Verified end-to-end: name 1 -> file 1 (Knight M), name 19 -> file 37
+// (Bandit), name 198 -> file 378 (Cold Flame).
+/** Doc-name for a frame-A creature file; null for frame-B (animation) files. */
 export function nameForCreatureFile(index: number, names: string[]): string | null {
-  for (let r = 0; r < NAMED_ROW_STARTS.length; r++) {
-    const start = NAMED_ROW_STARTS[r];
-    if (index >= start && index <= start + 17) {
-      return names[r * 18 + (index - start)] ?? null;
-    }
-  }
-  return null;
+  if (!isFrameA(index)) return null;
+  // 0-based ordinal of this file among the frame-A files, in reading order.
+  const ordinal = Math.floor((index - 1) / (ROW * 2)) * ROW + ((index - 1) % ROW);
+  return names[ordinal] ?? null;
 }
 
 export function buildCatalog(input: CatalogInput): CatalogView {

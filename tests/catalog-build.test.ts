@@ -58,25 +58,19 @@ describe('spriteIndex', () => {
   });
 });
 
-describe('nameForCreatureFile (named-row mapping)', () => {
+describe('nameForCreatureFile (frame-A rows map 1:1 to doc names)', () => {
   // names[i] = 'n<i>' so we can assert exactly which doc-name index a file maps to.
   const names = Array.from({ length: 198 }, (_, i) => `n${i}`);
-  it('maps named frame-A rows + the townsfolk B-row, nulls every other file', () => {
-    expect(nameForCreatureFile(1, names)).toBe('n0');    // row start (classes A)
+  it('names frame-A files in reading order; frame-B files are unnamed', () => {
+    expect(nameForCreatureFile(1, names)).toBe('n0');     // row 1 (A) — Knight M
     expect(nameForCreatureFile(18, names)).toBe('n17');
-    expect(nameForCreatureFile(19, names)).toBe(null);   // class B-frame, unnamed
-    expect(nameForCreatureFile(36, names)).toBe(null);
-    expect(nameForCreatureFile(37, names)).toBe('n18');  // townsfolk A
-    expect(nameForCreatureFile(55, names)).toBe('n36');  // townsfolk B (doc-listed)
-    expect(nameForCreatureFile(72, names)).toBe('n53');
-    expect(nameForCreatureFile(73, names)).toBe('n54');  // adventurers A
-    expect(nameForCreatureFile(90, names)).toBe('n71');
-    expect(nameForCreatureFile(91, names)).toBe(null);   // adventurer B-frame, unnamed
-    expect(nameForCreatureFile(108, names)).toBe(null);
-    expect(nameForCreatureFile(109, names)).toBe('n72'); // next named A-row (realigned)
-    expect(nameForCreatureFile(325, names)).toBe('n180'); // last named row start
-    expect(nameForCreatureFile(342, names)).toBe('n197'); // last named file
-    expect(nameForCreatureFile(343, names)).toBe(null);   // past the named rows
+    expect(nameForCreatureFile(19, names)).toBe(null);    // row 2 (B)
+    expect(nameForCreatureFile(37, names)).toBe('n18');   // row 3 (A) — Bandit
+    expect(nameForCreatureFile(55, names)).toBe(null);    // row 4 (B)
+    expect(nameForCreatureFile(73, names)).toBe('n36');   // row 5 (A)
+    expect(nameForCreatureFile(342, names)).toBe('n179'); // row 19 (A)
+    expect(nameForCreatureFile(378, names)).toBe('n197'); // row 21 (A) — Cold Flame slot
+    expect(nameForCreatureFile(396, names)).toBe(null);   // row 22 (B)
   });
 });
 
@@ -97,7 +91,7 @@ describe('buildCatalog creaturePairs', () => {
     const p37 = v.creaturePairs.find((p) => p.aIndex === 37)!;
     expect(p37.bIndex).toBe(55);
     expect(p37.aName).toBe('Bandit');
-    expect(p37.bName).toBe('Bandit B');
+    expect(p37.bName).toBe(null); // frame-B files are unnamed animation dupes
     expect(p37.annotation).toEqual(['tier 1', 'boss']);
   });
 });
@@ -122,13 +116,10 @@ describe('buildCatalog world tiles + class sheet (unchanged)', () => {
 });
 
 describe('buildCatalog orphaned frame-A (missing +18 partner)', () => {
-  it('sets bFile null but resolves bName from the mapping', () => {
-    // Townsfolk A-frame #37 (partner #55) — #55 is the doc-listed townsfolk
-    // B-row, so its name resolves even though the B file is absent on disk.
+  it('sets bFile null when the partner is absent; aName still resolves', () => {
     const names = (() => {
       const n = Array(80).fill('x');
-      n[18] = 'Townsfolk';    // file 37 -> names[18]
-      n[36] = 'Townsfolk B';  // file 55 -> names[36]
+      n[18] = 'Townsfolk'; // file 37 (frame A) -> names[18]
       return n;
     })();
     const v = buildCatalog({
@@ -147,6 +138,6 @@ describe('buildCatalog orphaned frame-A (missing +18 partner)', () => {
     expect(p.bIndex).toBe(55);
     expect(p.bFile).toBe(null);     // partner absent from the file list
     expect(p.aName).toBe('Townsfolk');
-    expect(p.bName).toBe('Townsfolk B'); // resolves from names even though bFile is null
+    expect(p.bName).toBe(null);     // frame-B files carry no doc name
   });
 });

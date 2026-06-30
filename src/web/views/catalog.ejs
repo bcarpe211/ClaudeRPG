@@ -65,7 +65,7 @@
           <% if (p.bFile) { %><img class="frame-b" src="/sprites/creatures_24x24/<%= p.bFile %>" loading="lazy" alt="<%= p.bFile %>"><% } %>
         </div>
         <div class="cat-idx">#<%= p.aIndex %> ↔ #<%= p.bIndex %></div>
-        <div class="cat-name"><%= p.aName || '—' %> / <%= p.bName || '—' %></div>
+        <div class="cat-name"><%= p.aName || '—' %></div>
         <div><%- p.annotation.map(badge).join('') %></div>
       </div>
     <% }) %>
