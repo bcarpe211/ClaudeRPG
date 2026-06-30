@@ -14,6 +14,7 @@ beforeEach(() => {
   for (const sub of ['creatures_24x24', 'world_24x24', 'classes_26x28']) {
     mkdirSync(join(dir, sub), { recursive: true });
   }
+  writeFileSync(join(dir, 'creatures_24x24', 'oryx_16bit_fantasy_creatures_01.png'), '');
   writeFileSync(join(dir, 'creatures_24x24', 'oryx_16bit_fantasy_creatures_19.png'), '');
   writeFileSync(join(dir, 'world_24x24', 'oryx_16bit_fantasy_world_70.png'), '');
 });
@@ -33,6 +34,9 @@ describe('catalog route gating', () => {
     const res = await request(app).get('/catalog');
     expect(res.status).toBe(200);
     expect(res.text).toContain('Sprite Catalog');
-    expect(res.text).toContain('oryx_16bit_fantasy_creatures_19.png');
+    expect(res.text).toContain('oryx_16bit_fantasy_creatures_01.png');
+    expect(res.text).toContain('oryx_16bit_fantasy_creatures_19.png'); // frame-B image
+    expect(res.text).toContain('/static/anim.js');                     // animation module
+    expect(res.text).toContain('sprite-anim');
   });
 });

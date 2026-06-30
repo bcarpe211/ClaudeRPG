@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCatalog, spriteIndex } from '../src/web/catalog/build';
+import { buildCatalog, spriteIndex, nameForCreatureFile } from '../src/web/catalog/build';
 import type { ThemeTiles } from '../src/domain/tilemanifest';
 
 const themes: Record<string, ThemeTiles> = {
@@ -13,12 +13,22 @@ const themes: Record<string, ThemeTiles> = {
   },
 };
 
+function names37(): string[] {
+  const n = Array(37).fill('x');
+  n[0] = 'Knight M';
+  n[17] = 'Paladin F';
+  n[18] = 'Bandit';     // file 37 -> names[37-19]=names[18]
+  n[36] = 'Bandit B';   // file 55 -> names[55-19]=names[36]
+  return n;
+}
+
 function run() {
   return buildCatalog({
     creatureFiles: [
-      'oryx_16bit_fantasy_creatures_01.png', // class avatar Knight M
-      'oryx_16bit_fantasy_creatures_19.png', // Bandit: tier 1 + boss (fake)
-      'oryx_16bit_fantasy_creatures_50.png', // unused
+      'oryx_16bit_fantasy_creatures_01.png', // frame A (class Knight M); partner 19
+      'oryx_16bit_fantasy_creatures_19.png', // frame B of #1
+      'oryx_16bit_fantasy_creatures_37.png', // frame A (Bandit); partner 55
+      'oryx_16bit_fantasy_creatures_55.png', // frame B of #37
     ],
     worldFiles: [
       'oryx_16bit_fantasy_world_70.png',  // stone_crypt.wall
@@ -30,9 +40,9 @@ function run() {
       'oryx_16bit_fantasy_world_999.png', // unused
     ],
     classSheetFiles: ['oryx_16bit_fantasy_classes_trans_03.png'],
-    creatureNames: ['Knight M', ...Array(17).fill('x'), 'Bandit'], // [18] -> idx 19
-    tiers: [[19]],
-    bosses: [19],
+    creatureNames: names37(),
+    tiers: [[37]],
+    bosses: [37],
     classAvatars: [{ name: 'Knight M', index: 1 }],
     themes,
   });
@@ -43,28 +53,52 @@ describe('spriteIndex', () => {
     expect(spriteIndex('oryx_16bit_fantasy_creatures_01.png')).toBe(1);
     expect(spriteIndex('oryx_16bit_fantasy_world_1142.png')).toBe(1142);
   });
-
   it('returns NaN for a non-sprite filename', () => {
     expect(Number.isNaN(spriteIndex('not-a-sprite.txt'))).toBe(true);
   });
 });
 
-describe('buildCatalog', () => {
-  it('annotates class avatars, tiers+boss, unused; aligns names', () => {
-    const v = run();
-    const c1 = v.creatures.find((c) => c.index === 1)!;
-    expect(c1.annotation).toEqual(['class: Knight M']);
-    expect(c1.name).toBe('Knight M');
-
-    const c19 = v.creatures.find((c) => c.index === 19)!;
-    expect(c19.annotation).toEqual(['tier 1', 'boss']);
-    expect(c19.name).toBe('Bandit');
-
-    const c50 = v.creatures.find((c) => c.index === 50)!;
-    expect(c50.annotation).toEqual(['unused']);
-    expect(c50.name).toBe(null);
+describe('nameForCreatureFile (Model B)', () => {
+  const names = (() => {
+    const n = Array(200).fill('x');
+    n[0] = 'Knight M'; n[17] = 'Paladin F'; n[18] = 'Bandit'; n[36] = 'Bandit B'; n[197] = 'Last';
+    return n;
+  })();
+  it('maps classes and +18-shifted creatures, nulls the gaps', () => {
+    expect(nameForCreatureFile(1, names)).toBe('Knight M');
+    expect(nameForCreatureFile(18, names)).toBe('Paladin F');
+    expect(nameForCreatureFile(19, names)).toBe(null); // class B-frame gap
+    expect(nameForCreatureFile(36, names)).toBe(null);
+    expect(nameForCreatureFile(37, names)).toBe('Bandit');
+    expect(nameForCreatureFile(55, names)).toBe('Bandit B');
+    expect(nameForCreatureFile(216, names)).toBe('Last'); // 216-19 = 197
+    expect(nameForCreatureFile(217, names)).toBe(null);
   });
+});
 
+describe('buildCatalog creaturePairs', () => {
+  it('one pair per frame-A file, +18 partner, both names, A-frame annotation', () => {
+    const v = run();
+    expect(v.creaturePairs.length).toBe(2);
+    expect(v.counts.creaturePairs).toBe(2);
+
+    const p1 = v.creaturePairs.find((p) => p.aIndex === 1)!;
+    expect(p1.bIndex).toBe(19);
+    expect(p1.aFile).toBe('oryx_16bit_fantasy_creatures_01.png');
+    expect(p1.bFile).toBe('oryx_16bit_fantasy_creatures_19.png');
+    expect(p1.aName).toBe('Knight M');
+    expect(p1.bName).toBe(null);
+    expect(p1.annotation).toEqual(['class: Knight M']);
+
+    const p37 = v.creaturePairs.find((p) => p.aIndex === 37)!;
+    expect(p37.bIndex).toBe(55);
+    expect(p37.aName).toBe('Bandit');
+    expect(p37.bName).toBe('Bandit B');
+    expect(p37.annotation).toEqual(['tier 1', 'boss']);
+  });
+});
+
+describe('buildCatalog world tiles + class sheet (unchanged)', () => {
   it('annotates every world tile role and unused', () => {
     const v = run();
     const role = (i: number) => v.worldTiles.find((t) => t.index === i)!.annotation;
@@ -76,10 +110,37 @@ describe('buildCatalog', () => {
     expect(role(94)).toEqual(['stone_crypt.decor']);
     expect(role(999)).toEqual(['unused']);
   });
-
   it('marks the class sheet as candidate art', () => {
     const v = run();
     expect(v.classSheet[0].annotation).toEqual(['unused — candidate class art (#2)']);
     expect(v.counts.classSheet).toBe(1);
+  });
+});
+
+describe('buildCatalog orphaned frame-A (missing +18 partner)', () => {
+  it('sets bFile null but resolves bName from the mapping', () => {
+    const names = (() => {
+      const n = Array(80).fill('x');
+      n[54] = 'Orphan';   // file 73 -> names[73-19] = names[54]
+      n[72] = 'OrphanB';  // file 91 -> names[91-19] = names[72]
+      return n;
+    })();
+    const v = buildCatalog({
+      creatureFiles: ['oryx_16bit_fantasy_creatures_73.png'], // frame A; partner 91 NOT present
+      worldFiles: [],
+      classSheetFiles: [],
+      creatureNames: names,
+      tiers: [],
+      bosses: [],
+      classAvatars: [],
+      themes: {},
+    });
+    expect(v.creaturePairs.length).toBe(1);
+    const p = v.creaturePairs[0];
+    expect(p.aIndex).toBe(73);
+    expect(p.bIndex).toBe(91);
+    expect(p.bFile).toBe(null);     // partner absent from the file list
+    expect(p.aName).toBe('Orphan');
+    expect(p.bName).toBe('OrphanB'); // resolves from names even though bFile is null
   });
 });

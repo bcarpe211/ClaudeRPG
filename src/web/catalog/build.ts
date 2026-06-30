@@ -8,10 +8,20 @@ export interface SpriteCell {
 }
 
 export interface CatalogView {
-  creatures: SpriteCell[];
+  creaturePairs: CreaturePair[];
   worldTiles: SpriteCell[];
   classSheet: SpriteCell[];
-  counts: { creatures: number; worldTiles: number; classSheet: number };
+  counts: { creaturePairs: number; worldTiles: number; classSheet: number };
+}
+
+export interface CreaturePair {
+  aIndex: number;
+  aFile: string;
+  aName: string | null;
+  bIndex: number;
+  bFile: string | null;
+  bName: string | null;
+  annotation: string[];
 }
 
 export interface ClassAvatar {
@@ -38,24 +48,54 @@ export function spriteIndex(file: string): number {
 
 const byIndex = (a: SpriteCell, b: SpriteCell): number => a.index - b.index;
 
+// creatures_24x24 is a 22x18 sheet of animation A/B pairs. Frame A = odd rows;
+// animation partner is +18. Duplicated in anim.js for the browser (no bundler).
+const ROW = 18;
+
+function isFrameA(index: number): boolean {
+  return Math.floor((index - 1) / ROW) % 2 === 0;
+}
+
+/** Doc-name for a creature file under the verified "Model B" mapping:
+ *  1..18 -> the 18 class names; 37..216 -> doc name shifted past the 18 class
+ *  B-frames; files 19..36 (class B-frames) and 217+ are unnamed. */
+export function nameForCreatureFile(index: number, names: string[]): string | null {
+  if (index >= 1 && index <= 18) return names[index - 1] ?? null;
+  if (index >= 37 && index <= 216) return names[index - 19] ?? null;
+  return null;
+}
+
 export function buildCatalog(input: CatalogInput): CatalogView {
-  const creatures = input.creatureFiles
-    .map((file): SpriteCell => {
-      const index = spriteIndex(file);
-      const avatar = input.classAvatars.find((a) => a.index === index);
+  const fileByIndex = new Map<number, string>();
+  for (const file of input.creatureFiles) fileByIndex.set(spriteIndex(file), file);
+
+  const creaturePairs: CreaturePair[] = input.creatureFiles
+    .filter((file) => isFrameA(spriteIndex(file)))
+    .map((file): CreaturePair => {
+      const aIndex = spriteIndex(file);
+      const bIndex = aIndex + ROW;
+      const avatar = input.classAvatars.find((a) => a.index === aIndex);
       const annotation: string[] = [];
       if (avatar) {
         annotation.push(`class: ${avatar.name}`);
       } else {
         input.tiers.forEach((tier, t) => {
-          if (tier.includes(index)) annotation.push(`tier ${t + 1}`);
+          if (tier.includes(aIndex)) annotation.push(`tier ${t + 1}`);
         });
-        if (input.bosses.includes(index)) annotation.push('boss');
+        if (input.bosses.includes(aIndex)) annotation.push('boss');
         if (annotation.length === 0) annotation.push('unused');
       }
-      return { index, file, name: input.creatureNames[index - 1] ?? null, annotation };
+      return {
+        aIndex,
+        aFile: file,
+        aName: nameForCreatureFile(aIndex, input.creatureNames),
+        bIndex,
+        bFile: fileByIndex.get(bIndex) ?? null,
+        bName: nameForCreatureFile(bIndex, input.creatureNames),
+        annotation,
+      };
     })
-    .sort(byIndex);
+    .sort((a, b) => a.aIndex - b.aIndex);
 
   const worldTiles = input.worldFiles
     .map((file): SpriteCell => {
@@ -84,11 +124,11 @@ export function buildCatalog(input: CatalogInput): CatalogView {
     .sort(byIndex);
 
   return {
-    creatures,
+    creaturePairs,
     worldTiles,
     classSheet,
     counts: {
-      creatures: creatures.length,
+      creaturePairs: creaturePairs.length,
       worldTiles: worldTiles.length,
       classSheet: classSheet.length,
     },
