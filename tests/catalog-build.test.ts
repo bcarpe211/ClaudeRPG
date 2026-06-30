@@ -116,3 +116,31 @@ describe('buildCatalog world tiles + class sheet (unchanged)', () => {
     expect(v.counts.classSheet).toBe(1);
   });
 });
+
+describe('buildCatalog orphaned frame-A (missing +18 partner)', () => {
+  it('sets bFile null but resolves bName from the mapping', () => {
+    const names = (() => {
+      const n = Array(80).fill('x');
+      n[54] = 'Orphan';   // file 73 -> names[73-19] = names[54]
+      n[72] = 'OrphanB';  // file 91 -> names[91-19] = names[72]
+      return n;
+    })();
+    const v = buildCatalog({
+      creatureFiles: ['oryx_16bit_fantasy_creatures_73.png'], // frame A; partner 91 NOT present
+      worldFiles: [],
+      classSheetFiles: [],
+      creatureNames: names,
+      tiers: [],
+      bosses: [],
+      classAvatars: [],
+      themes: {},
+    });
+    expect(v.creaturePairs.length).toBe(1);
+    const p = v.creaturePairs[0];
+    expect(p.aIndex).toBe(73);
+    expect(p.bIndex).toBe(91);
+    expect(p.bFile).toBe(null);     // partner absent from the file list
+    expect(p.aName).toBe('Orphan');
+    expect(p.bName).toBe('OrphanB'); // resolves from names even though bFile is null
+  });
+});
