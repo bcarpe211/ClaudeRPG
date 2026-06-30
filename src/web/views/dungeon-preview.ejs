@@ -1,0 +1,31 @@
+<style>
+  body { background:#0e0b14; color:#cfc8e6; font:13px monospace; }
+  .dp-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(360px,1fr)); gap:16px; }
+  .dp-cell { background:#1b1726; border:1px solid #2c2740; border-radius:6px; padding:8px; }
+  .dp-cell canvas { width:100%; image-rendering: pixelated; background:#000; }
+  .dp-meta { color:#8a83a6; margin-top:4px; }
+</style>
+<h1>Dungeon Preview</h1>
+<p class="dp-meta">Sheet: <%= sheet.url %> — <%= samples.length %> samples</p>
+<div class="dp-grid">
+  <% samples.forEach(function(d, i){ %>
+    <div class="dp-cell">
+      <canvas id="dp<%= i %>" width="<%= d.width*24 %>" height="<%= d.height*24 %>"></canvas>
+      <div class="dp-meta"><%= d.skin %> — seed <%= d.seed %></div>
+      <script type="application/json" class="dp-data" data-target="dp<%= i %>"><%- JSON.stringify(d) %></script>
+    </div>
+  <% }) %>
+</div>
+<script>
+  const TILE = 24, SHEET_URL = <%- JSON.stringify(sheet.url) %>;
+  const img = new Image();
+  img.onload = () => document.querySelectorAll('.dp-data').forEach((s) => {
+    const d = JSON.parse(s.textContent);
+    const cv = document.getElementById(s.dataset.target);
+    const ctx = cv.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    d.cells.forEach((c) => ctx.drawImage(img, c.col*TILE, c.row*TILE, TILE, TILE, c.x*TILE, c.y*TILE, TILE, TILE));
+    d.decor.forEach((p) => ctx.drawImage(img, p.col*TILE, p.row*TILE, TILE, TILE, p.x*TILE, p.y*TILE, TILE, TILE));
+  });
+  img.src = SHEET_URL;
+</script>

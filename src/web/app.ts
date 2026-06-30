@@ -12,6 +12,7 @@ import { registerMetricsRoutes } from './routes/metrics';
 import { TvHub } from './tvhub';
 import { registerTvRoutes } from './routes/tv';
 import { registerCatalogRoutes } from './routes/catalog';
+import { registerDungeonPreviewRoutes } from './routes/dungeon-preview';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -47,6 +48,9 @@ export function createApp({ db, config }: AppDeps): Express {
   );
   app.use('/static', express.static(path.join(__dirname, 'public')));
   app.use('/sprites', express.static(path.resolve(config.spritesDir)));
+  app.get('/sheet/world.png', (_req, res) =>
+    res.sendFile(path.resolve(config.spritesDir, '..', 'oryx_16bit_fantasy_world_trans.png')),
+  );
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
@@ -60,6 +64,7 @@ export function createApp({ db, config }: AppDeps): Express {
   (app as unknown as { tvHub: TvHub }).tvHub = tvHub;
 
   registerCatalogRoutes(app, { db, config });
+  registerDungeonPreviewRoutes(app, { db, config });
 
   // Final safety net: turn any handler error into a 500 instead of crashing.
   app.use(

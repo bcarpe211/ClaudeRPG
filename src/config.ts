@@ -9,6 +9,7 @@ export interface Config {
   otelHost: string;
   spritesDir: string;
   enableCatalog: boolean;
+  enableDungeonPreview: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -23,5 +24,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       env.SPRITES_DIR ?? 'assets/oryx_16-bit_fantasy_1.1/Sliced',
     enableCatalog:
       env.ENABLE_CATALOG === '1' || env.ENABLE_CATALOG === 'true',
+    enableDungeonPreview:
+      env.ENABLE_DUNGEON_PREVIEW === '1' || env.ENABLE_DUNGEON_PREVIEW === 'true',
   };
 }
