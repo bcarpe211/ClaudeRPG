@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { floorEdgeMask, resolveFloor, resolveWall } from '../src/domain/autotile';
+import { floorEdgeMask, resolveFloor, resolveWall, resolveDoor } from '../src/domain/autotile';
 import { FLOOR_EDGES, type Skin } from '../src/domain/tilesheet';
 
 // 3x3 floor patch surrounded by wall:
@@ -35,5 +35,8 @@ describe('resolve', () => {
   });
   it('resolveWall returns the skin wall coord', () => {
     expect(resolveWall(skin)).toEqual({ col: 1, row: 2 });
+  });
+  it('resolveDoor returns the skin door coord', () => {
+    expect(resolveDoor(skin)).toEqual({ col: 3, row: 4 });
   });
 });
