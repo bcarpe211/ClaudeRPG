@@ -92,3 +92,18 @@ each does or how changing it impacts the game.
 - [ ] For each setting: a plain-language description of what it controls
 - [ ] Show the default value and the effect/direction of changing it
 - [ ] (Optional) units and sane min/max hints
+
+## 12. Monster name flare — on-screen label with random adjective
+Show the current monster's name on the TV during battle, but prefix it with a
+random **dungeon-themed adjective** from a large dictionary so a plain "beetle"
+reads as e.g. "flaming beetle". It does not have to make literal sense — the goal
+is variety/personality. Part of a broader "add flare/diversity to names" idea.
+Depends on the curated creature display names from the art-curation pass (#1) —
+names must be clean, singular display labels so `<adjective> <creature>` reads
+well.
+- [ ] Large dictionary of dungeon-themed adjectives (e.g. flaming, cursed,
+      ancient, venomous, spectral, …)
+- [ ] Roll an adjective per encounter, deterministic from the encounter seed so
+      it's stable across renders/reconnects
+- [ ] Render the `<adjective> <creature>` label on the TV near the monster
+- [ ] (Stretch) broader name flare for other entities
