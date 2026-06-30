@@ -13,13 +13,14 @@
 </style>
 <h1>Sprite Catalog</h1>
 <%
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function badge(a){
     var cls='b-role';
     if(a.indexOf('class:')===0)cls='b-class';
     else if(a.indexOf('tier')===0)cls='b-tier';
     else if(a==='boss')cls='b-boss';
     else if(a.indexOf('unused')===0)cls='b-unused';
-    return '<span class="badge '+cls+'">'+a+'</span>';
+    return '<span class="badge '+cls+'">'+esc(a)+'</span>';
   }
   function section(title, cells, cat){
 %>
