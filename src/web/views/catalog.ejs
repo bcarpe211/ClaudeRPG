@@ -27,8 +27,8 @@
   <div class="cat-section">
     <h2><%= title %> (<%= cells.length %>)</h2>
     <div class="cat-controls">
-      <input class="cat-filter" placeholder="filter by name / index / role…" oninput="catFilter(this)">
-      <label><input type="checkbox" onchange="catUnused(this)"> only unused</label>
+      <input class="cat-filter" placeholder="filter by name / index / role…" oninput="catApply(this)">
+      <label><input type="checkbox" class="cat-unused" onchange="catApply(this)"> only unused</label>
     </div>
     <div class="cat-grid">
       <% cells.forEach(function(c){ %>
@@ -48,15 +48,14 @@
 <% section('World tiles', view.worldTiles, 'world_24x24') %>
 <% section('Class sheet', view.classSheet, 'classes_26x28') %>
 <script>
-  function catFilter(inp){
-    var q = inp.value.toLowerCase();
-    inp.closest('.cat-section').querySelectorAll('.cat-cell').forEach(function(c){
-      c.style.display = c.dataset.search.indexOf(q) >= 0 ? '' : 'none';
-    });
-  }
-  function catUnused(cb){
-    cb.closest('.cat-section').querySelectorAll('.cat-cell').forEach(function(c){
-      c.style.display = (!cb.checked || c.dataset.unused === 'true') ? '' : 'none';
+  function catApply(el){
+    var section = el.closest('.cat-section');
+    var q = section.querySelector('.cat-filter').value.toLowerCase();
+    var onlyUnused = section.querySelector('.cat-unused').checked;
+    section.querySelectorAll('.cat-cell').forEach(function(c){
+      var matchText = c.dataset.search.indexOf(q) >= 0;
+      var matchUnused = !onlyUnused || c.dataset.unused === 'true';
+      c.style.display = (matchText && matchUnused) ? '' : 'none';
     });
   }
 </script>
