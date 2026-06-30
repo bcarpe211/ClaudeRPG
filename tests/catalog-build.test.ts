@@ -22,6 +22,11 @@ function run() {
     ],
     worldFiles: [
       'oryx_16bit_fantasy_world_70.png',  // stone_crypt.wall
+      'oryx_16bit_fantasy_world_71.png',  // stone_crypt.wallVariant
+      'oryx_16bit_fantasy_world_59.png',  // stone_crypt.floor
+      'oryx_16bit_fantasy_world_60.png',  // stone_crypt.floorVariant
+      'oryx_16bit_fantasy_world_208.png', // stone_crypt.door
+      'oryx_16bit_fantasy_world_94.png',  // stone_crypt.decor
       'oryx_16bit_fantasy_world_999.png', // unused
     ],
     classSheetFiles: ['oryx_16bit_fantasy_classes_trans_03.png'],
@@ -37,6 +42,10 @@ describe('spriteIndex', () => {
   it('parses the trailing number', () => {
     expect(spriteIndex('oryx_16bit_fantasy_creatures_01.png')).toBe(1);
     expect(spriteIndex('oryx_16bit_fantasy_world_1142.png')).toBe(1142);
+  });
+
+  it('returns NaN for a non-sprite filename', () => {
+    expect(Number.isNaN(spriteIndex('not-a-sprite.txt'))).toBe(true);
   });
 });
 
@@ -56,10 +65,16 @@ describe('buildCatalog', () => {
     expect(c50.name).toBe(null);
   });
 
-  it('annotates world tile roles and unused', () => {
+  it('annotates every world tile role and unused', () => {
     const v = run();
-    expect(v.worldTiles.find((t) => t.index === 70)!.annotation).toEqual(['stone_crypt.wall']);
-    expect(v.worldTiles.find((t) => t.index === 999)!.annotation).toEqual(['unused']);
+    const role = (i: number) => v.worldTiles.find((t) => t.index === i)!.annotation;
+    expect(role(70)).toEqual(['stone_crypt.wall']);
+    expect(role(71)).toEqual(['stone_crypt.wallVariant']);
+    expect(role(59)).toEqual(['stone_crypt.floor']);
+    expect(role(60)).toEqual(['stone_crypt.floorVariant']);
+    expect(role(208)).toEqual(['stone_crypt.door']);
+    expect(role(94)).toEqual(['stone_crypt.decor']);
+    expect(role(999)).toEqual(['unused']);
   });
 
   it('marks the class sheet as candidate art', () => {
