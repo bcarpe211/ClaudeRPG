@@ -11,6 +11,7 @@ import { registerAdminRoutes } from './routes/admin';
 import { registerMetricsRoutes } from './routes/metrics';
 import { TvHub } from './tvhub';
 import { registerTvRoutes } from './routes/tv';
+import { registerCatalogRoutes } from './routes/catalog';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -57,6 +58,8 @@ export function createApp({ db, config }: AppDeps): Express {
   const tvHub = new TvHub(db);
   registerTvRoutes(app, { db, config }, tvHub);
   (app as unknown as { tvHub: TvHub }).tvHub = tvHub;
+
+  registerCatalogRoutes(app, { db, config });
 
   // Final safety net: turn any handler error into a 500 instead of crashing.
   app.use(
