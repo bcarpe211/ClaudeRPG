@@ -56,12 +56,24 @@ function isFrameA(index: number): boolean {
   return Math.floor((index - 1) / ROW) % 2 === 0;
 }
 
-/** Doc-name for a creature file under the verified "Model B" mapping:
- *  1..18 -> the 18 class names; 37..216 -> doc name shifted past the 18 class
- *  B-frames; files 19..36 (class B-frames) and 217+ are unnamed. */
+// Doc names fill the frame-A rows in reading order, PLUS the one townsfolk
+// B-row the doc explicitly lists (files 55-72). creature_key.doc double-lists
+// only the townsfolk group (frame A then frame B); every other group is listed
+// once, so all their B-frames are unnamed animation dupes. NAMED_ROW_STARTS[i]
+// is the first file index of the i-th named 18-file row; that row receives
+// name-block names[i*18 .. i*18+17]. (Verified in /catalog: names line up
+// through the named rows; unnamed B-frames show "—".)
+const NAMED_ROW_STARTS = [1, 37, 55, 73, 109, 145, 181, 217, 253, 289, 325];
+
+/** Doc-name for a creature file, or null for unnamed (animation B-frame /
+ *  uncatalogued) files. See NAMED_ROW_STARTS above. */
 export function nameForCreatureFile(index: number, names: string[]): string | null {
-  if (index >= 1 && index <= 18) return names[index - 1] ?? null;
-  if (index >= 37 && index <= 216) return names[index - 19] ?? null;
+  for (let r = 0; r < NAMED_ROW_STARTS.length; r++) {
+    const start = NAMED_ROW_STARTS[r];
+    if (index >= start && index <= start + 17) {
+      return names[r * 18 + (index - start)] ?? null;
+    }
+  }
   return null;
 }
 

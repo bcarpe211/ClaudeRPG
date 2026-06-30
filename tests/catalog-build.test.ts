@@ -58,21 +58,25 @@ describe('spriteIndex', () => {
   });
 });
 
-describe('nameForCreatureFile (Model B)', () => {
-  const names = (() => {
-    const n = Array(200).fill('x');
-    n[0] = 'Knight M'; n[17] = 'Paladin F'; n[18] = 'Bandit'; n[36] = 'Bandit B'; n[197] = 'Last';
-    return n;
-  })();
-  it('maps classes and +18-shifted creatures, nulls the gaps', () => {
-    expect(nameForCreatureFile(1, names)).toBe('Knight M');
-    expect(nameForCreatureFile(18, names)).toBe('Paladin F');
-    expect(nameForCreatureFile(19, names)).toBe(null); // class B-frame gap
+describe('nameForCreatureFile (named-row mapping)', () => {
+  // names[i] = 'n<i>' so we can assert exactly which doc-name index a file maps to.
+  const names = Array.from({ length: 198 }, (_, i) => `n${i}`);
+  it('maps named frame-A rows + the townsfolk B-row, nulls every other file', () => {
+    expect(nameForCreatureFile(1, names)).toBe('n0');    // row start (classes A)
+    expect(nameForCreatureFile(18, names)).toBe('n17');
+    expect(nameForCreatureFile(19, names)).toBe(null);   // class B-frame, unnamed
     expect(nameForCreatureFile(36, names)).toBe(null);
-    expect(nameForCreatureFile(37, names)).toBe('Bandit');
-    expect(nameForCreatureFile(55, names)).toBe('Bandit B');
-    expect(nameForCreatureFile(216, names)).toBe('Last'); // 216-19 = 197
-    expect(nameForCreatureFile(217, names)).toBe(null);
+    expect(nameForCreatureFile(37, names)).toBe('n18');  // townsfolk A
+    expect(nameForCreatureFile(55, names)).toBe('n36');  // townsfolk B (doc-listed)
+    expect(nameForCreatureFile(72, names)).toBe('n53');
+    expect(nameForCreatureFile(73, names)).toBe('n54');  // adventurers A
+    expect(nameForCreatureFile(90, names)).toBe('n71');
+    expect(nameForCreatureFile(91, names)).toBe(null);   // adventurer B-frame, unnamed
+    expect(nameForCreatureFile(108, names)).toBe(null);
+    expect(nameForCreatureFile(109, names)).toBe('n72'); // next named A-row (realigned)
+    expect(nameForCreatureFile(325, names)).toBe('n180'); // last named row start
+    expect(nameForCreatureFile(342, names)).toBe('n197'); // last named file
+    expect(nameForCreatureFile(343, names)).toBe(null);   // past the named rows
   });
 });
 
@@ -119,14 +123,16 @@ describe('buildCatalog world tiles + class sheet (unchanged)', () => {
 
 describe('buildCatalog orphaned frame-A (missing +18 partner)', () => {
   it('sets bFile null but resolves bName from the mapping', () => {
+    // Townsfolk A-frame #37 (partner #55) — #55 is the doc-listed townsfolk
+    // B-row, so its name resolves even though the B file is absent on disk.
     const names = (() => {
       const n = Array(80).fill('x');
-      n[54] = 'Orphan';   // file 73 -> names[73-19] = names[54]
-      n[72] = 'OrphanB';  // file 91 -> names[91-19] = names[72]
+      n[18] = 'Townsfolk';    // file 37 -> names[18]
+      n[36] = 'Townsfolk B';  // file 55 -> names[36]
       return n;
     })();
     const v = buildCatalog({
-      creatureFiles: ['oryx_16bit_fantasy_creatures_73.png'], // frame A; partner 91 NOT present
+      creatureFiles: ['oryx_16bit_fantasy_creatures_37.png'], // frame A; partner 55 NOT present
       worldFiles: [],
       classSheetFiles: [],
       creatureNames: names,
@@ -137,10 +143,10 @@ describe('buildCatalog orphaned frame-A (missing +18 partner)', () => {
     });
     expect(v.creaturePairs.length).toBe(1);
     const p = v.creaturePairs[0];
-    expect(p.aIndex).toBe(73);
-    expect(p.bIndex).toBe(91);
+    expect(p.aIndex).toBe(37);
+    expect(p.bIndex).toBe(55);
     expect(p.bFile).toBe(null);     // partner absent from the file list
-    expect(p.aName).toBe('Orphan');
-    expect(p.bName).toBe('OrphanB'); // resolves from names even though bFile is null
+    expect(p.aName).toBe('Townsfolk');
+    expect(p.bName).toBe('Townsfolk B'); // resolves from names even though bFile is null
   });
 });
