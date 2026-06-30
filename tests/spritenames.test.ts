@@ -7,7 +7,8 @@ describe('CREATURE_SHEET_NAMES', () => {
     expect(CREATURE_SHEET_NAMES[17]).toBe('Paladin F');
     expect(CREATURE_SHEET_NAMES[18]).toBe('Bandit');
   });
-  it('covers at least the creature sheet', () => {
-    expect(CREATURE_SHEET_NAMES.length).toBeGreaterThanOrEqual(396);
+  it('covers the doc-named creature entries', () => {
+    // The doc names 198 entries (files 1-198); files 199-396 are unnamed.
+    expect(CREATURE_SHEET_NAMES.length).toBeGreaterThanOrEqual(198);
   });
 });
