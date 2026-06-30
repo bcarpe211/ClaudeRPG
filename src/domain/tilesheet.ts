@@ -10,11 +10,15 @@ export function tileRect(c: TileCoord) {
 // neighbour is also floor). Values are offsets WITHIN a floor skin's block,
 // added to skin.floorBase. mask 15 = interior ("full").
 //
-// FIRST PASS: every mask maps to the block's full tile (offset 0,0), so floors
-// render solid and skinned. The per-mask edge/corner offsets are refined in the
-// /dungeon-preview visual pass (Task 5) — the 9 masks that occur in a
-// rectangular room are 15 (full), 14/11/7/13 (N/S/W/E edges) and 6/12/3/9
-// (the four corners); the other 7 only appear in corridors/peninsulas.
+// Every mask currently maps to the block's full tile (offset 0,0): floors render
+// solid and skinned, which already reads cohesively in /dungeon-preview (verified
+// — clean skinned border + solid floor for both proof skins). Populating the
+// per-mask edge/corner offsets (a FOLLOW-ON) gives floor-to-wall edge shading; it
+// needs the floor block's blob-arrangement key, best decoded iteratively against
+// the preview. The 9 masks that occur in a rectangular room are 15 (full),
+// 14/11/7/13 (N/S/W/E edges) and 6/12/3/9 (the four corners); the other 7 only
+// appear in corridors/peninsulas. The autotiler already computes these masks and
+// looks them up here, so this is pure data to fill in later.
 export const FLOOR_EDGES: Record<number, TileCoord> = {
   0: { col: 0, row: 0 }, 1: { col: 0, row: 0 }, 2: { col: 0, row: 0 }, 3: { col: 0, row: 0 },
   4: { col: 0, row: 0 }, 5: { col: 0, row: 0 }, 6: { col: 0, row: 0 }, 7: { col: 0, row: 0 },
