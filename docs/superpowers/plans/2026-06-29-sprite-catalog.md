@@ -15,7 +15,7 @@
 - No external runtime assets — inline all CSS/JS in the EJS view (kiosk is offline, no bundler).
 - Catalog is **read-only and dev-only**: off by default, never mounted unless `ENABLE_CATALOG=1`. Touches no DB or game state.
 - `assets/` is gitignored; only the small parsed name list lives in the repo.
-- `CREATURE_SHEET_NAMES[i]` aligns to `creatures_24x24` file index `i + 1` (so `[0..17]` are the class avatars, `[18..]` are monsters).
+- `CREATURE_SHEET_NAMES[i]` aligns 1:1 to `creatures_24x24` file index `i + 1` (`[0..17]` = class avatars, `[18..]` = monsters). The doc names **198** entries (files 1–198, verified visually as distinct 1:1 sprites); files 199–396 are additional creatures the doc does not name, so they get `name = null`.
 
 ---
 
@@ -148,7 +148,7 @@ console.log(`wrote ${OUT} (${names.length} names)`);
 - [ ] **Step 2: Run the generator**
 
 Run: `node scripts/dev/gen-spritenames.mjs`
-Expected: prints `wrote src/web/catalog/spritenames.ts (N names)` where N is ≥ 396, and the file exists.
+Expected: prints `wrote src/web/catalog/spritenames.ts (N names)` where N is 198 (the doc names 198 creatures; the 396 sprite files include 198 the doc does not name), and the file exists.
 
 - [ ] **Step 3: Write the sanity test**
 
@@ -164,8 +164,9 @@ describe('CREATURE_SHEET_NAMES', () => {
     expect(CREATURE_SHEET_NAMES[17]).toBe('Paladin F');
     expect(CREATURE_SHEET_NAMES[18]).toBe('Bandit');
   });
-  it('covers at least the creature sheet', () => {
-    expect(CREATURE_SHEET_NAMES.length).toBeGreaterThanOrEqual(396);
+  it('covers the doc-named creature entries', () => {
+    // The doc names 198 entries (files 1-198); files 199-396 are unnamed.
+    expect(CREATURE_SHEET_NAMES.length).toBeGreaterThanOrEqual(198);
   });
 });
 ```
@@ -173,7 +174,7 @@ describe('CREATURE_SHEET_NAMES', () => {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/spritenames.test.ts`
-Expected: PASS. If `[18]` is not `'Bandit'` or length < 396, the doc has extra blank-handling quirks — inspect `textutil -convert txt -stdout assets/oryx_16-bit_fantasy_1.1/creature_key.doc | sed -n '1,30p'` and adjust the filter, then regenerate.
+Expected: PASS. If `[18]` is not `'Bandit'`, the doc has extra blank-handling quirks — inspect `textutil -convert txt -stdout assets/oryx_16-bit_fantasy_1.1/creature_key.doc | sed -n '1,30p'` and adjust the filter, then regenerate.
 
 - [ ] **Step 5: Commit**
 

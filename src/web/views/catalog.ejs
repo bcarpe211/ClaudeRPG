@@ -1,0 +1,61 @@
+<style>
+  .cat-section { margin: 1.5rem 0; }
+  .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+  .cat-cell { background:#1b1726; border:1px solid #2c2740; border-radius:6px; padding:6px; text-align:center; font:11px monospace; color:#cfc8e6; }
+  .cat-cell img { width:48px; height:48px; image-rendering: pixelated; background:#000; }
+  .cat-idx { color:#8a83a6; }
+  .cat-name { color:#fff; word-break:break-word; }
+  .badge { display:inline-block; margin:1px; padding:0 4px; border-radius:4px; font-size:10px; }
+  .b-class{background:#1d4ed8;color:#fff}.b-tier{background:#15803d;color:#fff}
+  .b-boss{background:#7e22ce;color:#fff}.b-unused{background:#3a3550;color:#9a93b6}.b-role{background:#0e7490;color:#fff}
+  .cat-controls{margin:.4rem 0;font:12px monospace;color:#cfc8e6}
+  .cat-filter{padding:4px 8px;width:240px;margin-right:8px}
+</style>
+<h1>Sprite Catalog</h1>
+<%
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function badge(a){
+    var cls='b-role';
+    if(a.indexOf('class:')===0)cls='b-class';
+    else if(a.indexOf('tier')===0)cls='b-tier';
+    else if(a==='boss')cls='b-boss';
+    else if(a.indexOf('unused')===0)cls='b-unused';
+    return '<span class="badge '+cls+'">'+esc(a)+'</span>';
+  }
+  function section(title, cells, cat){
+%>
+  <div class="cat-section">
+    <h2><%= title %> (<%= cells.length %>)</h2>
+    <div class="cat-controls">
+      <input class="cat-filter" placeholder="filter by name / index / role…" oninput="catApply(this)">
+      <label><input type="checkbox" class="cat-unused" onchange="catApply(this)"> only unused</label>
+    </div>
+    <div class="cat-grid">
+      <% cells.forEach(function(c){ %>
+        <div class="cat-cell"
+             data-search="<%= (c.index + ' ' + (c.name || '') + ' ' + c.annotation.join(' ')).toLowerCase() %>"
+             data-unused="<%= c.annotation.some(function(a){ return a.indexOf('unused')===0; }) %>">
+          <img src="/sprites/<%= cat %>/<%= c.file %>" loading="lazy" alt="<%= c.file %>">
+          <div class="cat-idx">#<%= c.index %></div>
+          <% if (c.name) { %><div class="cat-name"><%= c.name %></div><% } %>
+          <div><%- c.annotation.map(badge).join('') %></div>
+        </div>
+      <% }) %>
+    </div>
+  </div>
+<% } %>
+<% section('Creatures', view.creatures, 'creatures_24x24') %>
+<% section('World tiles', view.worldTiles, 'world_24x24') %>
+<% section('Class sheet', view.classSheet, 'classes_26x28') %>
+<script>
+  function catApply(el){
+    var section = el.closest('.cat-section');
+    var q = section.querySelector('.cat-filter').value.toLowerCase();
+    var onlyUnused = section.querySelector('.cat-unused').checked;
+    section.querySelectorAll('.cat-cell').forEach(function(c){
+      var matchText = c.dataset.search.indexOf(q) >= 0;
+      var matchUnused = !onlyUnused || c.dataset.unused === 'true';
+      c.style.display = (matchText && matchUnused) ? '' : 'none';
+    });
+  }
+</script>

@@ -47,3 +47,15 @@ Then open:
 ```bash
 npm test
 ```
+
+## Sprite catalog (dev only)
+
+To browse every sprite with its file index, parsed name, and current in-game
+assignment (used for art curation), run with the catalog flag and open
+`/catalog`:
+
+```bash
+ENABLE_CATALOG=1 npm start   # then open http://localhost:8080/catalog
+```
+
+It is off by default and never mounted on the kiosk.

@@ -29,3 +29,15 @@ describe('loadConfig', () => {
     expect(c.sessionSecret).toBe('fixedsecretvalue');
   });
 });
+
+describe('loadConfig enableCatalog', () => {
+  it('defaults to false', () => {
+    expect(loadConfig({}).enableCatalog).toBe(false);
+  });
+  it('is true when ENABLE_CATALOG=1', () => {
+    expect(loadConfig({ ENABLE_CATALOG: '1' }).enableCatalog).toBe(true);
+  });
+  it('is true when ENABLE_CATALOG=true', () => {
+    expect(loadConfig({ ENABLE_CATALOG: 'true' }).enableCatalog).toBe(true);
+  });
+});
