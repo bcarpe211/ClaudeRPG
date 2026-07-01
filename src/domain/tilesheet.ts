@@ -129,6 +129,35 @@ export const SKINS: Skin[] = [
     door: { col: 4, row: 3 },
     floorBase: { col: 4, row: 3 },
   },
+  {
+    // Lighter grey stone-and-timber interior. Row 2 floors cols 5,6,7 are each a
+    // distinct main (checkered stone / wood planks / dark stone), no accents;
+    // col 4 (fine checkerboard) unused — too busy as a full floor.
+    name: 'keep',
+    wallRow: 2,
+    wallVariantChance: 0.1,
+    floorSets: [
+      { main: { col: 5, row: 2 }, accents: [], accentChance: 0 }, // checkered stone
+      { main: { col: 6, row: 2 }, accents: [], accentChance: 0 }, // wood planks
+      { main: { col: 7, row: 2 }, accents: [], accentChance: 0 }, // dark stone
+    ],
+    decor: [],
+    door: { col: 5, row: 2 },
+    floorBase: { col: 5, row: 2 },
+  },
+  {
+    // Red-brown / rust stone. Row 4 = same floor rules as row 1 (minus col 7).
+    name: 'catacombs',
+    wallRow: 4,
+    wallVariantChance: 0.1,
+    floorSets: [
+      { main: { col: 4, row: 4 }, accents: [{ col: 6, row: 4 }], accentChance: 0.1 }, // plain + cracked
+      { main: { col: 5, row: 4 }, accents: [], accentChance: 0 },                       // studded inset
+    ],
+    decor: [],
+    door: { col: 4, row: 4 },
+    floorBase: { col: 4, row: 4 },
+  },
 ];
 
 export function getSkin(name: string): Skin | undefined {

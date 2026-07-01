@@ -45,6 +45,19 @@ describe('tilesheet', () => {
     expect(getSkin(SKINS[0].name)).toBe(SKINS[0]);
   });
 
+  it('defines the four themed skins on their own sheet rows', () => {
+    const byName = Object.fromEntries(SKINS.map((s) => [s.name, s]));
+    expect(byName.crypt.wallRow).toBe(1);
+    expect(byName.keep.wallRow).toBe(2);
+    expect(byName.cave.wallRow).toBe(3);
+    expect(byName.catacombs.wallRow).toBe(4);
+    // keep has three distinct main floors (grey/wood/dark), no accents
+    expect(byName.keep.floorSets.map((f) => f.main.col)).toEqual([5, 6, 7]);
+    expect(byName.keep.floorSets.every((f) => f.accents.length === 0)).toBe(true);
+    // catacombs mirrors crypt's floor rules on row 4
+    expect(byName.catacombs.floorSets.map((f) => f.main.col)).toEqual([4, 5]);
+  });
+
   it('DOORS are all on the sheet grid with positive weights', () => {
     expect(DOORS.length).toBeGreaterThan(0);
     for (const d of DOORS) {
