@@ -51,10 +51,11 @@ describe('tilesheet', () => {
     expect(byName['ruined-castle'].wallRow).toBe(2);
     expect(byName.cave.wallRow).toBe(3);
     expect(byName.forge.wallRow).toBe(4);
-    // ruined-castle has three distinct main floors (checker/wood/dark), no accents
-    expect(byName['ruined-castle'].floorSets.map((f) => f.main.col)).toEqual([5, 6, 7]);
-    expect(byName['ruined-castle'].floorSets.every((f) => f.accents.length === 0)).toBe(true);
-    // forge mirrors castle's floor rules on row 4
+    // castle & ruined-castle are one place in two states -> shared floor pool,
+    // drawing from both row 1 (grey stone) and row 2 (checker/wood/dark) floors
+    expect(byName.castle.floorSets).toBe(byName['ruined-castle'].floorSets);
+    expect(new Set(byName.castle.floorSets.map((f) => f.main.row))).toEqual(new Set([1, 2]));
+    // forge mirrors castle's original floor rules on row 4
     expect(byName.forge.floorSets.map((f) => f.main.col)).toEqual([4, 5]);
   });
 

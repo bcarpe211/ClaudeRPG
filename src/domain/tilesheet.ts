@@ -103,15 +103,25 @@ export interface Skin {
 // The four bands read as distinct places: castle stonework (row 1), the same
 // stonework cracked/distressed = a ruined castle (row 2), a mossy cave (row 3),
 // and red-hot dwarven forge stone (row 4). Per-theme floor rules are typed data.
+// castle (row 1) and ruined-castle (row 2) are the same place in two states, so
+// their floors are one interchangeable pool: the clean grey stone of row 1 plus
+// the checkered / wood / dark floors of row 2. Either skin can roll any of them;
+// only the walls differ (row 1 clean, row 2 cracked). Row-1 col 7 (small tiles)
+// and row-2 col 4 (fine checker) stay out — too busy as full floors.
+const CASTLE_FLOORS: FloorSet[] = [
+  { main: { col: 4, row: 1 }, accents: [{ col: 6, row: 1 }], accentChance: 0.1 }, // grey plain + cracked
+  { main: { col: 5, row: 1 }, accents: [], accentChance: 0 },                       // grey inset panel
+  { main: { col: 5, row: 2 }, accents: [], accentChance: 0 },                       // checkered stone
+  { main: { col: 6, row: 2 }, accents: [], accentChance: 0 },                       // wood planks
+  { main: { col: 7, row: 2 }, accents: [], accentChance: 0 },                       // dark stone
+];
+
 export const SKINS: Skin[] = [
   {
     name: 'castle',
     wallRow: 1,
     wallVariantChance: 0.1,
-    floorSets: [
-      { main: { col: 4, row: 1 }, accents: [{ col: 6, row: 1 }], accentChance: 0.1 }, // plain + cracked-plain
-      { main: { col: 5, row: 1 }, accents: [], accentChance: 0 },                       // inset panel
-    ], // col 7 (small tiles) dropped — too busy as a full floor
+    floorSets: CASTLE_FLOORS,
     decor: [],
     door: { col: 4, row: 1 },
     floorBase: { col: 4, row: 1 },
@@ -131,17 +141,11 @@ export const SKINS: Skin[] = [
   },
   {
     // Same castle stonework as row 1 but cracked and distressed — a ruined,
-    // abandoned castle. Row 2 floors cols 5,6,7 are each a distinct main
-    // (checkered stone / wood planks / dark stone), no accents; col 4 (fine
-    // checkerboard) unused — too busy as a full floor.
+    // abandoned castle. Shares the castle floor pool (row 1 + row 2 floors).
     name: 'ruined-castle',
     wallRow: 2,
     wallVariantChance: 0.1,
-    floorSets: [
-      { main: { col: 5, row: 2 }, accents: [], accentChance: 0 }, // checkered stone
-      { main: { col: 6, row: 2 }, accents: [], accentChance: 0 }, // wood planks
-      { main: { col: 7, row: 2 }, accents: [], accentChance: 0 }, // dark stone
-    ],
+    floorSets: CASTLE_FLOORS,
     decor: [],
     door: { col: 5, row: 2 },
     floorBase: { col: 5, row: 2 },
