@@ -31,6 +31,9 @@ describe('generateAutotiledDungeon', () => {
       for (const c of d.cells.filter((c) => c.kind === 'door')) {
         sawDoor = true;
         expect(doorKeys.has(`${c.col},${c.row}`)).toBe(true);
+        // door tiles are transparent -> must carry a floor underlay
+        expect(c.under).toBeDefined();
+        expect(Number.isInteger(c.under!.col) && Number.isInteger(c.under!.row)).toBe(true);
       }
     }
     expect(sawDoor).toBe(true);

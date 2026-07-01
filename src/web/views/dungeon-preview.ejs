@@ -24,7 +24,10 @@
     const cv = document.getElementById(s.dataset.target);
     const ctx = cv.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    d.cells.forEach((c) => ctx.drawImage(img, c.col*TILE, c.row*TILE, TILE, TILE, c.x*TILE, c.y*TILE, TILE, TILE));
+    d.cells.forEach((c) => {
+      if (c.under) ctx.drawImage(img, c.under.col*TILE, c.under.row*TILE, TILE, TILE, c.x*TILE, c.y*TILE, TILE, TILE);
+      ctx.drawImage(img, c.col*TILE, c.row*TILE, TILE, TILE, c.x*TILE, c.y*TILE, TILE, TILE);
+    });
     d.decor.forEach((p) => ctx.drawImage(img, p.col*TILE, p.row*TILE, TILE, TILE, p.x*TILE, p.y*TILE, TILE, TILE));
   });
   img.src = SHEET_URL;

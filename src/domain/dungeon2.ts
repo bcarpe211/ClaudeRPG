@@ -50,7 +50,13 @@ function pickFloor(set: FloorSet, rng: () => number): TileCoord {
   return set.main;
 }
 
-export interface RenderCell { x: number; y: number; kind: LogicalKind; col: number; row: number; }
+// `under`: an optional tile drawn BEHIND this cell's tile. Door tiles are
+// transparent around the arch, so a door cell carries the dungeon's floor as its
+// underlay — the renderer paints `under` first, then the door, so no black shows.
+export interface RenderCell {
+  x: number; y: number; kind: LogicalKind; col: number; row: number;
+  under?: { col: number; row: number };
+}
 export interface AutoDungeon {
   width: number; height: number; skin: string; seed: number;
   cells: RenderCell[];
@@ -100,10 +106,13 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) {
       const kind = kinds[y][x];
       let coord;
+      let under: { col: number; row: number } | undefined;
       if (kind === 'wall') coord = pickWall(x, y, kinds, width, height, skin, rng);
-      else if (kind === 'door') coord = pickWeighted(DOORS, rng).coord; // weighted door tile
-      else coord = pickFloor(floorSet, rng);
-      cells.push({ x, y, kind, col: coord.col, row: coord.row });
+      else if (kind === 'door') {
+        coord = pickWeighted(DOORS, rng).coord; // weighted door tile
+        under = floorSet.main;                  // floor behind the transparent door
+      } else coord = pickFloor(floorSet, rng);
+      cells.push({ x, y, kind, col: coord.col, row: coord.row, under });
     }
   }
 
