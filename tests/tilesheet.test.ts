@@ -25,10 +25,14 @@ describe('tilesheet', () => {
       expect(inGrid(s.wall)).toBe(true);
       expect(inGrid(s.door)).toBe(true);
       expect(s.decor.every(inGrid)).toBe(true);
-      expect(s.floors.length).toBeGreaterThan(0);
-      expect(s.floors.every(inGrid)).toBe(true);
-      expect(s.accents.every(inGrid)).toBe(true);
       expect(s.wallVariants.every(inGrid)).toBe(true);
+      expect(s.floorSets.length).toBeGreaterThan(0);
+      for (const set of s.floorSets) {
+        expect(inGrid(set.main)).toBe(true);
+        expect(set.accents.every(inGrid)).toBe(true);
+        expect(set.accentChance).toBeGreaterThanOrEqual(0);
+        expect(set.accentChance).toBeLessThanOrEqual(1);
+      }
       for (let m = 0; m < 16; m++) {
         const e = FLOOR_EDGES[m];
         expect(inGrid({ col: s.floorBase.col + e.col, row: s.floorBase.row + e.row })).toBe(true);

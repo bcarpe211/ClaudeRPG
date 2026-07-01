@@ -1,9 +1,8 @@
 import { makeRng } from './dungeon';
-import { getSkin, type Skin, type TileCoord } from './tilesheet';
-import { resolveDoor, type LogicalKind } from './autotile';
+import { getSkin, type Skin, type FloorSet, type TileCoord } from './tilesheet';
+import { type LogicalKind } from './autotile';
 
-const at = (arr: TileCoord[], rng: () => number): TileCoord =>
-  arr[Math.floor(rng() * arr.length)];
+const at = <T>(arr: T[], rng: () => number): T => arr[Math.floor(rng() * arr.length)];
 
 // Wall: the solid block, with occasional cracked-wall variants sprinkled in.
 function pickWall(skin: Skin, rng: () => number): TileCoord {
@@ -13,12 +12,12 @@ function pickWall(skin: Skin, rng: () => number): TileCoord {
   return skin.wall;
 }
 
-// Floor: this theme's main tile(s), with optional decorative accents sprinkled in.
-function pickThemedFloor(skin: Skin, rng: () => number): TileCoord {
-  if (skin.accents.length > 0 && rng() < skin.accentChance) {
-    return at(skin.accents, rng);
+// Floor: the dungeon's chosen main tile, with this set's accents sprinkled in.
+function pickFloor(set: FloorSet, rng: () => number): TileCoord {
+  if (set.accents.length > 0 && rng() < set.accentChance) {
+    return at(set.accents, rng);
   }
-  return at(skin.floors, rng);
+  return set.main;
 }
 
 export interface RenderCell { x: number; y: number; kind: LogicalKind; col: number; row: number; }
@@ -37,6 +36,8 @@ export function generateAutotiledDungeon(
   const width = opts.width ?? 20;
   const height = opts.height ?? 15;
   const rng = makeRng(seed);
+  // Pick ONE floor set for this whole dungeon (coherent look; accents vary it).
+  const floorSet = at(skin.floorSets, rng);
 
   const isEdge = (x: number, y: number) => x === 0 || y === 0 || x === width - 1 || y === height - 1;
   const isCorner = (x: number, y: number) =>
@@ -70,8 +71,8 @@ export function generateAutotiledDungeon(
       const kind = kinds[y][x];
       let coord;
       if (kind === 'wall') coord = pickWall(skin, rng);
-      else if (kind === 'door') coord = resolveDoor(skin);
-      else coord = pickThemedFloor(skin, rng);
+      else if (kind === 'door') coord = floorSet.main; // opening = the dungeon's floor
+      else coord = pickFloor(floorSet, rng);
       cells.push({ x, y, kind, col: coord.col, row: coord.row });
     }
   }

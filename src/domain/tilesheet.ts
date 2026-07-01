@@ -26,49 +26,62 @@ export const FLOOR_EDGES: Record<number, TileCoord> = {
   12: { col: 0, row: 0 }, 13: { col: 0, row: 0 }, 14: { col: 0, row: 0 }, 15: { col: 0, row: 0 },
 };
 
+// A floor "set": one main floor tile the whole dungeon uses, plus its own
+// accent tiles sprinkled in at accentChance (0 = none). A theme lists 1..N sets;
+// the generator picks ONE per dungeon, so a given dungeon has a single coherent
+// floor look (accents are variants of that main, never a different main mixed in).
+export interface FloorSet {
+  main: TileCoord;
+  accents: TileCoord[];
+  accentChance: number;
+}
+
 export interface Skin {
   name: string;
   wall: TileCoord;             // solid wall block (wall-pack col 1)
   wallVariants: TileCoord[];   // cracked WALL tiles (cols 2-3), sprinkled into the border
   wallVariantChance: number;   // 0 = never
-  floors: TileCoord[];         // this theme's main floor tile(s) — picked ~uniformly
-  accents: TileCoord[];        // optional decorative floor tiles sprinkled on top
-  accentChance: number;        // 0 = no accents
-  door: TileCoord;             // first pass: a floor tile (reads as an opening)
+  floorSets: FloorSet[];       // main-floor options; generator picks ONE per dungeon
   decor: TileCoord[];
-  // Kept for the (currently unused) blob-floor path / future open-world floors.
+  // Reserved: real archway doors (generator currently opens doorways as the
+  // dungeon's floor) and the unused blob-floor path / future open-world floors.
+  door: TileCoord;
   floorBase: TileCoord;
 }
 
 // Proof skins (decoded from oryx_16bit_fantasy_world_trans.png). Each wall pack
 // is a horizontal band: col 1 = solid wall, cols 2-3 = cracked wall variants,
-// cols 4-7 = themed floor tiles (per theme: 4=plain, 5=inset panel, 6=cracked
-// stone, 7=grate). crypt = grey-stone band (row 1); cave = brown band (row 3).
-// Each theme chooses its main floor(s) + optional accents — a theme with no
-// coherent accent set just lists a single main and accents: [].
+// cols 4-7 = themed floor tiles (this pack: 4=plain, 5=inset panel, 6=cracked
+// plain (accent of 4), 7=small tiles). crypt = grey band (row 1); cave = brown
+// band (row 3). Per-theme floor rules are typed data here — described per theme
+// as we add them (cave's mapping mirrors crypt for now; refine when reviewed).
 export const SKINS: Skin[] = [
   {
     name: 'crypt',
     wall: { col: 1, row: 1 },
     wallVariants: [{ col: 2, row: 1 }, { col: 3, row: 1 }],
-    wallVariantChance: 0.15,
-    floors: [{ col: 4, row: 1 }],
-    accents: [{ col: 5, row: 1 }, { col: 6, row: 1 }, { col: 7, row: 1 }],
-    accentChance: 0.1,
-    door: { col: 4, row: 1 },
+    wallVariantChance: 0.1,
+    floorSets: [
+      { main: { col: 4, row: 1 }, accents: [{ col: 6, row: 1 }], accentChance: 0.1 }, // plain + cracked-plain
+      { main: { col: 5, row: 1 }, accents: [], accentChance: 0 },                       // inset panel
+      { main: { col: 7, row: 1 }, accents: [], accentChance: 0 },                       // small tiles
+    ],
     decor: [],
+    door: { col: 4, row: 1 },
     floorBase: { col: 4, row: 1 },
   },
   {
     name: 'cave',
     wall: { col: 1, row: 3 },
     wallVariants: [{ col: 2, row: 3 }, { col: 3, row: 3 }],
-    wallVariantChance: 0.15,
-    floors: [{ col: 4, row: 3 }],
-    accents: [{ col: 5, row: 3 }, { col: 6, row: 3 }, { col: 7, row: 3 }],
-    accentChance: 0.1,
-    door: { col: 4, row: 3 },
+    wallVariantChance: 0.1,
+    floorSets: [
+      { main: { col: 4, row: 3 }, accents: [{ col: 6, row: 3 }], accentChance: 0.1 },
+      { main: { col: 5, row: 3 }, accents: [], accentChance: 0 },
+      { main: { col: 7, row: 3 }, accents: [], accentChance: 0 },
+    ],
     decor: [],
+    door: { col: 4, row: 3 },
     floorBase: { col: 4, row: 3 },
   },
 ];
