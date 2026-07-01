@@ -97,15 +97,15 @@ export interface Skin {
   floorBase: TileCoord;
 }
 
-// Proof skins (decoded from oryx_16bit_fantasy_world_trans.png). Each wall pack
-// is a horizontal band: col 1 = solid wall, cols 2-3 = cracked wall variants,
-// cols 4-7 = themed floor tiles (this pack: 4=plain, 5=inset panel, 6=cracked
-// plain (accent of 4), 7=small tiles). crypt = grey band (row 1); cave = brown
-// band (row 3). Per-theme floor rules are typed data here — described per theme
-// as we add them (cave's mapping mirrors crypt for now; refine when reviewed).
+// Themed skins (decoded from oryx_16bit_fantasy_world_trans.png). Each wall pack
+// is a horizontal band: cols 1-3 = pillars, cols 4-7 = themed floor tiles,
+// cols 8-29 = the pseudo-3D wall autotile set (shared column layout across bands).
+// The four bands read as distinct places: castle stonework (row 1), the same
+// stonework cracked/distressed = a ruined castle (row 2), a mossy cave (row 3),
+// and red-hot dwarven forge stone (row 4). Per-theme floor rules are typed data.
 export const SKINS: Skin[] = [
   {
-    name: 'crypt',
+    name: 'castle',
     wallRow: 1,
     wallVariantChance: 0.1,
     floorSets: [
@@ -130,10 +130,11 @@ export const SKINS: Skin[] = [
     floorBase: { col: 4, row: 3 },
   },
   {
-    // Lighter grey stone-and-timber interior. Row 2 floors cols 5,6,7 are each a
-    // distinct main (checkered stone / wood planks / dark stone), no accents;
-    // col 4 (fine checkerboard) unused — too busy as a full floor.
-    name: 'keep',
+    // Same castle stonework as row 1 but cracked and distressed — a ruined,
+    // abandoned castle. Row 2 floors cols 5,6,7 are each a distinct main
+    // (checkered stone / wood planks / dark stone), no accents; col 4 (fine
+    // checkerboard) unused — too busy as a full floor.
+    name: 'ruined-castle',
     wallRow: 2,
     wallVariantChance: 0.1,
     floorSets: [
@@ -146,8 +147,9 @@ export const SKINS: Skin[] = [
     floorBase: { col: 5, row: 2 },
   },
   {
-    // Red-brown / rust stone. Row 4 = same floor rules as row 1 (minus col 7).
-    name: 'catacombs',
+    // Red-hot / rust stone — a dwarven forge. Row 4 = same floor rules as row 1
+    // (plain main + cracked accent, plus studded inset; col 7 dropped).
+    name: 'forge',
     wallRow: 4,
     wallVariantChance: 0.1,
     floorSets: [

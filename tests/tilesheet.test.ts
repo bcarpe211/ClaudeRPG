@@ -47,15 +47,15 @@ describe('tilesheet', () => {
 
   it('defines the four themed skins on their own sheet rows', () => {
     const byName = Object.fromEntries(SKINS.map((s) => [s.name, s]));
-    expect(byName.crypt.wallRow).toBe(1);
-    expect(byName.keep.wallRow).toBe(2);
+    expect(byName.castle.wallRow).toBe(1);
+    expect(byName['ruined-castle'].wallRow).toBe(2);
     expect(byName.cave.wallRow).toBe(3);
-    expect(byName.catacombs.wallRow).toBe(4);
-    // keep has three distinct main floors (grey/wood/dark), no accents
-    expect(byName.keep.floorSets.map((f) => f.main.col)).toEqual([5, 6, 7]);
-    expect(byName.keep.floorSets.every((f) => f.accents.length === 0)).toBe(true);
-    // catacombs mirrors crypt's floor rules on row 4
-    expect(byName.catacombs.floorSets.map((f) => f.main.col)).toEqual([4, 5]);
+    expect(byName.forge.wallRow).toBe(4);
+    // ruined-castle has three distinct main floors (checker/wood/dark), no accents
+    expect(byName['ruined-castle'].floorSets.map((f) => f.main.col)).toEqual([5, 6, 7]);
+    expect(byName['ruined-castle'].floorSets.every((f) => f.accents.length === 0)).toBe(true);
+    // forge mirrors castle's floor rules on row 4
+    expect(byName.forge.floorSets.map((f) => f.main.col)).toEqual([4, 5]);
   });
 
   it('DOORS are all on the sheet grid with positive weights', () => {
