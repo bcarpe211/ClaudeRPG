@@ -1,15 +1,24 @@
 import { makeRng } from './dungeon';
-import { getSkin, type Skin, type FloorSet, type TileCoord } from './tilesheet';
+import { getSkin, WALL_COLS, type Skin, type FloorSet, type TileCoord } from './tilesheet';
 import { type LogicalKind } from './autotile';
 
 const at = <T>(arr: T[], rng: () => number): T => arr[Math.floor(rng() * arr.length)];
 
-// Wall: the solid block, with occasional cracked-wall variants sprinkled in.
-function pickWall(skin: Skin, rng: () => number): TileCoord {
-  if (skin.wallVariants.length > 0 && rng() < skin.wallVariantChance) {
-    return at(skin.wallVariants, rng);
-  }
-  return skin.wall;
+// Wall autotiling for a rectangular border: the 4 outer corners get corner
+// pieces; straight runs get horizontal/vertical, with cracked variants sprinkled
+// in (never on corners). (Interior room walls / T-L-cross junctions: future.)
+function pickWall(
+  x: number, y: number, w: number, h: number, skin: Skin, rng: () => number,
+): TileCoord {
+  const row = skin.wallRow;
+  const top = y === 0, bottom = y === h - 1, left = x === 0, right = x === w - 1;
+  if (top && left) return { col: WALL_COLS.tl, row };
+  if (top && right) return { col: WALL_COLS.tr, row };
+  if (bottom && left) return { col: WALL_COLS.bl, row };
+  if (bottom && right) return { col: WALL_COLS.br, row };
+  const cracked = rng() < skin.wallVariantChance;
+  if (top || bottom) return { col: cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal, row };
+  return { col: cracked ? WALL_COLS.crackedV : WALL_COLS.vertical, row };
 }
 
 // Floor: the dungeon's chosen main tile, with this set's accents sprinkled in.
@@ -70,7 +79,7 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) {
       const kind = kinds[y][x];
       let coord;
-      if (kind === 'wall') coord = pickWall(skin, rng);
+      if (kind === 'wall') coord = pickWall(x, y, width, height, skin, rng);
       else if (kind === 'door') coord = floorSet.main; // opening = the dungeon's floor
       else coord = pickFloor(floorSet, rng);
       cells.push({ x, y, kind, col: coord.col, row: coord.row });

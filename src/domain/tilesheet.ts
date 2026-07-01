@@ -36,11 +36,23 @@ export interface FloorSet {
   accentChance: number;
 }
 
+// Wall pieces sit at fixed COLUMNS within any wall band (a skin is just a row),
+// so the piece->column map is shared and a skin only needs its wallRow. These
+// are the pseudo-3D wall autotile pieces: straight runs, the 4 outer corners,
+// and the cracked straight-run variants. Corners have no cracked version.
+// T/L/cross junction columns exist too (reserved for the future "rooms" feature).
+export const WALL_COLS = {
+  horizontal: 12, // top & bottom straight runs (face drops toward the room)
+  vertical: 15,   // left & right straight runs
+  tl: 19, tr: 20, bl: 11, br: 13, // the 4 outer corners
+  crackedH: 27,   // cracked horizontal run
+  crackedV: 26,   // cracked vertical run
+} as const;
+
 export interface Skin {
   name: string;
-  wall: TileCoord;             // solid wall block (wall-pack col 1)
-  wallVariants: TileCoord[];   // cracked WALL tiles (cols 2-3), sprinkled into the border
-  wallVariantChance: number;   // 0 = never
+  wallRow: number;             // the wall band's row; wall tiles = WALL_COLS[piece] @ this row
+  wallVariantChance: number;   // chance a straight-run wall shows its cracked variant
   floorSets: FloorSet[];       // main-floor options; generator picks ONE per dungeon
   decor: TileCoord[];
   // Reserved: real archway doors (generator currently opens doorways as the
@@ -58,8 +70,7 @@ export interface Skin {
 export const SKINS: Skin[] = [
   {
     name: 'crypt',
-    wall: { col: 1, row: 1 },
-    wallVariants: [{ col: 2, row: 1 }, { col: 3, row: 1 }],
+    wallRow: 1,
     wallVariantChance: 0.1,
     floorSets: [
       { main: { col: 4, row: 1 }, accents: [{ col: 6, row: 1 }], accentChance: 0.1 }, // plain + cracked-plain
@@ -71,8 +82,7 @@ export const SKINS: Skin[] = [
   },
   {
     name: 'cave',
-    wall: { col: 1, row: 3 },
-    wallVariants: [{ col: 2, row: 3 }, { col: 3, row: 3 }],
+    wallRow: 3,
     wallVariantChance: 0.1,
     floorSets: [
       // row 3 = same as row 1 (minus col 7)

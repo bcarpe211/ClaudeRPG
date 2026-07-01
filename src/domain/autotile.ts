@@ -20,10 +20,6 @@ export function resolveFloor(skin: Skin, mask: number): TileCoord {
   return { col: skin.floorBase.col + e.col, row: skin.floorBase.row + e.row };
 }
 
-export function resolveWall(skin: Skin): TileCoord {
-  return skin.wall;
-}
-
 export function resolveDoor(skin: Skin): TileCoord {
   return skin.door;
 }

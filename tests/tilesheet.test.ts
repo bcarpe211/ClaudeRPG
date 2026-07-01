@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SHEET, tileRect, FLOOR_EDGES, SKINS, getSkin } from '../src/domain/tilesheet';
+import { SHEET, tileRect, FLOOR_EDGES, WALL_COLS, SKINS, getSkin } from '../src/domain/tilesheet';
 
 const inGrid = (c: { col: number; row: number }) =>
   c.col >= 0 && c.col < SHEET.cols && c.row >= 0 && c.row < SHEET.rows;
@@ -22,10 +22,14 @@ describe('tilesheet', () => {
     expect(SKINS.length).toBeGreaterThanOrEqual(2);
     for (const s of SKINS) {
       expect(inGrid(s.floorBase)).toBe(true);
-      expect(inGrid(s.wall)).toBe(true);
       expect(inGrid(s.door)).toBe(true);
       expect(s.decor.every(inGrid)).toBe(true);
-      expect(s.wallVariants.every(inGrid)).toBe(true);
+      expect(s.wallRow).toBeGreaterThanOrEqual(0);
+      expect(s.wallRow).toBeLessThan(SHEET.rows);
+      // every wall piece column lands on the sheet at this skin's row
+      for (const col of Object.values(WALL_COLS)) {
+        expect(inGrid({ col, row: s.wallRow })).toBe(true);
+      }
       expect(s.floorSets.length).toBeGreaterThan(0);
       for (const set of s.floorSets) {
         expect(inGrid(set.main)).toBe(true);
