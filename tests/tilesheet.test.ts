@@ -27,7 +27,8 @@ describe('tilesheet', () => {
       expect(s.decor.every(inGrid)).toBe(true);
       expect(s.floors.length).toBeGreaterThan(0);
       expect(s.floors.every(inGrid)).toBe(true);
-      expect(s.crackedFloors.every(inGrid)).toBe(true);
+      expect(s.accents.every(inGrid)).toBe(true);
+      expect(s.wallVariants.every(inGrid)).toBe(true);
       for (let m = 0; m < 16; m++) {
         const e = FLOOR_EDGES[m];
         expect(inGrid({ col: s.floorBase.col + e.col, row: s.floorBase.row + e.row })).toBe(true);

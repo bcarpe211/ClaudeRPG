@@ -1,19 +1,24 @@
 import { makeRng } from './dungeon';
 import { getSkin, type Skin, type TileCoord } from './tilesheet';
-import { resolveWall, resolveDoor, type LogicalKind } from './autotile';
+import { resolveDoor, type LogicalKind } from './autotile';
 
-// Themed dungeon floor: mostly the base floor (floors[0]), with sporadic accent
-// tiles (floors[1..] — panel/cracked-stone/grid) and occasional cracked tiles.
-const CRACK_CHANCE = 0.08;
-const ACCENT_CHANCE = 0.2;
+const at = (arr: TileCoord[], rng: () => number): TileCoord =>
+  arr[Math.floor(rng() * arr.length)];
+
+// Wall: the solid block, with occasional cracked-wall variants sprinkled in.
+function pickWall(skin: Skin, rng: () => number): TileCoord {
+  if (skin.wallVariants.length > 0 && rng() < skin.wallVariantChance) {
+    return at(skin.wallVariants, rng);
+  }
+  return skin.wall;
+}
+
+// Floor: this theme's main tile(s), with optional decorative accents sprinkled in.
 function pickThemedFloor(skin: Skin, rng: () => number): TileCoord {
-  if (skin.crackedFloors.length > 0 && rng() < CRACK_CHANCE) {
-    return skin.crackedFloors[Math.floor(rng() * skin.crackedFloors.length)];
+  if (skin.accents.length > 0 && rng() < skin.accentChance) {
+    return at(skin.accents, rng);
   }
-  if (skin.floors.length > 1 && rng() < ACCENT_CHANCE) {
-    return skin.floors[1 + Math.floor(rng() * (skin.floors.length - 1))];
-  }
-  return skin.floors[0];
+  return at(skin.floors, rng);
 }
 
 export interface RenderCell { x: number; y: number; kind: LogicalKind; col: number; row: number; }
@@ -64,7 +69,7 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) {
       const kind = kinds[y][x];
       let coord;
-      if (kind === 'wall') coord = resolveWall(skin);
+      if (kind === 'wall') coord = pickWall(skin, rng);
       else if (kind === 'door') coord = resolveDoor(skin);
       else coord = pickThemedFloor(skin, rng);
       cells.push({ x, y, kind, col: coord.col, row: coord.row });

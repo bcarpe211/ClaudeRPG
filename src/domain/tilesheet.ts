@@ -29,9 +29,11 @@ export const FLOOR_EDGES: Record<number, TileCoord> = {
 export interface Skin {
   name: string;
   wall: TileCoord;             // solid wall block (wall-pack col 1)
-  wallVariants?: TileCoord[];
-  floors: TileCoord[];         // themed dungeon floor tiles (wall-pack cols 4-7)
-  crackedFloors: TileCoord[];  // sporadic cracked accents (wall-pack cols 2-3)
+  wallVariants: TileCoord[];   // cracked WALL tiles (cols 2-3), sprinkled into the border
+  wallVariantChance: number;   // 0 = never
+  floors: TileCoord[];         // this theme's main floor tile(s) — picked ~uniformly
+  accents: TileCoord[];        // optional decorative floor tiles sprinkled on top
+  accentChance: number;        // 0 = no accents
   door: TileCoord;             // first pass: a floor tile (reads as an opening)
   decor: TileCoord[];
   // Kept for the (currently unused) blob-floor path / future open-world floors.
@@ -39,17 +41,20 @@ export interface Skin {
 }
 
 // Proof skins (decoded from oryx_16bit_fantasy_world_trans.png). Each wall pack
-// is a horizontal band: col 1 = solid wall, cols 2-3 = cracked variants, cols
-// 4-7 = themed floor tiles. crypt = grey-stone band (row 1); cave = brown band
-// (row 3).
+// is a horizontal band: col 1 = solid wall, cols 2-3 = cracked wall variants,
+// cols 4-7 = themed floor tiles (per theme: 4=plain, 5=inset panel, 6=cracked
+// stone, 7=grate). crypt = grey-stone band (row 1); cave = brown band (row 3).
+// Each theme chooses its main floor(s) + optional accents — a theme with no
+// coherent accent set just lists a single main and accents: [].
 export const SKINS: Skin[] = [
   {
     name: 'crypt',
     wall: { col: 1, row: 1 },
-    floors: [
-      { col: 4, row: 1 }, { col: 5, row: 1 }, { col: 6, row: 1 }, { col: 7, row: 1 },
-    ],
-    crackedFloors: [{ col: 2, row: 1 }, { col: 3, row: 1 }],
+    wallVariants: [{ col: 2, row: 1 }, { col: 3, row: 1 }],
+    wallVariantChance: 0.15,
+    floors: [{ col: 4, row: 1 }],
+    accents: [{ col: 5, row: 1 }, { col: 6, row: 1 }, { col: 7, row: 1 }],
+    accentChance: 0.1,
     door: { col: 4, row: 1 },
     decor: [],
     floorBase: { col: 4, row: 1 },
@@ -57,10 +62,11 @@ export const SKINS: Skin[] = [
   {
     name: 'cave',
     wall: { col: 1, row: 3 },
-    floors: [
-      { col: 4, row: 3 }, { col: 5, row: 3 }, { col: 6, row: 3 }, { col: 7, row: 3 },
-    ],
-    crackedFloors: [{ col: 2, row: 3 }, { col: 3, row: 3 }],
+    wallVariants: [{ col: 2, row: 3 }, { col: 3, row: 3 }],
+    wallVariantChance: 0.15,
+    floors: [{ col: 4, row: 3 }],
+    accents: [{ col: 5, row: 3 }, { col: 6, row: 3 }, { col: 7, row: 3 }],
+    accentChance: 0.1,
     door: { col: 4, row: 3 },
     decor: [],
     floorBase: { col: 4, row: 3 },
