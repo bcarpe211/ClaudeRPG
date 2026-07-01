@@ -64,8 +64,7 @@ export const SKINS: Skin[] = [
     floorSets: [
       { main: { col: 4, row: 1 }, accents: [{ col: 6, row: 1 }], accentChance: 0.1 }, // plain + cracked-plain
       { main: { col: 5, row: 1 }, accents: [], accentChance: 0 },                       // inset panel
-      { main: { col: 7, row: 1 }, accents: [], accentChance: 0 },                       // small tiles
-    ],
+    ], // col 7 (small tiles) dropped — too busy as a full floor
     decor: [],
     door: { col: 4, row: 1 },
     floorBase: { col: 4, row: 1 },
@@ -76,9 +75,9 @@ export const SKINS: Skin[] = [
     wallVariants: [{ col: 2, row: 3 }, { col: 3, row: 3 }],
     wallVariantChance: 0.1,
     floorSets: [
+      // row 3 = same as row 1 (minus col 7)
       { main: { col: 4, row: 3 }, accents: [{ col: 6, row: 3 }], accentChance: 0.1 },
       { main: { col: 5, row: 3 }, accents: [], accentChance: 0 },
-      { main: { col: 7, row: 3 }, accents: [], accentChance: 0 },
     ],
     decor: [],
     door: { col: 4, row: 3 },
