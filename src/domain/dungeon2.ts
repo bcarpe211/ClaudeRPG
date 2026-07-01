@@ -4,21 +4,42 @@ import { type LogicalKind } from './autotile';
 
 const at = <T>(arr: T[], rng: () => number): T => arr[Math.floor(rng() * arr.length)];
 
-// Wall autotiling for a rectangular border: the 4 outer corners get corner
-// pieces; straight runs get horizontal/vertical, with cracked variants sprinkled
-// in (never on corners). (Interior room walls / T-L-cross junctions: future.)
+// mulberry32's first outputs are strongly correlated for small sequential
+// seeds (1,2,3 all yield a high first value). Feeding the seed through an
+// integer avalanche hash first decorrelates the whole stream, so per-dungeon
+// choices (floor set, doors, cracks) vary across adjacent seeds. Deterministic.
+const scrambleSeed = (n: number): number => {
+  n = Math.imul(n ^ (n >>> 15), 0x2c1b3c6d);
+  n = Math.imul(n ^ (n >>> 12), 0x297a2d39);
+  return (n ^ (n >>> 15)) >>> 0;
+};
+
+// Neighbour-aware wall autotiling: a wall cell picks its tile from which of its
+// N/E/S/W neighbours are also wall. Corners connect two runs; a cell beside a
+// doorway (gap) becomes a soft wall-end; straight runs sprinkle cracks. This
+// also handles interior walls / rooms later (T/L/cross masks). Doors and floor
+// count as NOT wall.
 function pickWall(
-  x: number, y: number, w: number, h: number, skin: Skin, rng: () => number,
+  x: number, y: number, kinds: LogicalKind[][], w: number, h: number,
+  skin: Skin, rng: () => number,
 ): TileCoord {
   const row = skin.wallRow;
-  const top = y === 0, bottom = y === h - 1, left = x === 0, right = x === w - 1;
-  if (top && left) return { col: WALL_COLS.tl, row };
-  if (top && right) return { col: WALL_COLS.tr, row };
-  if (bottom && left) return { col: WALL_COLS.bl, row };
-  if (bottom && right) return { col: WALL_COLS.br, row };
+  const C = (col: number): TileCoord => ({ col, row });
+  const isWall = (xx: number, yy: number) =>
+    xx >= 0 && yy >= 0 && xx < w && yy < h && kinds[yy][xx] === 'wall';
+  const N = isWall(x, y - 1), E = isWall(x + 1, y), S = isWall(x, y + 1), Wt = isWall(x - 1, y);
   const cracked = rng() < skin.wallVariantChance;
-  if (top || bottom) return { col: cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal, row };
-  return { col: cracked ? WALL_COLS.crackedV : WALL_COLS.vertical, row };
+  if (E && Wt && !N && !S) return C(cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal);
+  if (N && S && !E && !Wt) return C(cracked ? WALL_COLS.crackedV : WALL_COLS.vertical);
+  if (E && S && !N && !Wt) return C(WALL_COLS.tl);
+  if (Wt && S && !N && !E) return C(WALL_COLS.tr);
+  if (E && N && !S && !Wt) return C(WALL_COLS.bl);
+  if (Wt && N && !S && !E) return C(WALL_COLS.br);
+  if (Wt && !E && !N && !S) return C(WALL_COLS.rend); // wall to the west only -> east cap
+  if (E && !Wt && !N && !S) return C(WALL_COLS.lend);
+  if (N && !S && !E && !Wt) return C(WALL_COLS.bend); // wall to the north only -> south cap
+  if (S && !N && !E && !Wt) return C(WALL_COLS.tend);
+  return C(WALL_COLS.horizontal); // junctions/isolated (rooms: future)
 }
 
 // Floor: the dungeon's chosen main tile, with this set's accents sprinkled in.
@@ -44,7 +65,7 @@ export function generateAutotiledDungeon(
   if (!skin) throw new Error(`unknown skin: ${skinName}`);
   const width = opts.width ?? 20;
   const height = opts.height ?? 15;
-  const rng = makeRng(seed);
+  const rng = makeRng(scrambleSeed(seed));
   // Pick ONE floor set for this whole dungeon (coherent look; accents vary it).
   const floorSet = at(skin.floorSets, rng);
 
@@ -79,7 +100,7 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) {
       const kind = kinds[y][x];
       let coord;
-      if (kind === 'wall') coord = pickWall(x, y, width, height, skin, rng);
+      if (kind === 'wall') coord = pickWall(x, y, kinds, width, height, skin, rng);
       else if (kind === 'door') coord = floorSet.main; // opening = the dungeon's floor
       else coord = pickFloor(floorSet, rng);
       cells.push({ x, y, kind, col: coord.col, row: coord.row });

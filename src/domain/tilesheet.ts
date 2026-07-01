@@ -42,9 +42,12 @@ export interface FloorSet {
 // and the cracked straight-run variants. Corners have no cracked version.
 // T/L/cross junction columns exist too (reserved for the future "rooms" feature).
 export const WALL_COLS = {
-  horizontal: 12, // top & bottom straight runs (face drops toward the room)
-  vertical: 15,   // left & right straight runs
-  tl: 19, tr: 20, bl: 11, br: 13, // the 4 outer corners
+  horizontal: 12, // straight run, wall on E+W
+  vertical: 15,   // straight run, wall on N+S
+  tl: 17, tr: 18, // top corners (wall on E+S / W+S)
+  bl: 19, br: 20, // bottom corners (wall on E+N / W+N)
+  lend: 11, rend: 13, // horizontal wall-ends (soft cap at a doorway): wall on E only / W only
+  tend: 14, bend: 16, // vertical wall-ends: wall on S only / N only
   crackedH: 27,   // cracked horizontal run
   crackedV: 26,   // cracked vertical run
 } as const;
