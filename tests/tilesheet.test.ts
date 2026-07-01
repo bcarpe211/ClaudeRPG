@@ -49,7 +49,7 @@ describe('tilesheet', () => {
     const byName = Object.fromEntries(SKINS.map((s) => [s.name, s]));
     expect(byName.castle.wallRow).toBe(1);
     expect(byName['ruined-castle'].wallRow).toBe(2);
-    expect(byName.cave.wallRow).toBe(3);
+    expect(byName.dungeon.wallRow).toBe(3);
     expect(byName.forge.wallRow).toBe(4);
     // castle & ruined-castle are one place in two states -> shared floor pool,
     // drawing from both row 1 (grey stone) and row 2 (checker/wood/dark) floors

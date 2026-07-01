@@ -59,18 +59,18 @@ export const WALL_COLS = {
 // common, grey stone / iron portcullis less frequent, ice / portal rare.
 export interface WeightedTile { coord: TileCoord; weight: number; }
 export const DOORS: WeightedTile[] = [
-  // brown wooden — most often
-  ...[29, 30, 31, 32, 33, 34, 35].map((col) => ({ coord: { col, row: 3 }, weight: 8 })),
-  // brown barricaded — common
-  ...[40, 41].map((col) => ({ coord: { col, row: 3 }, weight: 5 })),
-  // grey stone — less frequent
-  ...[36, 37].map((col) => ({ coord: { col, row: 3 }, weight: 3 })),
-  // iron portcullis — less frequent
-  ...[29, 30].map((col) => ({ coord: { col, row: 4 }, weight: 3 })),
-  // ice — rare
+  // brown wooden — most often (~70%)
+  ...[29, 30, 31, 32, 33, 34, 35].map((col) => ({ coord: { col, row: 3 }, weight: 16 })),
+  // brown barricaded — common (~12%)
+  ...[40, 41].map((col) => ({ coord: { col, row: 3 }, weight: 10 })),
+  // grey stone — less frequent (~7%)
+  ...[36, 37].map((col) => ({ coord: { col, row: 3 }, weight: 6 })),
+  // iron portcullis — less frequent (~7%)
+  ...[29, 30].map((col) => ({ coord: { col, row: 4 }, weight: 6 })),
+  // ice / blue — very rare (~2% total across the 3 ice tiles)
   ...[38, 39].map((col) => ({ coord: { col, row: 3 }, weight: 1 })),
-  { coord: { col: 42, row: 3 }, weight: 1 }, // purple portal — rare
-  { coord: { col: 31, row: 4 }, weight: 1 }, // ice w/ handle — rare
+  { coord: { col: 31, row: 4 }, weight: 1 }, // ice w/ handle
+  { coord: { col: 42, row: 3 }, weight: 2 }, // purple portal — rare (~1%)
 ];
 
 // Weighted pick: draw one item with probability proportional to its weight.
@@ -101,8 +101,9 @@ export interface Skin {
 // is a horizontal band: cols 1-3 = pillars, cols 4-7 = themed floor tiles,
 // cols 8-29 = the pseudo-3D wall autotile set (shared column layout across bands).
 // The four bands read as distinct places: castle stonework (row 1), the same
-// stonework cracked/distressed = a ruined castle (row 2), a mossy cave (row 3),
-// and red-hot dwarven forge stone (row 4). Per-theme floor rules are typed data.
+// stonework cracked/distressed = a ruined castle (row 2), the lower dungeon
+// levels — still hard tiled stone, not dirt (row 3) — and red-hot dwarven forge
+// stone (row 4). Per-theme floor rules are typed data.
 // castle (row 1) and ruined-castle (row 2) are the same place in two states, so
 // their floors are one interchangeable pool: the clean grey stone of row 1 plus
 // the checkered / wood / dark floors of row 2. Either skin can roll any of them;
@@ -127,11 +128,12 @@ export const SKINS: Skin[] = [
     floorBase: { col: 4, row: 1 },
   },
   {
-    name: 'cave',
+    // Lower dungeon levels — hard tiled stone floors (not dirt), so "dungeon"
+    // rather than "cave". Floor rules mirror the castle's originals (row 3).
+    name: 'dungeon',
     wallRow: 3,
     wallVariantChance: 0.1,
     floorSets: [
-      // row 3 = same as row 1 (minus col 7)
       { main: { col: 4, row: 3 }, accents: [{ col: 6, row: 3 }], accentChance: 0.1 },
       { main: { col: 5, row: 3 }, accents: [], accentChance: 0 },
     ],

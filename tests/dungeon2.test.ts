@@ -28,7 +28,10 @@ describe('generateAutotiledDungeon', () => {
     let sawDoor = false;
     for (let seed = 1; seed <= 20; seed++) {
       const d = generateAutotiledDungeon(skin, seed, { width: 20, height: 15 });
-      for (const c of d.cells.filter((c) => c.kind === 'door')) {
+      const doorCells = d.cells.filter((c) => c.kind === 'door');
+      expect(doorCells.length).toBeGreaterThanOrEqual(2);
+      expect(doorCells.length).toBeLessThanOrEqual(3);
+      for (const c of doorCells) {
         sawDoor = true;
         expect(doorKeys.has(`${c.col},${c.row}`)).toBe(true);
         // door tiles are transparent -> must carry a floor underlay

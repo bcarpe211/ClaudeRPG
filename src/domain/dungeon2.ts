@@ -86,8 +86,8 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) row.push(isEdge(x, y) ? 'wall' : 'floor');
     kinds.push(row);
   }
-  // doors: 2-4 non-corner border cells
-  const doorCount = 2 + Math.floor(rng() * 3);
+  // doors: 2-3 non-corner border cells
+  const doorCount = 2 + Math.floor(rng() * 2);
   let guard = 0; let placed = 0;
   while (placed < doorCount && guard++ < 200) {
     const side = Math.floor(rng() * 4);
