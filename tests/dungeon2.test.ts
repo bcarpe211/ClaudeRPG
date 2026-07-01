@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateAutotiledDungeon } from '../src/domain/dungeon2';
-import { SKINS } from '../src/domain/tilesheet';
+import { SKINS, DOORS } from '../src/domain/tilesheet';
 
 const skin = SKINS[0].name;
 
@@ -21,5 +21,18 @@ describe('generateAutotiledDungeon', () => {
     const d = generateAutotiledDungeon(skin, 7, { width: 10, height: 8 });
     expect(d.cells.length).toBe(10 * 8);
     expect(d.cells.every((c) => Number.isInteger(c.col) && Number.isInteger(c.row))).toBe(true);
+  });
+  it('door cells resolve to a tile from the door pool', () => {
+    const doorKeys = new Set(DOORS.map((x) => `${x.coord.col},${x.coord.row}`));
+    // scan several seeds so we actually hit door cells
+    let sawDoor = false;
+    for (let seed = 1; seed <= 20; seed++) {
+      const d = generateAutotiledDungeon(skin, seed, { width: 20, height: 15 });
+      for (const c of d.cells.filter((c) => c.kind === 'door')) {
+        sawDoor = true;
+        expect(doorKeys.has(`${c.col},${c.row}`)).toBe(true);
+      }
+    }
+    expect(sawDoor).toBe(true);
   });
 });

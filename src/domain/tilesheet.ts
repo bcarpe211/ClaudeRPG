@@ -52,6 +52,39 @@ export const WALL_COLS = {
   crackedV: 26,   // cracked vertical run
 } as const;
 
+// Door tiles live on the world sheet at row 3 cols 29-42 and row 4 cols 29-31.
+// A doorway cell renders one of these instead of an open floor gap. Doors are a
+// single GLOBAL weighted pool (theme-matched doors are a future refinement): the
+// weight sets relative frequency, so brown wooden doors dominate, barricaded are
+// common, grey stone / iron portcullis less frequent, ice / portal rare.
+export interface WeightedTile { coord: TileCoord; weight: number; }
+export const DOORS: WeightedTile[] = [
+  // brown wooden — most often
+  ...[29, 30, 31, 32, 33, 34, 35].map((col) => ({ coord: { col, row: 3 }, weight: 8 })),
+  // brown barricaded — common
+  ...[40, 41].map((col) => ({ coord: { col, row: 3 }, weight: 5 })),
+  // grey stone — less frequent
+  ...[36, 37].map((col) => ({ coord: { col, row: 3 }, weight: 3 })),
+  // iron portcullis — less frequent
+  ...[29, 30].map((col) => ({ coord: { col, row: 4 }, weight: 3 })),
+  // ice — rare
+  ...[38, 39].map((col) => ({ coord: { col, row: 3 }, weight: 1 })),
+  { coord: { col: 42, row: 3 }, weight: 1 }, // purple portal — rare
+  { coord: { col: 31, row: 4 }, weight: 1 }, // ice w/ handle — rare
+];
+
+// Weighted pick: draw one item with probability proportional to its weight.
+// Consumes exactly one rng() call so the generator's stream stays deterministic.
+export function pickWeighted<T extends { weight: number }>(items: T[], rng: () => number): T {
+  const total = items.reduce((s, i) => s + i.weight, 0);
+  let r = rng() * total;
+  for (const item of items) {
+    r -= item.weight;
+    if (r < 0) return item;
+  }
+  return items[items.length - 1];
+}
+
 export interface Skin {
   name: string;
   wallRow: number;             // the wall band's row; wall tiles = WALL_COLS[piece] @ this row

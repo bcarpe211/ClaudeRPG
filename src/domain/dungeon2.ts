@@ -1,5 +1,5 @@
 import { makeRng } from './dungeon';
-import { getSkin, WALL_COLS, type Skin, type FloorSet, type TileCoord } from './tilesheet';
+import { getSkin, WALL_COLS, DOORS, pickWeighted, type Skin, type FloorSet, type TileCoord } from './tilesheet';
 import { type LogicalKind } from './autotile';
 
 const at = <T>(arr: T[], rng: () => number): T => arr[Math.floor(rng() * arr.length)];
@@ -101,7 +101,7 @@ export function generateAutotiledDungeon(
       const kind = kinds[y][x];
       let coord;
       if (kind === 'wall') coord = pickWall(x, y, kinds, width, height, skin, rng);
-      else if (kind === 'door') coord = floorSet.main; // opening = the dungeon's floor
+      else if (kind === 'door') coord = pickWeighted(DOORS, rng).coord; // weighted door tile
       else coord = pickFloor(floorSet, rng);
       cells.push({ x, y, kind, col: coord.col, row: coord.row });
     }
