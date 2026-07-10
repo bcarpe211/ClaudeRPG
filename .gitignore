@@ -7,3 +7,6 @@ data/
 *.db-wal
 *.db-shm
 assets/
+
+# raw flooring import (data vendored into src/domain/floordata; provenance in the spec)
+docs/oryx_flooring_package/

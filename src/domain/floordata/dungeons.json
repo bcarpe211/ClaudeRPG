@@ -1,0 +1,1502 @@
+{
+  "_readme": "Oryx 16-bit Fantasy sprite floor-tile map for a dungeon generator. Each 'style' is one horizontal band of the top-left wall/floor block; the wall material of that band defines its color theme. For each style we list the COLOR-MATCHED floor tiles (sheet columns 3-6). HOW TO USE: for a room of a given style, pick one tile whose role=='base' as the main fill (weight it heavily / flood most of the floor), then optionally sprinkle role=='accent' tiles sparsely (cracks, embers, emblems, checkerboard, transition edges) for variation. A style may have several valid bases (pick one, or mix a couple of similar-tone bases) and may have zero accents. Never use an 'accent' as the dominant fill. Tiles marked GLOW (style 9 col6, style 14 col5/col6) are vivid emissive tiles \u2014 treat as rare hero accents. Style 17 (Homestead Pickets) is a fence PROP row, not a real dungeon wall; its floors are generic dark filler.",
+  "_schema": {
+    "sheet_file": "oryx_16bit_fantasy_world_trans.png",
+    "tile_size": 24,
+    "coordinate_system": "pixel origin top-left; a tile's rect is [x, y, w, h] in pixels, ready to crop directly.",
+    "column_layout": {
+      "note": "Per style band the leftmost empty column is dropped, then columns are 0-indexed.",
+      "col0": "solid wall face (NOT a floor)",
+      "col1": "cracked wall face (NOT a floor)",
+      "col2": "shattered wall face (NOT a floor)",
+      "col3": "floor tile",
+      "col4": "floor tile",
+      "col5": "floor tile",
+      "col6": "floor tile"
+    },
+    "style_fields": "id, name, aka(optional), material, wall_hex(theme color from wall face), floors[]",
+    "floor_fields": "col, rect[x,y,w,h], role(base|accent), hex, hint",
+    "quick_lists": "each style also has base_cols[] and accent_cols[] for fast selection"
+  },
+  "styles": [
+    {
+      "id": 1,
+      "name": "Greystone Keep",
+      "material": "clean grey cut granite",
+      "wall_hex": "#919191",
+      "base_cols": [
+        3,
+        4
+      ],
+      "accent_cols": [
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            24,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "flat solid slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            24,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "framed / inset border"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            24,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#3d3d3d",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            24,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "small square-tile floor"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Crimson Court",
+      "material": "grey stone, heraldic \u2014 checkerboard + red banners",
+      "wall_hex": "#919191",
+      "base_cols": [
+        6
+      ],
+      "accent_cols": [
+        3,
+        4,
+        5
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            48,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#262626",
+          "hint": "checkerboard"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            48,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#474747",
+          "hint": "checkerboard (offset)"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            48,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#534e3c",
+          "hint": "warm plank inlay"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            48,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "flat dark slab"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Mossmarch Hold",
+      "material": "olive-tinted grey stone",
+      "wall_hex": "#756b47",
+      "base_cols": [
+        3,
+        4
+      ],
+      "accent_cols": [
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            72,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3826",
+          "hint": "flat solid slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            72,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3826",
+          "hint": "framed / inset border"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            72,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#3d3826",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            72,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "small square-tile floor"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Emberforge",
+      "material": "rust/copper diamond-plate, riveted",
+      "wall_hex": "#7b4a3b",
+      "base_cols": [
+        3
+      ],
+      "accent_cols": [
+        4,
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            96,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#432d24",
+          "hint": "flat solid slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            96,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#432d24",
+          "hint": "diamond-studded"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            96,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#432d24",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            96,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "small square-tile floor"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Oakenvault",
+      "material": "dark brown paneled / wainscot stone",
+      "wall_hex": "#4c442e",
+      "base_cols": [
+        3,
+        4
+      ],
+      "accent_cols": [
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            120,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#4d251c",
+          "hint": "flat solid slab (warm)"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            120,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3826",
+          "hint": "framed / inset border"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            120,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#3d3826",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            120,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#3d3826",
+          "hint": "cross / grid"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Verdant Crypt",
+      "material": "mossy green stone",
+      "wall_hex": "#688360",
+      "base_cols": [
+        5
+      ],
+      "accent_cols": [
+        3,
+        4,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            144,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#44380d",
+          "hint": "herringbone planks"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            144,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#252e1b",
+          "hint": "grass / hedge texture"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            144,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#2c3829",
+          "hint": "flat inset slab"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            144,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#2c3829",
+          "hint": "bright-bordered slab"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Tideglass Halls",
+      "material": "teal / turquoise stone",
+      "wall_hex": "#4d9999",
+      "base_cols": [
+        3,
+        4
+      ],
+      "accent_cols": [
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            168,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#214040",
+          "hint": "flat solid slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            168,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#323322",
+          "hint": "framed / inset border"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            168,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#214040",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            168,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#214040",
+          "hint": "line detail"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Frostiron Bastion",
+      "material": "slate-blue steel stone",
+      "wall_hex": "#4b647b",
+      "base_cols": [
+        3
+      ],
+      "accent_cols": [
+        4,
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            192,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#364858",
+          "hint": "flat solid slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            192,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#364858",
+          "hint": "circular emblem"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            192,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#364858",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            192,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#364858",
+          "hint": "arc / seal detail"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Auric Deep",
+      "material": "glowing gold / yellow blocks",
+      "wall_hex": "#eaff00",
+      "base_cols": [
+        3,
+        6
+      ],
+      "accent_cols": [
+        4,
+        5
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            216,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3826",
+          "hint": "flat muted slab (base ground)"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            216,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#3d3826",
+          "hint": "circular seal"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            216,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#3d3826",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            216,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#eaff00",
+          "hint": "solid gold GLOW slab (vivid \u2014 use sparingly as hero base or accent)"
+        }
+      ],
+      "aka": "Sunspire Vault"
+    },
+    {
+      "id": 10,
+      "name": "Rustpipe Sewers",
+      "material": "grey sewer stone, pipes & portholes",
+      "wall_hex": "#919191",
+      "base_cols": [
+        3,
+        5
+      ],
+      "accent_cols": [
+        4,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            240,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "panel / plate slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            240,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#3d3d3d",
+          "hint": "pipe cross"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            240,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#2f2d25",
+          "hint": "flat slab"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            240,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#363226",
+          "hint": "pipe detail"
+        }
+      ],
+      "aka": "The Undersluice"
+    },
+    {
+      "id": 11,
+      "name": "Drowned Foundry",
+      "material": "sea-green stone with round bolts/rivets",
+      "wall_hex": "#457765",
+      "base_cols": [
+        3,
+        4,
+        6
+      ],
+      "accent_cols": [
+        5
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            264,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#243d34",
+          "hint": "riveted slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            264,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "flat grey slab"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            264,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#243d34",
+          "hint": "cracked cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            264,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#29473c",
+          "hint": "flat green slab"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "Duskstone Warren",
+      "material": "muted grey-tan stone",
+      "wall_hex": "#706a57",
+      "base_cols": [
+        3,
+        5
+      ],
+      "accent_cols": [
+        4,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            288,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#474438",
+          "hint": "flat tan slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            288,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#542b21",
+          "hint": "warm red-brown inlay"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            288,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "flat dark slab"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            288,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#262626",
+          "hint": "dark detail"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "name": "Thornwind Ruins",
+      "material": "grey stone laced with ivy/vines",
+      "wall_hex": "#706a57",
+      "base_cols": [
+        3
+      ],
+      "accent_cols": [
+        4,
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            312,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#38362c",
+          "hint": "flat tan slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            312,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#38362c",
+          "hint": "vine specks"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            312,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#38362c",
+          "hint": "faint ring"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            312,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#38362c",
+          "hint": "emblem"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "Cinderdeep",
+      "material": "cracked orange ember-rock",
+      "wall_hex": "#8f551f",
+      "base_cols": [
+        3,
+        4
+      ],
+      "accent_cols": [
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            336,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#4d251c",
+          "hint": "flat solid slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            336,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "subtle ember slab"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            336,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#4d251c",
+          "hint": "ember-speckled GLOW"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            336,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#4d251c",
+          "hint": "bright ember flecks GLOW"
+        }
+      ],
+      "aka": "Magma Reach"
+    },
+    {
+      "id": 15,
+      "name": "Wildroot Barrow",
+      "material": "grassy green earth (grey gravel floors)",
+      "wall_hex": "#296b29",
+      "base_cols": [
+        3,
+        4,
+        5
+      ],
+      "accent_cols": [
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            360,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#343434",
+          "hint": "grey gravel"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            360,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "grey gravel"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            360,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "grey gravel"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            360,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#343434",
+          "hint": "gravel w/ moss"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "Ossuary Pale",
+      "material": "grey stone with bone/frost speckle",
+      "wall_hex": "#919191",
+      "base_cols": [
+        3,
+        4,
+        5
+      ],
+      "accent_cols": [
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            384,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#403d32",
+          "hint": "olive gravel"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            384,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#2f2d25",
+          "hint": "olive gravel"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            384,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#2f2d25",
+          "hint": "olive gravel"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            384,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#403d32",
+          "hint": "gravel w/ moss"
+        }
+      ],
+      "aka": "Bonemeal Grotto"
+    },
+    {
+      "id": 17,
+      "name": "Homestead Pickets",
+      "material": "wooden fence PROPS (not a tiling wall)",
+      "wall_hex": "#262626",
+      "base_cols": [
+        3,
+        4
+      ],
+      "accent_cols": [
+        5,
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            408,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "dark filler cobble"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            408,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "dark filler cobble"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            408,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#262626",
+          "hint": "dark cracked"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            408,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#262626",
+          "hint": "dark cracked"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "Wintermarch Keep",
+      "material": "grey stone dusted with snow",
+      "wall_hex": "#919191",
+      "base_cols": [
+        4,
+        6
+      ],
+      "accent_cols": [
+        3,
+        5
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            432,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#4f4f4f",
+          "hint": "scattered rubble"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            432,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#262626",
+          "hint": "rocky slab"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            432,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#262626",
+          "hint": "dark scatter"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            432,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#696969",
+          "hint": "cobble slab"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "name": "Glacierhold",
+      "material": "heavy white snow / ice",
+      "wall_hex": "#dcdcdc",
+      "base_cols": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "accent_cols": [],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            456,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#696969",
+          "hint": "smooth grey slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            456,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#696969",
+          "hint": "rounded slab"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            456,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#696969",
+          "hint": "smooth slab"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            456,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#696969",
+          "hint": "rounded stone"
+        }
+      ],
+      "aka": "Frostbite Hollow"
+    },
+    {
+      "id": 20,
+      "name": "Bogstone Mire",
+      "material": "dark olive sandstone",
+      "wall_hex": "#b3aa77",
+      "base_cols": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "accent_cols": [],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            480,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#595332",
+          "hint": "flat olive slab"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            480,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#595332",
+          "hint": "olive slab"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            480,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#595332",
+          "hint": "olive slab"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            480,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#595332",
+          "hint": "rounded olive"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Dunewatch",
+      "material": "sandy tan cobble",
+      "wall_hex": "#595332",
+      "base_cols": [
+        3,
+        4,
+        5
+      ],
+      "accent_cols": [
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            504,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#595332",
+          "hint": "tan cobble"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            504,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#595332",
+          "hint": "tan cobble"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            504,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#595332",
+          "hint": "tan cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            504,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#b3aa77",
+          "hint": "sparse edge stones (transition)"
+        }
+      ],
+      "aka": "Sandsworn Ruins"
+    },
+    {
+      "id": 22,
+      "name": "Cobblemoor",
+      "material": "grey rounded fieldstone",
+      "wall_hex": "#525252",
+      "base_cols": [
+        3,
+        4,
+        5
+      ],
+      "accent_cols": [
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            528,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "grey cobble"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            528,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "grey cobble"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            528,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#3d3d3d",
+          "hint": "grey cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            528,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#919191",
+          "hint": "sparse edge stones (transition)"
+        }
+      ],
+      "aka": "Old Cairn"
+    },
+    {
+      "id": 23,
+      "name": "Bloodstone Cairn",
+      "material": "crimson rounded fieldstone (red twin of Cobblemoor)",
+      "wall_hex": "#5c1414",
+      "base_cols": [
+        3,
+        4,
+        5
+      ],
+      "accent_cols": [
+        6
+      ],
+      "floors": [
+        {
+          "col": 3,
+          "rect": [
+            96,
+            552,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#450f0f",
+          "hint": "red cobble"
+        },
+        {
+          "col": 4,
+          "rect": [
+            120,
+            552,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#450f0f",
+          "hint": "red cobble"
+        },
+        {
+          "col": 5,
+          "rect": [
+            144,
+            552,
+            24,
+            24
+          ],
+          "role": "base",
+          "hex": "#450f0f",
+          "hint": "red cobble"
+        },
+        {
+          "col": 6,
+          "rect": [
+            168,
+            552,
+            24,
+            24
+          ],
+          "role": "accent",
+          "hex": "#a32323",
+          "hint": "sparse edge stones (transition)"
+        }
+      ],
+      "aka": "Sanguine Moor"
+    }
+  ],
+  "sprite_sheet": "sprite/oryx_16bit_fantasy_world_trans.png"
+}
