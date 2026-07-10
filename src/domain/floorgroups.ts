@@ -46,3 +46,25 @@ export const DUNGEONS: Dungeon[] = load<{ styles: RawDungeon[] }>('dungeons.json
 
 const DUNGEON_BY_NAME = new Map(DUNGEONS.map((d) => [d.name, d]));
 export const getDungeon = (name: string): Dungeon | undefined => DUNGEON_BY_NAME.get(name);
+
+// Tier weights from the package's tiers_weight_suggestion: home best, feature rarest.
+const TIER_WEIGHTS = { home: 6, great: 5, good: 2, feature: 1 } as const;
+
+// Pick ONE floor group for a dungeon: gather every group whose compat lists this
+// dungeon in any tier, then weighted-pick by that tier. One group per dungeon keeps
+// a room's floor cohesive; variety comes between dungeons.
+export function chooseGroup(dungeonName: string, rng: () => number): FloorGroup {
+  const eligible: { group: FloorGroup; weight: number }[] = [];
+  for (const g of FLOOR_GROUPS) {
+    const c = COMPAT[g.handle];
+    if (!c) continue;
+    const weight =
+      c.home === dungeonName ? TIER_WEIGHTS.home :
+      c.great.includes(dungeonName) ? TIER_WEIGHTS.great :
+      c.good.includes(dungeonName) ? TIER_WEIGHTS.good :
+      c.feature.includes(dungeonName) ? TIER_WEIGHTS.feature : 0;
+    if (weight > 0) eligible.push({ group: g, weight });
+  }
+  if (eligible.length === 0) throw new Error(`no eligible floor group for dungeon: ${dungeonName}`);
+  return pickWeighted(eligible, rng).group;
+}
