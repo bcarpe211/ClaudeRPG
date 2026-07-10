@@ -1,4 +1,4 @@
-import { FLOOR_EDGES, type Skin, type TileCoord } from './tilesheet';
+import { FLOOR_EDGES, type TileCoord } from './tilesheet';
 
 export type LogicalKind = 'wall' | 'floor' | 'door' | 'decor';
 export type KindAt = (x: number, y: number) => LogicalKind | null;
@@ -15,11 +15,11 @@ export function floorEdgeMask(kindAt: KindAt, x: number, y: number): number {
   return m;
 }
 
-export function resolveFloor(skin: Skin, mask: number): TileCoord {
+export function resolveFloor(floorBase: TileCoord, mask: number): TileCoord {
   const e = FLOOR_EDGES[mask] ?? FLOOR_EDGES[15];
-  return { col: skin.floorBase.col + e.col, row: skin.floorBase.row + e.row };
+  return { col: floorBase.col + e.col, row: floorBase.row + e.row };
 }
 
-export function resolveDoor(skin: Skin): TileCoord {
-  return skin.door;
+export function resolveDoor(door: TileCoord): TileCoord {
+  return door;
 }
