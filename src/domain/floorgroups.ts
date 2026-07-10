@@ -68,3 +68,22 @@ export function chooseGroup(dungeonName: string, rng: () => number): FloorGroup 
   if (eligible.length === 0) throw new Error(`no eligible floor group for dungeon: ${dungeonName}`);
   return pickWeighted(eligible, rng).group;
 }
+
+const ACCENT_RATE = 0.06; // normal detail accents per cell
+const GLOW_RATE = 0.01;   // emissive glow accents per cell (rarer)
+const at = <T>(arr: T[], rng: () => number): T => arr[Math.floor(rng() * arr.length)];
+
+// One floor cell: usually a random main (mains blend for natural variation);
+// occasionally a normal accent; rarely a glow accent. A glow MAIN (e.g. auric_glow)
+// still floods normally — its rarity is controlled by chooseGroup's feature tier.
+export function pickCell(group: FloorGroup, rng: () => number): FloorTile {
+  const glow = group.accents.filter((a) => a.isGlow);
+  const normal = group.accents.filter((a) => !a.isGlow);
+  const r = rng();
+  if (glow.length > 0 && r < GLOW_RATE) return at(glow, rng);
+  if (normal.length > 0 && r < ACCENT_RATE) return at(normal, rng);
+  return at(group.mains, rng);
+}
+
+// A stable base tile for a group — used as the underlay behind transparent door tiles.
+export const mainTile = (group: FloorGroup): FloorTile => group.mains[0];
