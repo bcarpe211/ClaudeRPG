@@ -7,8 +7,8 @@ export function tileRect(c: TileCoord) {
 }
 
 // 4-bit orthogonal edge mask: bit 1=N floor, 2=E, 4=S, 8=W (set when that
-// neighbour is also floor). Values are offsets WITHIN a floor skin's block,
-// added to skin.floorBase. mask 15 = interior ("full").
+// neighbour is also floor). Values are offsets WITHIN a floor block,
+// added to a floor block's base coord. mask 15 = interior ("full").
 //
 // Every mask currently maps to the block's full tile (offset 0,0): floors render
 // solid and skinned, which already reads cohesively in /dungeon-preview (verified
@@ -25,16 +25,6 @@ export const FLOOR_EDGES: Record<number, TileCoord> = {
   8: { col: 0, row: 0 }, 9: { col: 0, row: 0 }, 10: { col: 0, row: 0 }, 11: { col: 0, row: 0 },
   12: { col: 0, row: 0 }, 13: { col: 0, row: 0 }, 14: { col: 0, row: 0 }, 15: { col: 0, row: 0 },
 };
-
-// A floor "set": one main floor tile the whole dungeon uses, plus its own
-// accent tiles sprinkled in at accentChance (0 = none). A theme lists 1..N sets;
-// the generator picks ONE per dungeon, so a given dungeon has a single coherent
-// floor look (accents are variants of that main, never a different main mixed in).
-export interface FloorSet {
-  main: TileCoord;
-  accents: TileCoord[];
-  accentChance: number;
-}
 
 // Wall pieces sit at fixed COLUMNS within any wall band (a skin is just a row),
 // so the piece->column map is shared and a skin only needs its wallRow. These
@@ -85,89 +75,3 @@ export function pickWeighted<T extends { weight: number }>(items: T[], rng: () =
   return items[items.length - 1];
 }
 
-export interface Skin {
-  name: string;
-  wallRow: number;             // the wall band's row; wall tiles = WALL_COLS[piece] @ this row
-  wallVariantChance: number;   // chance a straight-run wall shows its cracked variant
-  floorSets: FloorSet[];       // main-floor options; generator picks ONE per dungeon
-  decor: TileCoord[];
-  // Reserved: real archway doors (generator currently opens doorways as the
-  // dungeon's floor) and the unused blob-floor path / future open-world floors.
-  door: TileCoord;
-  floorBase: TileCoord;
-}
-
-// Themed skins (decoded from oryx_16bit_fantasy_world_trans.png). Each wall pack
-// is a horizontal band: cols 1-3 = pillars, cols 4-7 = themed floor tiles,
-// cols 8-29 = the pseudo-3D wall autotile set (shared column layout across bands).
-// The four bands read as distinct places: castle stonework (row 1), the same
-// stonework cracked/distressed = a ruined castle (row 2), the lower dungeon
-// levels — still hard tiled stone, not dirt (row 3) — and red-hot dwarven forge
-// stone (row 4). Per-theme floor rules are typed data.
-// castle (row 1) and ruined-castle (row 2) are the same place in two states, so
-// their floors are one interchangeable pool: the clean grey stone of row 1 plus
-// the checkered / wood / dark floors of row 2. Either skin can roll any of them;
-// only the walls differ (row 1 clean, row 2 cracked). Row-1 col 7 (small tiles)
-// and row-2 col 4 (fine checker) stay out — too busy as full floors.
-const CASTLE_FLOORS: FloorSet[] = [
-  { main: { col: 4, row: 1 }, accents: [{ col: 6, row: 1 }], accentChance: 0.1 }, // grey plain + cracked
-  { main: { col: 5, row: 1 }, accents: [], accentChance: 0 },                       // grey inset panel
-  { main: { col: 5, row: 2 }, accents: [], accentChance: 0 },                       // checkered stone
-  { main: { col: 6, row: 2 }, accents: [], accentChance: 0 },                       // wood planks
-  { main: { col: 7, row: 2 }, accents: [], accentChance: 0 },                       // dark stone
-];
-
-export const SKINS: Skin[] = [
-  {
-    name: 'castle',
-    wallRow: 1,
-    wallVariantChance: 0.1,
-    floorSets: CASTLE_FLOORS,
-    decor: [],
-    door: { col: 4, row: 1 },
-    floorBase: { col: 4, row: 1 },
-  },
-  {
-    // Lower dungeon levels — hard tiled stone floors (not dirt), so "dungeon"
-    // rather than "cave". Floor rules mirror the castle's originals (row 3).
-    name: 'dungeon',
-    wallRow: 3,
-    wallVariantChance: 0.1,
-    floorSets: [
-      { main: { col: 4, row: 3 }, accents: [{ col: 6, row: 3 }], accentChance: 0.1 },
-      { main: { col: 5, row: 3 }, accents: [], accentChance: 0 },
-    ],
-    decor: [],
-    door: { col: 4, row: 3 },
-    floorBase: { col: 4, row: 3 },
-  },
-  {
-    // Same castle stonework as row 1 but cracked and distressed — a ruined,
-    // abandoned castle. Shares the castle floor pool (row 1 + row 2 floors).
-    name: 'ruined-castle',
-    wallRow: 2,
-    wallVariantChance: 0.1,
-    floorSets: CASTLE_FLOORS,
-    decor: [],
-    door: { col: 5, row: 2 },
-    floorBase: { col: 5, row: 2 },
-  },
-  {
-    // Red-hot / rust stone — a dwarven forge. Row 4 = same floor rules as row 1
-    // (plain main + cracked accent, plus studded inset; col 7 dropped).
-    name: 'forge',
-    wallRow: 4,
-    wallVariantChance: 0.1,
-    floorSets: [
-      { main: { col: 4, row: 4 }, accents: [{ col: 6, row: 4 }], accentChance: 0.1 }, // plain + cracked
-      { main: { col: 5, row: 4 }, accents: [], accentChance: 0 },                       // studded inset
-    ],
-    decor: [],
-    door: { col: 4, row: 4 },
-    floorBase: { col: 4, row: 4 },
-  },
-];
-
-export function getSkin(name: string): Skin | undefined {
-  return SKINS.find((s) => s.name === name);
-}

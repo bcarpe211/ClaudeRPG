@@ -11,7 +11,7 @@
   <% samples.forEach(function(d, i){ %>
     <div class="dp-cell">
       <canvas id="dp<%= i %>" width="<%= d.width*24 %>" height="<%= d.height*24 %>"></canvas>
-      <div class="dp-meta"><%= d.skin %> — seed <%= d.seed %></div>
+      <div class="dp-meta"><%= d.dungeon %> — seed <%= d.seed %></div>
       <script type="application/json" class="dp-data" data-target="dp<%= i %>"><%- JSON.stringify(d) %></script>
     </div>
   <% }) %>

@@ -19,4 +19,11 @@ describe('dungeon-preview route gating', () => {
     expect(res.text).toContain('Dungeon Preview');
     expect(res.text).toContain('/sheet/world.png');
   });
+  it('renders a single dungeon when ?dungeon= is given', async () => {
+    const db = openDb(':memory:');
+    const app = createApp({ db, config: loadConfig({ ENABLE_DUNGEON_PREVIEW: '1' }) });
+    const res = await request(app).get('/dungeon-preview?dungeon=Emberforge');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Emberforge');
+  });
 });

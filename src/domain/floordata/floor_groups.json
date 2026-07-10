@@ -1,0 +1,1634 @@
+{
+  "_readme": "Revised flooring groups. group={mains[] blended as base, accents[] sprinkled 0..N}. Each tile is an explicit {dungeon_id,col} ref (accents may borrow from other dungeons). rect=[24+col*24, dungeon_id*24, 24,24]. is_cross_ref=true means the tile's dungeon differs from the group source.",
+  "tile_size": 24,
+  "sprite_sheet": "oryx_16bit_fantasy_world_trans.png",
+  "groups": [
+    {
+      "handle": "greystone_flag",
+      "name": "Keep Flagstone",
+      "source_dungeon_id": 1,
+      "source_dungeon": "Greystone Keep",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 1,
+          "dungeon": "Greystone Keep",
+          "col": 3,
+          "rect": [
+            96,
+            24,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "flat solid slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 1,
+          "dungeon": "Greystone Keep",
+          "col": 5,
+          "rect": [
+            144,
+            24,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Plain grey slab; worn cobble + grate wear"
+    },
+    {
+      "handle": "greystone_tile",
+      "name": "Keep Tilework",
+      "source_dungeon_id": 1,
+      "source_dungeon": "Greystone Keep",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 1,
+          "dungeon": "Greystone Keep",
+          "col": 4,
+          "rect": [
+            120,
+            24,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "framed / inset border",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Framed slab, tidy standalone"
+    },
+    {
+      "handle": "greystone_smalltile",
+      "name": "Keep Small Tile",
+      "source_dungeon_id": 1,
+      "source_dungeon": "Greystone Keep",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 1,
+          "dungeon": "Greystone Keep",
+          "col": 6,
+          "rect": [
+            168,
+            24,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "small square-tile floor",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Small grey square-tile floor, standalone"
+    },
+    {
+      "handle": "crimson_hall",
+      "name": "Court Hall",
+      "source_dungeon_id": 2,
+      "source_dungeon": "Crimson Court",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 2,
+          "dungeon": "Crimson Court",
+          "col": 6,
+          "rect": [
+            168,
+            48,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "flat dark slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Dark heraldic slab, standalone"
+    },
+    {
+      "handle": "crimson_check",
+      "name": "Court Checker",
+      "source_dungeon_id": 2,
+      "source_dungeon": "Crimson Court",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 2,
+          "dungeon": "Crimson Court",
+          "col": 3,
+          "rect": [
+            96,
+            48,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "checkerboard",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Checkerboard floor A"
+    },
+    {
+      "handle": "crimson_mosaic",
+      "name": "Court Mosaic",
+      "source_dungeon_id": 2,
+      "source_dungeon": "Crimson Court",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 2,
+          "dungeon": "Crimson Court",
+          "col": 4,
+          "rect": [
+            120,
+            48,
+            24,
+            24
+          ],
+          "hex": "#474747",
+          "hint": "checkerboard (offset)",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Checkerboard floor B (offset)"
+    },
+    {
+      "handle": "crimson_plank",
+      "name": "Court Planks",
+      "source_dungeon_id": 2,
+      "source_dungeon": "Crimson Court",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 2,
+          "dungeon": "Crimson Court",
+          "col": 5,
+          "rect": [
+            144,
+            48,
+            24,
+            24
+          ],
+          "hex": "#534e3c",
+          "hint": "warm plank inlay",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Warm plank floor, standalone"
+    },
+    {
+      "handle": "moss_flag",
+      "name": "Mossmarch Flagstone",
+      "source_dungeon_id": 3,
+      "source_dungeon": "Mossmarch Hold",
+      "theme_hex": "#756b47",
+      "mains": [
+        {
+          "dungeon_id": 3,
+          "dungeon": "Mossmarch Hold",
+          "col": 3,
+          "rect": [
+            96,
+            72,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "flat solid slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 3,
+          "dungeon": "Mossmarch Hold",
+          "col": 5,
+          "rect": [
+            144,
+            72,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Olive slab; cobble + grate wear"
+    },
+    {
+      "handle": "moss_tile",
+      "name": "Mossmarch Tilework",
+      "source_dungeon_id": 3,
+      "source_dungeon": "Mossmarch Hold",
+      "theme_hex": "#756b47",
+      "mains": [
+        {
+          "dungeon_id": 3,
+          "dungeon": "Mossmarch Hold",
+          "col": 4,
+          "rect": [
+            120,
+            72,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "framed / inset border",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Framed olive slab, tidy"
+    },
+    {
+      "handle": "moss_smalltile",
+      "name": "Mossmarch Small Tile",
+      "source_dungeon_id": 3,
+      "source_dungeon": "Mossmarch Hold",
+      "theme_hex": "#756b47",
+      "mains": [
+        {
+          "dungeon_id": 3,
+          "dungeon": "Mossmarch Hold",
+          "col": 6,
+          "rect": [
+            168,
+            72,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "small square-tile floor",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Small olive square-tile floor, standalone"
+    },
+    {
+      "handle": "ember_forge",
+      "name": "Forge Floor",
+      "source_dungeon_id": 4,
+      "source_dungeon": "Emberforge",
+      "theme_hex": "#7b4a3b",
+      "mains": [
+        {
+          "dungeon_id": 4,
+          "dungeon": "Emberforge",
+          "col": 3,
+          "rect": [
+            96,
+            96,
+            24,
+            24
+          ],
+          "hex": "#432d24",
+          "hint": "flat solid slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 4,
+          "dungeon": "Emberforge",
+          "col": 5,
+          "rect": [
+            144,
+            96,
+            24,
+            24
+          ],
+          "hex": "#432d24",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Flat rust base; cobble + grate wear"
+    },
+    {
+      "handle": "ember_studs",
+      "name": "Forge Studs",
+      "source_dungeon_id": 4,
+      "source_dungeon": "Emberforge",
+      "theme_hex": "#7b4a3b",
+      "mains": [
+        {
+          "dungeon_id": 4,
+          "dungeon": "Emberforge",
+          "col": 4,
+          "rect": [
+            120,
+            96,
+            24,
+            24
+          ],
+          "hex": "#432d24",
+          "hint": "diamond-studded",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Diamond-studded plate, standalone"
+    },
+    {
+      "handle": "ember_smalltile",
+      "name": "Forge Small Tile",
+      "source_dungeon_id": 4,
+      "source_dungeon": "Emberforge",
+      "theme_hex": "#7b4a3b",
+      "mains": [
+        {
+          "dungeon_id": 4,
+          "dungeon": "Emberforge",
+          "col": 6,
+          "rect": [
+            168,
+            96,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "small square-tile floor",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Small rust square-tile floor, standalone"
+    },
+    {
+      "handle": "oaken_flag",
+      "name": "Oakenvault Flagstone",
+      "source_dungeon_id": 5,
+      "source_dungeon": "Oakenvault",
+      "theme_hex": "#4c442e",
+      "mains": [
+        {
+          "dungeon_id": 5,
+          "dungeon": "Oakenvault",
+          "col": 3,
+          "rect": [
+            96,
+            120,
+            24,
+            24
+          ],
+          "hex": "#4d251c",
+          "hint": "flat solid slab (warm)",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Warm brown slab, no accents"
+    },
+    {
+      "handle": "oaken_tile",
+      "name": "Oakenvault Tilework",
+      "source_dungeon_id": 5,
+      "source_dungeon": "Oakenvault",
+      "theme_hex": "#4c442e",
+      "mains": [
+        {
+          "dungeon_id": 5,
+          "dungeon": "Oakenvault",
+          "col": 4,
+          "rect": [
+            120,
+            120,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "framed / inset border",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Framed brown slab, tidy"
+    },
+    {
+      "handle": "oaken_cross",
+      "name": "Oaken Cross",
+      "source_dungeon_id": 5,
+      "source_dungeon": "Oakenvault",
+      "theme_hex": "#4c442e",
+      "mains": [
+        {
+          "dungeon_id": 5,
+          "dungeon": "Oakenvault",
+          "col": 6,
+          "rect": [
+            168,
+            120,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "cross / grid",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 5,
+          "dungeon": "Oakenvault",
+          "col": 5,
+          "rect": [
+            144,
+            120,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Cross/grid floor; cracked cobble wear"
+    },
+    {
+      "handle": "verdant_slab",
+      "name": "Crypt Slab",
+      "source_dungeon_id": 6,
+      "source_dungeon": "Verdant Crypt",
+      "theme_hex": "#688360",
+      "mains": [
+        {
+          "dungeon_id": 6,
+          "dungeon": "Verdant Crypt",
+          "col": 5,
+          "rect": [
+            144,
+            144,
+            24,
+            24
+          ],
+          "hex": "#2c3829",
+          "hint": "flat inset slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 6,
+          "dungeon": "Verdant Crypt",
+          "col": 6,
+          "rect": [
+            168,
+            144,
+            24,
+            24
+          ],
+          "hex": "#2c3829",
+          "hint": "bright-bordered slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Dark green slabs, blended"
+    },
+    {
+      "handle": "verdant_grass",
+      "name": "Verdant Grass",
+      "source_dungeon_id": 6,
+      "source_dungeon": "Verdant Crypt",
+      "theme_hex": "#688360",
+      "mains": [
+        {
+          "dungeon_id": 6,
+          "dungeon": "Verdant Crypt",
+          "col": 4,
+          "rect": [
+            120,
+            144,
+            24,
+            24
+          ],
+          "hex": "#252e1b",
+          "hint": "grass / hedge texture",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Grass/hedge floor, standalone"
+    },
+    {
+      "handle": "verdant_plank",
+      "name": "Verdant Planks",
+      "source_dungeon_id": 6,
+      "source_dungeon": "Verdant Crypt",
+      "theme_hex": "#688360",
+      "mains": [
+        {
+          "dungeon_id": 6,
+          "dungeon": "Verdant Crypt",
+          "col": 3,
+          "rect": [
+            96,
+            144,
+            24,
+            24
+          ],
+          "hex": "#44380d",
+          "hint": "herringbone planks",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Herringbone plank floor"
+    },
+    {
+      "handle": "tide_flag",
+      "name": "Tideglass Flagstone",
+      "source_dungeon_id": 7,
+      "source_dungeon": "Tideglass Halls",
+      "theme_hex": "#4d9999",
+      "mains": [
+        {
+          "dungeon_id": 7,
+          "dungeon": "Tideglass Halls",
+          "col": 3,
+          "rect": [
+            96,
+            168,
+            24,
+            24
+          ],
+          "hex": "#214040",
+          "hint": "flat solid slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 7,
+          "dungeon": "Tideglass Halls",
+          "col": 5,
+          "rect": [
+            144,
+            168,
+            24,
+            24
+          ],
+          "hex": "#214040",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 7,
+          "dungeon": "Tideglass Halls",
+          "col": 6,
+          "rect": [
+            168,
+            168,
+            24,
+            24
+          ],
+          "hex": "#214040",
+          "hint": "line detail",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Teal slab; cobble + line wear"
+    },
+    {
+      "handle": "tide_tile",
+      "name": "Tideglass Tilework",
+      "source_dungeon_id": 7,
+      "source_dungeon": "Tideglass Halls",
+      "theme_hex": "#4d9999",
+      "mains": [
+        {
+          "dungeon_id": 7,
+          "dungeon": "Tideglass Halls",
+          "col": 4,
+          "rect": [
+            120,
+            168,
+            24,
+            24
+          ],
+          "hex": "#323322",
+          "hint": "framed / inset border",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Framed teal slab, tidy"
+    },
+    {
+      "handle": "frost_flag",
+      "name": "Bastion Floor",
+      "source_dungeon_id": 8,
+      "source_dungeon": "Frostiron Bastion",
+      "theme_hex": "#4b647b",
+      "mains": [
+        {
+          "dungeon_id": 8,
+          "dungeon": "Frostiron Bastion",
+          "col": 3,
+          "rect": [
+            96,
+            192,
+            24,
+            24
+          ],
+          "hex": "#364858",
+          "hint": "flat solid slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 8,
+          "dungeon": "Frostiron Bastion",
+          "col": 4,
+          "rect": [
+            120,
+            192,
+            24,
+            24
+          ],
+          "hex": "#364858",
+          "hint": "circular emblem",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 8,
+          "dungeon": "Frostiron Bastion",
+          "col": 5,
+          "rect": [
+            144,
+            192,
+            24,
+            24
+          ],
+          "hex": "#364858",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 8,
+          "dungeon": "Frostiron Bastion",
+          "col": 6,
+          "rect": [
+            168,
+            192,
+            24,
+            24
+          ],
+          "hex": "#364858",
+          "hint": "arc / seal detail",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Flat blue base; emblem/cobble/arc"
+    },
+    {
+      "handle": "auric_ground",
+      "name": "Vault Ground",
+      "source_dungeon_id": 9,
+      "source_dungeon": "Auric Deep",
+      "theme_hex": "#eaff00",
+      "mains": [
+        {
+          "dungeon_id": 9,
+          "dungeon": "Auric Deep",
+          "col": 3,
+          "rect": [
+            96,
+            216,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "flat muted slab (base ground)",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 9,
+          "dungeon": "Auric Deep",
+          "col": 4,
+          "rect": [
+            120,
+            216,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "circular seal",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 9,
+          "dungeon": "Auric Deep",
+          "col": 5,
+          "rect": [
+            144,
+            216,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Muted slab; seal + cobble sprinkles"
+    },
+    {
+      "handle": "auric_glow",
+      "name": "Gold Glow",
+      "source_dungeon_id": 9,
+      "source_dungeon": "Auric Deep",
+      "theme_hex": "#eaff00",
+      "mains": [
+        {
+          "dungeon_id": 9,
+          "dungeon": "Auric Deep",
+          "col": 6,
+          "rect": [
+            168,
+            216,
+            24,
+            24
+          ],
+          "hex": "#eaff00",
+          "hint": "solid gold GLOW slab (vivid \u2014 use sparingly as hero base or accent)",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Solid emissive gold - hero floor"
+    },
+    {
+      "handle": "sewer_deck",
+      "name": "Sewer Deck",
+      "source_dungeon_id": 10,
+      "source_dungeon": "Rustpipe Sewers",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 10,
+          "dungeon": "Rustpipe Sewers",
+          "col": 3,
+          "rect": [
+            96,
+            240,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "panel / plate slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 10,
+          "dungeon": "Rustpipe Sewers",
+          "col": 4,
+          "rect": [
+            120,
+            240,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "pipe cross",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 10,
+          "dungeon": "Rustpipe Sewers",
+          "col": 5,
+          "rect": [
+            144,
+            240,
+            24,
+            24
+          ],
+          "hex": "#2f2d25",
+          "hint": "flat slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 10,
+          "dungeon": "Rustpipe Sewers",
+          "col": 6,
+          "rect": [
+            168,
+            240,
+            24,
+            24
+          ],
+          "hex": "#363226",
+          "hint": "pipe detail",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Panel base; flat slab + pipe details"
+    },
+    {
+      "handle": "foundry_plates",
+      "name": "Foundry Plates",
+      "source_dungeon_id": 11,
+      "source_dungeon": "Drowned Foundry",
+      "theme_hex": "#457765",
+      "mains": [
+        {
+          "dungeon_id": 11,
+          "dungeon": "Drowned Foundry",
+          "col": 3,
+          "rect": [
+            96,
+            264,
+            24,
+            24
+          ],
+          "hex": "#243d34",
+          "hint": "riveted slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 11,
+          "dungeon": "Drowned Foundry",
+          "col": 6,
+          "rect": [
+            168,
+            264,
+            24,
+            24
+          ],
+          "hex": "#29473c",
+          "hint": "flat green slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 11,
+          "dungeon": "Drowned Foundry",
+          "col": 5,
+          "rect": [
+            144,
+            264,
+            24,
+            24
+          ],
+          "hex": "#243d34",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Riveted + green slabs; cobble accent"
+    },
+    {
+      "handle": "foundry_grey",
+      "name": "Foundry Grey",
+      "source_dungeon_id": 11,
+      "source_dungeon": "Drowned Foundry",
+      "theme_hex": "#457765",
+      "mains": [
+        {
+          "dungeon_id": 11,
+          "dungeon": "Drowned Foundry",
+          "col": 4,
+          "rect": [
+            120,
+            264,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "flat grey slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Flat grey slab, standalone"
+    },
+    {
+      "handle": "dusk_tan",
+      "name": "Warren Floor",
+      "source_dungeon_id": 12,
+      "source_dungeon": "Duskstone Warren",
+      "theme_hex": "#706a57",
+      "mains": [
+        {
+          "dungeon_id": 12,
+          "dungeon": "Duskstone Warren",
+          "col": 3,
+          "rect": [
+            96,
+            288,
+            24,
+            24
+          ],
+          "hex": "#474438",
+          "hint": "flat tan slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 12,
+          "dungeon": "Duskstone Warren",
+          "col": 5,
+          "rect": [
+            144,
+            288,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "flat dark slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 12,
+          "dungeon": "Duskstone Warren",
+          "col": 6,
+          "rect": [
+            168,
+            288,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "dark detail",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 3,
+          "dungeon": "Mossmarch Hold",
+          "col": 5,
+          "rect": [
+            144,
+            72,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "cracked cobble",
+          "is_cross_ref": true
+        }
+      ],
+      "note": "Tan slab; dark slab/detail + borrowed warm cobble"
+    },
+    {
+      "handle": "dusk_inlay",
+      "name": "Warren Inlay",
+      "source_dungeon_id": 12,
+      "source_dungeon": "Duskstone Warren",
+      "theme_hex": "#706a57",
+      "mains": [
+        {
+          "dungeon_id": 12,
+          "dungeon": "Duskstone Warren",
+          "col": 4,
+          "rect": [
+            120,
+            288,
+            24,
+            24
+          ],
+          "hex": "#542b21",
+          "hint": "warm red-brown inlay",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [],
+      "note": "Warm red-brown inlay, standalone"
+    },
+    {
+      "handle": "thorn_ruins",
+      "name": "Ruins Floor",
+      "source_dungeon_id": 13,
+      "source_dungeon": "Thornwind Ruins",
+      "theme_hex": "#706a57",
+      "mains": [
+        {
+          "dungeon_id": 13,
+          "dungeon": "Thornwind Ruins",
+          "col": 3,
+          "rect": [
+            96,
+            312,
+            24,
+            24
+          ],
+          "hex": "#38362c",
+          "hint": "flat tan slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 13,
+          "dungeon": "Thornwind Ruins",
+          "col": 4,
+          "rect": [
+            120,
+            312,
+            24,
+            24
+          ],
+          "hex": "#38362c",
+          "hint": "vine specks",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 13,
+          "dungeon": "Thornwind Ruins",
+          "col": 5,
+          "rect": [
+            144,
+            312,
+            24,
+            24
+          ],
+          "hex": "#38362c",
+          "hint": "faint ring",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 13,
+          "dungeon": "Thornwind Ruins",
+          "col": 6,
+          "rect": [
+            168,
+            312,
+            24,
+            24
+          ],
+          "hex": "#38362c",
+          "hint": "emblem",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Flat tan base; vines/ring/emblem"
+    },
+    {
+      "handle": "cinder_rock",
+      "name": "Cinder Rock",
+      "source_dungeon_id": 14,
+      "source_dungeon": "Cinderdeep",
+      "theme_hex": "#8f551f",
+      "mains": [
+        {
+          "dungeon_id": 14,
+          "dungeon": "Cinderdeep",
+          "col": 3,
+          "rect": [
+            96,
+            336,
+            24,
+            24
+          ],
+          "hex": "#4d251c",
+          "hint": "flat solid slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 14,
+          "dungeon": "Cinderdeep",
+          "col": 4,
+          "rect": [
+            120,
+            336,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "subtle ember slab",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 14,
+          "dungeon": "Cinderdeep",
+          "col": 5,
+          "rect": [
+            144,
+            336,
+            24,
+            24
+          ],
+          "hex": "#4d251c",
+          "hint": "ember-speckled GLOW",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 14,
+          "dungeon": "Cinderdeep",
+          "col": 6,
+          "rect": [
+            168,
+            336,
+            24,
+            24
+          ],
+          "hex": "#4d251c",
+          "hint": "bright ember flecks GLOW",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Dark rock base; ember-glow sprinkles"
+    },
+    {
+      "handle": "wildroot_gravel",
+      "name": "Barrow Gravel",
+      "source_dungeon_id": 15,
+      "source_dungeon": "Wildroot Barrow",
+      "theme_hex": "#296b29",
+      "mains": [
+        {
+          "dungeon_id": 15,
+          "dungeon": "Wildroot Barrow",
+          "col": 3,
+          "rect": [
+            96,
+            360,
+            24,
+            24
+          ],
+          "hex": "#343434",
+          "hint": "grey gravel",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 15,
+          "dungeon": "Wildroot Barrow",
+          "col": 4,
+          "rect": [
+            120,
+            360,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "grey gravel",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 15,
+          "dungeon": "Wildroot Barrow",
+          "col": 5,
+          "rect": [
+            144,
+            360,
+            24,
+            24
+          ],
+          "hex": "#262626",
+          "hint": "grey gravel",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 15,
+          "dungeon": "Wildroot Barrow",
+          "col": 6,
+          "rect": [
+            168,
+            360,
+            24,
+            24
+          ],
+          "hex": "#343434",
+          "hint": "gravel w/ moss",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Grey gravel blend; mossy sprinkle"
+    },
+    {
+      "handle": "ossuary_gravel",
+      "name": "Ossuary Gravel",
+      "source_dungeon_id": 16,
+      "source_dungeon": "Ossuary Pale",
+      "theme_hex": "#919191",
+      "mains": [
+        {
+          "dungeon_id": 16,
+          "dungeon": "Ossuary Pale",
+          "col": 3,
+          "rect": [
+            96,
+            384,
+            24,
+            24
+          ],
+          "hex": "#403d32",
+          "hint": "olive gravel",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 16,
+          "dungeon": "Ossuary Pale",
+          "col": 4,
+          "rect": [
+            120,
+            384,
+            24,
+            24
+          ],
+          "hex": "#2f2d25",
+          "hint": "olive gravel",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 16,
+          "dungeon": "Ossuary Pale",
+          "col": 5,
+          "rect": [
+            144,
+            384,
+            24,
+            24
+          ],
+          "hex": "#2f2d25",
+          "hint": "olive gravel",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 16,
+          "dungeon": "Ossuary Pale",
+          "col": 6,
+          "rect": [
+            168,
+            384,
+            24,
+            24
+          ],
+          "hex": "#403d32",
+          "hint": "gravel w/ moss",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Olive gravel blend; mossy sprinkle"
+    },
+    {
+      "handle": "glacier_ice",
+      "name": "Ice Field",
+      "source_dungeon_id": 19,
+      "source_dungeon": "Glacierhold",
+      "theme_hex": "#dcdcdc",
+      "mains": [
+        {
+          "dungeon_id": 19,
+          "dungeon": "Glacierhold",
+          "col": 6,
+          "rect": [
+            168,
+            456,
+            24,
+            24
+          ],
+          "hex": "#696969",
+          "hint": "rounded stone",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 19,
+          "dungeon": "Glacierhold",
+          "col": 3,
+          "rect": [
+            96,
+            456,
+            24,
+            24
+          ],
+          "hex": "#696969",
+          "hint": "smooth grey slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 19,
+          "dungeon": "Glacierhold",
+          "col": 4,
+          "rect": [
+            120,
+            456,
+            24,
+            24
+          ],
+          "hex": "#696969",
+          "hint": "rounded slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 19,
+          "dungeon": "Glacierhold",
+          "col": 5,
+          "rect": [
+            144,
+            456,
+            24,
+            24
+          ],
+          "hex": "#696969",
+          "hint": "smooth slab",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Rounded ice slab base; smooth slab accents"
+    },
+    {
+      "handle": "bog_flats",
+      "name": "Mire Flats",
+      "source_dungeon_id": 20,
+      "source_dungeon": "Bogstone Mire",
+      "theme_hex": "#b3aa77",
+      "mains": [
+        {
+          "dungeon_id": 20,
+          "dungeon": "Bogstone Mire",
+          "col": 6,
+          "rect": [
+            168,
+            480,
+            24,
+            24
+          ],
+          "hex": "#595332",
+          "hint": "rounded olive",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 20,
+          "dungeon": "Bogstone Mire",
+          "col": 3,
+          "rect": [
+            96,
+            480,
+            24,
+            24
+          ],
+          "hex": "#595332",
+          "hint": "flat olive slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 20,
+          "dungeon": "Bogstone Mire",
+          "col": 4,
+          "rect": [
+            120,
+            480,
+            24,
+            24
+          ],
+          "hex": "#595332",
+          "hint": "olive slab",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 20,
+          "dungeon": "Bogstone Mire",
+          "col": 5,
+          "rect": [
+            144,
+            480,
+            24,
+            24
+          ],
+          "hex": "#595332",
+          "hint": "olive slab",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Rounded olive base; flat slab accents"
+    },
+    {
+      "handle": "dune_cobble",
+      "name": "Dune Cobble",
+      "source_dungeon_id": 21,
+      "source_dungeon": "Dunewatch",
+      "theme_hex": "#595332",
+      "mains": [
+        {
+          "dungeon_id": 21,
+          "dungeon": "Dunewatch",
+          "col": 3,
+          "rect": [
+            96,
+            504,
+            24,
+            24
+          ],
+          "hex": "#595332",
+          "hint": "tan cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 21,
+          "dungeon": "Dunewatch",
+          "col": 4,
+          "rect": [
+            120,
+            504,
+            24,
+            24
+          ],
+          "hex": "#595332",
+          "hint": "tan cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 21,
+          "dungeon": "Dunewatch",
+          "col": 5,
+          "rect": [
+            144,
+            504,
+            24,
+            24
+          ],
+          "hex": "#595332",
+          "hint": "tan cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 21,
+          "dungeon": "Dunewatch",
+          "col": 6,
+          "rect": [
+            168,
+            504,
+            24,
+            24
+          ],
+          "hex": "#b3aa77",
+          "hint": "sparse edge stones (transition)",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Tan cobble blend; sparse-stone edge"
+    },
+    {
+      "handle": "moor_cobble",
+      "name": "Moor Cobble",
+      "source_dungeon_id": 22,
+      "source_dungeon": "Cobblemoor",
+      "theme_hex": "#525252",
+      "mains": [
+        {
+          "dungeon_id": 22,
+          "dungeon": "Cobblemoor",
+          "col": 3,
+          "rect": [
+            96,
+            528,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "grey cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 22,
+          "dungeon": "Cobblemoor",
+          "col": 4,
+          "rect": [
+            120,
+            528,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "grey cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 22,
+          "dungeon": "Cobblemoor",
+          "col": 5,
+          "rect": [
+            144,
+            528,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "grey cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 22,
+          "dungeon": "Cobblemoor",
+          "col": 6,
+          "rect": [
+            168,
+            528,
+            24,
+            24
+          ],
+          "hex": "#919191",
+          "hint": "sparse edge stones (transition)",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Grey cobble blend; sparse-stone edge"
+    },
+    {
+      "handle": "blood_cobble",
+      "name": "Cairn Cobble",
+      "source_dungeon_id": 23,
+      "source_dungeon": "Bloodstone Cairn",
+      "theme_hex": "#5c1414",
+      "mains": [
+        {
+          "dungeon_id": 23,
+          "dungeon": "Bloodstone Cairn",
+          "col": 3,
+          "rect": [
+            96,
+            552,
+            24,
+            24
+          ],
+          "hex": "#450f0f",
+          "hint": "red cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 23,
+          "dungeon": "Bloodstone Cairn",
+          "col": 4,
+          "rect": [
+            120,
+            552,
+            24,
+            24
+          ],
+          "hex": "#450f0f",
+          "hint": "red cobble",
+          "is_cross_ref": false
+        },
+        {
+          "dungeon_id": 23,
+          "dungeon": "Bloodstone Cairn",
+          "col": 5,
+          "rect": [
+            144,
+            552,
+            24,
+            24
+          ],
+          "hex": "#450f0f",
+          "hint": "red cobble",
+          "is_cross_ref": false
+        }
+      ],
+      "accents": [
+        {
+          "dungeon_id": 23,
+          "dungeon": "Bloodstone Cairn",
+          "col": 6,
+          "rect": [
+            168,
+            552,
+            24,
+            24
+          ],
+          "hex": "#a32323",
+          "hint": "sparse edge stones (transition)",
+          "is_cross_ref": false
+        }
+      ],
+      "note": "Red cobble blend; sparse-stone edge"
+    }
+  ]
+}

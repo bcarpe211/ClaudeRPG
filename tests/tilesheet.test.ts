@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SHEET, tileRect, FLOOR_EDGES, WALL_COLS, SKINS, getSkin, DOORS, pickWeighted } from '../src/domain/tilesheet';
+import { SHEET, tileRect, FLOOR_EDGES, WALL_COLS, DOORS, pickWeighted } from '../src/domain/tilesheet';
 
 const inGrid = (c: { col: number; row: number }) =>
   c.col >= 0 && c.col < SHEET.cols && c.row >= 0 && c.row < SHEET.rows;
@@ -16,47 +16,6 @@ describe('tilesheet', () => {
       expect(FLOOR_EDGES[m].col).toBeGreaterThanOrEqual(0);
       expect(FLOOR_EDGES[m].row).toBeGreaterThanOrEqual(0);
     }
-  });
-
-  it('has at least 2 proof skins, all coords on the sheet grid', () => {
-    expect(SKINS.length).toBeGreaterThanOrEqual(2);
-    for (const s of SKINS) {
-      expect(inGrid(s.floorBase)).toBe(true);
-      expect(inGrid(s.door)).toBe(true);
-      expect(s.decor.every(inGrid)).toBe(true);
-      expect(s.wallRow).toBeGreaterThanOrEqual(0);
-      expect(s.wallRow).toBeLessThan(SHEET.rows);
-      // every wall piece column lands on the sheet at this skin's row
-      for (const col of Object.values(WALL_COLS)) {
-        expect(inGrid({ col, row: s.wallRow })).toBe(true);
-      }
-      expect(s.floorSets.length).toBeGreaterThan(0);
-      for (const set of s.floorSets) {
-        expect(inGrid(set.main)).toBe(true);
-        expect(set.accents.every(inGrid)).toBe(true);
-        expect(set.accentChance).toBeGreaterThanOrEqual(0);
-        expect(set.accentChance).toBeLessThanOrEqual(1);
-      }
-      for (let m = 0; m < 16; m++) {
-        const e = FLOOR_EDGES[m];
-        expect(inGrid({ col: s.floorBase.col + e.col, row: s.floorBase.row + e.row })).toBe(true);
-      }
-    }
-    expect(getSkin(SKINS[0].name)).toBe(SKINS[0]);
-  });
-
-  it('defines the four themed skins on their own sheet rows', () => {
-    const byName = Object.fromEntries(SKINS.map((s) => [s.name, s]));
-    expect(byName.castle.wallRow).toBe(1);
-    expect(byName['ruined-castle'].wallRow).toBe(2);
-    expect(byName.dungeon.wallRow).toBe(3);
-    expect(byName.forge.wallRow).toBe(4);
-    // castle & ruined-castle are one place in two states -> shared floor pool,
-    // drawing from both row 1 (grey stone) and row 2 (checker/wood/dark) floors
-    expect(byName.castle.floorSets).toBe(byName['ruined-castle'].floorSets);
-    expect(new Set(byName.castle.floorSets.map((f) => f.main.row))).toEqual(new Set([1, 2]));
-    // forge mirrors castle's original floor rules on row 4
-    expect(byName.forge.floorSets.map((f) => f.main.col)).toEqual([4, 5]);
   });
 
   it('DOORS are all on the sheet grid with positive weights', () => {

@@ -1,8 +1,7 @@
 import { makeRng } from './dungeon';
-import { getSkin, WALL_COLS, DOORS, pickWeighted, type Skin, type FloorSet, type TileCoord } from './tilesheet';
+import { WALL_COLS, DOORS, pickWeighted, type TileCoord } from './tilesheet';
+import { getDungeon, chooseGroup, pickCell, mainTile, type Dungeon, type FloorGroup } from './floorgroups';
 import { type LogicalKind } from './autotile';
-
-const at = <T>(arr: T[], rng: () => number): T => arr[Math.floor(rng() * arr.length)];
 
 // mulberry32's first outputs are strongly correlated for small sequential
 // seeds (1,2,3 all yield a high first value). Feeding the seed through an
@@ -21,14 +20,14 @@ const scrambleSeed = (n: number): number => {
 // count as NOT wall.
 function pickWall(
   x: number, y: number, kinds: LogicalKind[][], w: number, h: number,
-  skin: Skin, rng: () => number,
+  dungeon: Dungeon, rng: () => number,
 ): TileCoord {
-  const row = skin.wallRow;
+  const row = dungeon.wallRow;
   const C = (col: number): TileCoord => ({ col, row });
   const isWall = (xx: number, yy: number) =>
     xx >= 0 && yy >= 0 && xx < w && yy < h && kinds[yy][xx] === 'wall';
   const N = isWall(x, y - 1), E = isWall(x + 1, y), S = isWall(x, y + 1), Wt = isWall(x - 1, y);
-  const cracked = rng() < skin.wallVariantChance;
+  const cracked = rng() < dungeon.wallVariantChance;
   if (E && Wt && !N && !S) return C(cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal);
   if (N && S && !E && !Wt) return C(cracked ? WALL_COLS.crackedV : WALL_COLS.vertical);
   if (E && S && !N && !Wt) return C(WALL_COLS.tl);
@@ -42,14 +41,6 @@ function pickWall(
   return C(WALL_COLS.horizontal); // junctions/isolated (rooms: future)
 }
 
-// Floor: the dungeon's chosen main tile, with this set's accents sprinkled in.
-function pickFloor(set: FloorSet, rng: () => number): TileCoord {
-  if (set.accents.length > 0 && rng() < set.accentChance) {
-    return at(set.accents, rng);
-  }
-  return set.main;
-}
-
 // `under`: an optional tile drawn BEHIND this cell's tile. Door tiles are
 // transparent around the arch, so a door cell carries the dungeon's floor as its
 // underlay — the renderer paints `under` first, then the door, so no black shows.
@@ -58,22 +49,23 @@ export interface RenderCell {
   under?: { col: number; row: number };
 }
 export interface AutoDungeon {
-  width: number; height: number; skin: string; seed: number;
+  width: number; height: number; dungeon: string; seed: number;
   cells: RenderCell[];
   decor: { x: number; y: number; col: number; row: number }[];
 }
 export interface GenOpts { width?: number; height?: number; }
 
 export function generateAutotiledDungeon(
-  skinName: string, seed: number, opts: GenOpts = {},
+  dungeonName: string, seed: number, opts: GenOpts = {},
 ): AutoDungeon {
-  const skin = getSkin(skinName);
-  if (!skin) throw new Error(`unknown skin: ${skinName}`);
+  const dungeon = getDungeon(dungeonName);
+  if (!dungeon) throw new Error(`unknown dungeon: ${dungeonName}`);
   const width = opts.width ?? 20;
   const height = opts.height ?? 15;
   const rng = makeRng(scrambleSeed(seed));
-  // Pick ONE floor set for this whole dungeon (coherent look; accents vary it).
-  const floorSet = at(skin.floorSets, rng);
+  // One coherent floor group for the whole dungeon.
+  const group: FloorGroup = chooseGroup(dungeonName, rng);
+  const underlay = mainTile(group); // floor behind transparent door tiles
 
   const isEdge = (x: number, y: number) => x === 0 || y === 0 || x === width - 1 || y === height - 1;
   const isCorner = (x: number, y: number) =>
@@ -105,13 +97,13 @@ export function generateAutotiledDungeon(
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const kind = kinds[y][x];
-      let coord;
+      let coord: TileCoord;
       let under: { col: number; row: number } | undefined;
-      if (kind === 'wall') coord = pickWall(x, y, kinds, width, height, skin, rng);
+      if (kind === 'wall') coord = pickWall(x, y, kinds, width, height, dungeon, rng);
       else if (kind === 'door') {
-        coord = pickWeighted(DOORS, rng).coord; // weighted door tile
-        under = floorSet.main;                  // floor behind the transparent door
-      } else coord = pickFloor(floorSet, rng);
+        coord = pickWeighted(DOORS, rng).coord;
+        under = { col: underlay.col, row: underlay.row };
+      } else coord = pickCell(group, rng);
       cells.push({ x, y, kind, col: coord.col, row: coord.row, under });
     }
   }
@@ -124,12 +116,12 @@ export function generateAutotiledDungeon(
     const j = Math.floor(rng() * (i + 1));
     [interior[i], interior[j]] = [interior[j], interior[i]];
   }
-  const decorCount = skin.decor.length === 0 ? 0 : Math.min(interior.length, 6 + Math.floor(rng() * 7));
+  const decorCount = dungeon.decor.length === 0 ? 0 : Math.min(interior.length, 6 + Math.floor(rng() * 7));
   const decor = [];
   for (let i = 0; i < decorCount; i++) {
-    const d = skin.decor[Math.min(skin.decor.length - 1, Math.floor(rng() * skin.decor.length))];
+    const d = dungeon.decor[Math.min(dungeon.decor.length - 1, Math.floor(rng() * dungeon.decor.length))];
     decor.push({ x: interior[i].x, y: interior[i].y, col: d.col, row: d.row });
   }
 
-  return { width, height, skin: skinName, seed, cells, decor };
+  return { width, height, dungeon: dungeonName, seed, cells, decor };
 }
