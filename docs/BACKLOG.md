@@ -171,3 +171,23 @@ tuning. `auric_glow` is intentionally kept rare (feature-tier on a curated set o
 - [ ] Award a bonus-gold amount (define; scale with dungeon level?) — likely in the engine
       on kill/clear, or as a flat per-dungeon bonus
 - [ ] Surface it on the TV (a "Gold Vault!" flourish / gold-rain) so players notice
+
+## 16. Cracked-wall tiles: re-enable per-band with placement rules
+During the wall-autotiling polish (2026-07-11) cracks were **disabled** for the bands
+whose shared crack columns (sheet 26/27) don't read well — see `NO_CRACK_DUNGEON_IDS`
+in `src/domain/floorgroups.ts` (`wallVariantChance = 0`):
+- **Rustpipe Sewers (10)** — plain walls carry a pipe/"=" motif the plain cracked
+  variant lacks, so a crack looks inconsistent beside the piped walls (tile is *not*
+  broken, just stylistically off).
+- **Bogstone Mire (20), Dunewatch (21), Cobblemoor (22), Bloodstone Cairn (23)** — the
+  rounded fieldstone/cobble bands have notched rubble at the crack columns that breaks
+  the wall line (wrong tile for a cracked run).
+
+These bands currently render clean walls only (no `wallVariantChance` cracks). Later, add
+smarter cracked-tile support so they can have damage again:
+- [ ] Per-band crack tiles: some bands' correct cracked pieces may live at different
+      columns than the shared 26/27 — decode the right cracked-wall tile per band.
+- [ ] Placement rules for when a crack is allowed (e.g. only on straight runs away from
+      corners/doors; a max density; avoid stylistic clashes like the sewer pipe motif).
+- [ ] Consider band-appropriate "damage" beyond cracks (moss, rust, scorch) that matches
+      each theme, rather than one generic spiderweb crack.
