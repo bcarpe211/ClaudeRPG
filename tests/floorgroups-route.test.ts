@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { chooseGroup, DUNGEONS, COMPAT, FLOOR_GROUPS } from '../src/domain/floorgroups';
+import { chooseGroup, DUNGEONS, COMPAT } from '../src/domain/floorgroups';
 import { makeRng } from '../src/domain/dungeon';
 
 describe('chooseGroup', () => {
-  it('finds an eligible group for every one of the 22 dungeons', () => {
+  it('finds an eligible group for every one of the 21 rostered dungeons', () => {
     for (const d of DUNGEONS) {
       const g = chooseGroup(d.name, makeRng(1));
       const c = COMPAT[g.handle];
@@ -11,9 +11,9 @@ describe('chooseGroup', () => {
     }
   });
 
-  it('covers Wintermarch Keep, which has no home group', () => {
-    expect(FLOOR_GROUPS.some((g) => COMPAT[g.handle].home === 'Wintermarch Keep')).toBe(false);
-    expect(() => chooseGroup('Wintermarch Keep', makeRng(3))).not.toThrow();
+  it('excludes Wintermarch Keep from the roster and refuses to route it', () => {
+    expect(DUNGEONS.find((d) => d.name === 'Wintermarch Keep')).toBeUndefined();
+    expect(() => chooseGroup('Wintermarch Keep', makeRng(3))).toThrow();
   });
 
   it('is deterministic for a fixed rng seed', () => {

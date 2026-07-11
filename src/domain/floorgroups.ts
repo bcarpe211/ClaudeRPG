@@ -34,7 +34,9 @@ export const COMPAT: Record<string, Compat> = Object.fromEntries(
 );
 
 // #17 Homestead Pickets is a fence-prop row, not a tiling dungeon (README excludes it).
-const EXCLUDED_DUNGEON_IDS = new Set([17]);
+// #18 Wintermarch Keep pulled from the rotation during floor tuning (no home floor;
+// user opted it out entirely) — 2026-07-11.
+const EXCLUDED_DUNGEON_IDS = new Set([17, 18]);
 const WALL_VARIANT_CHANCE = 0.1;
 
 // A band's sheet row index IS its dungeon_id, so wallRow = id.

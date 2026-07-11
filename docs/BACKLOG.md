@@ -161,3 +161,13 @@ constants in `src/domain/floorgroups.ts`) — no generator changes. Not player-f
       load-time JSON shape validation in `floorgroups.ts` (currently a test-time guard);
       the `dungeon2` decor block is dormant (all dungeons `decor:[]`); latent `pickCell`
       accent-rate quirk if a group ever has BOTH glow and normal accents.
+
+## 15. Gold Glow floor → bonus gold reward
+When the `auric_glow` floor (the emissive gold slab, a rare `feature`-tier floor) is the
+chosen floor for a dungeon, award bonus gold to the players who fight there. Makes the rare
+"treasure vault" floor a payout moment, not just a visual. Logged 2026-07-11 during floor
+tuning. `auric_glow` is intentionally kept rare (feature-tier on a curated set of dungeons).
+- [ ] Detect when the active dungeon's chosen floor group is `auric_glow`
+- [ ] Award a bonus-gold amount (define; scale with dungeon level?) — likely in the engine
+      on kill/clear, or as a flat per-dungeon bonus
+- [ ] Surface it on the TV (a "Gold Vault!" flourish / gold-rain) so players notice
