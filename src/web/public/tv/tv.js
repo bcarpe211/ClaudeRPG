@@ -4,6 +4,7 @@
 
 const TILE = 24;            // source tile size
 const SIDEBAR_FRAC = 0.25;  // leaderboard width fraction
+const SHADOW = { col: 30, row: 37 }; // wall-shadow tile (mirrors WALL_SHADOW in tilesheet.ts)
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -59,6 +60,10 @@ function buildBackground() {
         if (c.under) put(c.under.col, c.under.row, x, y); // floor behind a transparent door
         put(c.col, c.row, x, y);
       }
+    // wall-shadow layer (above floor, below decor): a wall/door casts it downward
+    for (let y = 0; y < layout.height; y++)
+      for (let x = 0; x < layout.width; x++)
+        if (layout.cells[y][x].shadow) put(SHADOW.col, SHADOW.row, x, y);
     for (const d of layout.decor) put(d.col, d.row, d.x, d.y);
   };
   // draw now, and again once the sheet finishes loading (one shared image)

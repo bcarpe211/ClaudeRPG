@@ -66,6 +66,24 @@ describe('currentTvLayout', () => {
     expect(currentTvLayout(db)).toEqual(L);
   });
 
+  it('shadows a floor cell exactly when its north neighbour is a wall or door', () => {
+    activeDungeon();
+    setTheme('Greystone Keep');
+    const L = currentTvLayout(db)!;
+    let shadowed = 0;
+    for (let y = 0; y < L.height; y++)
+      for (let x = 0; x < L.width; x++) {
+        const c = L.cells[y][x];
+        const north = y > 0 ? L.cells[y - 1][x] : undefined;
+        const shouldShadow = c.type === 'floor' && !!north && (north.type === 'wall' || north.type === 'door');
+        expect(!!c.shadow).toBe(shouldShadow);
+        if (c.shadow) shadowed++;
+      }
+    expect(shadowed).toBeGreaterThan(0); // the top interior row (below the top wall) is shadowed
+    // only floor cells are ever shadowed
+    for (const row of L.cells) for (const c of row) if (c.shadow) expect(c.type).toBe('floor');
+  });
+
   it('falls back to a default dungeon on an unknown/legacy theme (no throw)', () => {
     activeDungeon();
     setTheme('stone_crypt'); // old theme, not a dungeon2 name

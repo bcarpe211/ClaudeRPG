@@ -43,6 +43,12 @@ export const WALL_COLS = {
   crackedV: 26,   // cracked vertical run
 } as const;
 
+// Top-fade wall shadow: a semi-transparent tile drawn OVER a floor cell that has a
+// wall/door directly to its NORTH, so the wall appears to cast a soft shadow downward
+// onto the floor. Row 37 cols 29-32 are 4 shadow lengths (29 shortest .. 32 longest);
+// col 30 is the starting length for all. Layer above floor, below decor/actors.
+export const WALL_SHADOW: TileCoord = { col: 30, row: 37 };
+
 // Door tiles live on the world sheet at row 3 cols 29-42 and row 4 cols 29-31.
 // A doorway cell renders one of these instead of an open floor gap. Doors are a
 // single GLOBAL weighted pool (theme-matched doors are a future refinement): the
