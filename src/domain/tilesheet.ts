@@ -38,6 +38,7 @@ export const WALL_COLS = {
   bl: 19, br: 20, // bottom corners (wall on E+N / W+N)
   lend: 11, rend: 13, // horizontal wall-ends (soft cap at a doorway): wall on E only / W only
   tend: 14, bend: 16, // vertical wall-ends: wall on S only / N only
+  isolated: 10,   // double-capped standalone block (beveled all round) — a 1-tile wall between two doorways
   crackedH: 27,   // cracked horizontal run
   crackedV: 26,   // cracked vertical run
 } as const;

@@ -16,7 +16,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
@@ -24,7 +23,6 @@
         "Mossmarch Hold",
         "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -48,7 +46,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
@@ -56,7 +53,6 @@
         "Mossmarch Hold",
         "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -80,24 +76,18 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
       "good": [
         "Mossmarch Hold",
-        "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
-        "Bloodstone Cairn",
-        "Verdant Crypt",
         "Wildroot Barrow",
-        "Tideglass Halls",
         "Frostiron Bastion",
         "Drowned Foundry"
       ],
@@ -112,7 +102,6 @@
         "Greystone Keep",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
@@ -126,7 +115,6 @@
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
-        "Bloodstone Cairn",
         "Verdant Crypt",
         "Wildroot Barrow",
         "Tideglass Halls",
@@ -143,26 +131,13 @@
       "great": [
         "Greystone Keep",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
       "good": [
-        "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
         "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
-        "Cinderdeep",
-        "Bogstone Mire",
-        "Dunewatch",
-        "Bloodstone Cairn",
-        "Verdant Crypt",
-        "Wildroot Barrow",
-        "Tideglass Halls",
-        "Frostiron Bastion",
         "Drowned Foundry"
       ],
       "feature": []
@@ -175,24 +150,14 @@
       "great": [
         "Greystone Keep",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
       "good": [
-        "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
         "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
-        "Cinderdeep",
-        "Bogstone Mire",
-        "Dunewatch",
-        "Bloodstone Cairn",
         "Verdant Crypt",
-        "Wildroot Barrow",
         "Tideglass Halls",
         "Frostiron Bastion",
         "Drowned Foundry"
@@ -205,26 +170,17 @@
       "floor_class": "warm",
       "home": "Crimson Court",
       "great": [
-        "Mossmarch Hold",
-        "Emberforge",
         "Oakenvault",
         "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
-        "Cinderdeep",
-        "Bogstone Mire",
-        "Dunewatch",
-        "Bloodstone Cairn"
+        "Bloodstone Cairn",
+        "Verdant Crypt"
       ],
       "good": [
         "Greystone Keep",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -236,7 +192,6 @@
       "great": [
         "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -249,8 +204,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Verdant Crypt",
         "Wildroot Barrow"
@@ -265,7 +218,6 @@
       "great": [
         "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -278,8 +230,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Verdant Crypt",
         "Wildroot Barrow"
@@ -292,9 +242,7 @@
       "floor_class": "warm",
       "home": "Mossmarch Hold",
       "great": [
-        "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -307,8 +255,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Verdant Crypt",
         "Wildroot Barrow"
@@ -323,7 +269,6 @@
       "great": [
         "Mossmarch Hold",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -336,11 +281,7 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -352,7 +293,6 @@
       "great": [
         "Mossmarch Hold",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -365,11 +305,7 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -381,7 +317,6 @@
       "great": [
         "Mossmarch Hold",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -394,11 +329,7 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -406,13 +337,11 @@
       "handle": "oaken_flag",
       "name": "Oakenvault Flagstone",
       "floor_class": "warm",
-      "home": "Oakenvault",
+      "home": "",
       "great": [
         "Mossmarch Hold",
         "Emberforge",
-        "Auric Deep",
         "Duskstone Warren",
-        "Thornwind Ruins",
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
@@ -423,11 +352,7 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -439,7 +364,6 @@
       "great": [
         "Mossmarch Hold",
         "Emberforge",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -451,9 +375,6 @@
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Verdant Crypt",
         "Wildroot Barrow"
@@ -467,8 +388,6 @@
       "home": "Oakenvault",
       "great": [
         "Mossmarch Hold",
-        "Emberforge",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
@@ -481,10 +400,7 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
-        "Verdant Crypt",
         "Wildroot Barrow"
       ],
       "feature": []
@@ -502,19 +418,13 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Mossmarch Hold",
-        "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
-        "Cinderdeep",
         "Bogstone Mire",
-        "Dunewatch",
-        "Bloodstone Cairn"
+        "Dunewatch"
       ],
       "feature": []
     },
@@ -528,22 +438,13 @@
       ],
       "good": [
         "Greystone Keep",
-        "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
-        "Cinderdeep",
         "Bogstone Mire",
-        "Dunewatch",
-        "Bloodstone Cairn"
+        "Dunewatch"
       ],
       "feature": []
     },
@@ -553,24 +454,16 @@
       "floor_class": "warm",
       "home": "Verdant Crypt",
       "great": [
-        "Mossmarch Hold",
-        "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
-        "Cinderdeep",
         "Bogstone Mire",
-        "Dunewatch",
-        "Bloodstone Cairn"
+        "Dunewatch"
       ],
       "good": [
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Wildroot Barrow"
       ],
@@ -583,15 +476,13 @@
       "home": "Tideglass Halls",
       "great": [
         "Frostiron Bastion",
-        "Drowned Foundry"
+        "Drowned Foundry",
+        "Verdant Crypt"
       ],
       "good": [
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor"
       ],
       "feature": []
@@ -600,18 +491,18 @@
       "handle": "tide_tile",
       "name": "Tideglass Tilework",
       "floor_class": "cool",
-      "home": "Tideglass Halls",
+      "home": "",
       "great": [
-        "Frostiron Bastion",
-        "Drowned Foundry"
+        "Drowned Foundry",
+        "Mossmarch Hold",
+        "Verdant Crypt",
+        "Bogstone Mire",
+        "Dunewatch"
       ],
       "good": [
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor"
       ],
       "feature": []
@@ -622,16 +513,14 @@
       "floor_class": "cool",
       "home": "Frostiron Bastion",
       "great": [
-        "Tideglass Halls",
-        "Drowned Foundry"
+        "Drowned Foundry",
+        "Verdant Crypt",
+        "Tideglass Halls"
       ],
       "good": [
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor"
       ],
       "feature": []
@@ -656,9 +545,6 @@
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Verdant Crypt",
         "Wildroot Barrow"
@@ -677,7 +563,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor",
         "Mossmarch Hold",
@@ -686,7 +571,6 @@
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
-        "Bogstone Mire",
         "Dunewatch",
         "Bloodstone Cairn"
       ]
@@ -700,13 +584,11 @@
         "Greystone Keep",
         "Crimson Court",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
       "good": [
         "Mossmarch Hold",
-        "Emberforge",
         "Oakenvault",
         "Auric Deep",
         "Duskstone Warren",
@@ -729,16 +611,14 @@
       "floor_class": "cool",
       "home": "Drowned Foundry",
       "great": [
-        "Tideglass Halls",
-        "Frostiron Bastion"
+        "Frostiron Bastion",
+        "Verdant Crypt",
+        "Tideglass Halls"
       ],
       "good": [
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor"
       ],
       "feature": []
@@ -753,7 +633,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
@@ -767,7 +646,6 @@
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
-        "Bloodstone Cairn",
         "Verdant Crypt",
         "Wildroot Barrow",
         "Tideglass Halls",
@@ -796,8 +674,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Verdant Crypt",
         "Wildroot Barrow"
@@ -813,8 +689,6 @@
         "Mossmarch Hold",
         "Emberforge",
         "Oakenvault",
-        "Auric Deep",
-        "Thornwind Ruins",
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
@@ -825,11 +699,7 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -842,7 +712,6 @@
         "Mossmarch Hold",
         "Emberforge",
         "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Cinderdeep",
         "Bogstone Mire",
@@ -854,8 +723,6 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
         "Verdant Crypt",
         "Wildroot Barrow"
@@ -870,11 +737,7 @@
       "great": [
         "Mossmarch Hold",
         "Emberforge",
-        "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
-        "Thornwind Ruins",
-        "Bogstone Mire",
         "Dunewatch",
         "Bloodstone Cairn"
       ],
@@ -882,12 +745,7 @@
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -897,27 +755,19 @@
       "floor_class": "grey",
       "home": "Wildroot Barrow",
       "great": [
-        "Greystone Keep",
-        "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold",
         "Cobblemoor"
       ],
       "good": [
         "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
         "Bloodstone Cairn",
-        "Verdant Crypt",
-        "Tideglass Halls",
         "Frostiron Bastion",
         "Drowned Foundry"
       ],
@@ -929,28 +779,18 @@
       "floor_class": "grey",
       "home": "Ossuary Pale",
       "great": [
-        "Greystone Keep",
-        "Crimson Court",
         "Rustpipe Sewers",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor"
       ],
       "good": [
         "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
         "Bloodstone Cairn",
-        "Verdant Crypt",
         "Wildroot Barrow",
-        "Tideglass Halls",
-        "Frostiron Bastion",
         "Drowned Foundry"
       ],
       "feature": []
@@ -965,23 +805,15 @@
         "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Cobblemoor"
       ],
       "good": [
         "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
         "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
-        "Bogstone Mire",
         "Dunewatch",
-        "Bloodstone Cairn",
-        "Verdant Crypt",
-        "Wildroot Barrow",
-        "Tideglass Halls",
         "Frostiron Bastion",
         "Drowned Foundry"
       ],
@@ -994,7 +826,6 @@
       "home": "Bogstone Mire",
       "great": [
         "Mossmarch Hold",
-        "Emberforge",
         "Oakenvault",
         "Auric Deep",
         "Duskstone Warren",
@@ -1007,12 +838,7 @@
         "Greystone Keep",
         "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     },
@@ -1023,24 +849,14 @@
       "home": "Dunewatch",
       "great": [
         "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
-        "Bogstone Mire",
-        "Bloodstone Cairn"
+        "Bogstone Mire"
       ],
       "good": [
-        "Greystone Keep",
-        "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
         "Cobblemoor",
-        "Verdant Crypt",
         "Wildroot Barrow"
       ],
       "feature": []
@@ -1051,28 +867,17 @@
       "floor_class": "grey",
       "home": "Cobblemoor",
       "great": [
-        "Greystone Keep",
-        "Crimson Court",
         "Rustpipe Sewers",
         "Ossuary Pale",
-        "Wintermarch Keep",
         "Glacierhold"
       ],
       "good": [
-        "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
         "Thornwind Ruins",
         "Cinderdeep",
         "Bogstone Mire",
         "Dunewatch",
-        "Bloodstone Cairn",
-        "Verdant Crypt",
         "Wildroot Barrow",
-        "Tideglass Halls",
-        "Frostiron Bastion",
         "Drowned Foundry"
       ],
       "feature": []
@@ -1083,26 +888,13 @@
       "floor_class": "warm",
       "home": "Bloodstone Cairn",
       "great": [
-        "Mossmarch Hold",
-        "Emberforge",
-        "Oakenvault",
-        "Auric Deep",
         "Duskstone Warren",
-        "Thornwind Ruins",
         "Cinderdeep",
-        "Bogstone Mire",
         "Dunewatch"
       ],
       "good": [
-        "Greystone Keep",
-        "Crimson Court",
         "Rustpipe Sewers",
-        "Ossuary Pale",
-        "Wintermarch Keep",
-        "Glacierhold",
-        "Cobblemoor",
-        "Verdant Crypt",
-        "Wildroot Barrow"
+        "Cobblemoor"
       ],
       "feature": []
     }

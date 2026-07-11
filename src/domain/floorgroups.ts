@@ -34,14 +34,24 @@ export const COMPAT: Record<string, Compat> = Object.fromEntries(
 );
 
 // #17 Homestead Pickets is a fence-prop row, not a tiling dungeon (README excludes it).
-const EXCLUDED_DUNGEON_IDS = new Set([17]);
+// #18 Wintermarch Keep pulled from the rotation during floor tuning (no home floor;
+// user opted it out entirely) — 2026-07-11.
+const EXCLUDED_DUNGEON_IDS = new Set([17, 18]);
 const WALL_VARIANT_CHANCE = 0.1;
+// Bands whose cracked-wall variant reads poorly, so cracks are disabled (clean walls
+// only). Two reasons: the "rounded fieldstone/cobble" bands (20-23) have notched rubble
+// at the shared crack columns (26/27) that break the wall line; and Rustpipe Sewers (10)
+// has a distinctive pipe motif on its plain walls that the plain cracked variant lacks,
+// so a crack looks inconsistent beside the piped walls.
+const NO_CRACK_DUNGEON_IDS = new Set([10, 20, 21, 22, 23]);
 
 // A band's sheet row index IS its dungeon_id, so wallRow = id.
 export const DUNGEONS: Dungeon[] = load<{ styles: RawDungeon[] }>('dungeons.json').styles
   .filter((d) => !EXCLUDED_DUNGEON_IDS.has(d.id))
   .map((d) => ({
-    name: d.name, dungeonId: d.id, wallRow: d.id, wallVariantChance: WALL_VARIANT_CHANCE, decor: [],
+    name: d.name, dungeonId: d.id, wallRow: d.id,
+    wallVariantChance: NO_CRACK_DUNGEON_IDS.has(d.id) ? 0 : WALL_VARIANT_CHANCE,
+    decor: [],
   }));
 
 const DUNGEON_BY_NAME = new Map(DUNGEONS.map((d) => [d.name, d]));

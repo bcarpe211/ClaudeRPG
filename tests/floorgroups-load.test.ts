@@ -7,9 +7,10 @@ describe('floor data loads from the vendored package JSON', () => {
     for (const g of FLOOR_GROUPS) expect(g.mains.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('has 22 dungeons, excluding #17 Homestead Pickets; wallRow == dungeonId', () => {
-    expect(DUNGEONS.length).toBe(22);
+  it('has 21 dungeons, excluding #17 Homestead Pickets and #18 Wintermarch Keep; wallRow == dungeonId', () => {
+    expect(DUNGEONS.length).toBe(21);
     expect(DUNGEONS.find((d) => d.name === 'Homestead Pickets')).toBeUndefined();
+    expect(DUNGEONS.find((d) => d.name === 'Wintermarch Keep')).toBeUndefined();
     expect(getDungeon('Greystone Keep')).toMatchObject({ dungeonId: 1, wallRow: 1 });
     expect(getDungeon('Bloodstone Cairn')).toMatchObject({ dungeonId: 23, wallRow: 23 });
     expect(DUNGEONS.every((d) => d.wallRow === d.dungeonId)).toBe(true);

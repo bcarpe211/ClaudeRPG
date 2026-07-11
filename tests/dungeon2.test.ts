@@ -1,8 +1,121 @@
 import { describe, it, expect } from 'vitest';
 import { generateAutotiledDungeon } from '../src/domain/dungeon2';
-import { DOORS } from '../src/domain/tilesheet';
+import { DOORS, WALL_COLS } from '../src/domain/tilesheet';
 
 const dungeon = 'Greystone Keep';
+
+describe('door placement + wall autotiling rules', () => {
+  const W = 20, H = 15;
+  const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  const cellAt = (d: ReturnType<typeof generateAutotiledDungeon>) => {
+    const m = new Map<string, (typeof d.cells)[number]>();
+    for (const c of d.cells) m.set(`${c.x},${c.y}`, c);
+    return m;
+  };
+
+  it('never places two doors orthogonally adjacent, nor on a corner', () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      const doors = d.cells.filter((c) => c.kind === 'door');
+      const dset = new Set(doors.map((c) => `${c.x},${c.y}`));
+      for (const c of doors) {
+        const corner = (c.x === 0 || c.x === W - 1) && (c.y === 0 || c.y === H - 1);
+        expect(corner).toBe(false);
+        for (const [dx, dy] of NEI) expect(dset.has(`${c.x + dx},${c.y + dy}`)).toBe(false);
+      }
+    }
+  });
+
+  it('is a corner only when both its walls continue; a door directly beside it caps to a beveled end', () => {
+    // a door adjacent to a corner degrades it to a straight/end piece (a beveled edge
+    // faces the door) rather than a raw corner whose face butts the doorway.
+    const NONCORNER = new Set<number>([
+      WALL_COLS.horizontal, WALL_COLS.vertical, WALL_COLS.crackedH, WALL_COLS.crackedV,
+      WALL_COLS.lend, WALL_COLS.rend, WALL_COLS.tend, WALL_COLS.bend,
+    ]);
+    const corners = [
+      { x: 0, y: 0, perp: [[1, 0], [0, 1]], piece: WALL_COLS.tl },
+      { x: W - 1, y: 0, perp: [[-1, 0], [0, 1]], piece: WALL_COLS.tr },
+      { x: 0, y: H - 1, perp: [[1, 0], [0, -1]], piece: WALL_COLS.bl },
+      { x: W - 1, y: H - 1, perp: [[-1, 0], [0, -1]], piece: WALL_COLS.br },
+    ] as const;
+    let sawCorner = false, sawCapped = false;
+    for (let seed = 1; seed <= 80; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      const m = cellAt(d);
+      for (const c of corners) {
+        const cell = m.get(`${c.x},${c.y}`)!;
+        const bothWalls = c.perp.every(([dx, dy]) => m.get(`${c.x + dx},${c.y + dy}`)?.kind === 'wall');
+        if (bothWalls) { expect(cell.col).toBe(c.piece); sawCorner = true; }
+        else { expect(cell.col).not.toBe(c.piece); expect(NONCORNER.has(cell.col)).toBe(true); sawCapped = true; }
+      }
+    }
+    expect(sawCorner).toBe(true);
+    expect(sawCapped).toBe(true);
+  });
+
+  it('uses the double-capped isolated piece for a 1-tile wall between two doorways', () => {
+    let saw = false;
+    for (let seed = 1; seed <= 200; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      const m = cellAt(d);
+      for (const c of d.cells) {
+        if (c.kind !== 'wall') continue;
+        const corner = (c.x === 0 || c.x === W - 1) && (c.y === 0 || c.y === H - 1);
+        if (corner) continue;
+        const E = m.get(`${c.x + 1},${c.y}`), Wt = m.get(`${c.x - 1},${c.y}`);
+        const N = m.get(`${c.x},${c.y - 1}`), S = m.get(`${c.x},${c.y + 1}`);
+        const vBetween = (c.x === 0 || c.x === W - 1) && N?.kind === 'door' && S?.kind === 'door';
+        const hBetween = (c.y === 0 || c.y === H - 1) && E?.kind === 'door' && Wt?.kind === 'door';
+        if (vBetween || hBetween) { expect(c.col).toBe(WALL_COLS.isolated); saw = true; }
+      }
+    }
+    expect(saw).toBe(true); // the between-two-doors scenario actually occurs in the sample
+  });
+
+  it('orients edge walls by their edge (runs, cracks, caps, or the isolated block), not by door gaps', () => {
+    // horizontal family (top/bottom edge): straight run, cracked run, horizontal end-cap, or isolated block
+    const HORIZ = new Set<number>([WALL_COLS.horizontal, WALL_COLS.crackedH, WALL_COLS.lend, WALL_COLS.rend, WALL_COLS.isolated]);
+    // vertical family (left/right edge): straight run, cracked run, vertical end-cap, or isolated block
+    const VERT = new Set<number>([WALL_COLS.vertical, WALL_COLS.crackedV, WALL_COLS.tend, WALL_COLS.bend, WALL_COLS.isolated]);
+    for (let seed = 1; seed <= 60; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      for (const c of d.cells) {
+        if (c.kind !== 'wall') continue;
+        const onLR = c.x === 0 || c.x === W - 1;
+        const onTB = c.y === 0 || c.y === H - 1;
+        if (onLR && onTB) continue; // corners covered by the corner test
+        if (onLR) expect(VERT.has(c.col)).toBe(true);
+        else if (onTB) expect(HORIZ.has(c.col)).toBe(true);
+      }
+    }
+  });
+
+  it('caps a wall where its run meets a doorway (finished doorframe, no raw edge)', () => {
+    let sawCap = false;
+    for (let seed = 1; seed <= 60; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      const m = cellAt(d);
+      for (const c of d.cells) {
+        if (c.kind !== 'wall') continue;
+        const corner = (c.x === 0 || c.x === W - 1) && (c.y === 0 || c.y === H - 1);
+        if (corner) continue;
+        const E = m.get(`${c.x + 1},${c.y}`), Wt = m.get(`${c.x - 1},${c.y}`);
+        const N = m.get(`${c.x},${c.y - 1}`), S = m.get(`${c.x},${c.y + 1}`);
+        // a run ending at a door (door one side, wall the other) caps TOWARD the door
+        if (c.y === 0 || c.y === H - 1) {
+          if (E?.kind === 'door' && Wt?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.rend); sawCap = true; }
+          if (Wt?.kind === 'door' && E?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.lend); sawCap = true; }
+        }
+        if (c.x === 0 || c.x === W - 1) {
+          if (S?.kind === 'door' && N?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.bend); sawCap = true; }
+          if (N?.kind === 'door' && S?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.tend); sawCap = true; }
+        }
+      }
+    }
+    expect(sawCap).toBe(true);
+  });
+});
 
 describe('generateAutotiledDungeon', () => {
   it('is deterministic for the same (dungeon, seed)', () => {

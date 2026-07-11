@@ -16,29 +16,38 @@ const scrambleSeed = (n: number): number => {
 // Neighbour-aware wall autotiling: a wall cell picks its tile from which of its
 // N/E/S/W neighbours are also wall. Corners connect two runs; a cell beside a
 // doorway (gap) becomes a soft wall-end; straight runs sprinkle cracks. This
-// also handles interior walls / rooms later (T/L/cross masks). Doors and floor
-// count as NOT wall.
+// also handles interior walls / rooms later (T/L/cross masks).
+//
+// A DOOR is an OPENING, not wall. So for run/cap/corner logic doors count as NOT
+// wall, which means:
+//  - a wall run that MEETS a doorway CAPS at it (soft end piece = a beveled
+//    doorframe) instead of butting it with a raw straight edge;
+//  - a corner stays a corner only when BOTH its walls actually continue — a door
+//    directly beside a corner degrades it to a beveled end (so the bevel faces the
+//    door), rather than a raw corner face butting the opening;
+//  - a 1-tile wall isolated BETWEEN two doorways uses a double-capped piece
+//    (beveled on both ends), oriented to its border edge.
 function pickWall(
   x: number, y: number, kinds: LogicalKind[][], w: number, h: number,
   dungeon: Dungeon, rng: () => number,
 ): TileCoord {
   const row = dungeon.wallRow;
   const C = (col: number): TileCoord => ({ col, row });
+  const cracked = rng() < dungeon.wallVariantChance; // 1 rng/wall cell
   const isWall = (xx: number, yy: number) =>
     xx >= 0 && yy >= 0 && xx < w && yy < h && kinds[yy][xx] === 'wall';
   const N = isWall(x, y - 1), E = isWall(x + 1, y), S = isWall(x, y + 1), Wt = isWall(x - 1, y);
-  const cracked = rng() < dungeon.wallVariantChance;
   if (E && Wt && !N && !S) return C(cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal);
   if (N && S && !E && !Wt) return C(cracked ? WALL_COLS.crackedV : WALL_COLS.vertical);
   if (E && S && !N && !Wt) return C(WALL_COLS.tl);
   if (Wt && S && !N && !E) return C(WALL_COLS.tr);
   if (E && N && !S && !Wt) return C(WALL_COLS.bl);
   if (Wt && N && !S && !E) return C(WALL_COLS.br);
-  if (Wt && !E && !N && !S) return C(WALL_COLS.rend); // wall to the west only -> east cap
+  if (Wt && !E && !N && !S) return C(WALL_COLS.rend); // wall to the west only -> east cap (meets a door/gap east)
   if (E && !Wt && !N && !S) return C(WALL_COLS.lend);
   if (N && !S && !E && !Wt) return C(WALL_COLS.bend); // wall to the north only -> south cap
   if (S && !N && !E && !Wt) return C(WALL_COLS.tend);
-  return C(WALL_COLS.horizontal); // junctions/isolated (rooms: future)
+  return C(WALL_COLS.isolated); // 1-tile wall between two doorways: double-capped block
 }
 
 // `under`: an optional tile drawn BEHIND this cell's tile. Door tiles are
@@ -78,7 +87,11 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) row.push(isEdge(x, y) ? 'wall' : 'floor');
     kinds.push(row);
   }
-  // doors: 2-3 non-corner border cells
+  // doors: 2-3 non-corner border cells, never adjacent to another door.
+  const isDoorAt = (xx: number, yy: number) =>
+    xx >= 0 && yy >= 0 && xx < width && yy < height && kinds[yy][xx] === 'door';
+  const hasAdjacentDoor = (x: number, y: number) =>
+    isDoorAt(x - 1, y) || isDoorAt(x + 1, y) || isDoorAt(x, y - 1) || isDoorAt(x, y + 1);
   const doorCount = 2 + Math.floor(rng() * 2);
   let guard = 0; let placed = 0;
   while (placed < doorCount && guard++ < 200) {
@@ -88,7 +101,7 @@ export function generateAutotiledDungeon(
     else if (side === 1) { y = height - 1; x = 1 + Math.floor(rng() * (width - 2)); }
     else if (side === 2) { x = 0; y = 1 + Math.floor(rng() * (height - 2)); }
     else { x = width - 1; y = 1 + Math.floor(rng() * (height - 2)); }
-    if (isCorner(x, y) || kinds[y][x] === 'door') continue;
+    if (isCorner(x, y) || kinds[y][x] === 'door' || hasAdjacentDoor(x, y)) continue;
     kinds[y][x] = 'door'; placed++;
   }
 
