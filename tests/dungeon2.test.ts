@@ -45,9 +45,11 @@ describe('door placement + wall autotiling rules', () => {
     expect(sawAdjacentDoor).toBe(true); // the bug-trigger scenario actually occurs in the sample
   });
 
-  it('orients edge walls by their edge, not by adjacent door gaps', () => {
-    const HORIZ = new Set<number>([WALL_COLS.horizontal, WALL_COLS.crackedH]);
-    const VERT = new Set<number>([WALL_COLS.vertical, WALL_COLS.crackedV]);
+  it('orients edge walls by their edge (runs, cracks, or caps), not by door gaps', () => {
+    // horizontal family (top/bottom edge): straight run, cracked run, or a horizontal end-cap
+    const HORIZ = new Set<number>([WALL_COLS.horizontal, WALL_COLS.crackedH, WALL_COLS.lend, WALL_COLS.rend]);
+    // vertical family (left/right edge): straight run, cracked run, or a vertical end-cap
+    const VERT = new Set<number>([WALL_COLS.vertical, WALL_COLS.crackedV, WALL_COLS.tend, WALL_COLS.bend]);
     const CORNERS = new Set<number>([WALL_COLS.tl, WALL_COLS.tr, WALL_COLS.bl, WALL_COLS.br]);
     for (let seed = 1; seed <= 60; seed++) {
       const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
@@ -60,6 +62,31 @@ describe('door placement + wall autotiling rules', () => {
         else if (onTB) expect(HORIZ.has(c.col)).toBe(true);
       }
     }
+  });
+
+  it('caps a wall where its run meets a doorway (finished doorframe, no raw edge)', () => {
+    let sawCap = false;
+    for (let seed = 1; seed <= 60; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      const m = cellAt(d);
+      for (const c of d.cells) {
+        if (c.kind !== 'wall') continue;
+        const corner = (c.x === 0 || c.x === W - 1) && (c.y === 0 || c.y === H - 1);
+        if (corner) continue;
+        const E = m.get(`${c.x + 1},${c.y}`), Wt = m.get(`${c.x - 1},${c.y}`);
+        const N = m.get(`${c.x},${c.y - 1}`), S = m.get(`${c.x},${c.y + 1}`);
+        // a run ending at a door (door one side, wall the other) caps TOWARD the door
+        if (c.y === 0 || c.y === H - 1) {
+          if (E?.kind === 'door' && Wt?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.rend); sawCap = true; }
+          if (Wt?.kind === 'door' && E?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.lend); sawCap = true; }
+        }
+        if (c.x === 0 || c.x === W - 1) {
+          if (S?.kind === 'door' && N?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.bend); sawCap = true; }
+          if (N?.kind === 'door' && S?.kind === 'wall') { expect(c.col).toBe(WALL_COLS.tend); sawCap = true; }
+        }
+      }
+    }
+    expect(sawCap).toBe(true);
   });
 });
 

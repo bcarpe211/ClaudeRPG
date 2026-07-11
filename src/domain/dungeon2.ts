@@ -16,33 +16,41 @@ const scrambleSeed = (n: number): number => {
 // Neighbour-aware wall autotiling: a wall cell picks its tile from which of its
 // N/E/S/W neighbours are also wall. Corners connect two runs; a cell beside a
 // doorway (gap) becomes a soft wall-end; straight runs sprinkle cracks. This
-// also handles interior walls / rooms later (T/L/cross masks). A DOOR counts as
-// wall here: it sits in the wall line (an opening punched into it), so adjacent
-// walls must still form corners/straight runs THROUGH it — otherwise a corner
-// beside a door loses its corner, and a wall between two doors loses its
-// orientation. Only floor is non-wall.
+// also handles interior walls / rooms later (T/L/cross masks).
+//
+// Two rules make doorways read right:
+//  - CORNERS are fixed by the room's geometry (position), NOT by neighbour walls —
+//    so a door placed beside a corner can't demote it to an edge/end piece.
+//  - A DOOR is an OPENING, not wall: a wall run that meets a doorway CAPS at it
+//    (soft end piece = a finished doorframe), rather than butting it with a raw
+//    straight edge. So doors count as NOT wall for the run/cap logic.
 function pickWall(
   x: number, y: number, kinds: LogicalKind[][], w: number, h: number,
   dungeon: Dungeon, rng: () => number,
 ): TileCoord {
   const row = dungeon.wallRow;
   const C = (col: number): TileCoord => ({ col, row });
+  const cracked = rng() < dungeon.wallVariantChance; // 1 rng/wall cell; corners ignore it
+  // Room corners are positional — never demoted by an adjacent door.
+  if (x === 0 && y === 0) return C(WALL_COLS.tl);
+  if (x === w - 1 && y === 0) return C(WALL_COLS.tr);
+  if (x === 0 && y === h - 1) return C(WALL_COLS.bl);
+  if (x === w - 1 && y === h - 1) return C(WALL_COLS.br);
+
   const isWall = (xx: number, yy: number) =>
-    xx >= 0 && yy >= 0 && xx < w && yy < h &&
-    (kinds[yy][xx] === 'wall' || kinds[yy][xx] === 'door');
+    xx >= 0 && yy >= 0 && xx < w && yy < h && kinds[yy][xx] === 'wall';
   const N = isWall(x, y - 1), E = isWall(x + 1, y), S = isWall(x, y + 1), Wt = isWall(x - 1, y);
-  const cracked = rng() < dungeon.wallVariantChance;
   if (E && Wt && !N && !S) return C(cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal);
   if (N && S && !E && !Wt) return C(cracked ? WALL_COLS.crackedV : WALL_COLS.vertical);
-  if (E && S && !N && !Wt) return C(WALL_COLS.tl);
+  if (E && S && !N && !Wt) return C(WALL_COLS.tl); // interior corners (rooms: future)
   if (Wt && S && !N && !E) return C(WALL_COLS.tr);
   if (E && N && !S && !Wt) return C(WALL_COLS.bl);
   if (Wt && N && !S && !E) return C(WALL_COLS.br);
-  if (Wt && !E && !N && !S) return C(WALL_COLS.rend); // wall to the west only -> east cap
+  if (Wt && !E && !N && !S) return C(WALL_COLS.rend); // wall to the west only -> east cap (meets a door/gap east)
   if (E && !Wt && !N && !S) return C(WALL_COLS.lend);
   if (N && !S && !E && !Wt) return C(WALL_COLS.bend); // wall to the north only -> south cap
   if (S && !N && !E && !Wt) return C(WALL_COLS.tend);
-  // Isolated (rooms: future) — orient by which border edge the cell sits on.
+  // Isolated (e.g. a 1-tile wall between two doorways) — orient by the border edge.
   const onLR = x === 0 || x === w - 1;
   return C(onLR ? (cracked ? WALL_COLS.crackedV : WALL_COLS.vertical)
                 : (cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal));
