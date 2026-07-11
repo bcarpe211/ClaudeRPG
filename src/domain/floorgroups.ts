@@ -38,12 +38,18 @@ export const COMPAT: Record<string, Compat> = Object.fromEntries(
 // user opted it out entirely) — 2026-07-11.
 const EXCLUDED_DUNGEON_IDS = new Set([17, 18]);
 const WALL_VARIANT_CHANCE = 0.1;
+// The "rounded fieldstone/cobble" bands (20-23) don't have matching cracked-wall
+// variants at the shared crack columns (sheet cols 26/27) — those cells hold notched
+// rubble pieces that break the wall line. Their clean walls are fine, so disable cracks.
+const NO_CRACK_DUNGEON_IDS = new Set([20, 21, 22, 23]);
 
 // A band's sheet row index IS its dungeon_id, so wallRow = id.
 export const DUNGEONS: Dungeon[] = load<{ styles: RawDungeon[] }>('dungeons.json').styles
   .filter((d) => !EXCLUDED_DUNGEON_IDS.has(d.id))
   .map((d) => ({
-    name: d.name, dungeonId: d.id, wallRow: d.id, wallVariantChance: WALL_VARIANT_CHANCE, decor: [],
+    name: d.name, dungeonId: d.id, wallRow: d.id,
+    wallVariantChance: NO_CRACK_DUNGEON_IDS.has(d.id) ? 0 : WALL_VARIANT_CHANCE,
+    decor: [],
   }));
 
 const DUNGEON_BY_NAME = new Map(DUNGEONS.map((d) => [d.name, d]));
