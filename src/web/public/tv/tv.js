@@ -44,25 +44,26 @@ window.addEventListener('resize', resize);
 
 function buildBackground() {
   if (!layout) return;
+  const sheet = img('/sheet/world.png');
   bg = document.createElement('canvas');
   bg.width = 20 * tilePx; bg.height = 15 * tilePx;
   const b = bg.getContext('2d');
   b.imageSmoothingEnabled = false;
-  let pending = 0;
+  const put = (col, row, x, y) =>
+    b.drawImage(sheet, col * TILE, row * TILE, TILE, TILE, x * tilePx, y * tilePx, tilePx, tilePx);
   const draw = () => {
     b.clearRect(0, 0, bg.width, bg.height);
     for (let y = 0; y < layout.height; y++)
-      for (let x = 0; x < layout.width; x++)
-        b.drawImage(img(layout.cells[y][x].url), x * tilePx, y * tilePx, tilePx, tilePx);
-    for (const d of layout.decor)
-      b.drawImage(img(d.url), d.x * tilePx, d.y * tilePx, tilePx, tilePx);
+      for (let x = 0; x < layout.width; x++) {
+        const c = layout.cells[y][x];
+        if (c.under) put(c.under.col, c.under.row, x, y); // floor behind a transparent door
+        put(c.col, c.row, x, y);
+      }
+    for (const d of layout.decor) put(d.col, d.row, d.x, d.y);
   };
-  // draw once now and again as images finish loading
+  // draw now, and again once the sheet finishes loading (one shared image)
   draw();
-  for (const row of layout.cells) for (const c of row) {
-    const im = img(c.url);
-    if (!im.complete) { pending++; im.onload = () => { draw(); }; }
-  }
+  if (!sheet.complete) sheet.onload = draw;
 }
 
 const evt = new EventSource('/tv/stream');

@@ -34,7 +34,7 @@ describe('buildTvLayout', () => {
     expect(buildTvLayout(db)).toBeNull();
   });
 
-  it('maps the active dungeon to sprite URLs', () => {
+  it('maps the active dungeon to sheet cells', () => {
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(p.auth_token, 1000), 100000, { cacheReadWeight: 0 });
     new GameEngine(db, { rng: () => 0.5 }).tick(100000);
@@ -43,12 +43,15 @@ describe('buildTvLayout', () => {
     expect(layout.width).toBe(20);
     expect(layout.height).toBe(15);
     expect(layout.dungeonId).toBeGreaterThan(0);
-    // every cell has a /sprites/world_24x24/ url and a type
     for (const row of layout.cells) for (const c of row) {
-      expect(c.url.startsWith('/sprites/world_24x24/')).toBe(true);
+      expect(Number.isInteger(c.col)).toBe(true);
+      expect(Number.isInteger(c.row)).toBe(true);
       expect(['wall', 'floor', 'door']).toContain(c.type);
     }
     expect(layout.monster.x).toBeGreaterThan(0);
-    for (const d of layout.decor) expect(d.url.startsWith('/sprites/world_24x24/')).toBe(true);
+    for (const d of layout.decor) {
+      expect(Number.isInteger(d.col)).toBe(true);
+      expect(Number.isInteger(d.row)).toBe(true);
+    }
   });
 });
