@@ -18,31 +18,28 @@ const scrambleSeed = (n: number): number => {
 // doorway (gap) becomes a soft wall-end; straight runs sprinkle cracks. This
 // also handles interior walls / rooms later (T/L/cross masks).
 //
-// Two rules make doorways read right:
-//  - CORNERS are fixed by the room's geometry (position), NOT by neighbour walls —
-//    so a door placed beside a corner can't demote it to an edge/end piece.
-//  - A DOOR is an OPENING, not wall: a wall run that meets a doorway CAPS at it
-//    (soft end piece = a finished doorframe), rather than butting it with a raw
-//    straight edge. So doors count as NOT wall for the run/cap logic.
+// A DOOR is an OPENING, not wall. So for run/cap/corner logic doors count as NOT
+// wall, which means:
+//  - a wall run that MEETS a doorway CAPS at it (soft end piece = a beveled
+//    doorframe) instead of butting it with a raw straight edge;
+//  - a corner stays a corner only when BOTH its walls actually continue — a door
+//    directly beside a corner degrades it to a beveled end (so the bevel faces the
+//    door), rather than a raw corner face butting the opening;
+//  - a 1-tile wall isolated BETWEEN two doorways uses a double-capped piece
+//    (beveled on both ends), oriented to its border edge.
 function pickWall(
   x: number, y: number, kinds: LogicalKind[][], w: number, h: number,
   dungeon: Dungeon, rng: () => number,
 ): TileCoord {
   const row = dungeon.wallRow;
   const C = (col: number): TileCoord => ({ col, row });
-  const cracked = rng() < dungeon.wallVariantChance; // 1 rng/wall cell; corners ignore it
-  // Room corners are positional — never demoted by an adjacent door.
-  if (x === 0 && y === 0) return C(WALL_COLS.tl);
-  if (x === w - 1 && y === 0) return C(WALL_COLS.tr);
-  if (x === 0 && y === h - 1) return C(WALL_COLS.bl);
-  if (x === w - 1 && y === h - 1) return C(WALL_COLS.br);
-
+  const cracked = rng() < dungeon.wallVariantChance; // 1 rng/wall cell
   const isWall = (xx: number, yy: number) =>
     xx >= 0 && yy >= 0 && xx < w && yy < h && kinds[yy][xx] === 'wall';
   const N = isWall(x, y - 1), E = isWall(x + 1, y), S = isWall(x, y + 1), Wt = isWall(x - 1, y);
   if (E && Wt && !N && !S) return C(cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal);
   if (N && S && !E && !Wt) return C(cracked ? WALL_COLS.crackedV : WALL_COLS.vertical);
-  if (E && S && !N && !Wt) return C(WALL_COLS.tl); // interior corners (rooms: future)
+  if (E && S && !N && !Wt) return C(WALL_COLS.tl);
   if (Wt && S && !N && !E) return C(WALL_COLS.tr);
   if (E && N && !S && !Wt) return C(WALL_COLS.bl);
   if (Wt && N && !S && !E) return C(WALL_COLS.br);
@@ -50,10 +47,7 @@ function pickWall(
   if (E && !Wt && !N && !S) return C(WALL_COLS.lend);
   if (N && !S && !E && !Wt) return C(WALL_COLS.bend); // wall to the north only -> south cap
   if (S && !N && !E && !Wt) return C(WALL_COLS.tend);
-  // Isolated (e.g. a 1-tile wall between two doorways) — orient by the border edge.
-  const onLR = x === 0 || x === w - 1;
-  return C(onLR ? (cracked ? WALL_COLS.crackedV : WALL_COLS.vertical)
-                : (cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal));
+  return C(WALL_COLS.isolated); // 1-tile wall between two doorways: double-capped block
 }
 
 // `under`: an optional tile drawn BEHIND this cell's tile. Door tiles are
