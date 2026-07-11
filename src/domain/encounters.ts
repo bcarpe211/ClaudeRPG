@@ -4,6 +4,8 @@ import { damageMultiplier } from './leveling';
 import { tokenModifier } from './combat';
 import { sumEffectiveSince } from './ingest';
 import { pickEncounterCreature, type EncounterKind } from './creatures';
+import { DUNGEONS } from './floorgroups';
+import { pickWeighted } from './tilesheet';
 
 export interface EngineConfig {
   baseXp: number; xpGrowth: number; levelMultSlope: number;
@@ -77,7 +79,20 @@ export function calibrateHp(
   return Math.max(minHp, Math.round(officeDpm * targetMinutes * difficultyFactor));
 }
 
-const THEMES = ['stone_crypt', 'cave', 'wood_fort'];
+// Per-theme spawn weight over the 22 dungeon names; unlisted default to BASE.
+// Down-weight the visually loud / novelty wall themes. Curated from the roster
+// render — tune on the real TV. (Weights the WALL theme; floors come from compat.)
+const THEME_BASE = 10;
+const THEME_WEIGHTS: Record<string, number> = {
+  'Auric Deep': 3,    // bright gold walls — a rare treat
+  'Crimson Court': 5, // stark heraldic checker
+};
+const THEME_POOL = DUNGEONS.map((d) => ({ name: d.name, weight: THEME_WEIGHTS[d.name] ?? THEME_BASE }));
+
+/** Weighted pick of a dungeon theme (one rng() draw). Deterministic given rng. */
+export function pickDungeonTheme(rng: () => number): string {
+  return pickWeighted(THEME_POOL, rng).name;
+}
 
 function spawnEncounter(
   db: Database.Database,
@@ -118,7 +133,7 @@ function spawnEncounter(
 function newDungeon(
   db: Database.Database, level: number, now: number, cfg: EngineConfig, rng: () => number,
 ): { id: number; level: number; regular_count: number } {
-  const theme = THEMES[Math.min(THEMES.length - 1, Math.floor(rng() * THEMES.length))];
+  const theme = pickDungeonTheme(rng);
   const seed = Math.floor(rng() * 2_000_000_000);
   const span = Math.max(0, cfg.regularEncountersMax - cfg.regularEncountersMin);
   const regularCount = cfg.regularEncountersMin + Math.floor(rng() * (span + 1));
