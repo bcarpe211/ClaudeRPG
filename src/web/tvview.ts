@@ -1,36 +1,9 @@
 import type Database from 'better-sqlite3';
-import { currentLayout } from '../domain/dungeon';
-import { worldSpriteUrl } from '../domain/tilemanifest';
+import { currentTvLayout, type TvLayout } from './tvlayout';
 
-export interface TvLayoutCell { type: string; url: string; }
-export interface TvLayout {
-  dungeonId: number;
-  theme: string;
-  width: number;
-  height: number;
-  cells: TvLayoutCell[][];
-  doors: { x: number; y: number }[];
-  monster: { x: number; y: number; footprint: number };
-  decor: { x: number; y: number; url: string }[];
-}
-
-/** Map the active dungeon layout to a sprite-URL payload for the TV, or null. */
+/** Active dungeon layout as the TV render payload, or null. */
 export function buildTvLayout(db: Database.Database): TvLayout | null {
-  const layout = currentLayout(db);
-  if (!layout) return null;
-  const gs = db.prepare('SELECT current_dungeon_id FROM game_state WHERE id=1').get() as any;
-  return {
-    dungeonId: gs.current_dungeon_id,
-    theme: layout.theme,
-    width: layout.width,
-    height: layout.height,
-    cells: layout.cells.map((row) =>
-      row.map((c) => ({ type: c.type, url: worldSpriteUrl(c.sprite) })),
-    ),
-    doors: layout.doors,
-    monster: layout.monster,
-    decor: layout.decor.map((d) => ({ x: d.x, y: d.y, url: worldSpriteUrl(d.sprite) })),
-  };
+  return currentTvLayout(db);
 }
 
 /** Zip players (in order) onto slot coordinates; extras get {x:null,y:null}. */
@@ -114,7 +87,7 @@ export function buildTvState(db: Database.Database, now: number): TvState {
   }));
 
   // Assign battlefield slots to enabled players (same order) from the layout.
-  const layout = currentLayout(db);
+  const layout = currentTvLayout(db);
   if (layout) {
     const enabled = players.filter((p) => !p.disabled);
     const placed = assignHeroSlots(enabled, layout.heroSlots);
