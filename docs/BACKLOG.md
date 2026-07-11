@@ -135,3 +135,29 @@ depends on the #1 frame-A/B mapping being curated.
 - [ ] Renderer toggles A/B frames on a timer (e.g. ~0.5–1s), independent per
       sprite or globally
 - [ ] Confirm world-tile/decor sprites for any animated tiles (torches, etc.)
+
+## 14. Modular flooring — palette tuning (data-only)
+The modular flooring system (merged 2026-07-10, preview-only via `/dungeon-preview`)
+works and is compat-matched, but a roster render surfaced floor-palette taste items.
+All are **data edits** in `src/domain/floordata/*.json` (or the `ACCENT_RATE`/`GLOW_RATE`
+constants in `src/domain/floorgroups.ts`) — no generator changes. Not player-facing yet
+(live `/tv` still runs the old `dungeon.ts`); tune before/with the eventual `/tv` swap.
+- [ ] `cinder_rock`'s two mains blend ~50/50 and its 2nd main ("subtle ember slab") is
+      high-contrast → busy/noisy floor (seen under Oakenvault). Demote the ember slab
+      from a 2nd MAIN to a sparse ACCENT.
+- [ ] `crimson_mosaic` (single "checkerboard" tile) is loud as a whole-room fill and its
+      compat bridges it to grey dungeons (e.g. Rustpipe Sewers). Drop it as a main, or
+      restrict its compat to crimson-family dungeons only.
+- [ ] Generous `good`-tier compat lists put warm floors (e.g. `oaken_flag` red slab) under
+      cool/green walls (e.g. Thornwind Ruins). Tighten `good` lists if you want stricter
+      per-theme color coherence.
+- [ ] Many floors read dark & flat (charcoal) — ties into #7 "wallpaper-quality floor".
+      Consider bumping `ACCENT_RATE`, adding accents to flat single-main groups, or biasing
+      selection toward multi-main groups for within-room variation.
+- [ ] (Optional) Floor choice is purely seed-driven, so two same-class dungeons at the same
+      seed pick the identical floor. Cosmetic in play (each dungeon has its own seed); if
+      dungeons are ever shown side-by-side, mix the dungeon id/name into the floor-pick rng.
+- [ ] Follow-ups from the final code review (non-blocking): restore the spec-promised
+      load-time JSON shape validation in `floorgroups.ts` (currently a test-time guard);
+      the `dungeon2` decor block is dormant (all dungeons `decor:[]`); latent `pickCell`
+      accent-rate quirk if a group ever has BOTH glow and normal accents.
