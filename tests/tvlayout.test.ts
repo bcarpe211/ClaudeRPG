@@ -4,7 +4,7 @@ import { seedSettings } from '../src/domain/settings';
 import { createPlayer } from '../src/domain/players';
 import { ingestTokenUsage } from '../src/domain/ingest';
 import { GameEngine } from '../src/domain/engine';
-import { getDungeon } from '../src/domain/floorgroups';
+import { getDungeon, DUNGEONS } from '../src/domain/floorgroups';
 import { currentTvLayout } from '../src/web/tvlayout';
 
 let db: ReturnType<typeof openDb>;
@@ -74,5 +74,17 @@ describe('currentTvLayout', () => {
     expect(L).not.toBeNull();
     expect(L.theme).toBe('Greystone Keep');
     expect(L.cells.length).toBe(15);
+  });
+
+  it('never throws across the full dungeon roster (live adapter, never-throw guard)', () => {
+    activeDungeon();
+    for (const d of DUNGEONS) {
+      setTheme(d.name);
+      const L = currentTvLayout(db);
+      expect(L).not.toBeNull();
+      expect(L!.width).toBe(20);
+      expect(L!.height).toBe(15);
+      expect(L!.theme).toBe(d.name);
+    }
   });
 });

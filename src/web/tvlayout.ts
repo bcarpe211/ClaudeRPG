@@ -31,8 +31,22 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
 
   // Legacy/in-flight rows may hold an old theme (e.g. 'stone_crypt') that isn't a
   // dungeon2 name -> fall back so /tv never 500s; self-corrects on the next spawn.
-  const name = getDungeon(d.theme) ? d.theme : FALLBACK_DUNGEON;
-  const auto = generateAutotiledDungeon(name, d.seed);
+  const primary = getDungeon(d.theme) ? d.theme : FALLBACK_DUNGEON;
+  const tryGenerate = (n: string) => {
+    try { return generateAutotiledDungeon(n, d.seed); } catch { return null; }
+  };
+
+  // generateAutotiledDungeon can also throw (e.g. no eligible floor group for a
+  // theme, from a bad vendored-data edit) -> retry once with the fallback dungeon,
+  // and give up gracefully (return null) rather than ever 500ing /tv.
+  let name = primary;
+  let auto = tryGenerate(name);
+  if (!auto) {
+    if (name === FALLBACK_DUNGEON) return null;
+    name = FALLBACK_DUNGEON;
+    auto = tryGenerate(name);
+    if (!auto) return null;
+  }
   const { width, height } = auto;
 
   // Flat cells -> [y][x] render payload; collect door positions.
