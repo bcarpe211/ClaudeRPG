@@ -1,8 +1,67 @@
 import { describe, it, expect } from 'vitest';
 import { generateAutotiledDungeon } from '../src/domain/dungeon2';
-import { DOORS } from '../src/domain/tilesheet';
+import { DOORS, WALL_COLS } from '../src/domain/tilesheet';
 
 const dungeon = 'Greystone Keep';
+
+describe('door placement + wall autotiling rules', () => {
+  const W = 20, H = 15;
+  const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  const cellAt = (d: ReturnType<typeof generateAutotiledDungeon>) => {
+    const m = new Map<string, (typeof d.cells)[number]>();
+    for (const c of d.cells) m.set(`${c.x},${c.y}`, c);
+    return m;
+  };
+
+  it('never places two doors orthogonally adjacent, nor on a corner', () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      const doors = d.cells.filter((c) => c.kind === 'door');
+      const dset = new Set(doors.map((c) => `${c.x},${c.y}`));
+      for (const c of doors) {
+        const corner = (c.x === 0 || c.x === W - 1) && (c.y === 0 || c.y === H - 1);
+        expect(corner).toBe(false);
+        for (const [dx, dy] of NEI) expect(dset.has(`${c.x + dx},${c.y + dy}`)).toBe(false);
+      }
+    }
+  });
+
+  it('renders the four corners as corner pieces even when a door sits next to one', () => {
+    let sawAdjacentDoor = false;
+    for (let seed = 1; seed <= 60; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      const m = cellAt(d);
+      const corners = [
+        [0, 0, WALL_COLS.tl], [W - 1, 0, WALL_COLS.tr],
+        [0, H - 1, WALL_COLS.bl], [W - 1, H - 1, WALL_COLS.br],
+      ] as const;
+      for (const [x, y, col] of corners) {
+        const c = m.get(`${x},${y}`)!;
+        expect(c.kind).toBe('wall');
+        expect(c.col).toBe(col);
+        for (const [dx, dy] of NEI) if (m.get(`${x + dx},${y + dy}`)?.kind === 'door') sawAdjacentDoor = true;
+      }
+    }
+    expect(sawAdjacentDoor).toBe(true); // the bug-trigger scenario actually occurs in the sample
+  });
+
+  it('orients edge walls by their edge, not by adjacent door gaps', () => {
+    const HORIZ = new Set<number>([WALL_COLS.horizontal, WALL_COLS.crackedH]);
+    const VERT = new Set<number>([WALL_COLS.vertical, WALL_COLS.crackedV]);
+    const CORNERS = new Set<number>([WALL_COLS.tl, WALL_COLS.tr, WALL_COLS.bl, WALL_COLS.br]);
+    for (let seed = 1; seed <= 60; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: W, height: H });
+      for (const c of d.cells) {
+        if (c.kind !== 'wall') continue;
+        const onLR = c.x === 0 || c.x === W - 1;
+        const onTB = c.y === 0 || c.y === H - 1;
+        if (onLR && onTB) { expect(CORNERS.has(c.col)).toBe(true); continue; }
+        if (onLR) expect(VERT.has(c.col)).toBe(true);
+        else if (onTB) expect(HORIZ.has(c.col)).toBe(true);
+      }
+    }
+  });
+});
 
 describe('generateAutotiledDungeon', () => {
   it('is deterministic for the same (dungeon, seed)', () => {
