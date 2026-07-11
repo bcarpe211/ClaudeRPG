@@ -35,9 +35,10 @@ function computeScale() {
   sidebarW = Math.round(vw * SIDEBAR_FRAC);
   fieldX = sidebarW;
   const fieldW = vw - sidebarW;
-  // reserve a strip above (HP bar) and below (dungeon name), plus a side margin,
-  // so the dungeon floats on the backdrop rather than filling the field.
-  const hpZone = vh * 0.09, nameStrip = vh * 0.13, sideMargin = fieldW * 0.05;
+  // reserve a strip above (monster name + HP bar) and below (dungeon name), plus a
+  // side margin, so the dungeon floats on the backdrop. Strips kept tight so the
+  // dungeon gets the largest clean integer scale (5x @4K, 3x @1440p, 2x @1080p).
+  const hpZone = vh * 0.09, nameStrip = vh * 0.06, sideMargin = fieldW * 0.05;
   const availW = fieldW - 2 * sideMargin;
   const availH = vh - hpZone - nameStrip;
   // largest INTEGER scale that fits -> crisp pixels at any resolution
@@ -183,9 +184,11 @@ function drawHeroes(t) {
 
 function drawHpBar() {
   const e = state.encounter; if (!e) return;
-  const w = panelW * 0.6, h = Math.max(18, Math.round(tilePx * 0.42));
+  const w = panelW * 0.6, h = Math.max(16, Math.round(tilePx * 0.34));
   const x = panelX + (panelW - w) / 2;
-  const y = Math.round((panelY - h) / 2); // vertically centred in the strip above the panel
+  // sit just above the panel; the space above the bar is reserved for the monster
+  // name (bigger than the bar) — backlog #12.
+  const y = panelY - h - Math.round(tilePx * 0.14);
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.65)'; ctx.shadowBlur = Math.round(h * 0.6); ctx.shadowOffsetY = Math.round(h * 0.3);
   ctx.fillStyle = '#180a0a'; ctx.fillRect(x - 4, y - 3, w + 8, h + 6);
@@ -199,7 +202,8 @@ function drawHpBar() {
 function drawName() {
   if (!layout || !layout.theme) return;
   const zoneTop = panelY + panelH, zoneH = canvas.height - zoneTop;
-  const size = Math.max(22, Math.round(zoneH * 0.42));
+  // smaller than before — the dungeon is the show; the name is just a label
+  const size = Math.max(18, Math.round(tilePx * 0.5));
   const cx = panelX + panelW / 2;
   const cy = zoneTop + zoneH * 0.5 + size * 0.35; // alphabetic baseline for vertical centring
   shadowText(layout.theme.toUpperCase(), cx, cy, `bold ${size}px system-ui`, '#e8c96a', 'center');
@@ -224,12 +228,14 @@ function drawLeaderboard() {
   shadowText('LEADERBOARD', pad, y + sidebarW * 0.06, `bold ${Math.round(sidebarW * 0.07)}px system-ui`, '#e8c96a', 'left');
   y += sidebarW * 0.11;
   const rowH = Math.min((canvas.height - y - pad) / Math.max(1, state.players.length), sidebarW * 0.12);
+  const avW = Math.round(rowH * 0.72);
+  const textX = pad + avW + Math.round(rowH * 0.1); // name/stats hug the avatar (justified left)
   for (const p of state.players) {
     ctx.globalAlpha = p.disabled ? 0.4 : 1;
-    ctx.drawImage(img(p.avatarUrl), pad, y, rowH * 0.8, rowH * 0.85);
-    shadowText(p.name, pad + rowH, y + rowH * 0.36, `${Math.round(rowH * 0.34)}px system-ui`, '#cdb9e0', 'left');
+    ctx.drawImage(img(p.avatarUrl), pad, y, avW, avW);
+    shadowText(p.name, textX, y + rowH * 0.36, `${Math.round(rowH * 0.34)}px system-ui`, '#cdb9e0', 'left');
     shadowText(`L${p.level}  ${p.effectiveTokens.toLocaleString()} tok  ${p.gold}g  x${p.modifier.toFixed(2)}`,
-      pad + rowH, y + rowH * 0.72, `${Math.round(rowH * 0.28)}px system-ui`, '#9a86b0', 'left');
+      textX, y + rowH * 0.72, `${Math.round(rowH * 0.28)}px system-ui`, '#9a86b0', 'left');
     ctx.globalAlpha = 1;
     y += rowH;
   }
