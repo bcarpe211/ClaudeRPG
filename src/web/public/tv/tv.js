@@ -7,6 +7,7 @@
 const TILE = 24;            // source tile size
 const SIDEBAR_FRAC = 0.30;  // leaderboard width fraction
 const SHADOW = { col: 30, row: 37 }; // wall-shadow tile (mirrors WALL_SHADOW in tilesheet.ts)
+const MSHADOW = { S: { col: 37, row: 37 }, M: { col: 38, row: 37 }, L: { col: 39, row: 37 } }; // mirrors MONSTER_SHADOWS in tilesheet.ts
 const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
 
 const canvas = document.getElementById('stage');
@@ -156,16 +157,28 @@ function tileToField(x, y) { return { px: panelX + x * tilePx, py: panelY + y * 
 
 function drawMonster() {
   const e = state.encounter; if (!e || !layout) return;
+  const sheet = img('/sheet/world.png');
   const m = layout.monster;
   const fp = e.footprint;                       // 1 or 2
   const visScale = fp === 2 ? 2.2 : 1.4;        // bosses loom larger
   const size = tilePx * visScale;
-  const { px, py } = tileToField(m.x + fp / 2, m.y + fp);
-  drawSprite(img(e.creatureUrl), px, py, size, size);
-  // pack: a couple of small duplicates beside it
+  const { px, py } = tileToField(m.x + fp / 2, m.y + fp); // feet baseline (drawSprite anchors bottom)
+  const shadow = (cx, feetY, w) => {
+    const sh = MSHADOW[e.size] || MSHADOW.M;
+    const shW = w * 0.8, shH = shW * 0.4;
+    ctx.drawImage(sheet, sh.col * TILE, sh.row * TILE, TILE, TILE,
+      Math.round(cx - shW / 2), Math.round(feetY - shH / 2), shW, shH);
+  };
+  const raise = e.flying ? Math.round(tilePx * 0.45) : 0;
+  shadow(px, py, size);
+  drawSprite(img(e.creatureUrl), px, py - raise, size, size);
+  // pack: a couple of small duplicates beside it, each with its own small shadow
   if (e.kind === 'pack') {
-    for (let i = 1; i <= Math.min(3, e.packCount - 1); i++)
-      drawSprite(img(e.creatureUrl), px + i * tilePx * 0.6, py, size * 0.7, size * 0.7);
+    for (let i = 1; i <= Math.min(3, e.packCount - 1); i++) {
+      const dx = px + i * tilePx * 0.6, dw = size * 0.7;
+      shadow(dx, py, dw);
+      drawSprite(img(e.creatureUrl), dx, py - raise, dw, dw);
+    }
   }
 }
 
@@ -186,8 +199,8 @@ function drawHpBar() {
   const e = state.encounter; if (!e) return;
   const w = panelW * 0.6, h = Math.max(16, Math.round(tilePx * 0.34));
   const x = panelX + (panelW - w) / 2;
-  // sit above the panel with a clear gap; the space above the bar is reserved for
-  // the monster name (bigger than the bar) — backlog #12.
+  // sit above the panel with a clear gap; the monster name is drawn in the strip
+  // above the bar (bigger than the bar), below.
   const y = panelY - h - Math.round(tilePx * 0.5);
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.65)'; ctx.shadowBlur = Math.round(h * 0.6); ctx.shadowOffsetY = Math.round(h * 0.3);
@@ -197,6 +210,10 @@ function drawHpBar() {
   ctx.fillStyle = '#d23b3b'; ctx.fillRect(x, y, w * Math.max(0, e.hp / e.maxHp), h);
   shadowText(`${e.hp.toLocaleString()} / ${e.maxHp.toLocaleString()}`,
     x + w / 2, y + h * 0.72, `${Math.round(h * 0.62)}px system-ui`, '#fff', 'center');
+  // monster name in the reserved strip above the bar, a step larger than the HP text
+  const nameSize = Math.max(14, Math.round(h * 1.15));
+  shadowText(e.name, panelX + panelW / 2, y - Math.round(h * 0.55),
+    `bold ${nameSize}px system-ui`, '#f2e4e4', 'center');
 }
 
 function drawFloaters(t) {

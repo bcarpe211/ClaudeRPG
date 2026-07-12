@@ -34,8 +34,7 @@ export interface CatalogInput {
   worldFiles: string[];
   classSheetFiles: string[];
   creatureNames: string[]; // CREATURE_SHEET_NAMES, aligned [i] -> file index i+1
-  tiers: number[][]; // MONSTER_TIERS
-  bosses: number[]; // BOSSES
+  monsters: { index: number; category: string; boss: boolean }[]; // bestiary MONSTERS
   classAvatars: ClassAvatar[];
   themes: Record<string, ThemeTiles>;
 }
@@ -83,11 +82,13 @@ export function buildCatalog(input: CatalogInput): CatalogView {
       if (avatar) {
         annotation.push(`class: ${avatar.name}`);
       } else {
-        input.tiers.forEach((tier, t) => {
-          if (tier.includes(aIndex)) annotation.push(`tier ${t + 1}`);
-        });
-        if (input.bosses.includes(aIndex)) annotation.push('boss');
-        if (annotation.length === 0) annotation.push('unused');
+        const m = input.monsters.find((mo) => mo.index === aIndex);
+        if (m) {
+          annotation.push(m.category);
+          if (m.boss) annotation.push('boss');
+        } else {
+          annotation.push('unused');
+        }
       }
       return {
         aIndex,

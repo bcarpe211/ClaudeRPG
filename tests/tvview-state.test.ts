@@ -5,6 +5,7 @@ import { createPlayer } from '../src/domain/players';
 import { ingestTokenUsage } from '../src/domain/ingest';
 import { GameEngine } from '../src/domain/engine';
 import { buildTvState } from '../src/web/tvview';
+import { monsterByIndex } from '../src/domain/bestiary';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -44,6 +45,24 @@ describe('buildTvState', () => {
     // enabled players get battlefield coordinates
     const placed = s.players.filter((p) => p.x !== null);
     expect(placed.length).toBe(2);
+  });
+
+  it('active encounter carries a monster name, size and flying flag', () => {
+    const a = createPlayer(db, { name: 'Big', class_key: 'wizard', gender: 'M' }, 1);
+    const b = createPlayer(db, { name: 'Small', class_key: 'thief', gender: 'F' }, 1);
+    ingestTokenUsage(db, tokens(a.auth_token, 40000), 100000, { cacheReadWeight: 0 });
+    ingestTokenUsage(db, tokens(b.auth_token, 1000), 100000, { cacheReadWeight: 0 });
+    new GameEngine(db, { rng: () => 0.5 }).tick(100000);
+    const s = buildTvState(db, 100000);
+    expect(s.encounter).not.toBeNull();
+    const e = s.encounter!;
+    expect(typeof e.name).toBe('string');
+    expect(e.name.length).toBeGreaterThan(0);
+    expect(['S', 'M', 'L']).toContain(e.size);
+    expect(typeof e.flying).toBe('boolean');
+    // consistent with the bestiary for the spawned creature
+    const m = monsterByIndex(e.creatureIndex);
+    if (m) { expect(e.size).toBe(m.size); expect(e.flying).toBe(m.flying); }
   });
 
   it('includes a defeat summary during the defeat window', () => {

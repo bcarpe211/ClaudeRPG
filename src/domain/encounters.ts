@@ -96,7 +96,7 @@ export function pickDungeonTheme(rng: () => number): string {
 
 function spawnEncounter(
   db: Database.Database,
-  dungeon: { id: number; level: number; regular_count: number },
+  dungeon: { id: number; level: number; theme: string; regular_count: number },
   index: number,
   now: number,
   cfg: EngineConfig,
@@ -104,7 +104,7 @@ function spawnEncounter(
 ): number {
   const isBoss = index >= dungeon.regular_count;
   const kind: EncounterKind = isBoss ? 'boss' : rng() < 0.5 ? 'single' : 'pack';
-  const creature = pickEncounterCreature(dungeon.level, kind, rng);
+  const creature = pickEncounterCreature(dungeon.theme, kind, rng);
   const packCount = kind === 'pack' ? 3 + Math.floor(rng() * 3) : 1;
   const difficulty =
     (1 + cfg.difficultyRampPerEncounter * index) *
@@ -132,7 +132,7 @@ function spawnEncounter(
 
 function newDungeon(
   db: Database.Database, level: number, now: number, cfg: EngineConfig, rng: () => number,
-): { id: number; level: number; regular_count: number } {
+): { id: number; level: number; theme: string; regular_count: number } {
   const theme = pickDungeonTheme(rng);
   const seed = Math.floor(rng() * 2_000_000_000);
   const span = Math.max(0, cfg.regularEncountersMax - cfg.regularEncountersMin);
@@ -140,7 +140,7 @@ function newDungeon(
   const info = db.prepare(
     'INSERT INTO dungeons (level, theme, seed, regular_count, created_at) VALUES (?,?,?,?,?)',
   ).run(level, theme, seed, regularCount, now);
-  return { id: Number(info.lastInsertRowid), level, regular_count: regularCount };
+  return { id: Number(info.lastInsertRowid), level, theme, regular_count: regularCount };
 }
 
 /**

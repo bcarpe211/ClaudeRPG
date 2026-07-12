@@ -8,6 +8,8 @@ import {
   advanceToNextEncounter,
   loadEngineConfig,
 } from '../src/domain/encounters';
+import { monsterByIndex } from '../src/domain/bestiary';
+import { themeMonsters } from '../src/domain/dungeonthemes';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -84,5 +86,19 @@ describe('advanceToNextEncounter', () => {
     const dungeons = db.prepare('SELECT * FROM dungeons ORDER BY id').all() as any[];
     expect(dungeons.length).toBe(2);
     expect(dungeons[1].level).toBe(2);
+  });
+});
+
+describe('spawned encounter respects the dungeon theme', () => {
+  it('creature_index is a bestiary monster in the theme categories', () => {
+    advanceToNextEncounter(db, 100000, loadEngineConfig(db), () => 0.3);
+    const gs = db.prepare('SELECT current_dungeon_id, current_encounter_id FROM game_state WHERE id=1').get() as any;
+    const d = db.prepare('SELECT theme FROM dungeons WHERE id=?').get(gs.current_dungeon_id) as any;
+    const e = db.prepare('SELECT creature_index, footprint FROM encounters WHERE id=?').get(gs.current_encounter_id) as any;
+    const m = monsterByIndex(e.creature_index);
+    expect(m).toBeDefined();
+    const tm = themeMonsters(d.theme);
+    const allowed = new Set([...(tm.bossCategories ?? []), ...tm.categories]);
+    expect(allowed.has(m!.category)).toBe(true);
   });
 });
