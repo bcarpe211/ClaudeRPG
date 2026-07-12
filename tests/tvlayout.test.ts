@@ -94,6 +94,17 @@ describe('currentTvLayout', () => {
     expect(L.cells.length).toBe(15);
   });
 
+  it('never places a hero on a non-walkable decor cell', () => {
+    activeDungeon();
+    // 'Crimson Court' is used (rather than the brief's 'Greystone Keep') because with
+    // this suite's fixed rng (seed always 1_000_000_000), 'Greystone Keep' happens not
+    // to collide -- this theme does, giving a genuine red before the fix.
+    setTheme('Crimson Court');
+    const L = currentTvLayout(db)!;
+    const decorKeys = new Set(L.decor.map((d) => `${d.x},${d.y}`)); // Build 1: all decor non-walkable
+    for (const s of L.heroSlots) expect(decorKeys.has(`${s.x},${s.y}`)).toBe(false);
+  });
+
   it('never throws across the full dungeon roster (live adapter, never-throw guard)', () => {
     activeDungeon();
     for (const d of DUNGEONS) {
