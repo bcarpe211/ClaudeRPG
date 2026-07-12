@@ -105,13 +105,18 @@ reflects Claude Code token usage** (nothing else is tracked/affected).
 - [ ] Landing page with game description + "what this does / doesn't do"
 - [ ] Clarify scope: affects only Claude Code usage; how to join/register
 
-## 11. Admin settings: human-readable descriptions
-The admin settings page shows raw variable names (`base_hit`, `token_modifier_k`,
-`recent_window_minutes`, etc. — see `src/domain/settings.ts`). Hard to tell what
-each does or how changing it impacts the game.
-- [ ] For each setting: a plain-language description of what it controls
-- [ ] Show the default value and the effect/direction of changing it
-- [ ] (Optional) units and sane min/max hints
+## 11. Admin settings: human-readable descriptions ✅ DONE (2026-07-12)
+Grouped, self-describing admin settings page. Spec/plan
+`docs/superpowers/{specs,plans}/2026-07-12-admin-settings-descriptions*`.
+- [x] Plain-language description per setting (incl. effect of raising/lowering)
+      — `src/domain/settings-meta.ts` `SETTINGS_META` (all 22 knobs); a coverage
+      test fails the build if a `DEFAULT_SETTINGS` key lacks metadata.
+- [x] Default value shown + per-setting **reset** button (client-side).
+- [x] Units + soft min/max/step hints (number inputs); grouped into 7 sections
+      (`groupedSettings()` view-model + regrouped `admin-settings.ejs`). POST save
+      path unchanged (inputs keep `name=<key>`).
+- [ ] (Future, optional) hard server-side clamp/validation of out-of-range values
+      (currently hints only).
 
 ## 12. Monster name flare — on-screen label with random adjective ✅ DONE (2026-07-12)
 Show the current monster's name on the TV during battle, prefixed with a random
