@@ -78,7 +78,7 @@ export function chooseGroup(dungeonName: string, rng: () => number): FloorGroup 
   return pickWeighted(eligible, rng).group;
 }
 
-const ACCENT_RATE = 0.06; // normal detail accents per cell
+const ACCENT_RATE = 0.11; // normal detail accents per cell
 const GLOW_RATE = 0.01;   // emissive glow accents per cell (rarer)
 const at = <T>(arr: T[], rng: () => number): T => arr[Math.floor(rng() * arr.length)];
 

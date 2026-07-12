@@ -65,7 +65,22 @@
           "is_cross_ref": false
         }
       ],
-      "accents": [],
+      "accents": [
+        {
+          "dungeon_id": 1,
+          "dungeon": "Greystone Keep",
+          "col": 5,
+          "rect": [
+            144,
+            24,
+            24,
+            24
+          ],
+          "hex": "#3d3d3d",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
       "note": "Framed slab, tidy standalone"
     },
     {
@@ -255,7 +270,22 @@
           "is_cross_ref": false
         }
       ],
-      "accents": [],
+      "accents": [
+        {
+          "dungeon_id": 3,
+          "dungeon": "Mossmarch Hold",
+          "col": 5,
+          "rect": [
+            144,
+            72,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
       "note": "Framed olive slab, tidy"
     },
     {
@@ -345,7 +375,22 @@
           "is_cross_ref": false
         }
       ],
-      "accents": [],
+      "accents": [
+        {
+          "dungeon_id": 4,
+          "dungeon": "Emberforge",
+          "col": 5,
+          "rect": [
+            144,
+            96,
+            24,
+            24
+          ],
+          "hex": "#432d24",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
       "note": "Diamond-studded plate, standalone"
     },
     {
@@ -420,7 +465,22 @@
           "is_cross_ref": false
         }
       ],
-      "accents": [],
+      "accents": [
+        {
+          "dungeon_id": 5,
+          "dungeon": "Oakenvault",
+          "col": 5,
+          "rect": [
+            144,
+            120,
+            24,
+            24
+          ],
+          "hex": "#3d3826",
+          "hint": "cracked cobble",
+          "is_cross_ref": false
+        }
+      ],
       "note": "Framed brown slab, tidy"
     },
     {
@@ -483,7 +543,9 @@
           "hex": "#2c3829",
           "hint": "flat inset slab",
           "is_cross_ref": false
-        },
+        }
+      ],
+      "accents": [
         {
           "dungeon_id": 6,
           "dungeon": "Verdant Crypt",
@@ -499,7 +561,6 @@
           "is_cross_ref": false
         }
       ],
-      "accents": [],
       "note": "Dark green slabs, blended"
     },
     {
@@ -1106,7 +1167,9 @@
           "hex": "#4d251c",
           "hint": "flat solid slab",
           "is_cross_ref": false
-        },
+        }
+      ],
+      "accents": [
         {
           "dungeon_id": 14,
           "dungeon": "Cinderdeep",
@@ -1120,9 +1183,7 @@
           "hex": "#262626",
           "hint": "subtle ember slab",
           "is_cross_ref": false
-        }
-      ],
-      "accents": [
+        },
         {
           "dungeon_id": 14,
           "dungeon": "Cinderdeep",
