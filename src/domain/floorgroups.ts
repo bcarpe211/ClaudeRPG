@@ -14,7 +14,7 @@ const load = <T>(file: string): T =>
 export interface FloorTile extends TileCoord { hint: string; isGlow: boolean }
 export interface FloorGroup { handle: string; name: string; mains: FloorTile[]; accents: FloorTile[] }
 export interface Dungeon {
-  name: string; dungeonId: number; wallRow: number; wallVariantChance: number; decor: TileCoord[];
+  name: string; dungeonId: number; wallRow: number; wallVariantChance: number;
 }
 export interface Compat { home: string; great: string[]; good: string[]; feature: string[] }
 
@@ -51,7 +51,6 @@ export const DUNGEONS: Dungeon[] = load<{ styles: RawDungeon[] }>('dungeons.json
   .map((d) => ({
     name: d.name, dungeonId: d.id, wallRow: d.id,
     wallVariantChance: NO_CRACK_DUNGEON_IDS.has(d.id) ? 0 : WALL_VARIANT_CHANCE,
-    decor: [],
   }));
 
 const DUNGEON_BY_NAME = new Map(DUNGEONS.map((d) => [d.name, d]));

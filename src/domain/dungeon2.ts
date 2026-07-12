@@ -2,6 +2,7 @@ import { makeRng } from './dungeon';
 import { WALL_COLS, DOORS, pickWeighted, type TileCoord } from './tilesheet';
 import { getDungeon, chooseGroup, pickCell, mainTile, type Dungeon, type FloorGroup } from './floorgroups';
 import { type LogicalKind } from './autotile';
+import { decorFor, COBWEB_HEAVY } from './decor';
 
 // mulberry32's first outputs are strongly correlated for small sequential
 // seeds (1,2,3 all yield a high first value). Feeding the seed through an
@@ -60,7 +61,7 @@ export interface RenderCell {
 export interface AutoDungeon {
   width: number; height: number; dungeon: string; seed: number;
   cells: RenderCell[];
-  decor: { x: number; y: number; col: number; row: number }[];
+  decor: { x: number; y: number; col: number; row: number; walkable: boolean }[];
 }
 export interface GenOpts { width?: number; height?: number; }
 
@@ -121,19 +122,45 @@ export function generateAutotiledDungeon(
     }
   }
 
-  // 3) Decor on a few interior floor cells (deterministic).
-  const interior: { x: number; y: number }[] = [];
-  for (let y = 1; y < height - 1; y++)
-    for (let x = 1; x < width - 1; x++) if (kinds[y][x] === 'floor') interior.push({ x, y });
-  for (let i = interior.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [interior[i], interior[j]] = [interior[j], interior[i]];
+  // 3) Decor: corner cobwebs, wall torches, and floor scatter (clear of the monster zone).
+  const pools = decorFor(dungeonName);
+  const decor: { x: number; y: number; col: number; row: number; walkable: boolean }[] = [];
+  const used = new Set<string>();
+  const at2 = <T>(arr: T[]) => arr[Math.floor(rng() * arr.length)];
+  const shuffle = <T>(arr: T[]) => {
+    for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  };
+  const place = (x: number, y: number, t: { col: number; row: number; walkable: boolean }) => {
+    decor.push({ x, y, col: t.col, row: t.row, walkable: t.walkable }); used.add(`${x},${y}`);
+  };
+  // corners
+  if (pools.corner.length) {
+    const p = COBWEB_HEAVY.has(dungeonName) ? 0.85 : 0.5;
+    for (const [cx, cy] of [[1, 1], [width - 2, 1], [1, height - 2], [width - 2, height - 2]] as const) {
+      if (kinds[cy][cx] === 'floor' && rng() < p) place(cx, cy, at2(pools.corner));
+    }
   }
-  const decorCount = dungeon.decor.length === 0 ? 0 : Math.min(interior.length, 6 + Math.floor(rng() * 7));
-  const decor = [];
-  for (let i = 0; i < decorCount; i++) {
-    const d = dungeon.decor[Math.min(dungeon.decor.length - 1, Math.floor(rng() * dungeon.decor.length))];
-    decor.push({ x: interior[i].x, y: interior[i].y, col: d.col, row: d.row });
+  // wall torches (non-corner border walls, not doors)
+  if (pools.wall.length) {
+    const wallCells: { x: number; y: number }[] = [];
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++)
+        if (kinds[y][x] === 'wall' && !isCorner(x, y)) wallCells.push({ x, y });
+    shuffle(wallCells);
+    const n = Math.min(6, Math.max(1, Math.floor(wallCells.length / 5)));
+    for (let i = 0; i < n && i < wallCells.length; i++) place(wallCells[i].x, wallCells[i].y, at2(pools.wall));
+  }
+  // floor scatter, avoiding the fixed 2x2 monster zone + already-used cells
+  const mx = Math.floor(width / 2) - 1, my = Math.floor(height / 2) - 1;
+  const inMonster = (x: number, y: number) => x >= mx && x <= mx + 1 && y >= my && y <= my + 1;
+  const floorCells: { x: number; y: number }[] = [];
+  for (let y = 1; y < height - 1; y++)
+    for (let x = 1; x < width - 1; x++)
+      if (kinds[y][x] === 'floor' && !inMonster(x, y) && !used.has(`${x},${y}`)) floorCells.push({ x, y });
+  shuffle(floorCells);
+  if (pools.floor.length) {
+    const n = 4 + Math.floor(rng() * 5);
+    for (let i = 0; i < n && i < floorCells.length; i++) place(floorCells[i].x, floorCells[i].y, at2(pools.floor));
   }
 
   return { width, height, dungeon: dungeonName, seed, cells, decor };
