@@ -5,7 +5,7 @@
 // below the panel; the monster HP bar sits in the strip above it.
 
 const TILE = 24;            // source tile size
-const SIDEBAR_FRAC = 0.25;  // leaderboard width fraction
+const SIDEBAR_FRAC = 0.30;  // leaderboard width fraction
 const SHADOW = { col: 30, row: 37 }; // wall-shadow tile (mirrors WALL_SHADOW in tilesheet.ts)
 const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
 
@@ -223,13 +223,15 @@ function drawFloaters(t) {
 }
 
 function drawLeaderboard() {
-  const pad = Math.round(sidebarW * 0.04);
+  const pad = Math.round(sidebarW * 0.05);
   let y = pad;
-  shadowText('LEADERBOARD', pad, y + sidebarW * 0.06, `bold ${Math.round(sidebarW * 0.07)}px system-ui`, '#e8c96a', 'left');
-  y += sidebarW * 0.11;
-  const rowH = Math.min((canvas.height - y - pad) / Math.max(1, state.players.length), sidebarW * 0.12);
-  const avW = Math.round(rowH * 0.72);
-  const textX = pad + avW + Math.round(rowH * 0.1); // name/stats hug the avatar (justified left)
+  shadowText('LEADERBOARD', pad, y + sidebarW * 0.065, `bold ${Math.round(sidebarW * 0.075)}px system-ui`, '#e8c96a', 'left');
+  y += sidebarW * 0.13;
+  // fill the sidebar: taller rows (bigger avatars + text), capped so a short roster
+  // still reads large. Rotation for big rosters is backlog #8.
+  const rowH = Math.min((canvas.height - y - pad) / Math.max(1, state.players.length), sidebarW * 0.17);
+  const avW = Math.round(rowH * 0.8);
+  const textX = pad + avW + Math.round(rowH * 0.14); // name/stats hug the avatar (justified left)
   for (const p of state.players) {
     ctx.globalAlpha = p.disabled ? 0.4 : 1;
     ctx.drawImage(img(p.avatarUrl), pad, y, avW, avW);
