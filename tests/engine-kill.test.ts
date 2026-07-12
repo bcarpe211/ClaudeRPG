@@ -19,7 +19,7 @@ describe('engine kill resolution', () => {
   it('marks defeated, awards gold by damage share, and opens a defeat window', () => {
     // tiny HP so a few swings kill it, gold_factor=1 so even 1hp yields gold
     setSetting(db, 'min_encounter_hp', '1');
-    setSetting(db, 'target_battle_minutes', '0'); // HP -> floor of 1
+    setSetting(db, 'baseline_battle_minutes', '0'); // HP -> floor of 1
     setSetting(db, 'gold_factor', '1');
     setSetting(db, 'popup_duration_s', '120');
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
@@ -42,7 +42,7 @@ describe('engine kill resolution', () => {
 
   it('after the defeat window, the next encounter spawns', () => {
     setSetting(db, 'min_encounter_hp', '1');
-    setSetting(db, 'target_battle_minutes', '0');
+    setSetting(db, 'baseline_battle_minutes', '0');
     setSetting(db, 'popup_duration_s', '5');
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(p.auth_token, 1000), 100000, { cacheReadWeight: 0 });

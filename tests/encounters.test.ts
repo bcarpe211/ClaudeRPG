@@ -3,7 +3,7 @@ import { openDb } from '../src/db/db';
 import { seedSettings, setSetting } from '../src/domain/settings';
 import { createPlayer } from '../src/domain/players';
 import {
-  estimateOfficeDamagePerMinute,
+  estimateOfficeBaselineDpm,
   calibrateHp,
   advanceToNextEncounter,
   loadEngineConfig,
@@ -32,15 +32,18 @@ describe('calibrateHp', () => {
   });
 });
 
-describe('estimateOfficeDamagePerMinute', () => {
-  it('sums per-player DPM for enabled players, modifier floored at 1', () => {
-    createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
+describe('estimateOfficeBaselineDpm', () => {
+  it('sums per-player DPM at level baseline, ignoring token activity', () => {
+    const a = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
     createPlayer(db, { name: 'B', class_key: 'thief', gender: 'F' }, 1);
     const cfg = loadEngineConfig(db);
-    const dpm = estimateOfficeDamagePerMinute(db, cfg, 100000);
-    // 2 players, level 1 mult 1.0, modifier 1.0, baseHit 100, interval 4000ms
-    // swings/min = 60000/4000 = 15; dpm/player = 15*100 = 1500; office = 3000
-    expect(dpm).toBeCloseTo(3000, 0);
+    const before = estimateOfficeBaselineDpm(db, cfg);
+    // 2 players, level 1 mult 1.0, baseHit 100, interval 4000 -> 15*100*2 = 3000
+    expect(before).toBeCloseTo(3000, 0);
+    // adding recent tokens must NOT change baseline HP input (decoupled from activity)
+    db.prepare('INSERT INTO token_events (player_id, ts, effective_delta, total_delta) VALUES (?,?,?,?)')
+      .run(a.id, 100000, 1_000_000, 1_000_000);
+    expect(estimateOfficeBaselineDpm(db, cfg)).toBeCloseTo(3000, 0);
   });
 });
 

@@ -67,7 +67,7 @@ describe('buildTvState', () => {
 
   it('includes a defeat summary during the defeat window', () => {
     setSetting(db, 'min_encounter_hp', '1');
-    setSetting(db, 'target_battle_minutes', '0');
+    setSetting(db, 'baseline_battle_minutes', '0');
     setSetting(db, 'popup_duration_s', '120');
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(p.auth_token, 1000), 100000, { cacheReadWeight: 0 });

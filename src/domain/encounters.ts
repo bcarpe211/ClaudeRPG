@@ -1,8 +1,6 @@
 import type Database from 'better-sqlite3';
 import { getAllSettings } from './settings';
 import { damageMultiplier } from './leveling';
-import { tokenModifier } from './combat';
-import { sumEffectiveSince } from './ingest';
 import { pickEncounterCreature, type EncounterKind } from './creatures';
 import { DUNGEONS } from './floorgroups';
 import { pickWeighted } from './tilesheet';
@@ -16,6 +14,8 @@ export interface EngineConfig {
   difficultyRampPerDungeon: number; regularEncountersMin: number;
   regularEncountersMax: number; pauseAfterMinutes: number;
   popupDurationS: number; tickIntervalMs: number;
+  baselineBattleMinutes: number; levelCurveSlope: number;
+  decayAfterMinutes: number; decaySpanMinutes: number; goldDamageWeight: number;
 }
 
 export function loadEngineConfig(db: Database.Database): EngineConfig {
@@ -41,6 +41,11 @@ export function loadEngineConfig(db: Database.Database): EngineConfig {
     pauseAfterMinutes: n('pause_after_minutes', 15),
     popupDurationS: n('popup_duration_s', 120),
     tickIntervalMs: n('tick_interval_ms', 1000),
+    baselineBattleMinutes: n('baseline_battle_minutes', 45),
+    levelCurveSlope: n('level_curve_slope', 0.5),
+    decayAfterMinutes: n('decay_after_minutes', 5),
+    decaySpanMinutes: n('decay_span_minutes', 5),
+    goldDamageWeight: n('gold_damage_weight', 0),
   };
 }
 
@@ -52,20 +57,14 @@ function enabledPlayers(db: Database.Database): EnabledPlayer[] {
   ).all() as EnabledPlayer[];
 }
 
-/** Estimate the office's current damage output per minute (drives HP). */
-export function estimateOfficeDamagePerMinute(
-  db: Database.Database,
-  cfg: EngineConfig,
-  now: number,
+/** Office steady damage/min at current levels, WITHOUT any activity bonus (HP input). */
+export function estimateOfficeBaselineDpm(
+  db: Database.Database, cfg: EngineConfig,
 ): number {
-  const since = now - cfg.recentWindowMinutes * 60_000;
   const swingsPerMin = 60_000 / cfg.attackIntervalMs;
   let dpm = 0;
   for (const p of enabledPlayers(db)) {
-    const recent = sumEffectiveSince(db, p.id, since);
-    const mod = tokenModifier(recent, cfg.tokenModifierK);
-    const perHit = cfg.baseHit * damageMultiplier(p.level, cfg.levelMultSlope) * mod;
-    dpm += swingsPerMin * perHit;
+    dpm += swingsPerMin * cfg.baseHit * damageMultiplier(p.level, cfg.levelCurveSlope);
   }
   return dpm;
 }
@@ -110,8 +109,8 @@ function spawnEncounter(
     (1 + cfg.difficultyRampPerEncounter * index) *
     (1 + cfg.difficultyRampPerDungeon * (dungeon.level - 1)) *
     (isBoss ? cfg.bossHpMult : 1);
-  const dpm = estimateOfficeDamagePerMinute(db, cfg, now);
-  const hp = calibrateHp(dpm, cfg.targetBattleMinutes, difficulty, cfg.minEncounterHp);
+  const dpm = estimateOfficeBaselineDpm(db, cfg);
+  const hp = calibrateHp(dpm, cfg.baselineBattleMinutes, difficulty, cfg.minEncounterHp);
   let encId = 0;
   const tx = db.transaction(() => {
     const info = db.prepare(

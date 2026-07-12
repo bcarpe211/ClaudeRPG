@@ -11,6 +11,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   token_modifier_k: '20000',   // recent tokens that add +1.0 to modifier
   recent_window_minutes: '10', // rolling window for tokenModifier
   target_battle_minutes: '30', // target active-time battle length
+  baseline_battle_minutes: '45', // quiet-office battle length (activity shortens it)
+  level_curve_slope: '0.5',      // damage multiplier = 1 + slope*ln(level)
+  decay_after_minutes: '5',      // idle before the activity modifier decays
+  decay_span_minutes: '5',       // linear decay duration to reach modifier 1.0
+  gold_damage_weight: '0',       // 0 = gold purely by token share
   boss_hp_mult: '3',           // boss HP multiplier
   gold_factor: '0.01',         // gold = maxHP * dungeonLevel * gold_factor
   cache_read_weight: '0',      // weight applied to cacheRead tokens
