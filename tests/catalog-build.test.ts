@@ -41,8 +41,7 @@ function run() {
     ],
     classSheetFiles: ['oryx_16bit_fantasy_classes_trans_03.png'],
     creatureNames: names37(),
-    tiers: [[37]],
-    bosses: [37],
+    monsters: [{ index: 37, category: 'humanoid', boss: true }],
     classAvatars: [{ name: 'Knight M', index: 1 }],
     themes,
   });
@@ -92,7 +91,7 @@ describe('buildCatalog creaturePairs', () => {
     expect(p37.bIndex).toBe(55);
     expect(p37.aName).toBe('Bandit');
     expect(p37.bName).toBe(null); // frame-B files are unnamed animation dupes
-    expect(p37.annotation).toEqual(['tier 1', 'boss']);
+    expect(p37.annotation).toEqual(['humanoid', 'boss']);
   });
 });
 
@@ -127,8 +126,7 @@ describe('buildCatalog orphaned frame-A (missing +18 partner)', () => {
       worldFiles: [],
       classSheetFiles: [],
       creatureNames: names,
-      tiers: [],
-      bosses: [],
+      monsters: [],
       classAvatars: [],
       themes: {},
     });

@@ -6,7 +6,7 @@ import { renderPage } from '../app';
 import { asyncHandler } from '../async';
 import { buildCatalog } from '../catalog/build';
 import { CREATURE_SHEET_NAMES } from '../catalog/spritenames';
-import { MONSTER_TIERS, BOSSES } from '../../domain/creatures';
+import { MONSTERS } from '../../domain/bestiary';
 import { CLASSES, spriteIndexFor } from '../../domain/classes';
 import { TILE_MANIFEST } from '../../domain/tilemanifest';
 
@@ -36,8 +36,7 @@ export function registerCatalogRoutes(app: Express, { config }: AppDeps): void {
         worldFiles: listPngs(path.join(base, 'world_24x24')),
         classSheetFiles: listPngs(path.join(base, 'classes_26x28')),
         creatureNames: CREATURE_SHEET_NAMES,
-        tiers: MONSTER_TIERS,
-        bosses: BOSSES,
+        monsters: MONSTERS,
         classAvatars,
         themes: TILE_MANIFEST,
       });
