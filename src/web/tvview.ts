@@ -24,6 +24,8 @@ import { sumEffectiveSince } from '../domain/ingest';
 import { tokenModifier } from '../domain/combat';
 import { classSpriteUrl, creatureSpriteFile, type Gender } from '../domain/classes';
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
+import { monsterByIndex, monsterName } from '../domain/bestiary';
+import { monsterTitle } from '../domain/monstername';
 
 export function creatureSpriteUrl(index: number): string {
   return `/sprites/creatures_24x24/${creatureSpriteFile(index)}`;
@@ -33,6 +35,7 @@ export interface TvEncounter {
   id: number; creatureIndex: number; creatureUrl: string;
   footprint: number; kind: string; packCount: number;
   hp: number; maxHp: number;
+  name: string; size: 'S' | 'M' | 'L'; flying: boolean;
 }
 export interface TvHero {
   id: number; name: string; avatarUrl: string; level: number;
@@ -59,10 +62,14 @@ export function buildTvState(db: Database.Database, now: number): TvState {
   if (gs.current_encounter_id) {
     const e = db.prepare('SELECT * FROM encounters WHERE id=?').get(gs.current_encounter_id) as any;
     if (e && e.status === 'active') {
+      const meta = monsterByIndex(e.creature_index);
       encounter = {
         id: e.id, creatureIndex: e.creature_index, creatureUrl: creatureSpriteUrl(e.creature_index),
         footprint: e.footprint, kind: e.kind, packCount: e.pack_count,
         hp: e.current_hp, maxHp: e.max_hp,
+        name: meta ? monsterTitle(e.id, e.creature_index, meta.category) : monsterName(e.creature_index),
+        size: meta?.size ?? 'M',
+        flying: meta?.flying ?? false,
       };
     }
   }
