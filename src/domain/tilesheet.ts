@@ -49,6 +49,15 @@ export const WALL_COLS = {
 // col 30 is the starting length for all. Layer above floor, below decor/actors.
 export const WALL_SHADOW: TileCoord = { col: 30, row: 37 };
 
+// Ground-shadow ellipses drawn UNDER a monster (row 37): col 37 = S, 38 = M,
+// 39 = L (larger/rounder variants at cols 40-41, reserved). tv.js mirrors these
+// coords as a local const (it can't import; see MSHADOW there).
+export const MONSTER_SHADOWS: Record<'S' | 'M' | 'L', TileCoord> = {
+  S: { col: 37, row: 37 },
+  M: { col: 38, row: 37 },
+  L: { col: 39, row: 37 },
+};
+
 // Door tiles live on the world sheet at row 3 cols 29-42 and row 4 cols 29-31.
 // A doorway cell renders one of these instead of an open floor gap. Doors are a
 // single GLOBAL weighted pool (theme-matched doors are a future refinement): the
