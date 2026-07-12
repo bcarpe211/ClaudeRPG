@@ -79,24 +79,24 @@ different views:
 - [ ] Rotating leaderboards (~30s): daily win streaks, daily token usage,
       overall leaderboard, and other fun leaderboards
 
-## 9. Damage modifier should not decay during active play
-The "damage modifier" is `tokenModifier = 1 + recent/k` (`src/domain/combat.ts`),
-where `recent` = effective tokens within a **trailing rolling window**
-(`recent_window_minutes`, default 10) summed via `sumEffectiveSince`
-(`src/domain/engine.ts`, `src/domain/encounters.ts`). Because the window slides,
-tokens older than the window continuously drop off — so the modifier decays
-*while the player is still actively burning tokens*, which caps the big numbers
-from ever landing on the monster.
-
-Desired: while there is token activity, the modifier should hold/accumulate; it
-should only start decaying after a configurable threshold of **token
-inactivity**.
-- [ ] Add a setting, e.g. `decay_after_minutes` (minutes of no tokens before
-      decay begins), with a sensible default
-- [ ] Rework the modifier so it does not shrink during continuous activity —
-      only after `decay_after_minutes` of inactivity (design: track modifier as
-      decaying state keyed off `last_token_at`, vs. the pure sliding window)
-- [ ] Make sure this composes with the existing office-idle pause
+## 9. Damage modifier should not decay during active play ✅ DONE (2026-07-12)
+Grew into a full **combat & reward economy redesign** (spec/plan
+`docs/superpowers/{specs,plans}/2026-07-12-combat-reward-economy*`).
+- [x] Activity modifier is now session-**accumulate**, **uncapped**, with
+      **linear** decay only after `decay_after_minutes` of token inactivity over
+      `decay_span_minutes` (`src/domain/activity.ts`, pure/derived from
+      `token_events` — no migration). Replaced the sliding window; feeds attack
+      damage + leaderboard.
+- [x] Composes with the office-idle pause (unchanged, separate mechanism).
+- [x] Also landed: **HP Model A** (office baseline power × `baseline_battle_minutes`
+      × depth — decoupled from wall-clock AND from activity bursts, so heavy play
+      genuinely melts monsters); **diminishing level curve** (`1 + slope·ln(level)`);
+      **gold split by token-usage share** (`rewards.splitGold`, tunable
+      `gold_damage_weight`, default pure token; award == defeat popup); **bar-only
+      HP** + **abbreviated K/M/B/T numbers** (`format.ts`).
+- [ ] (Follow-up, tuning) retune on the real TV: `base_hit`, `token_modifier_k`,
+      `level_curve_slope`, `baseline_battle_minutes` — pacing shifted (active
+      office kills fast, quiet grinds).
 
 ## 10. Public landing page
 Visitors to the site (the registration/root page) need a real landing page that
