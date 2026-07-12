@@ -1,9 +1,13 @@
 'use strict';
-// ClaudeRPG TV renderer: Canvas 2D, SSE-driven. Background (dungeon) is
-// pre-rendered once per layout to an offscreen canvas; dynamic actors draw on top.
+// ClaudeRPG TV renderer: Canvas 2D, SSE-driven. The dungeon is a floating panel
+// pre-rendered to an offscreen canvas, sitting on a tiled texture backdrop with a
+// drop shadow; dynamic actors draw on top. The dungeon name sits in the strip
+// below the panel; the monster HP bar sits in the strip above it.
 
 const TILE = 24;            // source tile size
-const SIDEBAR_FRAC = 0.25;  // leaderboard width fraction
+const SIDEBAR_FRAC = 0.30;  // leaderboard width fraction
+const SHADOW = { col: 30, row: 37 }; // wall-shadow tile (mirrors WALL_SHADOW in tilesheet.ts)
+const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -17,19 +21,31 @@ function img(url) {
 }
 
 let layout = null;       // last 'layout' payload
-let bg = null;           // offscreen canvas of the dungeon
+let bg = null;           // offscreen canvas of the dungeon panel
+let texbg = null;        // offscreen canvas of the tiled backdrop
 let state = null;        // last 'state' payload
-let scale = 6, tilePx = TILE * 6, sidebarW = 0, fieldX = 0;
-const anim = new Map();  // playerId -> {until, lastDamage} for swing flashes
+let scale = 3, tilePx = TILE * 3;
+let sidebarW = 0, fieldX = 0;
+let panelX = 0, panelY = 0, panelW = 0, panelH = 0; // dungeon panel rect
+const anim = new Map();  // playerId -> {until} for swing flashes
 const floaters = [];     // {x,y,text,born}
 
 function computeScale() {
   const vw = canvas.width, vh = canvas.height;
-  const fieldW = vw * (1 - SIDEBAR_FRAC);
-  scale = Math.max(1, Math.floor(Math.min(fieldW / (20 * TILE), vh / (15 * TILE))));
-  tilePx = TILE * scale;
-  sidebarW = vw - 20 * tilePx;
+  sidebarW = Math.round(vw * SIDEBAR_FRAC);
   fieldX = sidebarW;
+  const fieldW = vw - sidebarW;
+  // reserve a top strip (monster name + HP bar) + thin framing margins, so the
+  // dungeon floats on the backdrop while taking the largest clean integer scale.
+  const hpZone = vh * 0.09, bottomMargin = vh * 0.02, sideMargin = fieldW * 0.03;
+  const availW = fieldW - 2 * sideMargin;
+  const availH = vh - hpZone - bottomMargin;
+  // largest INTEGER scale that fits -> crisp pixels at any resolution
+  scale = Math.max(1, Math.floor(Math.min(availW / (20 * TILE), availH / (15 * TILE))));
+  tilePx = TILE * scale;
+  panelW = 20 * tilePx; panelH = 15 * tilePx;
+  panelX = fieldX + Math.round((fieldW - panelW) / 2);
+  panelY = Math.round(hpZone + (availH - panelH) / 2);
 }
 
 function resize() {
@@ -37,28 +53,38 @@ function resize() {
   canvas.height = window.innerHeight * (window.devicePixelRatio || 1);
   ctx.imageSmoothingEnabled = false; // reapply: setting canvas.width resets context state
   computeScale();
-  bg = null;
-  buildBackground(); // rebuild at new scale; no-ops if layout not yet received
+  buildBackground(); // rebuild backdrop + panel at the new scale
 }
 window.addEventListener('resize', resize);
 
 function buildBackground() {
-  if (!layout) return;
   const sheet = img('/sheet/world.png');
-  bg = document.createElement('canvas');
-  bg.width = 20 * tilePx; bg.height = 15 * tilePx;
-  const b = bg.getContext('2d');
-  b.imageSmoothingEnabled = false;
-  const put = (col, row, x, y) =>
-    b.drawImage(sheet, col * TILE, row * TILE, TILE, TILE, x * tilePx, y * tilePx, tilePx, tilePx);
+  // backdrop texture (full canvas, tiled at the dungeon tile scale)
+  texbg = document.createElement('canvas');
+  texbg.width = canvas.width; texbg.height = canvas.height;
+  const tb = texbg.getContext('2d'); tb.imageSmoothingEnabled = false;
+  // dungeon panel (only if a layout has arrived)
+  bg = layout ? document.createElement('canvas') : null;
+  if (bg) { bg.width = panelW; bg.height = panelH; }
   const draw = () => {
+    for (let y = 0; y < texbg.height; y += tilePx)
+      for (let x = 0; x < texbg.width; x += tilePx)
+        tb.drawImage(sheet, TEX.col * TILE, TEX.row * TILE, TILE, TILE, x, y, tilePx, tilePx);
+    if (!bg) return;
+    const b = bg.getContext('2d'); b.imageSmoothingEnabled = false;
     b.clearRect(0, 0, bg.width, bg.height);
+    const put = (col, row, x, y) =>
+      b.drawImage(sheet, col * TILE, row * TILE, TILE, TILE, x * tilePx, y * tilePx, tilePx, tilePx);
     for (let y = 0; y < layout.height; y++)
       for (let x = 0; x < layout.width; x++) {
         const c = layout.cells[y][x];
         if (c.under) put(c.under.col, c.under.row, x, y); // floor behind a transparent door
         put(c.col, c.row, x, y);
       }
+    // wall-shadow layer (above floor, below decor): a wall/door casts it downward
+    for (let y = 0; y < layout.height; y++)
+      for (let x = 0; x < layout.width; x++)
+        if (layout.cells[y][x].shadow) put(SHADOW.col, SHADOW.row, x, y);
     for (const d of layout.decor) put(d.col, d.row, d.x, d.y);
   };
   // draw now, and again once the sheet finishes loading (one shared image)
@@ -88,16 +114,32 @@ function drawSprite(im, cx, cy, w, h) {
   ctx.drawImage(im, Math.round(cx - w / 2), Math.round(cy - h), w, h);
 }
 
+// text with a manual drop shadow, offset proportional to the font size so bigger
+// text gets a bigger shadow (keeps default alphabetic baseline)
+function shadowText(txt, x, y, font, fill, align) {
+  ctx.font = font; ctx.textAlign = align || 'left';
+  const m = font.match(/(\d+)px/);
+  const o = Math.max(2, Math.round((m ? +m[1] : 16) * 0.1));
+  ctx.fillStyle = 'rgba(0,0,0,0.9)'; ctx.fillText(txt, x + o, y + o);
+  ctx.fillStyle = fill; ctx.fillText(txt, x, y);
+}
+
 function render(t) {
   requestAnimationFrame(render);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // sidebar background + wall-tile border feel
-  ctx.fillStyle = '#171019';
-  ctx.fillRect(0, 0, sidebarW, canvas.height);
-  ctx.fillStyle = '#0e0b14';
-  ctx.fillRect(fieldX, 0, canvas.width - fieldX, canvas.height);
+  if (texbg) ctx.drawImage(texbg, 0, 0);
+  else { ctx.fillStyle = '#14121a'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 
-  if (bg) ctx.drawImage(bg, fieldX, 0);
+  // dungeon panel with a soft drop shadow onto the backdrop
+  if (bg) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.75)';
+    ctx.shadowBlur = Math.round(tilePx * 0.45);
+    ctx.shadowOffsetX = Math.round(tilePx * 0.10);
+    ctx.shadowOffsetY = Math.round(tilePx * 0.20);
+    ctx.drawImage(bg, panelX, panelY);
+    ctx.restore();
+  }
 
   if (state) {
     drawMonster();
@@ -110,14 +152,14 @@ function render(t) {
   }
 }
 
-function tileToField(x, y) { return { px: fieldX + x * tilePx, py: y * tilePx }; }
+function tileToField(x, y) { return { px: panelX + x * tilePx, py: panelY + y * tilePx }; }
 
 function drawMonster() {
   const e = state.encounter; if (!e || !layout) return;
   const m = layout.monster;
   const fp = e.footprint;                       // 1 or 2
   const visScale = fp === 2 ? 2.2 : 1.4;        // bosses loom larger
-  const size = TILE * scale * visScale;
+  const size = tilePx * visScale;
   const { px, py } = tileToField(m.x + fp / 2, m.y + fp);
   drawSprite(img(e.creatureUrl), px, py, size, size);
   // pack: a couple of small duplicates beside it
@@ -142,12 +184,19 @@ function drawHeroes(t) {
 
 function drawHpBar() {
   const e = state.encounter; if (!e) return;
-  const w = (canvas.width - fieldX) * 0.6, h = 22 * (scale / 3), x = fieldX + ((canvas.width - fieldX) - w) / 2, y = 10;
-  ctx.fillStyle = '#000a'; ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
+  const w = panelW * 0.6, h = Math.max(16, Math.round(tilePx * 0.34));
+  const x = panelX + (panelW - w) / 2;
+  // sit above the panel with a clear gap; the space above the bar is reserved for
+  // the monster name (bigger than the bar) — backlog #12.
+  const y = panelY - h - Math.round(tilePx * 0.5);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.65)'; ctx.shadowBlur = Math.round(h * 0.6); ctx.shadowOffsetY = Math.round(h * 0.3);
+  ctx.fillStyle = '#180a0a'; ctx.fillRect(x - 4, y - 3, w + 8, h + 6);
+  ctx.restore();
   ctx.fillStyle = '#3a0d0d'; ctx.fillRect(x, y, w, h);
   ctx.fillStyle = '#d23b3b'; ctx.fillRect(x, y, w * Math.max(0, e.hp / e.maxHp), h);
-  ctx.fillStyle = '#fff'; ctx.font = `${Math.round(h * 0.7)}px system-ui`; ctx.textAlign = 'center';
-  ctx.fillText(`${e.hp.toLocaleString()} / ${e.maxHp.toLocaleString()}`, x + w / 2, y + h * 0.75);
+  shadowText(`${e.hp.toLocaleString()} / ${e.maxHp.toLocaleString()}`,
+    x + w / 2, y + h * 0.72, `${Math.round(h * 0.62)}px system-ui`, '#fff', 'center');
 }
 
 function drawFloaters(t) {
@@ -164,34 +213,37 @@ function drawFloaters(t) {
 }
 
 function drawLeaderboard() {
-  const pad = Math.round(sidebarW * 0.04);
+  const pad = Math.round(sidebarW * 0.05);
   let y = pad;
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#e8c96a'; ctx.font = `bold ${Math.round(sidebarW * 0.07)}px system-ui`;
-  ctx.fillText('LEADERBOARD', pad, y + sidebarW * 0.06); y += sidebarW * 0.11;
-  const rowH = Math.min((canvas.height - y - pad) / Math.max(1, state.players.length), sidebarW * 0.12);
+  shadowText('LEADERBOARD', pad, y + sidebarW * 0.065, `bold ${Math.round(sidebarW * 0.075)}px system-ui`, '#e8c96a', 'left');
+  y += sidebarW * 0.13;
+  // fill the sidebar: taller rows (bigger avatars + text), capped so a short roster
+  // still reads large. Rotation for big rosters is backlog #8.
+  const rowH = Math.min((canvas.height - y - pad) / Math.max(1, state.players.length), sidebarW * 0.17);
+  const avW = Math.round(rowH * 0.8);
+  const textX = pad + avW + Math.round(rowH * 0.14); // name/stats hug the avatar (justified left)
   for (const p of state.players) {
     ctx.globalAlpha = p.disabled ? 0.4 : 1;
-    ctx.drawImage(img(p.avatarUrl), pad, y, rowH * 0.8, rowH * 0.85);
-    ctx.fillStyle = '#cdb9e0'; ctx.font = `${Math.round(rowH * 0.34)}px system-ui`;
-    ctx.fillText(p.name, pad + rowH, y + rowH * 0.36);
-    ctx.fillStyle = '#9a86b0'; ctx.font = `${Math.round(rowH * 0.28)}px system-ui`;
-    ctx.fillText(`L${p.level}  ${p.effectiveTokens.toLocaleString()} tok  ${p.gold}g  x${p.modifier.toFixed(2)}`,
-      pad + rowH, y + rowH * 0.72);
+    ctx.drawImage(img(p.avatarUrl), pad, y, avW, avW);
+    shadowText(p.name, textX, y + rowH * 0.36, `${Math.round(rowH * 0.34)}px system-ui`, '#cdb9e0', 'left');
+    shadowText(`L${p.level}  ${p.effectiveTokens.toLocaleString()} tok  ${p.gold}g  x${p.modifier.toFixed(2)}`,
+      textX, y + rowH * 0.72, `${Math.round(rowH * 0.28)}px system-ui`, '#9a86b0', 'left');
     ctx.globalAlpha = 1;
     y += rowH;
   }
 }
 
 function drawOverlay(text) {
-  ctx.fillStyle = '#000a';
-  ctx.fillRect(fieldX, 0, canvas.width - fieldX, canvas.height);
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#000b'; // dim the WHOLE screen (sidebar + field) while resting
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#e8c96a'; ctx.textAlign = 'center';
   ctx.font = `${Math.round(20 * scale)}px system-ui`;
-  ctx.fillText(text, fieldX + (canvas.width - fieldX) / 2, canvas.height / 2);
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
 }
 
 function drawDefeat() {
+  ctx.textBaseline = 'alphabetic';
   const d = state.defeat;
   const w = (canvas.width - fieldX) * 0.7, h = canvas.height * 0.7;
   const x = fieldX + ((canvas.width - fieldX) - w) / 2, y = (canvas.height - h) / 2;

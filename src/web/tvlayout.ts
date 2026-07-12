@@ -7,6 +7,7 @@ export interface TvLayoutCell {
   type: 'wall' | 'floor' | 'door';
   col: number; row: number;
   under?: { col: number; row: number };
+  shadow?: boolean; // floor cell with a wall/door directly north -> draw the wall shadow
 }
 export interface TvLayout {
   dungeonId: number; theme: string; width: number; height: number;
@@ -56,6 +57,16 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
     cells[c.y][c.x] = { type: c.kind as 'wall' | 'floor' | 'door', col: c.col, row: c.row, under: c.under };
     if (c.kind === 'door') doors.push({ x: c.x, y: c.y });
   }
+
+  // Wall shadow: a floor cell whose NORTH neighbour is a wall or door gets a shadow
+  // (the wall casts it downward). Neighbour-based, so it also covers interior room
+  // walls when those arrive later.
+  for (let y = 1; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      const c = cells[y][x];
+      const n = cells[y - 1][x];
+      if (c.type === 'floor' && n && (n.type === 'wall' || n.type === 'door')) c.shadow = true;
+    }
 
   // Fixed 2x2 centre monster zone (drawn on top of floor).
   const monster = { x: Math.floor(width / 2) - 1, y: Math.floor(height / 2) - 1, footprint: 2 };
