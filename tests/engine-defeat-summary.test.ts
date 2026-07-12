@@ -18,7 +18,7 @@ function tokens(token: string, input: number) {
 describe('buildDefeatSummary', () => {
   it('summarizes per-player damage, gold, mvp, and creature for a defeated encounter', () => {
     setSetting(db, 'min_encounter_hp', '1');
-    setSetting(db, 'target_battle_minutes', '0');
+    setSetting(db, 'baseline_battle_minutes', '0');
     const p = createPlayer(db, { name: 'Aragorn', class_key: 'knight', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(p.auth_token, 1000), 100000, { cacheReadWeight: 0 });
     const eng = new GameEngine(db, { rng: () => 0.5 });

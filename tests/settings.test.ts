@@ -15,9 +15,9 @@ beforeEach(() => {
 
 describe('settings', () => {
   it('seeds defaults without overwriting existing values', () => {
-    setSetting(db, 'target_battle_minutes', '45');
+    setSetting(db, 'baseline_battle_minutes', '99');
     seedSettings(db);
-    expect(getSetting(db, 'target_battle_minutes')).toBe('45'); // preserved
+    expect(getSetting(db, 'baseline_battle_minutes')).toBe('99'); // preserved
     expect(getSetting(db, 'pause_after_minutes')).toBe(
       DEFAULT_SETTINGS.pause_after_minutes,
     );

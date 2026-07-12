@@ -4,13 +4,10 @@ import type Database from 'better-sqlite3';
 export const DEFAULT_SETTINGS: Record<string, string> = {
   base_xp: '50000',            // tokens for level 1 -> 2
   xp_growth: '1.5',            // geometric growth per level
-  level_mult_slope: '0.10',    // damage multiplier slope per level
   base_hit: '100',             // base damage per swing at modifier 1.0, level 1
   attack_interval_ms: '4000',  // base swing interval
   attack_jitter_ms: '1500',    // +/- jitter on swing interval
   token_modifier_k: '20000',   // recent tokens that add +1.0 to modifier
-  recent_window_minutes: '10', // rolling window for tokenModifier
-  target_battle_minutes: '30', // target active-time battle length
   baseline_battle_minutes: '45', // quiet-office battle length (activity shortens it)
   level_curve_slope: '0.5',      // damage multiplier = 1 + slope*ln(level)
   decay_after_minutes: '5',      // idle before the activity modifier decays

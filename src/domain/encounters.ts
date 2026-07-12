@@ -6,10 +6,9 @@ import { DUNGEONS } from './floorgroups';
 import { pickWeighted } from './tilesheet';
 
 export interface EngineConfig {
-  baseXp: number; xpGrowth: number; levelMultSlope: number;
+  baseXp: number; xpGrowth: number;
   baseHit: number; attackIntervalMs: number; attackJitterMs: number;
-  tokenModifierK: number; recentWindowMinutes: number;
-  targetBattleMinutes: number; bossHpMult: number; goldFactor: number;
+  tokenModifierK: number; bossHpMult: number; goldFactor: number;
   minEncounterHp: number; difficultyRampPerEncounter: number;
   difficultyRampPerDungeon: number; regularEncountersMin: number;
   regularEncountersMax: number; pauseAfterMinutes: number;
@@ -26,12 +25,9 @@ export function loadEngineConfig(db: Database.Database): EngineConfig {
   };
   return {
     baseXp: n('base_xp', 50000), xpGrowth: n('xp_growth', 1.5),
-    levelMultSlope: n('level_mult_slope', 0.1),
     baseHit: n('base_hit', 100), attackIntervalMs: n('attack_interval_ms', 4000),
     attackJitterMs: n('attack_jitter_ms', 1500),
     tokenModifierK: n('token_modifier_k', 20000),
-    recentWindowMinutes: n('recent_window_minutes', 10),
-    targetBattleMinutes: n('target_battle_minutes', 30),
     bossHpMult: n('boss_hp_mult', 3), goldFactor: n('gold_factor', 0.01),
     minEncounterHp: n('min_encounter_hp', 2000),
     difficultyRampPerEncounter: n('difficulty_ramp_per_encounter', 0.15),

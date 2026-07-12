@@ -28,7 +28,7 @@ describe('admin settings', () => {
     const agent = await adminAgent();
     const res = await agent.get('/admin/settings');
     expect(res.status).toBe(200);
-    expect(res.text).toContain('target_battle_minutes');
+    expect(res.text).toContain('pause_after_minutes');
   });
 
   it('updates a knob', async () => {
@@ -36,9 +36,9 @@ describe('admin settings', () => {
     const res = await agent
       .post('/admin/settings')
       .type('form')
-      .send({ target_battle_minutes: '40', pause_after_minutes: '20' });
+      .send({ baseline_battle_minutes: '40', pause_after_minutes: '20' });
     expect(res.status).toBe(302);
-    expect(getSetting(db, 'target_battle_minutes')).toBe('40');
+    expect(getSetting(db, 'baseline_battle_minutes')).toBe('40');
     expect(getSetting(db, 'pause_after_minutes')).toBe('20');
   });
 

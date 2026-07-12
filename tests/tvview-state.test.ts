@@ -48,11 +48,9 @@ describe('buildTvState', () => {
   });
 
   it('leaderboard modifier reflects the accumulate activity score (survives past the old recent-window)', () => {
-    // Shrink the old rolling window and widen the new decay window so the two
-    // approaches diverge: a burst that just left the 5-minute window would
-    // read modifier=1 under the old sum-since-window logic, but the new
-    // accumulate score (idle-decay starts at 30 min) still reports it fully.
-    setSetting(db, 'recent_window_minutes', '5');
+    // Widen the decay window so a burst that would have fallen outside the old
+    // 5-minute rolling window still reports fully under the new accumulate
+    // score (idle-decay only starts at 30 min).
     setSetting(db, 'decay_after_minutes', '30');
     setSetting(db, 'decay_span_minutes', '30');
     const p = createPlayer(db, { name: 'Burst', class_key: 'knight', gender: 'M' }, 1);
