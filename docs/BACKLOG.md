@@ -133,12 +133,19 @@ Every creature/class sprite in `creatures_24x24` ships as a **two-frame animatio
 pair**: frame A at file index N, frame B at **N + 18** (see the #1 finding). The TV
 renderer currently shows a single static frame. Alternating A/B on a slow timer
 would make monsters and heroes look alive. Pairs with #6/#7 (lively dungeon).
-**Now unblocked:** the bestiary (`src/domain/bestiary.ts`, 2026-07-12) stores
-correct frame-A indices, so the animation partner is exactly `index + 18`.
-- [ ] Record each creature's animation partner (frame-A index + 18)
-- [ ] Renderer toggles A/B frames on a timer (e.g. ~0.5–1s), independent per
-      sprite or globally
-- [ ] Confirm world-tile/decor sprites for any animated tiles (torches, etc.)
+**Monster + heroes: ✅ DONE (2026-07-12)** — `tv.js` alternates each rendered
+creature/hero sprite between frame A and its `+18` partner on a staggered ~0.6s
+shared clock (`animImg`/`partnerUrl`; frame math mirrors anim.js; falls back to
+frame A until the partner image loads). Spec: docs/superpowers/specs/2026-07-12-sprite-animation-design.md.
+- [x] Animation partner = frame-A index + 18 (derived client-side from the URL).
+- [x] Renderer toggles A/B on a ~0.6s timer, staggered per sprite (monster incl.
+      pack duplicates + battlefield heroes). Leaderboard avatars + defeat popup
+      stay static (scope decision).
+- [ ] **Decor animation still OPEN** (deferred): dungeon2 renders no decor yet
+      (#6). Animated decor needs its own WORLD-sheet frame-pair map (torches etc.
+      — the `+18` rule is creatures-sheet only) AND decor drawn per-frame in
+      `render()` instead of baked into the `bg` canvas in `buildBackground()`.
+      Do this alongside #6.
 
 ## 13. Animate sprites (two-frame loop) for a livelier dungeon
 Every creature/class sprite in `creatures_24x24` ships as a **two-frame animation

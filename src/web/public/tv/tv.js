@@ -9,6 +9,8 @@ const SIDEBAR_FRAC = 0.30;  // leaderboard width fraction
 const SHADOW = { col: 30, row: 37 }; // wall-shadow tile (mirrors WALL_SHADOW in tilesheet.ts)
 const MSHADOW = { S: { col: 37, row: 37 }, M: { col: 38, row: 37 }, L: { col: 39, row: 37 } }; // mirrors MONSTER_SHADOWS in tilesheet.ts
 const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
+const ANIM_MS = 600;  // creature/hero A/B flip period (~0.6s)
+const ANIM_ROW = 18;  // creatures_24x24 A/B partner offset (mirrors anim.js ROW)
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -19,6 +21,23 @@ function img(url) {
   let im = imgCache.get(url);
   if (!im) { im = new Image(); im.src = url; imgCache.set(url, im); }
   return im;
+}
+
+// The +18 animation-partner URL for a frame-A creature sprite URL.
+function partnerUrl(url) {
+  return url.replace(/_(\d+)\.png$/, (_m, n) =>
+    '_' + String(Number(n) + ANIM_ROW).padStart(2, '0') + '.png');
+}
+
+// Animated sprite image for `url`, keyed so sprites don't all flip in unison.
+// Shows frame A, or its +18 partner on alternate ticks; if the partner image
+// hasn't loaded yet, stays on frame A (no blank/flicker).
+function animImg(url, key, t) {
+  const phase = (key * 137 + 53) % ANIM_MS;      // spreads flips across the period
+  const showB = Math.floor((t + phase) / ANIM_MS) % 2 === 1;
+  if (!showB) return img(url);
+  const b = img(partnerUrl(url));
+  return (b.complete && b.naturalWidth) ? b : img(url);
 }
 
 let layout = null;       // last 'layout' payload
@@ -143,7 +162,7 @@ function render(t) {
   }
 
   if (state) {
-    drawMonster();
+    drawMonster(t);
     drawHeroes(t);
     drawHpBar();
     drawFloaters(t);
@@ -155,7 +174,7 @@ function render(t) {
 
 function tileToField(x, y) { return { px: panelX + x * tilePx, py: panelY + y * tilePx }; }
 
-function drawMonster() {
+function drawMonster(t) {
   const e = state.encounter; if (!e || !layout) return;
   const sheet = img('/sheet/world.png');
   const m = layout.monster;
@@ -171,13 +190,13 @@ function drawMonster() {
   };
   const raise = e.flying ? Math.round(tilePx * 0.45) : 0;
   shadow(px, py, size);
-  drawSprite(img(e.creatureUrl), px, py - raise, size, size);
+  drawSprite(animImg(e.creatureUrl, 100, t), px, py - raise, size, size);
   // pack: a couple of small duplicates beside it, each with its own small shadow
   if (e.kind === 'pack') {
     for (let i = 1; i <= Math.min(3, e.packCount - 1); i++) {
       const dx = px + i * tilePx * 0.6, dw = size * 0.7;
       shadow(dx, py, dw);
-      drawSprite(img(e.creatureUrl), dx, py - raise, dw, dw);
+      drawSprite(animImg(e.creatureUrl, 100 + i, t), dx, py - raise, dw, dw);
     }
   }
 }
@@ -190,7 +209,7 @@ function drawHeroes(t) {
     const { px, py } = tileToField(p.x + 0.5, p.y + 1 + lunge);
     const w = 26 * scale, h = 28 * scale;
     if (a && a.until > performance.now()) ctx.globalAlpha = 0.85;
-    drawSprite(img(p.avatarUrl), px, py, w, h);
+    drawSprite(animImg(p.avatarUrl, p.id, t), px, py, w, h);
     ctx.globalAlpha = 1;
   }
 }
