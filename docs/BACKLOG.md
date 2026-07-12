@@ -32,7 +32,10 @@ fix `MONSTER_TIERS`/`BOSSES` against the corrected mapping.
 - [ ] Phase 2: teach the catalog about A/B frames (label/dim B-frames, show the
       `+18` animation partner) so only the ~198 real creatures need naming
 - [ ] Phase 2: correct `spritenames.ts` / the name→file mapping to frame-A files
-- [ ] Phase 2: fix `MONSTER_TIERS`/`BOSSES` to real creature indices
+- [x] Phase 2: fix creature indices — DONE (2026-07-12). `MONSTER_TIERS`/`BOSSES`
+      REMOVED entirely and replaced by `src/domain/bestiary.ts` (117 monsters with
+      correct frame-A indices) + `src/domain/dungeonthemes.ts` (theme-gated
+      selection). See the themed-bestiary spec/plan (2026-07-11).
 
 ## 2. Gender selection drives creature/class sprites
 Choosing gender at registration should select the correct class sprite variant.
@@ -110,20 +113,32 @@ each does or how changing it impacts the game.
 - [ ] Show the default value and the effect/direction of changing it
 - [ ] (Optional) units and sane min/max hints
 
-## 12. Monster name flare — on-screen label with random adjective
-Show the current monster's name on the TV during battle, but prefix it with a
-random **dungeon-themed adjective** from a large dictionary so a plain "beetle"
-reads as e.g. "flaming beetle". It does not have to make literal sense — the goal
-is variety/personality. Part of a broader "add flare/diversity to names" idea.
-Depends on the curated creature display names from the art-curation pass (#1) —
-names must be clean, singular display labels so `<adjective> <creature>` reads
-well.
-- [ ] Large dictionary of dungeon-themed adjectives (e.g. flaming, cursed,
-      ancient, venomous, spectral, …)
-- [ ] Roll an adjective per encounter, deterministic from the encounter seed so
-      it's stable across renders/reconnects
-- [ ] Render the `<adjective> <creature>` label on the TV near the monster
-- [ ] (Stretch) broader name flare for other entities
+## 12. Monster name flare — on-screen label with random adjective ✅ DONE (2026-07-12)
+Show the current monster's name on the TV during battle, prefixed with a random
+adjective so a plain "skeleton" reads as e.g. "Cursed Skeleton".
+- [x] Adjective dictionary — `src/domain/monstername.ts` (GENERAL pool ∪
+      category-flavored pools; grow freely). Adjective pool keyed off the monster
+      CATEGORY rather than the dungeon, which reads better.
+- [x] Roll an adjective per encounter, deterministic from the **encounter id**
+      (fixed integer hash, no storage/migration) — stable across renders/reconnects.
+- [x] Render `<adjective> <creature>` above the HP bar (`tv.js drawHpBar`), bigger
+      than the HP numerals, in the reserved strip.
+- [ ] (Stretch, still open) broader name flare for other entities.
+- [ ] (Follow-up, TV visual tuning) long titles (e.g. "Grave-touched Lizardman
+      High Shaman") have no width clamp — could overflow the name strip at lower
+      resolutions. Add a max-width/shrink-to-fit if it clips on the real TV.
+
+## 13. Animate sprites (two-frame loop) for a livelier dungeon
+Every creature/class sprite in `creatures_24x24` ships as a **two-frame animation
+pair**: frame A at file index N, frame B at **N + 18** (see the #1 finding). The TV
+renderer currently shows a single static frame. Alternating A/B on a slow timer
+would make monsters and heroes look alive. Pairs with #6/#7 (lively dungeon).
+**Now unblocked:** the bestiary (`src/domain/bestiary.ts`, 2026-07-12) stores
+correct frame-A indices, so the animation partner is exactly `index + 18`.
+- [ ] Record each creature's animation partner (frame-A index + 18)
+- [ ] Renderer toggles A/B frames on a timer (e.g. ~0.5–1s), independent per
+      sprite or globally
+- [ ] Confirm world-tile/decor sprites for any animated tiles (torches, etc.)
 
 ## 13. Animate sprites (two-frame loop) for a livelier dungeon
 Every creature/class sprite in `creatures_24x24` ships as a **two-frame animation
