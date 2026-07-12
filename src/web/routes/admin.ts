@@ -16,6 +16,7 @@ import {
   getAllSettings,
   setSetting,
 } from '../../domain/settings';
+import { groupedSettings } from '../../domain/settings-meta';
 
 // Augment the session type with our admin flag.
 declare module 'express-session' {
@@ -156,11 +157,11 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
     asyncHandler(async (_req, res) => {
       const all = getAllSettings(db);
       // Only expose the known game knobs, never admin_* credential keys.
-      const settings: Record<string, string> = {};
+      const values: Record<string, string> = {};
       for (const key of Object.keys(DEFAULT_SETTINGS)) {
-        settings[key] = all[key] ?? DEFAULT_SETTINGS[key];
+        values[key] = all[key] ?? DEFAULT_SETTINGS[key];
       }
-      res.send(await renderPage('admin-settings', { title: 'Settings', settings }));
+      res.send(await renderPage('admin-settings', { title: 'Settings', groups: groupedSettings(values) }));
     }),
   );
 
