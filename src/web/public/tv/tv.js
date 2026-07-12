@@ -35,12 +35,11 @@ function computeScale() {
   sidebarW = Math.round(vw * SIDEBAR_FRAC);
   fieldX = sidebarW;
   const fieldW = vw - sidebarW;
-  // reserve a strip above (monster name + HP bar) and below (dungeon name), plus a
-  // side margin, so the dungeon floats on the backdrop. Strips kept tight so the
-  // dungeon gets the largest clean integer scale (5x @4K, 3x @1440p, 2x @1080p).
-  const hpZone = vh * 0.09, nameStrip = vh * 0.06, sideMargin = fieldW * 0.05;
+  // reserve a top strip (monster name + HP bar) + thin framing margins, so the
+  // dungeon floats on the backdrop while taking the largest clean integer scale.
+  const hpZone = vh * 0.09, bottomMargin = vh * 0.02, sideMargin = fieldW * 0.03;
   const availW = fieldW - 2 * sideMargin;
-  const availH = vh - hpZone - nameStrip;
+  const availH = vh - hpZone - bottomMargin;
   // largest INTEGER scale that fits -> crisp pixels at any resolution
   scale = Math.max(1, Math.floor(Math.min(availW / (20 * TILE), availH / (15 * TILE))));
   tilePx = TILE * scale;
@@ -145,7 +144,6 @@ function render(t) {
     drawHeroes(t);
     drawHpBar();
     drawFloaters(t);
-    drawName();
     drawLeaderboard();
     if (state.paused) drawOverlay('The dungeon rests… awaiting adventurers');
     if (state.defeat) drawDefeat();
@@ -199,16 +197,6 @@ function drawHpBar() {
     x + w / 2, y + h * 0.72, `${Math.round(h * 0.62)}px system-ui`, '#fff', 'center');
 }
 
-function drawName() {
-  if (!layout || !layout.theme) return;
-  const zoneTop = panelY + panelH, zoneH = canvas.height - zoneTop;
-  // smaller than before — the dungeon is the show; the name is just a label
-  const size = Math.max(18, Math.round(tilePx * 0.5));
-  const cx = panelX + panelW / 2;
-  const cy = zoneTop + zoneH * 0.5 + size * 0.35; // alphabetic baseline for vertical centring
-  shadowText(layout.theme.toUpperCase(), cx, cy, `bold ${size}px system-ui`, '#e8c96a', 'center');
-}
-
 function drawFloaters(t) {
   ctx.textAlign = 'center';
   for (let i = floaters.length - 1; i >= 0; i--) {
@@ -245,11 +233,11 @@ function drawLeaderboard() {
 
 function drawOverlay(text) {
   ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = '#000a';
-  ctx.fillRect(fieldX, 0, canvas.width - fieldX, canvas.height);
+  ctx.fillStyle = '#000b'; // dim the WHOLE screen (sidebar + field) while resting
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#e8c96a'; ctx.textAlign = 'center';
   ctx.font = `${Math.round(20 * scale)}px system-ui`;
-  ctx.fillText(text, fieldX + (canvas.width - fieldX) / 2, canvas.height / 2);
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
 }
 
 function drawDefeat() {
