@@ -47,6 +47,22 @@ describe('buildTvState', () => {
     expect(placed.length).toBe(2);
   });
 
+  it('leaderboard modifier reflects the accumulate activity score (survives past the old recent-window)', () => {
+    // Shrink the old rolling window and widen the new decay window so the two
+    // approaches diverge: a burst that just left the 5-minute window would
+    // read modifier=1 under the old sum-since-window logic, but the new
+    // accumulate score (idle-decay starts at 30 min) still reports it fully.
+    setSetting(db, 'recent_window_minutes', '5');
+    setSetting(db, 'decay_after_minutes', '30');
+    setSetting(db, 'decay_span_minutes', '30');
+    const p = createPlayer(db, { name: 'Burst', class_key: 'knight', gender: 'M' }, 1);
+    ingestTokenUsage(db, tokens(p.auth_token, 5000), 100000, { cacheReadWeight: 0 });
+    const now = 100000 + 8 * 60_000; // 8 minutes later
+    const s = buildTvState(db, now);
+    const entry = s.players.find((pl) => pl.id === p.id)!;
+    expect(entry.modifier).toBeGreaterThan(1);
+  });
+
   it('active encounter carries a monster name, size and flying flag', () => {
     const a = createPlayer(db, { name: 'Big', class_key: 'wizard', gender: 'M' }, 1);
     const b = createPlayer(db, { name: 'Small', class_key: 'thief', gender: 'F' }, 1);
