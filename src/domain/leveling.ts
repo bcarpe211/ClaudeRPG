@@ -15,7 +15,7 @@ export function levelForXp(xp: number, baseXp: number, growth: number): number {
   return level;
 }
 
-/** Damage multiplier from level: 1 + slope*(level-1). */
+/** Damage multiplier from level: diminishing. 1 + slope*ln(level). level>=1 => >=1. */
 export function damageMultiplier(level: number, slope: number): number {
-  return 1 + slope * (level - 1);
+  return 1 + slope * Math.log(Math.max(1, level));
 }

@@ -24,8 +24,12 @@ describe('leveling', () => {
     expect(levelForXp(10_000_000, BASE, GROWTH)).toBeGreaterThan(5);
   });
 
-  it('damageMultiplier grows linearly with level', () => {
-    expect(damageMultiplier(1, 0.1)).toBeCloseTo(1.0);
-    expect(damageMultiplier(10, 0.1)).toBeCloseTo(1.9);
+  it('damageMultiplier diminishes with level (1 + slope*ln(level))', () => {
+    expect(damageMultiplier(1, 0.5)).toBeCloseTo(1.0);
+    expect(damageMultiplier(10, 0.5)).toBeCloseTo(1 + 0.5 * Math.log(10)); // ~2.15
+    // strictly increasing but diminishing returns
+    const d1 = damageMultiplier(2, 0.5) - damageMultiplier(1, 0.5);
+    const d2 = damageMultiplier(100, 0.5) - damageMultiplier(99, 0.5);
+    expect(d1).toBeGreaterThan(d2);
   });
 });

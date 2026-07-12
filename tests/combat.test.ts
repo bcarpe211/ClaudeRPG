@@ -14,8 +14,8 @@ describe('combat', () => {
   it('attackDamage = round(baseHit * levelMult * modifier), min 1', () => {
     // baseHit 100, level 1 (mult 1.0, slope .1), modifier 1 -> 100
     expect(attackDamage(100, 1, 0.1, 1)).toBe(100);
-    // level 10 (mult 1.9), modifier 2 -> 100*1.9*2 = 380
-    expect(attackDamage(100, 10, 0.1, 2)).toBe(380);
+    // level 10 (mult 1 + 0.1*ln(10) ≈ 1.2303), modifier 2 -> round(100*1.2303*2) = 246
+    expect(attackDamage(100, 10, 0.1, 2)).toBe(246);
   });
 
   it('never deals less than 1', () => {

@@ -20,7 +20,7 @@ export function assignHeroSlots<T extends { id: number }>(
 
 import { getGameState } from '../domain/gamestate';
 import { loadEngineConfig } from '../domain/encounters';
-import { sumEffectiveSince } from '../domain/ingest';
+import { activityScore } from '../domain/activity';
 import { tokenModifier } from '../domain/combat';
 import { classSpriteUrl, creatureSpriteFile, type Gender } from '../domain/classes';
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
@@ -55,7 +55,6 @@ export interface TvState {
 export function buildTvState(db: Database.Database, now: number): TvState {
   const cfg = loadEngineConfig(db);
   const gs = getGameState(db);
-  const since = now - cfg.recentWindowMinutes * 60_000;
 
   // Encounter (active only).
   let encounter: TvEncounter | null = null;
@@ -88,7 +87,7 @@ export function buildTvState(db: Database.Database, now: number): TvState {
   const players: TvHero[] = rows.map((p) => ({
     id: p.id, name: p.name, avatarUrl: classSpriteUrl(p.class_key, p.gender as Gender),
     level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,
-    gold: p.gold, modifier: tokenModifier(sumEffectiveSince(db, p.id, since), cfg.tokenModifierK),
+    gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK),
     disabled: !!p.disabled, connected: p.last_token_at != null,
     damage: dmgByPlayer.get(p.id) ?? 0, x: null, y: null,
   }));

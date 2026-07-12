@@ -3,7 +3,8 @@ import { loadEngineConfig, advanceToNextEncounter, type EngineConfig } from './e
 import { isIdle, setPaused, getGameState } from './gamestate';
 import { levelForXp } from './leveling';
 import { tokenModifier, attackDamage } from './combat';
-import { sumEffectiveSince } from './ingest';
+import { activityScore } from './activity';
+import { splitGold } from './rewards';
 import { getAllSettings } from './settings';
 
 export interface DefeatParticipant {
@@ -36,6 +37,7 @@ export function buildDefeatSummary(
 ): DefeatSummary {
   const settings = getAllSettings(db);
   const goldFactor = settings['gold_factor'] !== undefined ? Number(settings['gold_factor']) : 0.01;
+  const goldDamageWeight = settings['gold_damage_weight'] !== undefined ? Number(settings['gold_damage_weight']) : 0;
 
   const enc = db.prepare('SELECT * FROM encounters WHERE id=?').get(encounterId) as any;
   const dungeon = db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
@@ -49,7 +51,8 @@ export function buildDefeatSummary(
   const start = enc.started_at;
   const end = enc.ended_at ?? start;
 
-  const participants: DefeatParticipant[] = dmgRows.map((r) => {
+  const tokensByPlayer = new Map<number, number>();
+  const rowMeta = dmgRows.map((r) => {
     const player = db.prepare('SELECT name FROM players WHERE id=?').get(r.player_id) as any;
     const tok = db.prepare(
       'SELECT COALESCE(SUM(effective_delta),0) AS s FROM token_events WHERE player_id=? AND ts>=? AND ts<=?',
@@ -57,18 +60,25 @@ export function buildDefeatSummary(
     const lvl = db.prepare(
       'SELECT MAX(new_level) AS m FROM level_ups WHERE player_id=? AND ts>=? AND ts<=?',
     ).get(r.player_id, start, end) as any;
-    const gold = totalDamage > 0 ? Math.round(goldPool * (r.damage_total / totalDamage)) : 0;
-    return {
-      playerId: r.player_id,
-      name: player?.name ?? `#${r.player_id}`,
-      damage: r.damage_total,
-      hits: r.hits,
-      maxHit: r.max_hit,
-      gold,
-      tokensDuringFight: tok.s,
-      leveledTo: lvl.m ?? null,
-    };
+    tokensByPlayer.set(r.player_id, tok.s);
+    return { r, player, tokens: tok.s, leveledTo: lvl.m ?? null };
   });
+  const goldByPlayer = splitGold(
+    dmgRows.map((r) => ({ playerId: r.player_id, damage: r.damage_total, tokens: tokensByPlayer.get(r.player_id) ?? 0 })),
+    goldPool,
+    goldDamageWeight,
+  );
+
+  const participants: DefeatParticipant[] = rowMeta.map(({ r, player, tokens, leveledTo }) => ({
+    playerId: r.player_id,
+    name: player?.name ?? `#${r.player_id}`,
+    damage: r.damage_total,
+    hits: r.hits,
+    maxHit: r.max_hit,
+    gold: goldByPlayer.get(r.player_id) ?? 0,
+    tokensDuringFight: tokens,
+    leveledTo,
+  }));
 
   let mvpPlayerId: number | null = null;
   let biggest: { playerId: number; amount: number } | null = null;
@@ -156,15 +166,20 @@ export class GameEngine {
     const rows = this.db.prepare(
       'SELECT player_id, damage_total FROM encounter_damage WHERE encounter_id=?',
     ).all(encId) as { player_id: number; damage_total: number }[];
-    const total = rows.reduce((s, r) => s + r.damage_total, 0) || 1;
+    const tokQ = this.db.prepare(
+      'SELECT COALESCE(SUM(effective_delta),0) AS s FROM token_events WHERE player_id=? AND ts>=? AND ts<=?',
+    );
+    const participants = rows.map((r) => ({
+      playerId: r.player_id,
+      damage: r.damage_total,
+      tokens: (tokQ.get(r.player_id, enc.started_at, now) as { s: number }).s,
+    }));
+    const goldByPlayer = splitGold(participants, goldPool, cfg.goldDamageWeight);
     const award = this.db.prepare('UPDATE players SET gold = gold + ? WHERE id=?');
     const tx = this.db.transaction(() => {
       this.db.prepare("UPDATE encounters SET status='defeated', ended_at=? WHERE id=?")
         .run(now, encId);
-      for (const r of rows) {
-        const gold = Math.round(goldPool * (r.damage_total / total));
-        if (gold > 0) award.run(gold, r.player_id);
-      }
+      for (const [playerId, gold] of goldByPlayer) if (gold > 0) award.run(gold, playerId);
       this.db.prepare(
         'UPDATE game_state SET defeat_until=?, last_defeat_encounter_id=?, current_encounter_id=NULL WHERE id=1',
       ).run(now + cfg.popupDurationS * 1000, encId);
@@ -204,15 +219,14 @@ export class GameEngine {
     }
 
     const encId = gs.current_encounter_id!;
-    const since = now - cfg.recentWindowMinutes * 60_000;
 
     for (const p of this.activePlayers()) {
       this.updateLevel(p, cfg, now);
       const next = this.nextAttackAt.get(p.id) ?? this.scheduleNext(now, cfg);
       if (now >= next) {
-        const recent = sumEffectiveSince(this.db, p.id, since);
-        const mod = tokenModifier(recent, cfg.tokenModifierK);
-        const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelMultSlope, mod);
+        const score = activityScore(this.db, p.id, now, cfg);
+        const mod = tokenModifier(score, cfg.tokenModifierK);
+        const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelCurveSlope, mod);
         this.applyHit(encId, p.id, dmg);
         this.nextAttackAt.set(p.id, this.scheduleNext(now, cfg));
       } else {
