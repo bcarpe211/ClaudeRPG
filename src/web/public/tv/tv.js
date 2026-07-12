@@ -199,8 +199,8 @@ function drawHpBar() {
   const e = state.encounter; if (!e) return;
   const w = panelW * 0.6, h = Math.max(16, Math.round(tilePx * 0.34));
   const x = panelX + (panelW - w) / 2;
-  // sit above the panel with a clear gap; the space above the bar is reserved for
-  // the monster name (bigger than the bar) — backlog #12.
+  // sit above the panel with a clear gap; the monster name is drawn in the strip
+  // above the bar (bigger than the bar), below.
   const y = panelY - h - Math.round(tilePx * 0.5);
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.65)'; ctx.shadowBlur = Math.round(h * 0.6); ctx.shadowOffsetY = Math.round(h * 0.3);
