@@ -229,11 +229,11 @@ export const MONSTERS: Monster[] = [
   { index: 182, category: 'humanoid', size: 'M', flying: false, boss: false }, // Gnoll Fighter Alt
   { index: 183, category: 'humanoid', size: 'M', flying: false, boss: false }, // Gnoll Fighter Captain
   { index: 184, category: 'humanoid', size: 'M', flying: false, boss: false }, // Gnoll Shaman
-  { index: 253, category: 'humanoid', size: 'S', flying: false, boss: true }, // Goblin Fighter
+  { index: 253, category: 'humanoid', size: 'S', flying: false, boss: false }, // Goblin Fighter
   { index: 254, category: 'humanoid', size: 'S', flying: false, boss: false }, // Goblin Archer
   { index: 255, category: 'humanoid', size: 'M', flying: false, boss: true }, // Goblin Captain
   { index: 256, category: 'humanoid', size: 'M', flying: false, boss: true }, // Goblin King
-  { index: 257, category: 'humanoid', size: 'S', flying: false, boss: true }, // Goblin Mystic
+  { index: 257, category: 'humanoid', size: 'S', flying: false, boss: false }, // Goblin Mystic
   { index: 258, category: 'humanoid', size: 'M', flying: false, boss: false }, // Orc Fighter
   { index: 259, category: 'humanoid', size: 'M', flying: false, boss: true }, // Orc Captain
   { index: 260, category: 'humanoid', size: 'M', flying: false, boss: false }, // Orc Mystic
@@ -969,10 +969,6 @@ git commit -m "feat(tv): monster name label + size/flying ground shadow"
 - **Type consistency:** `pickEncounterCreature(theme, kind, rng)` used identically in creatures.ts and encounters.ts; `TvEncounter` fields `name/size/flying` produced in Task 6 and consumed in Task 7; `MonsterCategory`/`Monster`/helpers named identically across bestiary consumers; `themeMonsters`/`FALLBACK_THEME` consistent between dungeonthemes.ts and creatures.ts.
 - **No placeholders:** the full MONSTERS array and THEME_MONSTERS map are inlined; every code step shows complete code.
 - **Ordering guarantees green suites:** Task 3 removes the catalog's dependency on `MONSTER_TIERS`/`BOSSES` before Task 4 deletes them.
-
-## Known spec-mandated oddities (surface to the human before/at execution)
-
-Per the spec's edited roster, **Goblin Fighter (253)** and **Goblin Mystic (257)** are `size: 'S'` yet `boss: true`. A 2×2 boss rendered from a small goblin sprite may look underwhelming. This is faithfully transcribed from the approved spec; flag it to the user and only change if they confirm.
 
 ## Visual verification note (Task 7)
 

@@ -167,8 +167,8 @@ verbatim; it is complete (no TBDs).
 | 329 ★ | Yeti | L | no |
 | 330 | Yeti Alt | L | no |
 | 333 | Brown Bear | M | no |
-| 334 | Grey Bear | M | no |
-| 335 | Polar Bear | L | no |
+| 334 ★ | Grey Bear | M | no |
+| 335 ★ | Polar Bear | L | no |
 
 **vermin**
 | idx | name | size | flying |
@@ -176,21 +176,21 @@ verbatim; it is complete (no TBDs).
 | 219 | Black Bat | S | yes |
 | 220 | Red Bat | S | yes |
 | 222 | Red Spider | S | no |
-| 223 | Black Spider | S | no |
+| 223 ★ | Black Spider | S | no |
 | 224 | Grey Rat | S | no |
 | 225 | Brown Rat | S | no |
 | 227 | Beetle | S | no |
 | 228 | Fire Beetle | S | no |
-| 331 | Giant Leech | S | no |
+| 331 ★ | Giant Leech | S | no |
 | 332 | Giant Worm | M | no |
-| 336 | Giant Scorpion | M | no |
+| 336 ★ | Giant Scorpion | M | no |
 | 337 | Scorpion Alt | M | no |
 | 338 | Scorpion Alt | M | no |
 
 **elemental**
 | idx | name | size | flying |
 |-----|------|------|--------|
-| 196 | Djinn | M | yes |
+| 196 ★ | Djinn | M | yes |
 | 268 ★ | Earth Elemental | L | no |
 | 269 | Ice/Water Elemental | M | no |
 | 270 | Air Elemental | M | yes |
@@ -217,7 +217,7 @@ verbatim; it is complete (no TBDs).
 | 193 | Flesh Golem | L | no |
 | 194 ★ | Lava Golem | L | no |
 | 195 ★ | Bone Golem | L | no |
-| 198 | Mimic | M | no |
+| 198 ★ | Mimic | M | no |
 
 **giant**
 | idx | name | size | flying |
@@ -232,11 +232,11 @@ verbatim; it is complete (no TBDs).
 **ooze**
 | idx | name | size | flying |
 |-----|------|------|--------|
-| 217 | Purple Slime | M | no |
-| 218 | Green Slime | M | no |
-| 374 | Blue Jelly | S | no |
-| 375 | Green Jelly | S | no |
-| 376 | Red Jelly | S | no |
+| 217 | Purple Slime | S | no |
+| 218 | Green Slime | S | no |
+| 374 ★ | Blue Jelly | M | no |
+| 375 ★ | Green Jelly | M | no |
+| 376 ★ | Red Jelly | M | no |
 
 **aberration**
 | idx | name | size | flying |
@@ -267,21 +267,21 @@ verbatim; it is complete (no TBDs).
 | 154 | Lizardman Archer | M | no |
 | 155 | Lizardman Captain | M | no |
 | 156 | Lizardman Shaman | M | no |
-| 157 | Lizardman High Shaman | M | no |
+| 157 ★ | Lizardman High Shaman | M | no |
 | 181 | Gnoll Fighter | M | no |
 | 182 | Gnoll Fighter Alt | M | no |
 | 183 | Gnoll Fighter Captain | M | no |
 | 184 | Gnoll Shaman | M | no |
 | 253 | Goblin Fighter | S | no |
 | 254 | Goblin Archer | S | no |
-| 255 | Goblin Captain | M | no |
+| 255 ★ | Goblin Captain | M | no |
 | 256 ★ | Goblin King | M | no |
 | 257 | Goblin Mystic | S | no |
 | 258 | Orc Fighter | M | no |
-| 259 | Orc Captain | M | no |
+| 259 ★ | Orc Captain | M | no |
 | 260 | Orc Mystic | M | no |
 | 304 | Witch | M | no |
-| 305 | Frost Witch | M | no |
+| 305 ★ | Frost Witch | M | no |
 | 306 | Green Witch | M | no |
 
 ★ = `boss: true`. All others `boss: false`.
@@ -337,7 +337,7 @@ Authoritative draft for the 21 dungeon names (from `DUNGEONS`):
 | Bogstone Mire | ooze, vermin, undead | giant |
 | Dunewatch | undead, vermin, humanoid | undead |
 | Cobblemoor | beast, humanoid, vermin | giant |
-| Bloodstone Cairn | undead, demon | undead |
+| Bloodstone Cairn | undead, demon | demon |
 
 Every listed `bossCategories` is chosen so `bossesFor(bossCategories)` is
 non-empty (verified in tests). The fallback for an unknown/legacy theme is
