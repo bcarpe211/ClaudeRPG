@@ -114,11 +114,13 @@ function drawSprite(im, cx, cy, w, h) {
   ctx.drawImage(im, Math.round(cx - w / 2), Math.round(cy - h), w, h);
 }
 
-// text with a soft manual drop shadow (keeps default alphabetic baseline)
+// text with a manual drop shadow, offset proportional to the font size so bigger
+// text gets a bigger shadow (keeps default alphabetic baseline)
 function shadowText(txt, x, y, font, fill, align) {
   ctx.font = font; ctx.textAlign = align || 'left';
-  const o = Math.max(2, Math.round(scale * 0.6));
-  ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillText(txt, x + o, y + o);
+  const m = font.match(/(\d+)px/);
+  const o = Math.max(2, Math.round((m ? +m[1] : 16) * 0.1));
+  ctx.fillStyle = 'rgba(0,0,0,0.9)'; ctx.fillText(txt, x + o, y + o);
   ctx.fillStyle = fill; ctx.fillText(txt, x, y);
 }
 
