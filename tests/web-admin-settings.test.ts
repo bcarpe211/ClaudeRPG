@@ -24,11 +24,15 @@ beforeEach(() => {
 });
 
 describe('admin settings', () => {
-  it('shows the tunable knobs', async () => {
+  it('shows friendly labels, descriptions, and defaults (not just raw keys)', async () => {
     const agent = await adminAgent();
     const res = await agent.get('/admin/settings');
     expect(res.status).toBe(200);
-    expect(res.text).toContain('pause_after_minutes');
+    expect(res.text).toContain('name="pause_after_minutes"'); // input still posts by raw key
+    expect(res.text).toContain('Idle-pause delay');           // friendly label
+    expect(res.text).toContain('the dungeon rests');          // description text
+    expect(res.text).toContain('default:');                   // default shown
+    expect(res.text).toContain('Activity modifier');          // a group heading
   });
 
   it('updates a knob', async () => {
