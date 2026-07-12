@@ -12,6 +12,16 @@ const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
 const ANIM_MS = 600;  // creature/hero A/B flip period (~0.6s)
 const ANIM_ROW = 18;  // creatures_24x24 A/B partner offset (mirrors anim.js ROW)
 
+// Compact number: 999, 1.2K, 12.4K, 124K, 3.2M, 1.1B, 4.5T. Sign-preserving.
+// (mirrors formatCompact in src/domain/format.ts; tv.js has no imports)
+function fmt(n) {
+  const s = n < 0 ? '-' : ''; let x = Math.abs(n);
+  if (x < 1000) return s + String(Math.round(x));
+  const u = ['K', 'M', 'B', 'T']; let i = -1;
+  while (x >= 1000 && i < u.length - 1) { x /= 1000; i++; }
+  return s + x.toFixed(x < 100 ? 1 : 0) + u[i];
+}
+
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
 ctx.imageSmoothingEnabled = false;
@@ -123,7 +133,7 @@ evt.addEventListener('state', (e) => {
       const before = prev.get(p.id) ?? 0;
       if (p.x !== null && p.damage > before) {
         anim.set(p.id, { until: performance.now() + 350 });
-        floaters.push({ x: p.x, y: p.y, text: '-' + (p.damage - before), born: performance.now() });
+        floaters.push({ x: p.x, y: p.y, text: '-' + fmt(p.damage - before), born: performance.now() });
       }
     }
   }
@@ -227,8 +237,6 @@ function drawHpBar() {
   ctx.restore();
   ctx.fillStyle = '#3a0d0d'; ctx.fillRect(x, y, w, h);
   ctx.fillStyle = '#d23b3b'; ctx.fillRect(x, y, w * Math.max(0, e.hp / e.maxHp), h);
-  shadowText(`${e.hp.toLocaleString()} / ${e.maxHp.toLocaleString()}`,
-    x + w / 2, y + h * 0.72, `${Math.round(h * 0.62)}px system-ui`, '#fff', 'center');
   // monster name in the reserved strip above the bar, a step larger than the HP text
   const nameSize = Math.max(14, Math.round(h * 1.15));
   shadowText(e.name, panelX + panelW / 2, y - Math.round(h * 0.55),
@@ -262,7 +270,7 @@ function drawLeaderboard() {
     ctx.globalAlpha = p.disabled ? 0.4 : 1;
     ctx.drawImage(img(p.avatarUrl), pad, y, avW, avW);
     shadowText(p.name, textX, y + rowH * 0.36, `${Math.round(rowH * 0.34)}px system-ui`, '#cdb9e0', 'left');
-    shadowText(`L${p.level}  ${p.effectiveTokens.toLocaleString()} tok  ${p.gold}g  x${p.modifier.toFixed(2)}`,
+    shadowText(`L${p.level}  ${fmt(p.effectiveTokens)} tok  ${fmt(p.gold)}g  x${p.modifier.toFixed(2)}`,
       textX, y + rowH * 0.72, `${Math.round(rowH * 0.28)}px system-ui`, '#9a86b0', 'left');
     ctx.globalAlpha = 1;
     y += rowH;
@@ -290,7 +298,7 @@ function drawDefeat() {
   ctx.fillText('MONSTER DEFEATED!', x + w / 2, y + h * 0.12);
   ctx.drawImage(img(d.creatureUrl), x + w / 2 - h * 0.08, y + h * 0.14, h * 0.16, h * 0.16);
   ctx.font = `${Math.round(h * 0.045)}px system-ui`; ctx.fillStyle = '#cdb9e0';
-  ctx.fillText(`Total damage ${d.totalDamage.toLocaleString()}`, x + w / 2, y + h * 0.4);
+  ctx.fillText(`Total damage ${fmt(d.totalDamage)}`, x + w / 2, y + h * 0.4);
   ctx.textAlign = 'left';
   let ry = y + h * 0.48;
   const ranked = [...d.participants].sort((a, b) => b.damage - a.damage).slice(0, 10);
@@ -299,7 +307,7 @@ function drawDefeat() {
     ctx.fillStyle = p.playerId === d.mvpPlayerId ? '#ffd36a' : '#cdb9e0';
     ctx.font = `${Math.round(h * 0.04)}px system-ui`;
     const pct = d.totalDamage ? Math.round((p.damage / d.totalDamage) * 100) : 0;
-    ctx.fillText(`${mvp}${p.name}  ${p.damage.toLocaleString()} (${pct}%)  +${p.gold}g` +
+    ctx.fillText(`${mvp}${p.name}  ${fmt(p.damage)} (${pct}%)  ${fmt(p.tokensDuringFight)}tok  +${fmt(p.gold)}g` +
       (p.leveledTo ? `  ⬆L${p.leveledTo}` : ''), x + w * 0.1, ry);
     ry += h * 0.055;
   }
