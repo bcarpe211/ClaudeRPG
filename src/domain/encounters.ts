@@ -15,6 +15,9 @@ export interface EngineConfig {
   popupDurationS: number; tickIntervalMs: number;
   baselineBattleMinutes: number; levelCurveSlope: number;
   decayAfterMinutes: number; decaySpanMinutes: number; goldDamageWeight: number;
+  monsterAttacksEnabled: number; monsterAttackIntervalMs: number;
+  monsterAttackJitterMs: number; monsterGoldSteal: number;
+  monsterDebuffFactor: number; monsterDebuffSeconds: number;
 }
 
 export function loadEngineConfig(db: Database.Database): EngineConfig {
@@ -42,6 +45,12 @@ export function loadEngineConfig(db: Database.Database): EngineConfig {
     decayAfterMinutes: n('decay_after_minutes', 5),
     decaySpanMinutes: n('decay_span_minutes', 5),
     goldDamageWeight: n('gold_damage_weight', 0),
+    monsterAttacksEnabled: n('monster_attacks_enabled', 1),
+    monsterAttackIntervalMs: n('monster_attack_interval_ms', 15000),
+    monsterAttackJitterMs: n('monster_attack_jitter_ms', 5000),
+    monsterGoldSteal: n('monster_gold_steal', 5),
+    monsterDebuffFactor: n('monster_debuff_factor', 0.85),
+    monsterDebuffSeconds: n('monster_debuff_seconds', 8),
   };
 }
 

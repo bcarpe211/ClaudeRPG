@@ -10,7 +10,7 @@ export interface SettingMeta {
 
 export const GROUP_ORDER = [
   'Progression', 'Combat', 'Activity modifier', 'Monster HP & difficulty',
-  'Economy', 'Encounters & pacing', 'System',
+  'Monster retaliation', 'Economy', 'Encounters & pacing', 'System',
 ] as const;
 
 export const SETTINGS_META: Record<string, SettingMeta> = {
@@ -46,6 +46,19 @@ export const SETTINGS_META: Record<string, SettingMeta> = {
     description: 'Extra HP for each encounter deeper into a dungeon (0.15 = +15% on the 2nd, +30% on the 3rd…). Higher = later fights in a dungeon get harder faster.' },
   difficulty_ramp_per_dungeon: { group: 'Monster HP & difficulty', label: 'Difficulty per dungeon', unit: '×/lvl', min: 0, max: 2, step: 0.05,
     description: 'Extra HP for each dungeon level descended (0.25 = +25% per level). Higher = deeper dungeons ramp up faster.' },
+  // Monster retaliation
+  monster_attacks_enabled: { group: 'Monster retaliation', label: 'Monster attacks back', unit: '0/1', min: 0, max: 1, step: 1,
+    description: 'Master switch for the monster striking back at players. 1 = on, 0 = off (monsters never retaliate).' },
+  monster_attack_interval_ms: { group: 'Monster retaliation', label: 'Monster strike interval', unit: 'ms', min: 1000, step: 500,
+    description: 'Base milliseconds between monster counter-attacks during a fight. Lower = the monster hits players more often.' },
+  monster_attack_jitter_ms: { group: 'Monster retaliation', label: 'Monster strike jitter', unit: 'ms', min: 0, step: 500,
+    description: 'Random ± spread on the strike interval so counter-attacks are not perfectly regular. Higher = more variation in timing.' },
+  monster_gold_steal: { group: 'Monster retaliation', label: 'Gold stolen per hit', unit: 'gold', min: 0, step: 1,
+    description: 'Most gold a monster hit can steal from a player (never more than they have). Higher = a gold-loss hit stings more. A broke player is debuffed instead.' },
+  monster_debuff_factor: { group: 'Monster retaliation', label: 'Debuff damage multiplier', unit: '×', min: 0, max: 1, step: 0.05,
+    description: 'Swing-damage multiplier while a player is debuffed by a monster hit (0.85 = 15% weaker). Lower = a harsher debuff. 1.0 = the debuff does nothing.' },
+  monster_debuff_seconds: { group: 'Monster retaliation', label: 'Debuff duration', unit: 's', min: 1, step: 1,
+    description: 'How many seconds a monster debuff lasts before a player returns to full strength. Higher = the weakening lingers longer.' },
   // Economy
   gold_factor: { group: 'Economy', label: 'Gold per kill', min: 0, step: 0.005,
     description: 'Gold pool for a kill = monster max HP × dungeon level × this. Higher = more gold awarded per monster.' },
