@@ -60,7 +60,7 @@ player's damage modifier by an insignificant amount.
 - [ ] Monster retaliates against a random player
 - [ ] Define the (non-HP) consequence (small gold loss / tiny damage-mod debuff)
 
-## 6. Dungeon decorations ✅ Build 1 DONE (2026-07-12)
+## 6. Dungeon decorations ✅ ALL BUILDS DONE (2026-07-12)
 Themed decor now renders in `/tv`. Spec/plan/reference:
 `docs/superpowers/{specs,plans}/2026-07-12-dungeon-decor-floors*`, `docs/oryx_decor_reference.md`.
 - [x] `src/domain/decor.ts` — ~50-tile curated library tagged by theme + placement
@@ -71,8 +71,11 @@ Themed decor now renders in `/tv`. Spec/plan/reference:
       flip A↔animB on the shared ~600ms clock (`tv.js drawAnimDecor`; animB threaded
       dungeon2→tvlayout→payload; bake only static decor). Also delivers the decor
       half of #13. Spec/plan: `docs/superpowers/{specs,plans}/2026-07-12-animated-decor*`.
-- [ ] **Build 3 (staged):** rugs (3×3 + swappable crests, walkable) + boss platform.
-      Rug/crest coords in the reference doc.
+- [x] **Build 3 DONE (2026-07-12):** occasional walkable 3×3 rug centerpiece
+      (themed red/blue border + heraldic crest) centered on the monster zone —
+      the monster stands on the platform, framed by the border (`rugs.ts` +
+      `dungeon2` placement; rides the Build 1 decor pipeline, no tv.js change).
+      Spec/plan: `docs/superpowers/{specs,plans}/2026-07-12-rug-centerpieces*`.
 
 ## 7. Lively, colorful dungeon floor ⏳ partial (2026-07-12)
 - [x] Bumped `ACCENT_RATE` 6%→11% + conservative #14 palette tuning (cinder_rock/
