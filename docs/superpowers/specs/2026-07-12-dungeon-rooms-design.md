@@ -94,19 +94,22 @@ resolution, partition the interior into rooms:
   `MIN_ROOM` (e.g. 5×5), mark that line as **interior wall** cells, and recurse
   into both halves. Stop at `2 + floor(rng()*3)` rooms (2–4) or when no rect can
   split.
-- **Doorway**: on each split wall, carve a 1-cell **opening** (set back to floor)
-  at a random position along the wall, so the two halves connect. BSP's tree
-  structure guarantees every room is reachable.
+- **Doorway**: on each split wall, place a 1-cell **door** (`kind: 'door'`) at a
+  random position along the wall, so the two halves connect. BSP's tree structure
+  guarantees every room is reachable.
 - Result: a list of **room rects** (BSP leaves) and interior wall cells written
-  into the `kinds` grid (`'wall'`, with the opening left `'floor'`). `pickWall`
-  autotiles them (junctions where an interior wall meets the border/another wall).
+  into the `kinds` grid (`'wall'`, with the door cell `'door'`). `pickWall`
+  autotiles them (junctions where an interior wall meets the border/another wall;
+  and interior walls **cap** at the door since `pickWall` treats a `'door'` as
+  non-wall — the existing end/isolated logic applies unchanged).
 
 `MIN_ROOM` and the target count are chosen so the **arena** (largest leaf) is ≥
 ~6×6 — big enough for the 2×2 monster + surrounding heroes.
 
-Border doors (existing) stay; interior connections are floor openings (cleaner
-than door tiles for interior walls). Ensure a border door isn't placed onto an
-interior-wall cell (skip such candidates).
+Interior doors are resolved exactly like border doors — a `pickWeighted(DOORS)`
+tile with a floor `under`lay (the door art is transparent) — so both the border
+and inter-room connections use real door tiles. Ensure a border door isn't placed
+onto an interior-wall cell (skip such candidates).
 
 ## Component 3 — Arena → layout-driven monster zone
 
