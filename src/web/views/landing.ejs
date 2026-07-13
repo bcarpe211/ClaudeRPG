@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ClaudeRPG — enter the dungeon</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%E2%9A%94%EF%B8%8F</text></svg>" />
+  <link rel="stylesheet" href="/static/landing.css" />
+</head>
+<body>
+  <div class="wall wall-l"><span class="sconce top"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span><span class="sconce bot"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span></div>
+  <div class="wall wall-r"><span class="sconce top"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span><span class="sconce bot"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span></div>
+
+  <% const loot=[["orb_cyan","7%","9%","9","1.6"],["axe","90%","6%","11","1.3"],["ring_gold","93%","30%","9.5","1.3"],["book","5%","44%","10","1.9"],["orb_pink","89%","60%","12","1.5"],["key","9%","70%","11","1.3"],["coins","92%","82%","10","1.9"],["amulet","4%","28%","12","1.4"],["sword_flame","95%","20%","11.5","1.3"],["crown","6%","90%","13","1.8"],["scroll","91%","92%","10","1.3"],["flail","33%","50%","12","1.5"],["orb_green","66%","64%","10","1.4"],["potion","88%","52%","11","1.6"],["book_purple","13%","84%","12.5","1.4"],["gem_red","24%","62%","13","1.3"],["ring_gold","78%","40%","10.5","1.2"],["orb_cyan","50%","30%","11","1.2"]]; %>
+  <div class="loot-field" aria-hidden="true"><% loot.forEach(function(f){ %><span class="loot" style="--l:<%= f[1] %>;--t:<%= f[2] %>;--d:<%= f[3] %>s;--s:<%= f[4] %>"><img class="px" src="/static/landing/<%= f[0] %>.png" alt=""></span><% }); %></div>
+
+  <header class="bar">
+    <a class="brand" href="/"><img class="px" src="/static/landing/sword.png" alt=""><span>CLAUDE<b>RPG</b></span></a>
+    <nav><a href="/tv">Watch the TV</a><a href="/character">Log in</a><a class="mini" href="/admin">Admin</a></nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="dot"></span> LIVE — the office is fighting right now</p>
+        <h1>Your code has<br>consequences.</h1>
+        <p class="lede">An office co-op RPG that runs on your <b>Claude Code</b> usage. Everyone&rsquo;s tokens power a shared dungeon crawl on the big screen &mdash; the more the team ships, the harder the party hits.</p>
+        <div class="cta-row"><a class="btn btn-gold" href="/register"><img class="px bi" src="/static/landing/sword.png" alt=""> Create your character</a><a class="btn btn-ghost" href="/tv">▶ Watch on the TV</a></div>
+      </div>
+      <aside class="boss-card">
+        <% if (boss) { %>
+          <div class="boss-head"><span class="tag"><span class="dot"></span>LIVE BATTLE</span><span class="floor"><%= boss.location %></span></div>
+          <div class="boss-stage"><div class="boss-glow"></div><img class="px boss-sprite" src="<%= boss.sprite %>" alt="the current boss"></div>
+          <div class="boss-name"><img class="px ci" src="/static/landing/crown.png" alt=""> <%= boss.name %></div>
+          <div class="hpbar"><span style="width:<%= boss.hpPct %>%"></span></div>
+          <div class="hp-meta"><span><img class="px si" src="/static/landing/heart.png" alt=""> <%= boss.hpText %> HP</span><span><%= boss.hpPct %>%</span></div>
+          <div class="party"><div class="pty-row"><% boss.avatars.forEach(function(a){ %><span class="pty"><img class="px" src="<%= a %>" alt=""></span><% }); %></div><span><%= boss.count %> adventurer<%= boss.count === 1 ? '' : 's' %> contributing</span></div>
+        <% } else { %>
+          <div class="boss-idle"><img class="px" src="/static/landing/skull.png" alt=""><h3>The dungeon rests</h3><p>No active battle right now &mdash; register and start coding to wake it.</p></div>
+        <% } %>
+      </aside>
+    </section>
+
+    <section class="classes">
+      <div class="sec-head"><h2>Pick your fighter</h2><p>Nine classes, each with its own sprite on the TV. Click one to enlist.</p></div>
+      <div class="cls-grid"><% classes.forEach(function(c){ %><a class="cls" href="/register?class=<%= c.key %>"><span class="cls-sprite"><img class="px" src="<%= c.sprite %>" alt="<%= c.name %>"></span><span class="cls-name"><%= c.name %></span><span class="cls-glint"></span></a><% }); %></div>
+    </section>
+
+    <section class="how">
+      <div class="sec-head"><h2>How to join</h2><p>Two minutes, then you&rsquo;re contributing.</p></div>
+      <ol class="steps">
+        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/scroll.png" alt=""><b>1</b></span><div><h3>Register &amp; pick a class</h3><p>Choose your fighter from nine classes and claim your character token.</p></div></li>
+        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/key.png" alt=""><b>2</b></span><div><h3>Add one line to your shell</h3><p>Paste a short snippet into your <code>~/.zshrc</code>. That&rsquo;s the whole setup.</p></div></li>
+        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/coins.png" alt=""><b>3</b></span><div><h3>Code as you normally do</h3><p>Your Claude Code token usage becomes XP, damage &amp; gold against the shared monster on the office TV.</p></div></li>
+      </ol>
+      <div class="snippet"><div class="snip-head"><img class="px si" src="/static/landing/key.png" alt=""> the whole setup &mdash; drop into your shell</div><pre><%= snippet %></pre></div>
+      <div class="callout"><img class="px si" src="/static/landing/skull.png" alt=""><span class="ctxt"><b>Claude Code only.</b> This tracks the <b>Claude Code CLI</b> &mdash; it does <b>not</b> count Claude <b>API</b> tokens or usage from the <b>desktop / web app</b>. No CLI, no XP.</span></div>
+    </section>
+
+    <section class="trust">
+      <div class="sec-head"><h2>What it sees &mdash; and what it doesn&rsquo;t</h2><p>It reads usage numbers, nothing else. Here&rsquo;s exactly where the line is.</p></div>
+      <div class="trust-cols">
+        <div class="tcol sees"><h3><img class="px si" src="/static/landing/gem_green.png" alt=""> It sees</h3><ul><li>How many tokens you used</li><li>Which model</li><li>When (timestamps)</li></ul><p class="fine">Delivered as OpenTelemetry <b>metrics</b> from the Claude Code CLI &mdash; the same counters it already emits.</p></div>
+        <div class="tcol nots"><h3><img class="px si" src="/static/landing/shield.png" alt=""> It never sees</h3><ul><li>Your prompts</li><li>Your code or files</li><li>Your conversations</li></ul><p class="fine">None of that lives in metrics. Pause anytime with <code>rpg_off</code>.</p></div>
+      </div>
+    </section>
+
+    <section class="final">
+      <div class="final-loot"><img class="px" src="/static/landing/gem_red.png" alt=""><img class="px" src="/static/landing/sword_flame.png" alt=""><img class="px" src="/static/landing/gem_blue.png" alt=""></div>
+      <h2>Enter the dungeon.</h2>
+      <p>The monster won&rsquo;t slay itself. Well &mdash; it might, if the office ships enough.</p>
+      <a class="btn btn-gold big" href="/register"><img class="px bi" src="/static/landing/sword.png" alt=""> Create your character</a>
+    </section>
+  </main>
+
+  <footer class="foot"><span><img class="px si" src="/static/landing/skull.png" alt=""> Runs on the office TV · your usage, gamified</span><span>Pixel art &copy; Oryx Design Lab</span></footer>
+</body>
+</html>

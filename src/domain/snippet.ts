@@ -1,15 +1,15 @@
 export interface SnippetArgs {
   token: string;
-  host: string;
-  port: number;
+  /** Full base URL of this server (e.g. http://clauderpg.redlattice.com:8080). */
+  endpoint: string;
 }
 
-export function buildSetupSnippet({ token, host, port }: SnippetArgs): string {
+export function buildSetupSnippet({ token, endpoint }: SnippetArgs): string {
   return `# --- ClaudeRPG telemetry setup (add to ~/.zshrc or ~/.bashrc) ---
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://${host}:${port}
+export OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}
 export OTEL_METRIC_EXPORT_INTERVAL=5000
 export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
 export OTEL_RESOURCE_ATTRIBUTES=claude_rpg_token=${token}

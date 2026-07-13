@@ -13,19 +13,37 @@ beforeEach(() => {
 });
 
 describe('registration', () => {
-  it('GET / shows the form with all 9 classes', async () => {
+  it('GET / is the landing page (pitch, Claude-Code-only note, links to register + tv)', async () => {
     const res = await request(app).get('/');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Your code has');            // hero pitch
+    expect(res.text).toContain('Claude Code only');          // the scope callout
+    expect(res.text).toContain('does <b>not</b> count Claude <b>API</b>');
+    expect(res.text).toContain('href="/register"');
+    expect(res.text).toContain('href="/tv"');
+    expect(res.text).toContain('The dungeon rests');         // idle boss fallback (no encounter)
+  });
+
+  it('GET /register shows the form with all 9 classes', async () => {
+    const res = await request(app).get('/register');
     expect(res.status).toBe(200);
     expect(res.text).toContain('Paladin');
     expect(res.text).toContain('name="class_key"');
   });
 
-  it('GET / emits both gender sprite URLs so the preview can swap', async () => {
-    const res = await request(app).get('/');
+  it('GET /register emits both gender sprite URLs so the preview can swap', async () => {
+    const res = await request(app).get('/register');
     // paladin: male sprite is _09.png, female is _18.png (maleIndex + 9)
     expect(res.text).toContain('data-sprite-m="/sprites/creatures_24x24/oryx_16bit_fantasy_creatures_09.png"');
     expect(res.text).toContain('data-sprite-f="/sprites/creatures_24x24/oryx_16bit_fantasy_creatures_18.png"');
     expect(res.text).toContain('function applyGender'); // the swap script is present
+  });
+
+  it('GET /register?class= preselects that fighter', async () => {
+    const res = await request(app).get('/register?class=wizard');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('id="class_key" value="wizard"');
+    expect(res.text).toContain('data-key="wizard" onclick="pick(this)"'); // grid present
   });
 
   it('POST /register creates a player and shows the token + snippet', async () => {

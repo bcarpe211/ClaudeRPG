@@ -5,5 +5,11 @@
   <pre><%= player.auth_token %></pre>
   <p>Add this to your shell config to start contributing:</p>
   <pre><%= snippet %></pre>
+  <p class="flash" style="border:1px solid #6b5436;background:#241a10;color:#efe4c9;">
+    ⚔️ <strong>Claude Code only.</strong> This tracks the <strong>Claude Code CLI</strong> — it does
+    <strong>not</strong> count Claude <strong>API</strong> tokens or usage from the
+    <strong>desktop / web app</strong>. Run Claude Code with the snippet above active and your usage
+    joins the fight. Pause anytime with <code>rpg_off</code>.
+  </p>
   <p><a class="btn" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Go to your character sheet →</a></p>
 </div>
