@@ -115,7 +115,7 @@ function buildBackground() {
     for (let y = 0; y < layout.height; y++)
       for (let x = 0; x < layout.width; x++)
         if (layout.cells[y][x].shadow) put(SHADOW.col, SHADOW.row, x, y);
-    for (const d of layout.decor) put(d.col, d.row, d.x, d.y);
+    for (const d of layout.decor) if (!d.animB) put(d.col, d.row, d.x, d.y);
   };
   // draw now, and again once the sheet finishes loading (one shared image)
   draw();
@@ -171,6 +171,8 @@ function render(t) {
     ctx.restore();
   }
 
+  drawAnimDecor(t);
+
   if (state) {
     drawMonster(t);
     drawHeroes(t);
@@ -179,6 +181,21 @@ function render(t) {
     drawLeaderboard();
     if (state.paused) drawOverlay('The dungeon rests… awaiting adventurers');
     if (state.defeat) drawDefeat();
+  }
+}
+
+function drawAnimDecor(t) {
+  if (!layout) return;
+  const sheet = img('/sheet/world.png');
+  for (let i = 0; i < layout.decor.length; i++) {
+    const d = layout.decor[i];
+    if (!d.animB) continue;
+    const phase = (i * 137 + 53) % ANIM_MS;         // stagger so torches flicker independently
+    const showB = Math.floor((t + phase) / ANIM_MS) % 2 === 1;
+    const col = showB ? d.animB.col : d.col;
+    const row = showB ? d.animB.row : d.row;
+    ctx.drawImage(sheet, col * TILE, row * TILE, TILE, TILE,
+      panelX + d.x * tilePx, panelY + d.y * tilePx, tilePx, tilePx);
   }
 }
 
