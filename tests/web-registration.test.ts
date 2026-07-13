@@ -20,6 +20,14 @@ describe('registration', () => {
     expect(res.text).toContain('name="class_key"');
   });
 
+  it('GET / emits both gender sprite URLs so the preview can swap', async () => {
+    const res = await request(app).get('/');
+    // paladin: male sprite is _09.png, female is _18.png (maleIndex + 9)
+    expect(res.text).toContain('data-sprite-m="/sprites/creatures_24x24/oryx_16bit_fantasy_creatures_09.png"');
+    expect(res.text).toContain('data-sprite-f="/sprites/creatures_24x24/oryx_16bit_fantasy_creatures_18.png"');
+    expect(res.text).toContain('function applyGender'); // the swap script is present
+  });
+
   it('POST /register creates a player and shows the token + snippet', async () => {
     const res = await request(app)
       .post('/register')

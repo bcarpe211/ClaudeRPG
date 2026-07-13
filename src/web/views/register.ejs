@@ -9,7 +9,7 @@
            value="<%= typeof name !== 'undefined' ? name : '' %>" />
 
     <label>Gender</label>
-    <select name="gender">
+    <select name="gender" id="gender" onchange="applyGender()">
       <option value="M">Male</option>
       <option value="F">Female</option>
     </select>
@@ -20,7 +20,8 @@
       <% classes.forEach(function(c, i) { %>
         <div class="avatar <%= i === 0 ? 'selected' : '' %>"
              data-key="<%= c.key %>" onclick="pick(this)">
-          <img src="<%= c.spriteM %>" alt="<%= c.name %>" />
+          <img src="<%= c.spriteM %>" data-sprite-m="<%= c.spriteM %>"
+               data-sprite-f="<%= c.spriteF %>" alt="<%= c.name %>" />
           <div><%= c.name %></div>
         </div>
       <% }) %>
@@ -34,4 +35,12 @@
     el.classList.add('selected');
     document.getElementById('class_key').value = el.dataset.key;
   }
+  // Swap every avatar preview to match the selected gender.
+  function applyGender() {
+    var female = document.getElementById('gender').value === 'F';
+    document.querySelectorAll('.avatar img').forEach(function (img) {
+      img.src = female ? img.dataset.spriteF : img.dataset.spriteM;
+    });
+  }
+  applyGender();
 </script>
