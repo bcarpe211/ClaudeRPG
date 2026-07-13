@@ -46,8 +46,10 @@ describe('currentTvLayout', () => {
       expect(Number.isInteger(c.row)).toBe(true);
       expect(['wall', 'floor', 'door']).toContain(c.type);
     }
-    // fixed 2x2 centre monster zone
-    expect(L.monster).toEqual({ x: 9, y: 6, footprint: 2 });
+    // 2x2 monster zone, sourced from the arena centre (dungeon2), inside the interior
+    expect(L.monster.footprint).toBe(2);
+    expect(L.monster.x).toBeGreaterThan(0); expect(L.monster.x).toBeLessThan(19);
+    expect(L.monster.y).toBeGreaterThan(0); expect(L.monster.y).toBeLessThan(14);
     // hero slots: <=24, all interior floor, none in the monster zone or on a door
     const doorKey = new Set(L.doors.map((d) => `${d.x},${d.y}`));
     expect(L.heroSlots.length).toBeGreaterThan(0);
@@ -56,7 +58,7 @@ describe('currentTvLayout', () => {
       expect(s.x).toBeGreaterThan(0); expect(s.x).toBeLessThan(19);
       expect(s.y).toBeGreaterThan(0); expect(s.y).toBeLessThan(14);
       expect(L.cells[s.y][s.x].type).toBe('floor');
-      const inMonster = s.x >= 9 && s.x <= 10 && s.y >= 6 && s.y <= 7;
+      const inMonster = s.x >= L.monster.x && s.x <= L.monster.x + 1 && s.y >= L.monster.y && s.y <= L.monster.y + 1;
       expect(inMonster).toBe(false);
       expect(doorKey.has(`${s.x},${s.y}`)).toBe(false);
     }
@@ -110,6 +112,20 @@ describe('currentTvLayout', () => {
     setTheme('Ossuary Pale');
     const L = currentTvLayout(db)!;
     expect(L.decor.some((d) => d.animB)).toBe(true);
+  });
+
+  it('monster zone comes from the arena, and hero slots sit in the arena', () => {
+    activeDungeon();
+    setTheme('Greystone Keep');
+    const L = currentTvLayout(db)!;
+    // monster inside its own footprint area, all floor
+    for (const s of L.heroSlots) {
+      // hero within some room's floor and not on the monster zone
+      const inM = s.x >= L.monster.x && s.x <= L.monster.x + 1 && s.y >= L.monster.y && s.y <= L.monster.y + 1;
+      expect(inM).toBe(false);
+      expect(L.cells[s.y][s.x].type).toBe('floor');
+    }
+    expect(L.monster.footprint).toBe(2);
   });
 
   it('never throws across the full dungeon roster (live adapter, never-throw guard)', () => {
