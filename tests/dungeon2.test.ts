@@ -1,10 +1,35 @@
 import { describe, it, expect } from 'vitest';
-import { generateAutotiledDungeon } from '../src/domain/dungeon2';
+import { generateAutotiledDungeon, pickWall } from '../src/domain/dungeon2';
 import { DOORS, WALL_COLS, SHEET } from '../src/domain/tilesheet';
 import { decorFor } from '../src/domain/decor';
 import { RED_RUG, BLUE_RUG } from '../src/domain/rugs';
+import { getDungeon } from '../src/domain/floorgroups';
 
 const dungeon = 'Greystone Keep';
+
+describe('pickWall junctions', () => {
+  const dg = getDungeon('Greystone Keep')!;
+  const rng = () => 0.99; // no crack
+  // build a 5x5 grid; W=wall, .=floor. col of the returned tile is what we check.
+  const grid = (rows: string[]) => rows.map((r) => [...r].map((c) => (c === 'W' ? 'wall' : 'floor')));
+  const at = (rows: string[], x: number, y: number) =>
+    pickWall(x, y, grid(rows) as any, rows[0].length, rows.length, dg, rng).col;
+
+  it('cross: 4 wall neighbors', () => {
+    const g = ['..W..', '..W..', 'WWWWW', '..W..', '..W..'];
+    expect(at(g, 2, 2)).toBe(WALL_COLS.cross);
+  });
+  it('T open to each side', () => {
+    // ⊣ (open W): walls N,E,S — N/S from rows 1/3 col2, E from row2 col3, W(row2 col1) is floor
+    expect(at(['.....', '..W..', '..WW.', '..W..', '.....'], 2, 2)).toBe(WALL_COLS.tOpenW);
+    // ⊤ (open N): walls E,S,W
+    expect(at(['.....', '.....', 'WWWWW', '..W..', '.....'], 2, 2)).toBe(WALL_COLS.tOpenN);
+    // ⊥ (open S): walls N,E,W — N from row1 col2, E/W from row2 cols 3/1, S(row3 col2) is floor
+    expect(at(['.....', '..W..', 'WWWWW', '.....', '.....'], 2, 2)).toBe(WALL_COLS.tOpenS);
+    // ⊢ (open E): walls N,S,W
+    expect(at(['..W..', '..W..', 'WW...', '..W..', '..W..'], 2, 2)).toBe(WALL_COLS.tOpenE);
+  });
+});
 
 describe('door placement + wall autotiling rules', () => {
   const W = 20, H = 15;

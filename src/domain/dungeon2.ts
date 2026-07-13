@@ -29,7 +29,7 @@ const scrambleSeed = (n: number): number => {
 //    door), rather than a raw corner face butting the opening;
 //  - a 1-tile wall isolated BETWEEN two doorways uses a double-capped piece
 //    (beveled on both ends), oriented to its border edge.
-function pickWall(
+export function pickWall(
   x: number, y: number, kinds: LogicalKind[][], w: number, h: number,
   dungeon: Dungeon, rng: () => number,
 ): TileCoord {
@@ -39,6 +39,14 @@ function pickWall(
   const isWall = (xx: number, yy: number) =>
     xx >= 0 && yy >= 0 && xx < w && yy < h && kinds[yy][xx] === 'wall';
   const N = isWall(x, y - 1), E = isWall(x + 1, y), S = isWall(x, y + 1), Wt = isWall(x - 1, y);
+  const nbrs = [N, E, S, Wt].filter(Boolean).length;
+  if (nbrs === 4) return C(WALL_COLS.cross);
+  if (nbrs === 3) {
+    if (!N) return C(WALL_COLS.tOpenN);
+    if (!E) return C(WALL_COLS.tOpenE);
+    if (!S) return C(WALL_COLS.tOpenS);
+    return C(WALL_COLS.tOpenW); // !Wt
+  }
   if (E && Wt && !N && !S) return C(cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal);
   if (N && S && !E && !Wt) return C(cracked ? WALL_COLS.crackedV : WALL_COLS.vertical);
   if (E && S && !N && !Wt) return C(WALL_COLS.tl);
