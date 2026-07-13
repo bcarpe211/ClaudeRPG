@@ -37,10 +37,13 @@ fix `MONSTER_TIERS`/`BOSSES` against the corrected mapping.
       correct frame-A indices) + `src/domain/dungeonthemes.ts` (theme-gated
       selection). See the themed-bestiary spec/plan (2026-07-11).
 
-## 2. Gender selection drives creature/class sprites
-Choosing gender at registration should select the correct class sprite variant.
-There are female versions of each class; currently only male variants are shown.
-- [ ] Wire gender choice → correct class sprite variant (male/female)
+## 2. Gender selection drives creature/class sprites ✅ DONE
+Choosing gender at registration selects the correct class sprite variant.
+- [x] Wire gender choice → correct class sprite variant (male/female).
+      `players.gender` is stored at registration (with a live gender→sprite
+      preview) and `classSpriteUrl(class_key, gender)` drives the battlefield
+      sprite, so female variants render on the TV (`spriteIndexFor` = maleIndex+9
+      for F). Verified 2026-07-13.
 
 ## 3. Attack animation direction
 Attacks currently only nudge downward a little, which looks wrong when the
