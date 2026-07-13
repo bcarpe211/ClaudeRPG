@@ -60,15 +60,26 @@ player's damage modifier by an insignificant amount.
 - [ ] Monster retaliates against a random player
 - [ ] Define the (non-HP) consequence (small gold loss / tiny damage-mod debuff)
 
-## 6. Dungeon decorations
-The dungeon layout needs more decorations, using the oryx tileset for
-inspiration. (Depends on item 1.)
-- [ ] Add decorative tiles to dungeon layout
+## 6. Dungeon decorations ✅ Build 1 DONE (2026-07-12)
+Themed decor now renders in `/tv`. Spec/plan/reference:
+`docs/superpowers/{specs,plans}/2026-07-12-dungeon-decor-floors*`, `docs/oryx_decor_reference.md`.
+- [x] `src/domain/decor.ts` — ~50-tile curated library tagged by theme + placement
+      (floor / corner-cobweb / wall-torch) + `walkable` flag; `decorFor(name)`.
+      `dungeon2` places them (corners, wall torches, floor scatter clear of the
+      2×2 monster zone); hero slots avoid non-walkable decor. Visual-verified.
+- [ ] **Build 2 (staged):** animate the flagged A/B items (torches/cauldron/tomes/
+      skull) — needs a per-frame decor pipeline in `tv.js` (also unblocks #13 decor
+      animation). animB coords captured in the reference doc.
+- [ ] **Build 3 (staged):** rugs (3×3 + swappable crests, walkable) + boss platform.
+      Rug/crest coords in the reference doc.
 
-## 7. Lively, colorful dungeon floor
-The floor should be lively and colorful so the whole thing reads like a really
-nice wallpaper. (Covered largely by art curation, item 1.)
-- [ ] Make floor visually rich / wallpaper-quality
+## 7. Lively, colorful dungeon floor ⏳ partial (2026-07-12)
+- [x] Bumped `ACCENT_RATE` 6%→11% + conservative #14 palette tuning (cinder_rock/
+      verdant_slab 2nd main→accent; accents added to a few flat groups;
+      crimson_mosaic compat restricted).
+- [ ] Finish the flat-floor groups — ~12 groups still have empty `accents` (no
+      confidently same-family tile found without a visual pass); enrich them for
+      full "wallpaper-quality" floors. Overlaps #14.
 
 ## 8. Leaderboard improvements
 Larger text and better showcasing of player stats — current token-usage streak
