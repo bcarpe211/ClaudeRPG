@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateAutotiledDungeon } from '../src/domain/dungeon2';
 import { DOORS, WALL_COLS } from '../src/domain/tilesheet';
+import { decorFor } from '../src/domain/decor';
 
 const dungeon = 'Greystone Keep';
 
@@ -157,5 +158,30 @@ describe('generateAutotiledDungeon', () => {
   it('labels the sample with the dungeon name', () => {
     const d = generateAutotiledDungeon(dungeon, 1, { width: 10, height: 8 });
     expect(d.dungeon).toBe('Greystone Keep');
+  });
+  it('places decor: non-empty, carries walkable, clears the 2x2 monster zone', () => {
+    const d = generateAutotiledDungeon(dungeon, 7, { width: 20, height: 15 });
+    expect(d.decor.length).toBeGreaterThan(0);
+    const mx = Math.floor(20 / 2) - 1, my = Math.floor(15 / 2) - 1;
+    for (const p of d.decor) {
+      expect(typeof p.walkable).toBe('boolean');
+      const inMonster = p.x >= mx && p.x <= mx + 1 && p.y >= my && p.y <= my + 1;
+      expect(inMonster).toBe(false);
+    }
+  });
+  it('corner decor sits at an interior corner and uses a corner tile', () => {
+    const cornerKeys = new Set(decorFor(dungeon).corner.map((t) => `${t.col},${t.row}`));
+    const corners = new Set(['1,1', `18,1`, `1,13`, `18,13`]); // 20x15 interior corners
+    let sawCorner = false;
+    for (let seed = 1; seed <= 10; seed++) {
+      const d = generateAutotiledDungeon(dungeon, seed, { width: 20, height: 15 });
+      for (const p of d.decor) {
+        if (corners.has(`${p.x},${p.y}`)) { sawCorner = true; expect(cornerKeys.has(`${p.col},${p.row}`)).toBe(true); }
+      }
+    }
+    expect(sawCorner).toBe(true); // Greystone Keep is cobweb-heavy -> corners fill often
+  });
+  it('decor is deterministic per (dungeon, seed)', () => {
+    expect(generateAutotiledDungeon(dungeon, 42).decor).toEqual(generateAutotiledDungeon(dungeon, 42).decor);
   });
 });

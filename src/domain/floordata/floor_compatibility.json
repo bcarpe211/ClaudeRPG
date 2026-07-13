@@ -147,20 +147,11 @@
       "name": "Court Mosaic",
       "floor_class": "grey",
       "home": "Crimson Court",
-      "great": [
-        "Greystone Keep",
-        "Rustpipe Sewers",
-        "Glacierhold",
-        "Cobblemoor"
-      ],
+      "great": [],
       "good": [
         "Auric Deep",
         "Duskstone Warren",
-        "Thornwind Ruins",
-        "Verdant Crypt",
-        "Tideglass Halls",
-        "Frostiron Bastion",
-        "Drowned Foundry"
+        "Thornwind Ruins"
       ],
       "feature": []
     },

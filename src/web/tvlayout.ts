@@ -75,10 +75,11 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
 
   // Hero slots: shuffled interior floor cells clear of the monster zone. Own
   // deterministic rng (dungeon2 doesn't expose its stream).
+  const blocked = new Set(auto.decor.filter((d) => !d.walkable).map((d) => `${d.x},${d.y}`));
   const candidates: { x: number; y: number }[] = [];
   for (let y = 1; y < height - 1; y++)
     for (let x = 1; x < width - 1; x++)
-      if (cells[y][x].type === 'floor' && !inMonster(x, y)) candidates.push({ x, y });
+      if (cells[y][x].type === 'floor' && !inMonster(x, y) && !blocked.has(`${x},${y}`)) candidates.push({ x, y });
   const rng = makeRng(d.seed);
   for (let i = candidates.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
