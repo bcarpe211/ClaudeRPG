@@ -67,9 +67,10 @@ Themed decor now renders in `/tv`. Spec/plan/reference:
       (floor / corner-cobweb / wall-torch) + `walkable` flag; `decorFor(name)`.
       `dungeon2` places them (corners, wall torches, floor scatter clear of the
       2×2 monster zone); hero slots avoid non-walkable decor. Visual-verified.
-- [ ] **Build 2 (staged):** animate the flagged A/B items (torches/cauldron/tomes/
-      skull) — needs a per-frame decor pipeline in `tv.js` (also unblocks #13 decor
-      animation). animB coords captured in the reference doc.
+- [x] **Build 2 DONE (2026-07-12):** animated decor — torches/cauldron/tomes/skull
+      flip A↔animB on the shared ~600ms clock (`tv.js drawAnimDecor`; animB threaded
+      dungeon2→tvlayout→payload; bake only static decor). Also delivers the decor
+      half of #13. Spec/plan: `docs/superpowers/{specs,plans}/2026-07-12-animated-decor*`.
 - [ ] **Build 3 (staged):** rugs (3×3 + swappable crests, walkable) + boss platform.
       Rug/crest coords in the reference doc.
 
