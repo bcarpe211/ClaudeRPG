@@ -68,17 +68,19 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
       if (c.type === 'floor' && n && (n.type === 'wall' || n.type === 'door')) c.shadow = true;
     }
 
-  // Fixed 2x2 centre monster zone (drawn on top of floor).
-  const monster = { x: Math.floor(width / 2) - 1, y: Math.floor(height / 2) - 1, footprint: 2 };
+  // Arena centre 2x2 monster zone (drawn on top of floor) from dungeon2.
+  const monster = auto.monster;
   const inMonster = (x: number, y: number) =>
     x >= monster.x && x <= monster.x + 1 && y >= monster.y && y <= monster.y + 1;
 
-  // Hero slots: shuffled interior floor cells clear of the monster zone. Own
-  // deterministic rng (dungeon2 doesn't expose its stream).
+  // Hero slots: shuffled arena floor cells clear of the monster zone, so the
+  // whole co-op battle (monster + heroes) stays in one room. Own deterministic
+  // rng (dungeon2 doesn't expose its stream).
   const blocked = new Set(auto.decor.filter((d) => !d.walkable).map((d) => `${d.x},${d.y}`));
+  const A = auto.arena;
   const candidates: { x: number; y: number }[] = [];
-  for (let y = 1; y < height - 1; y++)
-    for (let x = 1; x < width - 1; x++)
+  for (let y = A.y; y < A.y + A.h; y++)
+    for (let x = A.x; x < A.x + A.w; x++)
       if (cells[y][x].type === 'floor' && !inMonster(x, y) && !blocked.has(`${x},${y}`)) candidates.push({ x, y });
   const rng = makeRng(d.seed);
   for (let i = candidates.length - 1; i > 0; i--) {
