@@ -13,27 +13,27 @@ const RegisterInput = z.object({
   gender: z.enum(['M', 'F']),
 });
 
+// Each class with both gender sprite URLs, so the form can swap the preview client-side.
+const classCards = () =>
+  CLASSES.map((c) => ({
+    key: c.key,
+    name: c.name,
+    spriteM: classSpriteUrl(c.key, 'M'),
+    spriteF: classSpriteUrl(c.key, 'F'),
+  }));
+
 export function registerRegistrationRoutes(
   app: Express,
   { db, config }: AppDeps,
 ): void {
   app.get('/', asyncHandler(async (_req, res) => {
-    const classes = CLASSES.map((c) => ({
-      key: c.key,
-      name: c.name,
-      spriteM: classSpriteUrl(c.key, 'M'),
-    }));
-    res.send(await renderPage('register', { title: 'Register', classes }));
+    res.send(await renderPage('register', { title: 'Register', classes: classCards() }));
   }));
 
   app.post('/register', asyncHandler(async (req, res) => {
     const parsed = RegisterInput.safeParse(req.body);
     if (!parsed.success) {
-      const classes = CLASSES.map((c) => ({
-        key: c.key,
-        name: c.name,
-        spriteM: classSpriteUrl(c.key, 'M'),
-      }));
+      const classes = classCards();
       res
         .status(400)
         .send(
