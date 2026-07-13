@@ -40,7 +40,9 @@ export const WALL_COLS = {
   tend: 14, bend: 16, // vertical wall-ends: wall on S only / N only
   isolated: 10,   // double-capped standalone block (beveled all round) — a 1-tile wall between two doorways
   crackedH: 27,   // cracked horizontal run
-  crackedV: 26,   // cracked vertical run
+  crackedV: 26,   // cracked "vertical" run — UNUSED: this tile bakes in a horizontal
+                  // front-face band, so on a side wall it shows a stray grey bar;
+                  // vertical runs stay clean (see pickWall in dungeon2.ts).
   // T-junctions, named by the OPEN side (the one direction WITHOUT a wall neighbour).
   // Columns confirmed visually against in-context mockups: col 21 = cross,
   // 22 = ⊤ (open N), 23 = ⊣ (open E), 24 = ⊢ (open W), 25 = ⊥ (open S).
