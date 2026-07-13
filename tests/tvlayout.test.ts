@@ -105,6 +105,13 @@ describe('currentTvLayout', () => {
     for (const s of L.heroSlots) expect(decorKeys.has(`${s.x},${s.y}`)).toBe(false);
   });
 
+  it('preserves animB on animated decor cells in the layout', () => {
+    activeDungeon();
+    setTheme('Ossuary Pale');
+    const L = currentTvLayout(db)!;
+    expect(L.decor.some((d) => d.animB)).toBe(true);
+  });
+
   it('never throws across the full dungeon roster (live adapter, never-throw guard)', () => {
     activeDungeon();
     for (const d of DUNGEONS) {

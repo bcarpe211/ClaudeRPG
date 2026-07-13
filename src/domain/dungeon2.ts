@@ -61,7 +61,7 @@ export interface RenderCell {
 export interface AutoDungeon {
   width: number; height: number; dungeon: string; seed: number;
   cells: RenderCell[];
-  decor: { x: number; y: number; col: number; row: number; walkable: boolean }[];
+  decor: { x: number; y: number; col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }[];
 }
 export interface GenOpts { width?: number; height?: number; }
 
@@ -124,14 +124,14 @@ export function generateAutotiledDungeon(
 
   // 3) Decor: corner cobwebs, wall torches, and floor scatter (clear of the monster zone).
   const pools = decorFor(dungeonName);
-  const decor: { x: number; y: number; col: number; row: number; walkable: boolean }[] = [];
+  const decor: { x: number; y: number; col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }[] = [];
   const used = new Set<string>();
   const at2 = <T>(arr: T[]) => arr[Math.floor(rng() * arr.length)];
   const shuffle = <T>(arr: T[]) => {
     for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
   };
-  const place = (x: number, y: number, t: { col: number; row: number; walkable: boolean }) => {
-    decor.push({ x, y, col: t.col, row: t.row, walkable: t.walkable }); used.add(`${x},${y}`);
+  const place = (x: number, y: number, t: { col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }) => {
+    decor.push({ x, y, col: t.col, row: t.row, walkable: t.walkable, animB: t.animB }); used.add(`${x},${y}`);
   };
   // corners
   if (pools.corner.length) {
