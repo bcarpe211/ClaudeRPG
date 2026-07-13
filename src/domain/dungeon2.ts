@@ -48,7 +48,11 @@ export function pickWall(
     return C(WALL_COLS.tOpenW); // !Wt
   }
   if (E && Wt && !N && !S) return C(cracked ? WALL_COLS.crackedH : WALL_COLS.horizontal);
-  if (N && S && !E && !Wt) return C(cracked ? WALL_COLS.crackedV : WALL_COLS.vertical);
+  // Vertical runs never take the cracked variant: the cracked tile carries a
+  // horizontal front-face band at its base (there is no band-free vertical crack in
+  // the sheet), which renders as a stray grey bar on a side wall. `cracked` is still
+  // rolled above so the rng stream — and every other cell — stays deterministic.
+  if (N && S && !E && !Wt) return C(WALL_COLS.vertical);
   if (E && S && !N && !Wt) return C(WALL_COLS.tl);
   if (Wt && S && !N && !E) return C(WALL_COLS.tr);
   if (E && N && !S && !Wt) return C(WALL_COLS.bl);

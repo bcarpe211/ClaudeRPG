@@ -234,18 +234,32 @@ function drawMonster(t) {
   const { px, py } = tileToField(m.x + fp / 2, m.y + fp); // py = bottom edge of the footprint
   const groundY = footLine(py);                 // foot line, a bit above the footprint's bottom
   const shadowW = fp * tilePx * 0.85;           // ~footprint-wide, not sprite-wide
-  // grounded: feet on the shadow; flying: shadow stays on the ground, sprite lifts high above
-  const cy = e.flying ? groundY - Math.round(tilePx * 0.5) : groundY;
-  groundShadow(e.size, px, groundY, shadowW);
+  // grounded: feet on the shadow. flying: the shadow stays pinned to the ground
+  // directly below while the sprite lifts a clear ~0.8 tile above it — a gap too big
+  // to read as a mistake — and the shadow shrinks + dims (a distant cast shadow) so
+  // the elevation, not just a detached puddle, is what reads.
+  const lift = e.flying ? Math.round(tilePx * 0.8) : 0;
+  const cy = groundY - lift;
+  flyShadow(e, e.size, px, groundY, shadowW);
   drawSprite(animImg(e.creatureUrl, 100, t), px, cy, size, size);
   // pack: a couple of small duplicates beside it, each with its own small shadow
   if (e.kind === 'pack') {
     for (let i = 1; i <= Math.min(3, e.packCount - 1); i++) {
       const dx = px + i * tilePx * 0.6, dw = size * 0.7;
-      groundShadow(e.size, dx, groundY, tilePx * 0.7);
+      flyShadow(e, e.size, dx, groundY, tilePx * 0.7);
       drawSprite(animImg(e.creatureUrl, 100 + i, t), dx, cy, dw, dw);
     }
   }
+}
+
+// A ground shadow that, for a flying actor, shrinks and dims to sell height: a body
+// hovering well above the floor throws a smaller, softer shadow directly beneath it.
+function flyShadow(e, sizeKey, cx, groundY, w) {
+  if (!e.flying) { groundShadow(sizeKey, cx, groundY, w); return; }
+  ctx.save();
+  ctx.globalAlpha = 0.6;
+  groundShadow(sizeKey, cx, groundY, w * 0.62);
+  ctx.restore();
 }
 
 function drawHeroes(t) {
