@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { generateAutotiledDungeon, pickWall } from '../src/domain/dungeon2';
 import { DOORS, WALL_COLS, SHEET } from '../src/domain/tilesheet';
 import { decorFor } from '../src/domain/decor';
-import { RED_RUG, BLUE_RUG } from '../src/domain/rugs';
 import { getDungeon } from '../src/domain/floorgroups';
 
 const dungeon = 'Greystone Keep';
@@ -107,8 +106,13 @@ describe('door placement + wall autotiling rules', () => {
         if (corner) continue;
         const E = m.get(`${c.x + 1},${c.y}`), Wt = m.get(`${c.x - 1},${c.y}`);
         const N = m.get(`${c.x},${c.y - 1}`), S = m.get(`${c.x},${c.y + 1}`);
-        const vBetween = (c.x === 0 || c.x === W - 1) && N?.kind === 'door' && S?.kind === 'door';
-        const hBetween = (c.y === 0 || c.y === H - 1) && E?.kind === 'door' && Wt?.kind === 'door';
+        // isolated applies to a 1-tile wall with NO wall neighbour on any side. With
+        // rooms, an interior wall can attach to the border between two doors — that cell
+        // caps the interior wall (bend/tend) instead, so guard against an attached wall.
+        const vBetween = (c.x === 0 || c.x === W - 1) && N?.kind === 'door' && S?.kind === 'door'
+          && (c.x === 0 ? E : Wt)?.kind !== 'wall';
+        const hBetween = (c.y === 0 || c.y === H - 1) && E?.kind === 'door' && Wt?.kind === 'door'
+          && (c.y === 0 ? S : N)?.kind !== 'wall';
         if (vBetween || hBetween) { expect(c.col).toBe(WALL_COLS.isolated); saw = true; }
       }
     }
@@ -239,22 +243,22 @@ describe('generateAutotiledDungeon', () => {
       }
     }
   });
-  it('occasionally places a walkable 3x3 rug centered on the monster zone', () => {
+  it('occasionally places a walkable 4x4 rug whose centre 2x2 is the monster zone', () => {
     const W = 20, H = 15;
-    const crestKeys = new Set([...RED_RUG.crests, ...BLUE_RUG.crests].map((c) => `${c.col},${c.row}`));
     let sawRug = false;
     for (let seed = 1; seed <= 60 && !sawRug; seed++) {
       const d = generateAutotiledDungeon('Emberforge', seed, { width: W, height: H }); // warm -> red rug
       const walk = d.decor.filter((p) => p.walkable);
       if (walk.length === 0) continue;
       sawRug = true;
-      const rx = d.monster.x - 1, ry = d.monster.y - 1; // rug's top-left, one cell out from the monster zone
-      expect(walk.length).toBe(9);                     // 8 border + 1 crest
+      const rx = d.monster.x - 1, ry = d.monster.y - 1; // 4x4 top-left; monster 2x2 at (mx,my) is its centre
+      expect(walk.length).toBe(16);                    // full 4x4
       const keys = new Set(walk.map((p) => `${p.x},${p.y}`));
-      for (let dy = 0; dy < 3; dy++) for (let dx = 0; dx < 3; dx++)
-        expect(keys.has(`${rx + dx},${ry + dy}`)).toBe(true);  // full 3x3 covered
-      const center = walk.find((p) => p.x === rx + 1 && p.y === ry + 1)!;
-      expect(crestKeys.has(`${center.col},${center.row}`)).toBe(true); // center is a crest
+      for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++)
+        expect(keys.has(`${rx + dx},${ry + dy}`)).toBe(true);  // full 4x4 covered
+      // the 2x2 monster zone sits at the rug's centre
+      for (const [mxk, myk] of [[d.monster.x, d.monster.y], [d.monster.x + 1, d.monster.y + 1]] as const)
+        expect(keys.has(`${mxk},${myk}`)).toBe(true);
       for (const p of d.decor) if (!p.walkable) expect(keys.has(`${p.x},${p.y}`)).toBe(false); // no prop on rug
     }
     expect(sawRug).toBe(true); // at RUG_CHANCE 0.15, a rug appears within 60 seeds
@@ -280,23 +284,27 @@ describe('generateAutotiledDungeon', () => {
 
   it('partitions into rooms with interior walls, all floor connected', () => {
     let sawRooms = false;
-    for (let seed = 1; seed <= 20; seed++) {
+    for (let seed = 1; seed <= 500; seed++) {
       const d = generateAutotiledDungeon('Greystone Keep', seed, { width: 20, height: 15 });
       const interiorWalls = d.cells.filter((c) => c.kind === 'wall' && c.x > 0 && c.y > 0 && c.x < 19 && c.y < 14);
       if (interiorWalls.length > 0) sawRooms = true;
-      expect(floorConnected(d)).toBe(true); // doors keep every room reachable
+      expect(floorConnected(d)).toBe(true); // doors keep every room reachable, every seed
     }
     expect(sawRooms).toBe(true);
   });
 
-  it('exposes an arena and a monster zone inside it, all floor', () => {
-    const d = generateAutotiledDungeon('Greystone Keep', 7, { width: 20, height: 15 });
-    expect(d.arena.w).toBeGreaterThanOrEqual(5);
-    expect(d.arena.h).toBeGreaterThanOrEqual(5);
-    const m = d.monster;
-    expect(m.x >= d.arena.x && m.x + 1 < d.arena.x + d.arena.w).toBe(true);
-    expect(m.y >= d.arena.y && m.y + 1 < d.arena.y + d.arena.h).toBe(true);
-    for (let y = m.y; y <= m.y + 1; y++) for (let x = m.x; x <= m.x + 1; x++)
-      expect(d.cells.find((c) => c.x === x && c.y === y)!.kind).toBe('floor');
+  it('reserves an arena big enough for the battle, every seed', () => {
+    // Dense flavor rooms, but the arena (largest room) stays >= 7x6 so the 2x2 monster
+    // + surrounding heroes fit. Fallback keeps it >= the band floor even in rare seeds.
+    for (let seed = 1; seed <= 500; seed++) {
+      const d = generateAutotiledDungeon('Greystone Keep', seed, { width: 20, height: 15 });
+      expect(d.arena.w).toBeGreaterThanOrEqual(7);
+      expect(d.arena.h).toBeGreaterThanOrEqual(6);
+      const m = d.monster;
+      expect(m.x >= d.arena.x && m.x + 1 < d.arena.x + d.arena.w).toBe(true);
+      expect(m.y >= d.arena.y && m.y + 1 < d.arena.y + d.arena.h).toBe(true);
+      for (let y = m.y; y <= m.y + 1; y++) for (let x = m.x; x <= m.x + 1; x++)
+        expect(d.cells.find((c) => c.x === x && c.y === y)!.kind).toBe('floor');
+    }
   });
 });

@@ -11,16 +11,21 @@ export interface DecorTile {
   tags: DecorTag[];
   walkable: boolean;               // hero/monster may stand on it (rugs true; props false)
   animB?: { col: number; row: number };  // 2nd frame — captured for Build 2, not rendered now
+  // corner tiles: which corner the native art is anchored to (the renderer flips per target
+  // corner). Verified by per-quadrant pixel density on the sheet.
+  anchorRight?: boolean;
+  anchorBottom?: boolean;
 }
 
 export const DECOR_TILES: DecorTile[] = [
-  // corner — cobwebs
+  // corner — cobwebs, each anchored to a different corner on the sheet:
+  // col29 = top-left, col30 = top-right, col32 = bottom-left, col33 = symmetric.
   { col: 29, row: 2, name: 'cobweb small', placement: 'corner', walkable: false, tags: ['generic','crypt','stone','water'] },
-  { col: 30, row: 2, name: 'cobweb',       placement: 'corner', walkable: false, tags: ['generic','crypt','stone','ice'] },
-  { col: 32, row: 2, name: 'cobweb 3',     placement: 'corner', walkable: false, tags: ['generic','crypt','stone'] },
-  { col: 33, row: 2, name: 'cobweb full',  placement: 'corner', walkable: false, tags: ['crypt','stone'] }, // heavy only
-  // wall — torches (animated in Build 2)
-  { col: 41, row: 2, name: 'wall torch',   placement: 'wall', walkable: false, tags: ['fire','crypt','stone','treasure','blood'], animB: { col: 42, row: 2 } },
+  { col: 30, row: 2, name: 'cobweb',       placement: 'corner', walkable: false, tags: ['generic','crypt','stone','ice'], anchorRight: true },
+  { col: 32, row: 2, name: 'cobweb 3',     placement: 'corner', walkable: false, tags: ['generic','crypt','stone'], anchorBottom: true },
+  { col: 33, row: 2, name: 'cobweb full',  placement: 'corner', walkable: false, tags: ['crypt','stone'] }, // heavy only (symmetric)
+  // wall — torch (short wall-mounted sconce, row 1); animated
+  { col: 41, row: 1, name: 'wall torch',   placement: 'wall', walkable: false, tags: ['fire','crypt','stone','treasure','blood'], animB: { col: 42, row: 1 } },
   // floor — crypt / bones
   { col: 29, row: 1, name: 'gravestone',       placement: 'floor', walkable: false, tags: ['crypt','bones'] },
   { col: 30, row: 1, name: 'broken tombstone', placement: 'floor', walkable: false, tags: ['crypt','bones','stone'] },
@@ -30,8 +35,8 @@ export const DECOR_TILES: DecorTile[] = [
   { col: 38, row: 1, name: 'skeleton',         placement: 'floor', walkable: false, tags: ['crypt','bones'] },
   { col: 41, row: 9, name: 'skull',            placement: 'floor', walkable: false, tags: ['crypt','bones'], animB: { col: 41, row: 10 } },
   // floor — fire / forge (animated)
-  { col: 39, row: 1, name: 'flame',    placement: 'floor', walkable: false, tags: ['fire'], animB: { col: 40, row: 1 } },
-  { col: 41, row: 1, name: 'brazier',  placement: 'floor', walkable: false, tags: ['fire','treasure'], animB: { col: 42, row: 1 } },
+  { col: 39, row: 1, name: 'flame',      placement: 'floor', walkable: false, tags: ['fire'], animB: { col: 40, row: 1 } },
+  { col: 41, row: 2, name: 'floor torch', placement: 'floor', walkable: false, tags: ['fire','treasure'], animB: { col: 42, row: 2 } }, // tall free-standing torch (row 2)
   { col: 31, row: 6, name: 'cauldron', placement: 'floor', walkable: false, tags: ['fire','poison'], animB: { col: 32, row: 6 } },
   // floor — arcane (tomes, animated)
   { col: 38, row: 9, name: 'grey tome',  placement: 'floor', walkable: false, tags: ['arcane','crypt'], animB: { col: 38, row: 10 } },

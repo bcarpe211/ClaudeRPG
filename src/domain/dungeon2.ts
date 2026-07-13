@@ -70,7 +70,7 @@ export interface RenderCell {
 export interface AutoDungeon {
   width: number; height: number; dungeon: string; seed: number;
   cells: RenderCell[];
-  decor: { x: number; y: number; col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }[];
+  decor: { x: number; y: number; col: number; row: number; walkable: boolean; animB?: { col: number; row: number }; flipX?: boolean; flipY?: boolean }[];
   monster: { x: number; y: number; footprint: number };
   arena: { x: number; y: number; w: number; h: number };
 }
@@ -99,39 +99,67 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) row.push(isEdge(x, y) ? 'wall' : 'floor');
     kinds.push(row);
   }
-  // BSP: split the interior into 2-4 rooms with interior walls + a connecting door each.
+  // Room partition: the ARENA is the main feature, so carve a large arena band off one
+  // side with a single cut, then split the remaining strip into a few flavor rooms.
+  // Total 2-4 rooms, arena-dominant. Every cut records a Split; doors placed afterwards.
   interface Rect { x: number; y: number; w: number; h: number; }
   // A split's wall (pos, on the vertical/horizontal axis) plus the range perpendicular
   // to it (lo..hi) that the door may land on. Door placement is deferred (see below).
   interface Split { vertical: boolean; pos: number; lo: number; hi: number; }
-  const MIN_ROOM = 5;
-  const targetRooms = 2 + Math.floor(rng() * 3); // 2-4
-  const queue: Rect[] = [{ x: 1, y: 1, w: width - 2, h: height - 2 }];
-  const leaves: Rect[] = [];
+  const MIN_ROOM = 4;
+  const targetRooms = 2 + Math.floor(rng() * 3); // 2-4 total, arena-dominant
   const splits: Split[] = [];
-  while (leaves.length + queue.length < targetRooms && queue.length > 0) {
-    queue.sort((a, b) => b.w * b.h - a.w * a.h); // split the biggest
+  const leaves: Rect[] = [];
+  const queue: Rect[] = [];
+  // Cut `r` with a wall at absolute col/row `pos`, returning the two child rects.
+  const cutV = (r: Rect, pos: number): [Rect, Rect] => {
+    for (let y = r.y; y < r.y + r.h; y++) kinds[y][pos] = 'wall';
+    splits.push({ vertical: true, pos, lo: r.y, hi: r.y + r.h - 1 });
+    return [{ x: r.x, y: r.y, w: pos - r.x, h: r.h }, { x: pos + 1, y: r.y, w: r.x + r.w - 1 - pos, h: r.h }];
+  };
+  const cutH = (r: Rect, pos: number): [Rect, Rect] => {
+    for (let x = r.x; x < r.x + r.w; x++) kinds[pos][x] = 'wall';
+    splits.push({ vertical: false, pos, lo: r.x, hi: r.x + r.w - 1 });
+    return [{ x: r.x, y: r.y, w: r.w, h: pos - r.y }, { x: r.x, y: pos + 1, w: r.w, h: r.y + r.h - 1 - pos }];
+  };
+  // 1) Arena: a large band off one side (full width or full height), taking the bigger
+  //    portion. The rest becomes the flavor strip. Small dungeons skip the cut.
+  const interior: Rect = { x: 1, y: 1, w: width - 2, h: height - 2 };
+  let arena: Rect;
+  if (interior.w >= 12 && interior.h >= 10) {
+    if (rng() < 0.5) { // vertical cut: arena is a full-height band on one side
+      const AW = 10 + Math.floor(rng() * 3); // 10-12 wide
+      const onLeft = rng() < 0.5;
+      const vPos = onLeft ? interior.x + AW : interior.x + interior.w - 1 - AW;
+      const [l, r] = cutV(interior, vPos);
+      arena = onLeft ? l : r; leaves.push(arena); queue.push(onLeft ? r : l);
+    } else { // horizontal cut: arena is a full-width band on top or bottom
+      const AH = 8 + Math.floor(rng() * 2); // 8-9 tall
+      const onTop = rng() < 0.5;
+      const hPos = onTop ? interior.y + AH : interior.y + interior.h - 1 - AH;
+      const [t, b] = cutH(interior, hPos);
+      arena = onTop ? t : b; leaves.push(arena); queue.push(onTop ? b : t);
+    }
+  } else {
+    arena = interior; leaves.push(interior);
+  }
+  // 2) Split the remaining strip into a few flavor rooms (up to targetRooms total).
+  while (queue.length > 0) {
+    queue.sort((a, b) => b.w * b.h - a.w * a.h); // biggest first
     const r = queue.shift()!;
     const canV = r.w >= MIN_ROOM * 2 + 1;
     const canH = r.h >= MIN_ROOM * 2 + 1;
-    if (!canV && !canH) { leaves.push(r); continue; }
+    const enough = leaves.length + queue.length + 1 >= targetRooms;
+    if (!(canV || canH) || enough) { leaves.push(r); continue; }
     const vertical = canV && (!canH || r.w >= r.h);
     if (vertical) {
       const wx = r.x + MIN_ROOM + Math.floor(rng() * (r.w - 2 * MIN_ROOM)); // keeps both halves >= MIN_ROOM
-      for (let y = r.y; y < r.y + r.h; y++) kinds[y][wx] = 'wall';
-      splits.push({ vertical: true, pos: wx, lo: r.y, hi: r.y + r.h - 1 });
-      queue.push({ x: r.x, y: r.y, w: wx - r.x, h: r.h });
-      queue.push({ x: wx + 1, y: r.y, w: r.x + r.w - 1 - wx, h: r.h });
+      queue.push(...cutV(r, wx));
     } else {
       const wy = r.y + MIN_ROOM + Math.floor(rng() * (r.h - 2 * MIN_ROOM));
-      for (let x = r.x; x < r.x + r.w; x++) kinds[wy][x] = 'wall';
-      splits.push({ vertical: false, pos: wy, lo: r.x, hi: r.x + r.w - 1 });
-      queue.push({ x: r.x, y: r.y, w: r.w, h: wy - r.y });
-      queue.push({ x: r.x, y: wy + 1, w: r.w, h: r.y + r.h - 1 - wy });
+      queue.push(...cutH(r, wy));
     }
   }
-  leaves.push(...queue);
-  const arena = leaves.reduce((a, b) => (b.w * b.h > a.w * a.h ? b : a));
   // Place each split's connecting door AFTER every wall is drawn. A later, nested split's
   // own wall can cross the exact row/col an earlier split picked for its door (turning the
   // door's neighbor cell to wall), which would orphan that door and disconnect a room.
@@ -192,35 +220,38 @@ export function generateAutotiledDungeon(
 
   // 3) Decor: corner cobwebs, wall torches, and floor scatter (clear of the monster zone).
   const pools = decorFor(dungeonName);
-  const decor: { x: number; y: number; col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }[] = [];
+  const decor: { x: number; y: number; col: number; row: number; walkable: boolean; animB?: { col: number; row: number }; flipX?: boolean; flipY?: boolean }[] = [];
   const used = new Set<string>();
   const at2 = <T>(arr: T[]) => arr[Math.floor(rng() * arr.length)];
   const shuffle = <T>(arr: T[]) => {
     for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
   };
-  const place = (x: number, y: number, t: { col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }) => {
-    decor.push({ x, y, col: t.col, row: t.row, walkable: t.walkable, animB: t.animB }); used.add(`${x},${y}`);
+  const place = (x: number, y: number, t: { col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }, flip?: { flipX?: boolean; flipY?: boolean }) => {
+    decor.push({ x, y, col: t.col, row: t.row, walkable: t.walkable, animB: t.animB, flipX: flip?.flipX, flipY: flip?.flipY }); used.add(`${x},${y}`);
   };
   const mx = arena.x + Math.floor(arena.w / 2) - 1, my = arena.y + Math.floor(arena.h / 2) - 1; // monster zone (2x2) top-left, inside the arena
   const inMonster = (x: number, y: number) => x >= mx && x <= mx + 1 && y >= my && y <= my + 1;
-  // rug centerpiece (occasional) — placed FIRST so nothing overlaps it
+  // rug centerpiece (occasional) — a 4x4 rug whose centre 2x2 IS the monster zone, so the
+  // boss stands centred on it. Placed FIRST so nothing overlaps it.
   if (rng() < RUG_CHANCE) {
-    const rx = mx - 1, ry = my - 1;
+    const rx = mx - 1, ry = my - 1; // 4x4 spans (mx-1..mx+2, my-1..my+2); boss 2x2 at (mx,my) is its centre
     const rugCells: [number, number][] = [];
-    for (let dy = 0; dy < 3; dy++) for (let dx = 0; dx < 3; dx++) rugCells.push([rx + dx, ry + dy]);
+    for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) rugCells.push([rx + dx, ry + dy]);
     const fits = rugCells.every(([x, y]) => x >= 1 && y >= 1 && x <= width - 2 && y <= height - 2 && kinds[y][x] === 'floor');
-    if (fits) {
-      const rug = rugFor(dungeonName, rng);
-      for (const b of rug.border) place(rx + b.dx, ry + b.dy, { col: b.col, row: b.row, walkable: true });
-      place(rx + 1, ry + 1, { col: rug.crest.col, row: rug.crest.row, walkable: true }); // center crest
-    }
+    if (fits) for (const b of rugFor(dungeonName)) place(rx + b.dx, ry + b.dy, { col: b.col, row: b.row, walkable: true });
   }
-  // corners
+  // corners — flip each cobweb so it fans INTO the room from its corner. flipX/flipY are
+  // set only when the target corner differs from the tile's native anchor on that axis.
   if (pools.corner.length) {
     const p = COBWEB_HEAVY.has(dungeonName) ? 0.85 : 0.5;
     for (const rm of leaves)
-      for (const [cx, cy] of [[rm.x, rm.y], [rm.x + rm.w - 1, rm.y], [rm.x, rm.y + rm.h - 1], [rm.x + rm.w - 1, rm.y + rm.h - 1]] as const)
-        if (kinds[cy][cx] === 'floor' && !used.has(`${cx},${cy}`) && rng() < p) place(cx, cy, at2(pools.corner));
+      for (const [cx, cy, isRight, isBottom] of [
+        [rm.x, rm.y, false, false], [rm.x + rm.w - 1, rm.y, true, false],
+        [rm.x, rm.y + rm.h - 1, false, true], [rm.x + rm.w - 1, rm.y + rm.h - 1, true, true]] as const)
+        if (kinds[cy][cx] === 'floor' && !used.has(`${cx},${cy}`) && rng() < p) {
+          const t = at2(pools.corner);
+          place(cx, cy, t, { flipX: isRight !== !!t.anchorRight, flipY: isBottom !== !!t.anchorBottom });
+        }
   }
   // wall torches (non-corner border walls, not doors)
   if (pools.wall.length) {

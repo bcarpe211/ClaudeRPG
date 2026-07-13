@@ -41,8 +41,11 @@ export const WALL_COLS = {
   isolated: 10,   // double-capped standalone block (beveled all round) — a 1-tile wall between two doorways
   crackedH: 27,   // cracked horizontal run
   crackedV: 26,   // cracked vertical run
-  tOpenN: 21, tOpenE: 22, tOpenS: 23, tOpenW: 24, // T-junctions, named by the OPEN side
-  cross: 25,   // 4-way cross
+  // T-junctions, named by the OPEN side (the one direction WITHOUT a wall neighbour).
+  // Columns confirmed visually against in-context mockups: col 21 = cross,
+  // 22 = ⊤ (open N), 23 = ⊣ (open E), 24 = ⊢ (open W), 25 = ⊥ (open S).
+  tOpenN: 22, tOpenE: 23, tOpenS: 25, tOpenW: 24,
+  cross: 21,   // 4-way cross
 } as const;
 
 // Top-fade wall shadow: a semi-transparent tile drawn OVER a floor cell that has a

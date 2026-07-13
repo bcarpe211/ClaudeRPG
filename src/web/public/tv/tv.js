@@ -115,7 +115,16 @@ function buildBackground() {
     for (let y = 0; y < layout.height; y++)
       for (let x = 0; x < layout.width; x++)
         if (layout.cells[y][x].shadow) put(SHADOW.col, SHADOW.row, x, y);
-    for (const d of layout.decor) if (!d.animB) put(d.col, d.row, d.x, d.y);
+    // static decor; cobwebs carry flipX/flipY so each corner web fans into the room
+    for (const d of layout.decor) {
+      if (d.animB) continue;
+      if (!d.flipX && !d.flipY) { put(d.col, d.row, d.x, d.y); continue; }
+      b.save();
+      b.translate((d.x + (d.flipX ? 1 : 0)) * tilePx, (d.y + (d.flipY ? 1 : 0)) * tilePx);
+      b.scale(d.flipX ? -1 : 1, d.flipY ? -1 : 1);
+      b.drawImage(sheet, d.col * TILE, d.row * TILE, TILE, TILE, 0, 0, tilePx, tilePx);
+      b.restore();
+    }
   };
   // draw now, and again once the sheet finishes loading (one shared image)
   draw();
@@ -143,6 +152,21 @@ evt.addEventListener('state', (e) => {
 function drawSprite(im, cx, cy, w, h) {
   ctx.drawImage(im, Math.round(cx - w / 2), Math.round(cy - h), w, h);
 }
+
+// Ground-shadow ellipse under an actor. Crop just the flat ellipse band from the shadow tile
+// and CENTRE it on the actor's foot line `feetY` (width `w`): its lower half peeks out below
+// the feet, its upper half tucks behind the sprite. `feetY` sits a little above the tile
+// bottom so the ellipse stays on the actor's own tile.
+function groundShadow(sizeKey, cx, feetY, w) {
+  const sheet = img('/sheet/world.png');
+  const sh = MSHADOW[sizeKey] || MSHADOW.M;
+  const shH = Math.max(4, Math.round(w * 0.32));
+  ctx.drawImage(sheet, sh.col * TILE, sh.row * TILE + 16, TILE, 8,
+    Math.round(cx - w / 2), Math.round(feetY - shH / 2), w, shH);
+}
+// Sprite feet sit at the very bottom of the 24px source (row ~23), so the foot line is a bit
+// above the tile bottom — leaving room for the shadow's lower half to show on-tile.
+function footLine(py) { return py - Math.round(TILE * scale * 0.1); }
 
 // text with a manual drop shadow, offset proportional to the font size so bigger
 // text gets a bigger shadow (keeps default alphabetic baseline)
@@ -203,27 +227,23 @@ function tileToField(x, y) { return { px: panelX + x * tilePx, py: panelY + y * 
 
 function drawMonster(t) {
   const e = state.encounter; if (!e || !layout) return;
-  const sheet = img('/sheet/world.png');
   const m = layout.monster;
   const fp = e.footprint;                       // 1 or 2
   const visScale = fp === 2 ? 2.2 : 1.4;        // bosses loom larger
   const size = tilePx * visScale;
-  const { px, py } = tileToField(m.x + fp / 2, m.y + fp); // feet baseline (drawSprite anchors bottom)
-  const shadow = (cx, feetY, w) => {
-    const sh = MSHADOW[e.size] || MSHADOW.M;
-    const shW = w * 0.8, shH = shW * 0.4;
-    ctx.drawImage(sheet, sh.col * TILE, sh.row * TILE, TILE, TILE,
-      Math.round(cx - shW / 2), Math.round(feetY - shH / 2), shW, shH);
-  };
-  const raise = e.flying ? Math.round(tilePx * 0.45) : 0;
-  shadow(px, py, size);
-  drawSprite(animImg(e.creatureUrl, 100, t), px, py - raise, size, size);
+  const { px, py } = tileToField(m.x + fp / 2, m.y + fp); // py = bottom edge of the footprint
+  const groundY = footLine(py);                 // foot line, a bit above the footprint's bottom
+  const shadowW = fp * tilePx * 0.85;           // ~footprint-wide, not sprite-wide
+  // grounded: feet on the shadow; flying: shadow stays on the ground, sprite lifts high above
+  const cy = e.flying ? groundY - Math.round(tilePx * 0.5) : groundY;
+  groundShadow(e.size, px, groundY, shadowW);
+  drawSprite(animImg(e.creatureUrl, 100, t), px, cy, size, size);
   // pack: a couple of small duplicates beside it, each with its own small shadow
   if (e.kind === 'pack') {
     for (let i = 1; i <= Math.min(3, e.packCount - 1); i++) {
       const dx = px + i * tilePx * 0.6, dw = size * 0.7;
-      shadow(dx, py, dw);
-      drawSprite(animImg(e.creatureUrl, 100 + i, t), dx, py - raise, dw, dw);
+      groundShadow(e.size, dx, groundY, tilePx * 0.7);
+      drawSprite(animImg(e.creatureUrl, 100 + i, t), dx, cy, dw, dw);
     }
   }
 }
@@ -233,10 +253,12 @@ function drawHeroes(t) {
     if (p.x === null) continue;
     const a = anim.get(p.id);
     const lunge = a && a.until > performance.now() ? 0.25 : 0;
-    const { px, py } = tileToField(p.x + 0.5, p.y + 1 + lunge);
+    const { px, py } = tileToField(p.x + 0.5, p.y + 1); // py = bottom edge of the hero's tile
     const w = 26 * scale, h = 28 * scale;
+    const groundY = footLine(py);                        // foot line, a bit above the tile bottom
+    groundShadow('M', px, groundY, Math.round(tilePx * 0.66)); // medium shadow centred on the feet
     if (a && a.until > performance.now()) ctx.globalAlpha = 0.85;
-    drawSprite(animImg(p.avatarUrl, p.id, t), px, py, w, h);
+    drawSprite(animImg(p.avatarUrl, p.id, t), px, groundY + lunge * tilePx, w, h);
     ctx.globalAlpha = 1;
   }
 }

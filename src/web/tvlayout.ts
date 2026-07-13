@@ -15,7 +15,7 @@ export interface TvLayout {
   doors: { x: number; y: number }[];
   monster: { x: number; y: number; footprint: number };
   heroSlots: { x: number; y: number }[];
-  decor: { x: number; y: number; col: number; row: number; animB?: { col: number; row: number } }[];
+  decor: { x: number; y: number; col: number; row: number; animB?: { col: number; row: number }; flipX?: boolean; flipY?: boolean }[];
 }
 
 const FALLBACK_DUNGEON = 'Greystone Keep';
@@ -76,7 +76,8 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
   // Hero slots: shuffled arena floor cells clear of the monster zone, so the
   // whole co-op battle (monster + heroes) stays in one room. Own deterministic
   // rng (dungeon2 doesn't expose its stream).
-  const blocked = new Set(auto.decor.filter((d) => !d.walkable).map((d) => `${d.x},${d.y}`));
+  // Heroes avoid every decor cell — props AND the walkable rug (the boss owns the rug).
+  const blocked = new Set(auto.decor.map((d) => `${d.x},${d.y}`));
   const A = auto.arena;
   const candidates: { x: number; y: number }[] = [];
   for (let y = A.y; y < A.y + A.h; y++)
@@ -89,7 +90,7 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
   }
   const heroSlots = candidates.slice(0, Math.min(MAX_HERO_SLOTS, candidates.length));
 
-  const decor = auto.decor.map((p) => ({ x: p.x, y: p.y, col: p.col, row: p.row, animB: p.animB }));
+  const decor = auto.decor.map((p) => ({ x: p.x, y: p.y, col: p.col, row: p.row, animB: p.animB, flipX: p.flipX, flipY: p.flipY }));
 
   return { dungeonId: gs.current_dungeon_id, theme: name, width, height, cells, doors, monster, heroSlots, decor };
 }
