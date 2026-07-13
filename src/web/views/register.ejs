@@ -15,10 +15,11 @@
     </select>
 
     <label>Class / avatar</label>
-    <input type="hidden" name="class_key" id="class_key" value="knight" />
+    <% var sel = typeof selected !== 'undefined' ? selected : 'knight'; %>
+    <input type="hidden" name="class_key" id="class_key" value="<%= sel %>" />
     <div class="avatars">
       <% classes.forEach(function(c, i) { %>
-        <div class="avatar <%= i === 0 ? 'selected' : '' %>"
+        <div class="avatar <%= c.key === sel ? 'selected' : '' %>"
              data-key="<%= c.key %>" onclick="pick(this)">
           <img src="<%= c.spriteM %>" data-sprite-m="<%= c.spriteM %>"
                data-sprite-f="<%= c.spriteF %>" alt="<%= c.name %>" />

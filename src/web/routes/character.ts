@@ -46,8 +46,7 @@ export function registerCharacterRoutes(
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({
           token: player.auth_token,
-          host: config.otelHost,
-          port: config.port,
+          endpoint: config.publicUrl,
         }),
       }),
     );
