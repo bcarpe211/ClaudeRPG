@@ -1,0 +1,11 @@
+# ClaudeRPG reverse proxy with automatic TLS via Cloudflare DNS-01.
+# DNS-01 works even though the host is an internal IP (no inbound reachability
+# needed for issuance). Caddy serves 443 (+ 80 -> https redirect) and proxies to
+# the Node app on :8080, including the OTLP metrics path (POST /v1/metrics).
+clauderpg.redlattice.com {
+	reverse_proxy localhost:8080
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+	encode zstd gzip
+}
