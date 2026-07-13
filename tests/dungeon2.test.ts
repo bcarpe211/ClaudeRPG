@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { generateAutotiledDungeon } from '../src/domain/dungeon2';
 import { DOORS, WALL_COLS, SHEET } from '../src/domain/tilesheet';
 import { decorFor } from '../src/domain/decor';
+import { RED_RUG, BLUE_RUG } from '../src/domain/rugs';
 
 const dungeon = 'Greystone Keep';
 
@@ -176,9 +177,33 @@ describe('generateAutotiledDungeon', () => {
     const mx = Math.floor(20 / 2) - 1, my = Math.floor(15 / 2) - 1;
     for (const p of d.decor) {
       expect(typeof p.walkable).toBe('boolean');
-      const inMonster = p.x >= mx && p.x <= mx + 1 && p.y >= my && p.y <= my + 1;
-      expect(inMonster).toBe(false);
+      // non-walkable props avoid the monster zone; walkable rug tiles may sit under it
+      if (!p.walkable) {
+        const inMonster = p.x >= mx && p.x <= mx + 1 && p.y >= my && p.y <= my + 1;
+        expect(inMonster).toBe(false);
+      }
     }
+  });
+  it('occasionally places a walkable 3x3 rug centered on the monster zone', () => {
+    const W = 20, H = 15;
+    const mx = Math.floor(W / 2) - 1, my = Math.floor(H / 2) - 1;
+    const rx = mx - 1, ry = my - 1;
+    const crestKeys = new Set([...RED_RUG.crests, ...BLUE_RUG.crests].map((c) => `${c.col},${c.row}`));
+    let sawRug = false;
+    for (let seed = 1; seed <= 60 && !sawRug; seed++) {
+      const d = generateAutotiledDungeon('Emberforge', seed, { width: W, height: H }); // warm -> red rug
+      const walk = d.decor.filter((p) => p.walkable);
+      if (walk.length === 0) continue;
+      sawRug = true;
+      expect(walk.length).toBe(9);                     // 8 border + 1 crest
+      const keys = new Set(walk.map((p) => `${p.x},${p.y}`));
+      for (let dy = 0; dy < 3; dy++) for (let dx = 0; dx < 3; dx++)
+        expect(keys.has(`${rx + dx},${ry + dy}`)).toBe(true);  // full 3x3 covered
+      const center = walk.find((p) => p.x === rx + 1 && p.y === ry + 1)!;
+      expect(crestKeys.has(`${center.col},${center.row}`)).toBe(true); // center is a crest
+      for (const p of d.decor) if (!p.walkable) expect(keys.has(`${p.x},${p.y}`)).toBe(false); // no prop on rug
+    }
+    expect(sawRug).toBe(true); // at RUG_CHANCE 0.15, a rug appears within 60 seeds
   });
   it('corner decor sits at an interior corner and uses a corner tile', () => {
     const cornerKeys = new Set(decorFor(dungeon).corner.map((t) => `${t.col},${t.row}`));

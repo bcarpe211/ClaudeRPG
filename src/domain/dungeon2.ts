@@ -3,6 +3,7 @@ import { WALL_COLS, DOORS, pickWeighted, type TileCoord } from './tilesheet';
 import { getDungeon, chooseGroup, pickCell, mainTile, type Dungeon, type FloorGroup } from './floorgroups';
 import { type LogicalKind } from './autotile';
 import { decorFor, COBWEB_HEAVY } from './decor';
+import { rugFor, RUG_CHANCE } from './rugs';
 
 // mulberry32's first outputs are strongly correlated for small sequential
 // seeds (1,2,3 all yield a high first value). Feeding the seed through an
@@ -133,6 +134,20 @@ export function generateAutotiledDungeon(
   const place = (x: number, y: number, t: { col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }) => {
     decor.push({ x, y, col: t.col, row: t.row, walkable: t.walkable, animB: t.animB }); used.add(`${x},${y}`);
   };
+  const mx = Math.floor(width / 2) - 1, my = Math.floor(height / 2) - 1; // monster zone (2x2) top-left
+  const inMonster = (x: number, y: number) => x >= mx && x <= mx + 1 && y >= my && y <= my + 1;
+  // rug centerpiece (occasional) — placed FIRST so nothing overlaps it
+  if (rng() < RUG_CHANCE) {
+    const rx = mx - 1, ry = my - 1;
+    const rugCells: [number, number][] = [];
+    for (let dy = 0; dy < 3; dy++) for (let dx = 0; dx < 3; dx++) rugCells.push([rx + dx, ry + dy]);
+    const fits = rugCells.every(([x, y]) => x >= 1 && y >= 1 && x <= width - 2 && y <= height - 2 && kinds[y][x] === 'floor');
+    if (fits) {
+      const rug = rugFor(dungeonName, rng);
+      for (const b of rug.border) place(rx + b.dx, ry + b.dy, { col: b.col, row: b.row, walkable: true });
+      place(rx + 1, ry + 1, { col: rug.crest.col, row: rug.crest.row, walkable: true }); // center crest
+    }
+  }
   // corners
   if (pools.corner.length) {
     const p = COBWEB_HEAVY.has(dungeonName) ? 0.85 : 0.5;
@@ -151,8 +166,6 @@ export function generateAutotiledDungeon(
     for (let i = 0; i < n && i < wallCells.length; i++) place(wallCells[i].x, wallCells[i].y, at2(pools.wall));
   }
   // floor scatter, avoiding the fixed 2x2 monster zone + already-used cells
-  const mx = Math.floor(width / 2) - 1, my = Math.floor(height / 2) - 1;
-  const inMonster = (x: number, y: number) => x >= mx && x <= mx + 1 && y >= my && y <= my + 1;
   const floorCells: { x: number; y: number }[] = [];
   for (let y = 1; y < height - 1; y++)
     for (let x = 1; x < width - 1; x++)
