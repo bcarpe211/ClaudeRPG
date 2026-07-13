@@ -77,10 +77,24 @@ Themed decor now renders in `/tv`. Spec/plan/reference:
       `dungeon2` placement; rides the Build 1 decor pipeline, no tv.js change).
       Spec/plan: `docs/superpowers/{specs,plans}/2026-07-12-rug-centerpieces*`.
 
+## 17. Multi-room dungeons ✅ DONE (2026-07-12)
+BSP-partitioned dungeons (2–4 rooms) with autotiled interior walls + door
+connections; largest room = "arena" holding the monster + all heroes (co-op
+battle stays cohesive), others decorated flavor. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-12-dungeon-rooms*`.
+- [x] `pickWall` T/cross junctions (`WALL_COLS` cols 21–25); BSP partition + door
+      per split (connectivity verified over 9000 seeds); `dungeon2` exposes
+      `monster`+`arena`; `tvlayout` pins monster+heroes to the arena. Visual-verified.
+- [ ] (Follow-ons) corridors + smaller rooms; per-room *themed* decor sets;
+      interior *door* variety.
+
 ## 7. Lively, colorful dungeon floor ⏳ partial (2026-07-12)
 - [x] Bumped `ACCENT_RATE` 6%→11% + conservative #14 palette tuning (cinder_rock/
       verdant_slab 2nd main→accent; accents added to a few flat groups;
       crimson_mosaic compat restricted).
+- [ ] **Garish floors** seen in rooms visual pass (e.g. a bright-yellow floor group
+      under Greystone) — some floor groups / compat picks read too loud; revisit
+      as part of the palette tuning.
 - [ ] Finish the flat-floor groups — ~12 groups still have empty `accents` (no
       confidently same-family tile found without a visual pass); enrich them for
       full "wallpaper-quality" floors. Overlaps #14.
