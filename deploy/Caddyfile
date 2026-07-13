@@ -6,6 +6,11 @@ clauderpg.redlattice.com {
 	reverse_proxy localhost:8080
 	tls {
 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		# redlattice.com is split-horizon: the Pi's default resolver returns the
+		# internal AD nameservers (unreachable subnet). Force the ACME propagation
+		# check to use public resolvers, which query the Cloudflare zone where the
+		# DNS-01 TXT record actually lives.
+		resolvers 1.1.1.1 8.8.8.8
 	}
 	encode zstd gzip
 }
