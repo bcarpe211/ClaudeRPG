@@ -71,6 +71,8 @@ export interface AutoDungeon {
   width: number; height: number; dungeon: string; seed: number;
   cells: RenderCell[];
   decor: { x: number; y: number; col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }[];
+  monster: { x: number; y: number; footprint: number };
+  arena: { x: number; y: number; w: number; h: number };
 }
 export interface GenOpts { width?: number; height?: number; }
 
@@ -97,6 +99,60 @@ export function generateAutotiledDungeon(
     for (let x = 0; x < width; x++) row.push(isEdge(x, y) ? 'wall' : 'floor');
     kinds.push(row);
   }
+  // BSP: split the interior into 2-4 rooms with interior walls + a connecting door each.
+  interface Rect { x: number; y: number; w: number; h: number; }
+  // A split's wall (pos, on the vertical/horizontal axis) plus the range perpendicular
+  // to it (lo..hi) that the door may land on. Door placement is deferred (see below).
+  interface Split { vertical: boolean; pos: number; lo: number; hi: number; }
+  const MIN_ROOM = 5;
+  const targetRooms = 2 + Math.floor(rng() * 3); // 2-4
+  const queue: Rect[] = [{ x: 1, y: 1, w: width - 2, h: height - 2 }];
+  const leaves: Rect[] = [];
+  const splits: Split[] = [];
+  while (leaves.length + queue.length < targetRooms && queue.length > 0) {
+    queue.sort((a, b) => b.w * b.h - a.w * a.h); // split the biggest
+    const r = queue.shift()!;
+    const canV = r.w >= MIN_ROOM * 2 + 1;
+    const canH = r.h >= MIN_ROOM * 2 + 1;
+    if (!canV && !canH) { leaves.push(r); continue; }
+    const vertical = canV && (!canH || r.w >= r.h);
+    if (vertical) {
+      const wx = r.x + MIN_ROOM + Math.floor(rng() * (r.w - 2 * MIN_ROOM)); // keeps both halves >= MIN_ROOM
+      for (let y = r.y; y < r.y + r.h; y++) kinds[y][wx] = 'wall';
+      splits.push({ vertical: true, pos: wx, lo: r.y, hi: r.y + r.h - 1 });
+      queue.push({ x: r.x, y: r.y, w: wx - r.x, h: r.h });
+      queue.push({ x: wx + 1, y: r.y, w: r.x + r.w - 1 - wx, h: r.h });
+    } else {
+      const wy = r.y + MIN_ROOM + Math.floor(rng() * (r.h - 2 * MIN_ROOM));
+      for (let x = r.x; x < r.x + r.w; x++) kinds[wy][x] = 'wall';
+      splits.push({ vertical: false, pos: wy, lo: r.x, hi: r.x + r.w - 1 });
+      queue.push({ x: r.x, y: r.y, w: r.w, h: wy - r.y });
+      queue.push({ x: r.x, y: wy + 1, w: r.w, h: r.y + r.h - 1 - wy });
+    }
+  }
+  leaves.push(...queue);
+  const arena = leaves.reduce((a, b) => (b.w * b.h > a.w * a.h ? b : a));
+  // Place each split's connecting door AFTER every wall is drawn. A later, nested split's
+  // own wall can cross the exact row/col an earlier split picked for its door (turning the
+  // door's neighbor cell to wall), which would orphan that door and disconnect a room.
+  // Choosing from the *final* wall layout — restricted to rows/cols still open on both
+  // sides — guarantees every door actually connects floor to floor.
+  for (const s of splits) {
+    const candidates: number[] = [];
+    for (let p = s.lo + 1; p <= s.hi - 1; p++) {
+      const a = s.vertical ? kinds[p][s.pos - 1] : kinds[s.pos - 1][p];
+      const b = s.vertical ? kinds[p][s.pos + 1] : kinds[s.pos + 1][p];
+      if (a === 'floor' && b === 'floor') candidates.push(p);
+    }
+    const at = candidates.length ? candidates[Math.floor(rng() * candidates.length)] : Math.floor((s.lo + s.hi) / 2);
+    if (candidates.length === 0) {
+      // Degenerate case only (dungeon too small for MIN_ROOM headroom): force the
+      // neighbor cells open so the door still connects both sides.
+      if (s.vertical) { kinds[at][s.pos - 1] = 'floor'; kinds[at][s.pos + 1] = 'floor'; }
+      else { kinds[s.pos - 1][at] = 'floor'; kinds[s.pos + 1][at] = 'floor'; }
+    }
+    if (s.vertical) kinds[at][s.pos] = 'door'; else kinds[s.pos][at] = 'door';
+  }
   // doors: 2-3 non-corner border cells, never adjacent to another door.
   const isDoorAt = (xx: number, yy: number) =>
     xx >= 0 && yy >= 0 && xx < width && yy < height && kinds[yy][xx] === 'door';
@@ -111,7 +167,10 @@ export function generateAutotiledDungeon(
     else if (side === 1) { y = height - 1; x = 1 + Math.floor(rng() * (width - 2)); }
     else if (side === 2) { x = 0; y = 1 + Math.floor(rng() * (height - 2)); }
     else { x = width - 1; y = 1 + Math.floor(rng() * (height - 2)); }
-    if (isCorner(x, y) || kinds[y][x] === 'door' || hasAdjacentDoor(x, y)) continue;
+    const innerWall =
+      (side === 0 && kinds[1][x] === 'wall') || (side === 1 && kinds[height - 2][x] === 'wall') ||
+      (side === 2 && kinds[y][1] === 'wall') || (side === 3 && kinds[y][width - 2] === 'wall');
+    if (isCorner(x, y) || kinds[y][x] === 'door' || hasAdjacentDoor(x, y) || innerWall) continue;
     kinds[y][x] = 'door'; placed++;
   }
 
@@ -142,7 +201,7 @@ export function generateAutotiledDungeon(
   const place = (x: number, y: number, t: { col: number; row: number; walkable: boolean; animB?: { col: number; row: number } }) => {
     decor.push({ x, y, col: t.col, row: t.row, walkable: t.walkable, animB: t.animB }); used.add(`${x},${y}`);
   };
-  const mx = Math.floor(width / 2) - 1, my = Math.floor(height / 2) - 1; // monster zone (2x2) top-left
+  const mx = arena.x + Math.floor(arena.w / 2) - 1, my = arena.y + Math.floor(arena.h / 2) - 1; // monster zone (2x2) top-left, inside the arena
   const inMonster = (x: number, y: number) => x >= mx && x <= mx + 1 && y >= my && y <= my + 1;
   // rug centerpiece (occasional) — placed FIRST so nothing overlaps it
   if (rng() < RUG_CHANCE) {
@@ -159,9 +218,9 @@ export function generateAutotiledDungeon(
   // corners
   if (pools.corner.length) {
     const p = COBWEB_HEAVY.has(dungeonName) ? 0.85 : 0.5;
-    for (const [cx, cy] of [[1, 1], [width - 2, 1], [1, height - 2], [width - 2, height - 2]] as const) {
-      if (kinds[cy][cx] === 'floor' && rng() < p) place(cx, cy, at2(pools.corner));
-    }
+    for (const rm of leaves)
+      for (const [cx, cy] of [[rm.x, rm.y], [rm.x + rm.w - 1, rm.y], [rm.x, rm.y + rm.h - 1], [rm.x + rm.w - 1, rm.y + rm.h - 1]] as const)
+        if (kinds[cy][cx] === 'floor' && !used.has(`${cx},${cy}`) && rng() < p) place(cx, cy, at2(pools.corner));
   }
   // wall torches (non-corner border walls, not doors)
   if (pools.wall.length) {
@@ -184,5 +243,6 @@ export function generateAutotiledDungeon(
     for (let i = 0; i < n && i < floorCells.length; i++) place(floorCells[i].x, floorCells[i].y, at2(pools.floor));
   }
 
-  return { width, height, dungeon: dungeonName, seed, cells, decor };
+  return { width, height, dungeon: dungeonName, seed, cells, decor,
+           monster: { x: mx, y: my, footprint: 2 }, arena };
 }
