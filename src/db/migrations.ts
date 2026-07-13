@@ -108,4 +108,20 @@ export const migrations: Migration[] = [
       INSERT INTO game_state (id, paused) VALUES (1, 1);
     `,
   },
+  {
+    id: '005_monster_attacks',
+    sql: `
+      CREATE TABLE monster_attacks (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        encounter_id INTEGER NOT NULL,
+        player_id    INTEGER NOT NULL,
+        kind         TEXT NOT NULL,               -- 'gold' | 'debuff'
+        gold_delta   INTEGER NOT NULL DEFAULT 0,  -- gold stolen (0 for debuff)
+        ts           INTEGER NOT NULL,
+        FOREIGN KEY (encounter_id) REFERENCES encounters(id) ON DELETE CASCADE,
+        FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE
+      );
+      CREATE INDEX idx_monster_attacks_encounter ON monster_attacks (encounter_id);
+    `,
+  },
 ];
