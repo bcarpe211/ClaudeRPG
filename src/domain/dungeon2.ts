@@ -139,9 +139,9 @@ export function generateAutotiledDungeon(
   // rug centerpiece (occasional) — placed FIRST so nothing overlaps it
   if (rng() < RUG_CHANCE) {
     const rx = mx - 1, ry = my - 1;
-    const cells: [number, number][] = [];
-    for (let dy = 0; dy < 3; dy++) for (let dx = 0; dx < 3; dx++) cells.push([rx + dx, ry + dy]);
-    const fits = cells.every(([x, y]) => x >= 1 && y >= 1 && x <= width - 2 && y <= height - 2 && kinds[y][x] === 'floor');
+    const rugCells: [number, number][] = [];
+    for (let dy = 0; dy < 3; dy++) for (let dx = 0; dx < 3; dx++) rugCells.push([rx + dx, ry + dy]);
+    const fits = rugCells.every(([x, y]) => x >= 1 && y >= 1 && x <= width - 2 && y <= height - 2 && kinds[y][x] === 'floor');
     if (fits) {
       const rug = rugFor(dungeonName, rng);
       for (const b of rug.border) place(rx + b.dx, ry + b.dy, { col: b.col, row: b.row, walkable: true });
