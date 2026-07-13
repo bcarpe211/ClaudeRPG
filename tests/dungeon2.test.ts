@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateAutotiledDungeon } from '../src/domain/dungeon2';
-import { DOORS, WALL_COLS } from '../src/domain/tilesheet';
+import { DOORS, WALL_COLS, SHEET } from '../src/domain/tilesheet';
 import { decorFor } from '../src/domain/decor';
 
 const dungeon = 'Greystone Keep';
@@ -154,6 +154,17 @@ describe('generateAutotiledDungeon', () => {
       }
     }
     expect(sawDoor).toBe(true);
+  });
+  it('threads animB onto animated decor cells (in-sheet); static cells have none', () => {
+    const d = generateAutotiledDungeon('Ossuary Pale', 7, { width: 20, height: 15 });
+    const animated = d.decor.filter((p) => p.animB);
+    expect(animated.length).toBeGreaterThan(0); // Ossuary Pale places wall torches (always) + skull/tomes
+    for (const p of animated) {
+      expect(Number.isInteger(p.animB!.col) && p.animB!.col >= 0 && p.animB!.col < SHEET.cols).toBe(true);
+      expect(Number.isInteger(p.animB!.row) && p.animB!.row >= 0 && p.animB!.row < SHEET.rows).toBe(true);
+    }
+    // some cells are static (no animB) — e.g. bones/urns
+    expect(d.decor.some((p) => !p.animB)).toBe(true);
   });
   it('labels the sample with the dungeon name', () => {
     const d = generateAutotiledDungeon(dungeon, 1, { width: 10, height: 8 });
