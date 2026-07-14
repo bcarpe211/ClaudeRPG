@@ -284,12 +284,14 @@ Extend the landing dungeon-corridor look (torch-lit wall border, background +
 torch glow, side loot-float — but *not behind content*) to the rest of the pages.
 Decomposed into a foundation spec + per-cohort follow-ups (approach A).
 Spec 1: `docs/superpowers/specs/2026-07-14-dungeon-shell-design-language-design.md`.
-- [ ] **Spec 1 — foundation + player cohort:** shared `dungeon.css` design system
-      (tokens/background/frame/loot/primitives) + `layout.ejs` shell with a
-      `full`/`lite` frame variant + gutter loot rails (hide below ~1100px) +
-      refactor landing onto the shell + full redesign of the 4 player pages
-      (register, registered, character-login, character-sheet). Admin/dev get the
-      lite frame immediately.
+- [x] **Spec 1 — foundation + player cohort ✅ DONE (2026-07-14, #18 merge):**
+      shared `dungeon.css` design system (tokens/background/frame/loot/primitives)
+      + `layout.ejs` shell with a `full`/`lite` frame variant + gutter loot rails
+      (hide below 1180px) + landing refactored onto the shell (one source of truth,
+      `renderStandalone` removed) + full redesign of the 4 player pages (register,
+      registered, character-login, character-sheet). Admin/dev get the lite frame.
+      `style.css` retired. Plan: `docs/superpowers/plans/2026-07-14-dungeon-shell-design-language.md`.
+      Controller visual-verified live (landing/character-sheet/register/admin-login).
 - [ ] **Spec 2 (follow-up)** — admin cohort bespoke redesign (login/players/
       player-edit/settings).
 - [ ] **Spec 3 (follow-up)** — dev-tools cohort (catalog, dungeon-preview).
