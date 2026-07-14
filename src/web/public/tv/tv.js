@@ -12,6 +12,13 @@ const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
 const ANIM_MS = 600;  // creature/hero A/B flip period (~0.6s)
 const ANIM_ROW = 18;  // creatures_24x24 A/B partner offset (mirrors anim.js ROW)
 
+// Retaliation FX (fx_32x32 impact frames; fx_24x24 persistent debuff badge)
+const FX = {
+  gold:   ['/sprites/fx_32x32/oryx_16bit_fantasy_fx_83.png', '/sprites/fx_32x32/oryx_16bit_fantasy_fx_84.png'],
+  debuff: ['/sprites/fx_32x32/oryx_16bit_fantasy_fx_11.png', '/sprites/fx_32x32/oryx_16bit_fantasy_fx_12.png'],
+};
+const DEBUFF_BADGE = '/sprites/fx_24x24/oryx_16bit_fantasy_fx2_45.png';
+
 // Compact number: 999, 1.2K, 12.4K, 124K, 3.2M, 1.1B, 4.5T. Sign-preserving.
 // (mirrors formatCompact in src/domain/format.ts; tv.js has no imports)
 function fmt(n) {
@@ -59,6 +66,7 @@ let sidebarW = 0, fieldX = 0;
 let panelX = 0, panelY = 0, panelW = 0, panelH = 0; // dungeon panel rect
 const anim = new Map();  // playerId -> {until} for swing flashes
 const floaters = [];     // {x,y,text,born}
+let monsterHit = null;   // {playerId, kind, amount, born} — last monster counter-attack
 
 function computeScale() {
   const vw = canvas.width, vh = canvas.height;
@@ -146,8 +154,31 @@ evt.addEventListener('state', (e) => {
       }
     }
   }
+  // detect a new monster counter-attack -> trigger flinch/FX/floater (once per id)
+  if (state && next.monsterAttack &&
+      (!state.monsterAttack || next.monsterAttack.id !== state.monsterAttack.id)) {
+    const ma = next.monsterAttack;
+    monsterHit = { playerId: ma.playerId, kind: ma.kind, amount: ma.amount, born: performance.now() };
+    const tp = next.players.find((p) => p.id === ma.playerId);
+    if (tp && tp.x !== null) {
+      const text = ma.kind === 'gold' ? (ma.amount > 0 ? '-' + fmt(ma.amount) + 'g' : '') : 'WEAKENED';
+      floaters.push({ x: tp.x, y: tp.y, text, born: performance.now(),
+        color: ma.kind === 'gold' ? '#ffd36a' : '#ff5a5a' });
+    }
+  }
   state = next;
 });
+
+// Unit vector from a hero tile toward the monster centre; {x:0,y:0} if none/coincident.
+function dirToMonster(hx, hy) {
+  const m = layout && layout.monster;
+  if (!m) return { x: 0, y: 0 };
+  const fp = (state && state.encounter && state.encounter.footprint) || 1;
+  const dx = (m.x + fp / 2) - (hx + 0.5);
+  const dy = (m.y + fp / 2) - (hy + 0.5);
+  const len = Math.hypot(dx, dy);
+  return len < 0.001 ? { x: 0, y: 0 } : { x: dx / len, y: dy / len };
+}
 
 function drawSprite(im, cx, cy, w, h) {
   ctx.drawImage(im, Math.round(cx - w / 2), Math.round(cy - h), w, h);
@@ -237,7 +268,21 @@ function drawMonster(t) {
   // grounded: feet on the shadow; flying: shadow stays on the ground, sprite lifts high above
   const cy = e.flying ? groundY - Math.round(tilePx * 0.5) : groundY;
   groundShadow(e.size, px, groundY, shadowW);
-  drawSprite(animImg(e.creatureUrl, 100, t), px, cy, size, size);
+  // lunge toward the player the monster just struck (recoil in and back out)
+  let mlx = 0, mly = 0;
+  if (monsterHit) {
+    const age = performance.now() - monsterHit.born;
+    const tp = state.players.find((p) => p.id === monsterHit.playerId);
+    if (age < 450 && tp && tp.x !== null) {
+      const ddx = (tp.x + 0.5) - (m.x + fp / 2);
+      const ddy = (tp.y + 0.5) - (m.y + fp / 2);
+      const len = Math.hypot(ddx, ddy) || 1;
+      const pulse = Math.sin((age / 450) * Math.PI);
+      mlx = (ddx / len) * pulse * tilePx * 0.4;
+      mly = (ddy / len) * pulse * tilePx * 0.4;
+    }
+  }
+  drawSprite(animImg(e.creatureUrl, 100, t), px + mlx, cy + mly, size, size);
   // pack: a couple of small duplicates beside it, each with its own small shadow
   if (e.kind === 'pack') {
     for (let i = 1; i <= Math.min(3, e.packCount - 1); i++) {
@@ -252,14 +297,55 @@ function drawHeroes(t) {
   for (const p of state.players) {
     if (p.x === null) continue;
     const a = anim.get(p.id);
-    const lunge = a && a.until > performance.now() ? 0.25 : 0;
+    const swinging = a && a.until > performance.now();
     const { px, py } = tileToField(p.x + 0.5, p.y + 1); // py = bottom edge of the hero's tile
     const w = 26 * scale, h = 28 * scale;
-    const groundY = footLine(py);                        // foot line, a bit above the tile bottom
-    groundShadow('M', px, groundY, Math.round(tilePx * 0.66)); // medium shadow centred on the feet
-    if (a && a.until > performance.now()) ctx.globalAlpha = 0.85;
-    drawSprite(animImg(p.avatarUrl, p.id, t), px, groundY + lunge * tilePx, w, h);
+    const groundY = footLine(py);
+
+    // #3: lunge along the vector toward the monster (not just downward)
+    const d = swinging ? dirToMonster(p.x, p.y) : { x: 0, y: 0 };
+    const L = swinging ? 0.25 * tilePx : 0;
+
+    // #5: flinch away from the monster while a fresh monster hit is on this hero
+    const hit = monsterHit && monsterHit.playerId === p.id ? monsterHit : null;
+    const hitAge = hit ? performance.now() - hit.born : Infinity;
+    let fx = 0, fy = 0;
+    if (hitAge < 350) {
+      const dm = dirToMonster(p.x, p.y);
+      const pulse = Math.sin((hitAge / 350) * Math.PI);
+      fx = -dm.x * pulse * tilePx * 0.2;   // recoil away from monster
+      fy = -dm.y * pulse * tilePx * 0.2;
+    }
+
+    const drawX = px + d.x * L + fx;
+    const drawY = groundY + d.y * L + fy;
+
+    groundShadow('M', px, groundY, Math.round(tilePx * 0.66));
+    if (swinging) ctx.globalAlpha = 0.85;
+    drawSprite(animImg(p.avatarUrl, p.id, t), drawX, drawY, w, h);
     ctx.globalAlpha = 1;
+
+    // red flash over the hero on a fresh hit
+    if (hitAge < 250) {
+      ctx.globalAlpha = 0.5 * (1 - hitAge / 250);
+      ctx.fillStyle = '#ff2a2a';
+      ctx.fillRect(Math.round(drawX - w / 2), Math.round(drawY - h), w, h);
+      ctx.globalAlpha = 1;
+    }
+
+    // impact FX sprite (2-frame) centred on the hero's body
+    if (hit && hitAge < 400) {
+      const frames = FX[hit.kind];
+      const fim = img(frames[Math.floor(hitAge / 120) % 2]);
+      const fs = tilePx * 1.4;
+      ctx.drawImage(fim, Math.round(drawX - fs / 2), Math.round(drawY - h / 2 - fs / 2), fs, fs);
+    }
+
+    // persistent red "!" badge, top-right of the avatar, while debuffed
+    if (p.debuffed) {
+      const bs = w * 0.4;
+      ctx.drawImage(img(DEBUFF_BADGE), Math.round(drawX + w / 2 - bs), Math.round(drawY - h), bs, bs);
+    }
   }
 }
 
@@ -287,9 +373,10 @@ function drawFloaters(t) {
   for (let i = floaters.length - 1; i >= 0; i--) {
     const f = floaters[i]; const age = performance.now() - f.born;
     if (age > 900) { floaters.splice(i, 1); continue; }
+    if (!f.text) continue;
     const { px, py } = tileToField(f.x + 0.5, f.y);
     ctx.globalAlpha = 1 - age / 900;
-    ctx.fillStyle = '#ffd36a'; ctx.font = `${Math.round(10 * scale)}px system-ui`;
+    ctx.fillStyle = f.color || '#ffd36a'; ctx.font = `${Math.round(10 * scale)}px system-ui`;
     ctx.fillText(f.text, px, py - age * 0.05);
     ctx.globalAlpha = 1;
   }
