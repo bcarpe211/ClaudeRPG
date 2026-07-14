@@ -19,10 +19,18 @@ const FX = {
 };
 const DEBUFF_BADGE = '/sprites/fx_24x24/oryx_16bit_fantasy_fx2_45.png';
 
-// Rotating leaderboard (backlog #8): the 6 boards shown on the TV, and cadence.
-const LB_ROTATION = ['overall_tokens', 'total_damage', 'gold', 'on_fire', 'days_champion', 'most_battered'];
-const LB_ROTATE_MS = 30000;   // seconds per board
+// Rotating leaderboard (backlog #8): the variety boards, woven with a "This Fight"
+// home board (A, B, A, C, A, D…). A = current-fight standings (or overall between fights).
+const LB_VARIETY = ['overall_tokens', 'total_damage', 'gold', 'on_fire', 'days_champion', 'most_battered'];
+const LB_ROTATE_MS = 30000;   // seconds per slot
 const LB_FADE_MS = 400;       // crossfade dip at each switch
+
+// Monster-attack hit-animation durations (~1.5x the original, so hits read a beat slower).
+const HIT_FLINCH_MS = 525;    // hero recoil window
+const HIT_FLASH_MS = 375;     // red flash window
+const HIT_FX_MS = 600;        // impact FX sprite window
+const HIT_LUNGE_MS = 675;     // monster lunge-and-back window
+const HIT_FX_FRAME_MS = 180;  // impact FX 2-frame flip period
 
 // Compact number: 999, 1.2K, 12.4K, 124K, 3.2M, 1.1B, 4.5T. Sign-preserving.
 // (mirrors formatCompact in src/domain/format.ts; tv.js has no imports)
@@ -284,11 +292,11 @@ function drawMonster(t) {
   if (monsterHit) {
     const age = performance.now() - monsterHit.born;
     const tp = state.players.find((p) => p.id === monsterHit.playerId);
-    if (age < 450 && tp && tp.x !== null) {
+    if (age < HIT_LUNGE_MS && tp && tp.x !== null) {
       const ddx = (tp.x + 0.5) - (m.x + fp / 2);
       const ddy = (tp.y + 0.5) - (m.y + fp / 2);
       const len = Math.hypot(ddx, ddy) || 1;
-      const pulse = Math.sin((age / 450) * Math.PI);
+      const pulse = Math.sin((age / HIT_LUNGE_MS) * Math.PI);
       mlx = (ddx / len) * pulse * tilePx * 0.4;
       mly = (ddy / len) * pulse * tilePx * 0.4;
     }
@@ -331,9 +339,9 @@ function drawHeroes(t) {
     const hit = monsterHit && monsterHit.playerId === p.id ? monsterHit : null;
     const hitAge = hit ? performance.now() - hit.born : Infinity;
     let fx = 0, fy = 0;
-    if (hitAge < 350) {
+    if (hitAge < HIT_FLINCH_MS) {
       const dm = dirToMonster(p.x, p.y);
-      const pulse = Math.sin((hitAge / 350) * Math.PI);
+      const pulse = Math.sin((hitAge / HIT_FLINCH_MS) * Math.PI);
       fx = -dm.x * pulse * tilePx * 0.2;   // recoil away from monster
       fy = -dm.y * pulse * tilePx * 0.2;
     }
@@ -347,17 +355,17 @@ function drawHeroes(t) {
     ctx.globalAlpha = 1;
 
     // red flash over the hero on a fresh hit
-    if (hitAge < 250) {
-      ctx.globalAlpha = 0.5 * (1 - hitAge / 250);
+    if (hitAge < HIT_FLASH_MS) {
+      ctx.globalAlpha = 0.5 * (1 - hitAge / HIT_FLASH_MS);
       ctx.fillStyle = '#ff2a2a';
       ctx.fillRect(Math.round(drawX - w / 2), Math.round(drawY - h), w, h);
       ctx.globalAlpha = 1;
     }
 
     // impact FX sprite (2-frame) centred on the hero's body
-    if (hit && hitAge < 400) {
+    if (hit && hitAge < HIT_FX_MS) {
       const frames = FX[hit.kind];
-      const fim = img(frames[Math.floor(hitAge / 120) % 2]);
+      const fim = img(frames[Math.floor(hitAge / HIT_FX_FRAME_MS) % 2]);
       const fs = tilePx * 1.4;
       ctx.drawImage(fim, Math.round(drawX - fs / 2), Math.round(drawY - h / 2 - fs / 2), fs, fs);
     }
@@ -411,44 +419,72 @@ function fmtBoardValue(format, v) {
   return fmt(v); // tokens, damage
 }
 
+// Home board (A): "This Fight" (per-monster damage) during combat, or the old
+// multi-stat "Standings" (overall) between fights. Both from the live state payload.
+function homeBoard() {
+  const players = state ? state.players.filter((p) => !p.disabled) : [];
+  if (state && state.encounter) {
+    const rows = players.slice()
+      .sort((a, b) => b.damage - a.damage || a.name.localeCompare(b.name))
+      .map((p) => ({ avatarUrl: p.avatarUrl, name: p.name, stat: fmt(p.damage) + '  ×' + p.modifier.toFixed(1) }));
+    return { title: 'THIS FIGHT', rows, bigStat: true };
+  }
+  const rows = players.slice()
+    .sort((a, b) => b.effectiveTokens - a.effectiveTokens || a.name.localeCompare(b.name))
+    .map((p) => ({ avatarUrl: p.avatarUrl, name: p.name,
+      stat: `L${p.level}  ${fmt(p.effectiveTokens)} tok  ${fmt(p.gold)}g  ×${p.modifier.toFixed(1)}` }));
+  return { title: 'STANDINGS', rows, bigStat: false };
+}
+
+// A variety board (B/C/…) from the leaderboards payload.
+function varietyBoard(key) {
+  const board = leaderboards && leaderboards.find((b) => b.key === key);
+  if (!board) return { title: 'LEADERBOARD', rows: [], bigStat: true };
+  return {
+    title: board.title.toUpperCase(),
+    rows: board.entries.map((e) => ({ avatarUrl: e.avatarUrl, name: e.name, stat: fmtBoardValue(board.format, e.value) })),
+    bigStat: true,
+  };
+}
+
 function drawLeaderboard(t) {
   const pad = Math.round(sidebarW * 0.05);
-  // active board index + a crossfade dip at each switch
-  const idx = Math.floor(t / LB_ROTATE_MS) % LB_ROTATION.length;
+  // woven sequence: A, V0, A, V1, … (12 slots), with a crossfade dip at each switch
+  const slot = Math.floor(t / LB_ROTATE_MS) % (LB_VARIETY.length * 2);
   const into = t % LB_ROTATE_MS;
   const fade = into < LB_FADE_MS ? into / LB_FADE_MS
     : (LB_ROTATE_MS - into) < LB_FADE_MS ? (LB_ROTATE_MS - into) / LB_FADE_MS : 1;
-  const board = leaderboards && leaderboards.find((b) => b.key === LB_ROTATION[idx]);
+  const varietyIdx = Math.floor(slot / 2) % LB_VARIETY.length;
+  const { title, rows, bigStat } = (slot % 2 === 0) ? homeBoard() : varietyBoard(LB_VARIETY[varietyIdx]);
 
   ctx.globalAlpha = fade;
   let y = pad;
-  const title = board ? board.title.toUpperCase() : 'LEADERBOARD';
   shadowText(title, pad, y + sidebarW * 0.075, `bold ${Math.round(sidebarW * 0.08)}px system-ui`, '#e8c96a', 'left');
   y += sidebarW * 0.16;
 
-  const entries = board ? board.entries : [];
   const bottomReserve = pad * 3; // leave room for rotation dots
-  const rowH = Math.min((canvas.height - y - bottomReserve) / Math.max(1, entries.length || 1), sidebarW * 0.16);
+  const rowH = Math.min((canvas.height - y - bottomReserve) / Math.max(1, rows.length || 1), sidebarW * 0.16);
   const rankW = Math.round(rowH * 0.55);
   const avW = Math.round(rowH * 0.8);
   const avX = pad + rankW;
   const textX = avX + avW + Math.round(rowH * 0.14);
-  for (let i = 0; i < entries.length; i++) {
-    const e = entries[i];
+  const statFont = Math.round(rowH * (bigStat ? 0.38 : 0.3)); // multi-stat standings line runs smaller
+  for (let i = 0; i < rows.length; i++) {
+    const e = rows[i];
     shadowText(`${i + 1}.`, pad, y + rowH * 0.6, `bold ${Math.round(rowH * 0.42)}px system-ui`, '#8a7aa0', 'left');
     ctx.drawImage(img(e.avatarUrl), avX, y, avW, avW);
     shadowText(e.name, textX, y + rowH * 0.42, `${Math.round(rowH * 0.4)}px system-ui`, '#cdb9e0', 'left');
-    shadowText(fmtBoardValue(board.format, e.value), textX, y + rowH * 0.84, `bold ${Math.round(rowH * 0.38)}px system-ui`, '#e8c96a', 'left');
+    shadowText(e.stat, textX, y + rowH * 0.84, `bold ${statFont}px system-ui`, '#e8c96a', 'left');
     y += rowH;
   }
 
-  // rotation position dots along the sidebar bottom
+  // position dots track the 6 variety boards (the home slot previews the next one)
   const dotR = Math.max(3, Math.round(sidebarW * 0.009));
   const gap = dotR * 3;
   const dotY = canvas.height - pad;
-  for (let i = 0; i < LB_ROTATION.length; i++) {
+  for (let i = 0; i < LB_VARIETY.length; i++) {
     ctx.beginPath();
-    ctx.fillStyle = i === idx ? '#e8c96a' : '#5a4e6e';
+    ctx.fillStyle = i === varietyIdx ? '#e8c96a' : '#5a4e6e';
     ctx.arc(pad + dotR + i * gap, dotY, dotR, 0, Math.PI * 2);
     ctx.fill();
   }
