@@ -19,6 +19,11 @@ const FX = {
 };
 const DEBUFF_BADGE = '/sprites/fx_24x24/oryx_16bit_fantasy_fx2_45.png';
 
+// Rotating leaderboard (backlog #8): the 6 boards shown on the TV, and cadence.
+const LB_ROTATION = ['overall_tokens', 'total_damage', 'gold', 'on_fire', 'days_champion', 'most_battered'];
+const LB_ROTATE_MS = 30000;   // seconds per board
+const LB_FADE_MS = 400;       // crossfade dip at each switch
+
 // Compact number: 999, 1.2K, 12.4K, 124K, 3.2M, 1.1B, 4.5T. Sign-preserving.
 // (mirrors formatCompact in src/domain/format.ts; tv.js has no imports)
 function fmt(n) {
@@ -67,6 +72,7 @@ let panelX = 0, panelY = 0, panelW = 0, panelH = 0; // dungeon panel rect
 const anim = new Map();  // playerId -> {until} for swing flashes
 const floaters = [];     // {x,y,text,born}
 let monsterHit = null;   // {playerId, kind, amount, born} — last monster counter-attack
+let leaderboards = null;  // last 'leaderboards' payload (array of boards)
 
 function computeScale() {
   const vw = canvas.width, vh = canvas.height;
@@ -141,6 +147,7 @@ function buildBackground() {
 
 const evt = new EventSource('/tv/stream');
 evt.addEventListener('layout', (e) => { layout = JSON.parse(e.data); buildBackground(); });
+evt.addEventListener('leaderboards', (e) => { leaderboards = JSON.parse(e.data); });
 evt.addEventListener('state', (e) => {
   const next = JSON.parse(e.data);
   // detect swings: a player's per-fight damage increased -> flash + floater
@@ -233,7 +240,7 @@ function render(t) {
     drawHeroes(t);
     drawHpBar();
     drawFloaters(t);
-    drawLeaderboard();
+    drawLeaderboard(t);
     if (state.paused) drawOverlay('The dungeon rests… awaiting adventurers');
     if (state.defeat) drawDefeat();
   }
@@ -396,25 +403,56 @@ function drawFloaters(t) {
   }
 }
 
-function drawLeaderboard() {
+// Format a board value by its declared format. Mirrors leaderboards.ts BoardFormat.
+function fmtBoardValue(format, v) {
+  if (format === 'multiplier') return '×' + v.toFixed(2);   // ×2.34
+  if (format === 'gold') return fmt(v) + 'g';
+  if (format === 'count' || format === 'level') return String(Math.round(v));
+  return fmt(v); // tokens, damage
+}
+
+function drawLeaderboard(t) {
   const pad = Math.round(sidebarW * 0.05);
+  // active board index + a crossfade dip at each switch
+  const idx = Math.floor(t / LB_ROTATE_MS) % LB_ROTATION.length;
+  const into = t % LB_ROTATE_MS;
+  const fade = into < LB_FADE_MS ? into / LB_FADE_MS
+    : (LB_ROTATE_MS - into) < LB_FADE_MS ? (LB_ROTATE_MS - into) / LB_FADE_MS : 1;
+  const board = leaderboards && leaderboards.find((b) => b.key === LB_ROTATION[idx]);
+
+  ctx.globalAlpha = fade;
   let y = pad;
-  shadowText('LEADERBOARD', pad, y + sidebarW * 0.065, `bold ${Math.round(sidebarW * 0.075)}px system-ui`, '#e8c96a', 'left');
-  y += sidebarW * 0.13;
-  // fill the sidebar: taller rows (bigger avatars + text), capped so a short roster
-  // still reads large. Rotation for big rosters is backlog #8.
-  const rowH = Math.min((canvas.height - y - pad) / Math.max(1, state.players.length), sidebarW * 0.17);
+  const title = board ? board.title.toUpperCase() : 'LEADERBOARD';
+  shadowText(title, pad, y + sidebarW * 0.075, `bold ${Math.round(sidebarW * 0.08)}px system-ui`, '#e8c96a', 'left');
+  y += sidebarW * 0.16;
+
+  const entries = board ? board.entries : [];
+  const bottomReserve = pad * 3; // leave room for rotation dots
+  const rowH = Math.min((canvas.height - y - bottomReserve) / Math.max(1, entries.length || 1), sidebarW * 0.16);
+  const rankW = Math.round(rowH * 0.55);
   const avW = Math.round(rowH * 0.8);
-  const textX = pad + avW + Math.round(rowH * 0.14); // name/stats hug the avatar (justified left)
-  for (const p of state.players) {
-    ctx.globalAlpha = p.disabled ? 0.4 : 1;
-    ctx.drawImage(img(p.avatarUrl), pad, y, avW, avW);
-    shadowText(p.name, textX, y + rowH * 0.36, `${Math.round(rowH * 0.34)}px system-ui`, '#cdb9e0', 'left');
-    shadowText(`L${p.level}  ${fmt(p.effectiveTokens)} tok  ${fmt(p.gold)}g  x${p.modifier.toFixed(2)}`,
-      textX, y + rowH * 0.72, `${Math.round(rowH * 0.28)}px system-ui`, '#9a86b0', 'left');
-    ctx.globalAlpha = 1;
+  const avX = pad + rankW;
+  const textX = avX + avW + Math.round(rowH * 0.14);
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    shadowText(`${i + 1}.`, pad, y + rowH * 0.6, `bold ${Math.round(rowH * 0.42)}px system-ui`, '#8a7aa0', 'left');
+    ctx.drawImage(img(e.avatarUrl), avX, y, avW, avW);
+    shadowText(e.name, textX, y + rowH * 0.42, `${Math.round(rowH * 0.4)}px system-ui`, '#cdb9e0', 'left');
+    shadowText(fmtBoardValue(board.format, e.value), textX, y + rowH * 0.84, `bold ${Math.round(rowH * 0.38)}px system-ui`, '#e8c96a', 'left');
     y += rowH;
   }
+
+  // rotation position dots along the sidebar bottom
+  const dotR = Math.max(3, Math.round(sidebarW * 0.009));
+  const gap = dotR * 3;
+  const dotY = canvas.height - pad;
+  for (let i = 0; i < LB_ROTATION.length; i++) {
+    ctx.beginPath();
+    ctx.fillStyle = i === idx ? '#e8c96a' : '#5a4e6e';
+    ctx.arc(pad + dotR + i * gap, dotY, dotR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawOverlay(text) {
