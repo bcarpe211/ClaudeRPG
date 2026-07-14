@@ -22,6 +22,7 @@ export function registerDungeonPreviewRoutes(app: Express, { config }: AppDeps):
       res.send(
         await renderPage('dungeon-preview', {
           title: 'Dungeon Preview',
+          frame: 'lite',
           sheet: SHEET,
           samples,
         }),

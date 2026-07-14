@@ -27,3 +27,21 @@ describe('dungeon shell', () => {
     expect(res.text).not.toContain('frame-lite');
   });
 });
+
+describe('lite frame', () => {
+  it('the catalog uses the lite frame (no loot rails)', async () => {
+    // catalog requires spritesDir; loadConfig({}) provides the default asset dir
+    const res = await request(app).get('/catalog');
+    if (res.status === 200) {
+      expect(res.text).toContain('class="frame-lite"');
+      expect(res.text).not.toContain('class="loot-rail left"');
+    }
+  });
+
+  it('the admin login page uses the lite frame', async () => {
+    const res = await request(app).get('/admin/login');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('class="frame-lite"');
+    expect(res.text).not.toContain('class="loot-rail left"');
+  });
+});
