@@ -149,12 +149,21 @@ Grew into a full **combat & reward economy redesign** (spec/plan
       `level_curve_slope`, `baseline_battle_minutes` — pacing shifted (active
       office kills fast, quiet grinds).
 
-## 10. Public landing page
-Visitors to the site (the registration/root page) need a real landing page that
-explains what the game is, how it works, and — importantly — that it **only
-reflects Claude Code token usage** (nothing else is tracked/affected).
-- [ ] Landing page with game description + "what this does / doesn't do"
-- [ ] Clarify scope: affects only Claude Code usage; how to join/register
+## 10. Public landing page ✅ DONE (2026-07-14)
+A full dungeon-corridor landing page at `/` (commit `3e05096`,
+`src/web/views/landing.ejs` + `static/landing.css`): torch-lit wall border, live
+boss snapshot card, nine-class picker, a 3-step "how to join" with the shell
+snippet, and the scope clarification in two places.
+- [x] Landing page with game description + "what this does / doesn't do" — the
+      **"What it sees — and what it doesn't"** trust section (sees token
+      counts/model/timestamps; never prompts/code/conversations; `rpg_off` pause).
+- [x] Clarify scope: affects only Claude Code usage; how to join/register — the
+      **"Claude Code only"** callout (CLI only, not API tokens or desktop/web app)
+      + the 3-step register/snippet/code flow.
+- [ ] (Follow-on) roll the landing design language (torch-lit wall border,
+      background, torch glow, side loot-float — but *not behind content*) across
+      the other pages: character login, character sheet, registration, admin,
+      eventual shop/character editor. Tracked as #18.
 
 ## 11. Admin settings: human-readable descriptions ✅ DONE (2026-07-12)
 Grouped, self-describing admin settings page. Spec/plan
@@ -269,3 +278,19 @@ smarter cracked-tile support so they can have damage again:
       corners/doors; a max density; avoid stylistic clashes like the sewer pipe motif).
 - [ ] Consider band-appropriate "damage" beyond cracks (moss, rust, scorch) that matches
       each theme, rather than one generic spiderweb crack.
+
+## 18. Roll the landing design language across the pages
+Extend the landing dungeon-corridor look (torch-lit wall border, background +
+torch glow, side loot-float — but *not behind content*) to the rest of the pages.
+Decomposed into a foundation spec + per-cohort follow-ups (approach A).
+Spec 1: `docs/superpowers/specs/2026-07-14-dungeon-shell-design-language-design.md`.
+- [ ] **Spec 1 — foundation + player cohort:** shared `dungeon.css` design system
+      (tokens/background/frame/loot/primitives) + `layout.ejs` shell with a
+      `full`/`lite` frame variant + gutter loot rails (hide below ~1100px) +
+      refactor landing onto the shell + full redesign of the 4 player pages
+      (register, registered, character-login, character-sheet). Admin/dev get the
+      lite frame immediately.
+- [ ] **Spec 2 (follow-up)** — admin cohort bespoke redesign (login/players/
+      player-edit/settings).
+- [ ] **Spec 3 (follow-up)** — dev-tools cohort (catalog, dungeon-preview).
+- [ ] (Free) eventual shop / character-editor inherit the shell when built.
