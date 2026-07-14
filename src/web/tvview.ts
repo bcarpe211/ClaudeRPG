@@ -22,6 +22,7 @@ import { getGameState } from '../domain/gamestate';
 import { loadEngineConfig } from '../domain/encounters';
 import { activityScore } from '../domain/activity';
 import { tokenModifier } from '../domain/combat';
+import { debuffFactor } from '../domain/retaliation';
 import { classSpriteUrl, creatureSpriteFile, type Gender } from '../domain/classes';
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
 import { monsterByIndex, monsterName } from '../domain/bestiary';
@@ -42,14 +43,19 @@ export interface TvHero {
   totalTokens: number; effectiveTokens: number; gold: number;
   modifier: number; disabled: boolean; connected: boolean;
   damage: number; x: number | null; y: number | null;
+  debuffed: boolean;
 }
 export interface TvDefeat extends DefeatSummary { creatureUrl: string; }
+export interface TvMonsterAttack {
+  id: number; playerId: number; kind: 'gold' | 'debuff'; amount: number;
+}
 export interface TvState {
   dungeonId: number | null;
   paused: boolean;
   encounter: TvEncounter | null;
   players: TvHero[];
   defeat: TvDefeat | null;
+  monsterAttack: TvMonsterAttack | null;
 }
 
 export function buildTvState(db: Database.Database, now: number): TvState {
@@ -90,6 +96,7 @@ export function buildTvState(db: Database.Database, now: number): TvState {
     gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK),
     disabled: !!p.disabled, connected: p.last_token_at != null,
     damage: dmgByPlayer.get(p.id) ?? 0, x: null, y: null,
+    debuffed: debuffFactor(db, p.id, now, cfg) < 1,
   }));
 
   // Assign battlefield slots to enabled players (same order) from the layout.
@@ -104,6 +111,15 @@ export function buildTvState(db: Database.Database, now: number): TvState {
     }
   }
 
+  // Latest monster counter-attack this encounter (drives the one-shot TV animation).
+  let monsterAttack: TvMonsterAttack | null = null;
+  if (encounter) {
+    const row = db.prepare(
+      'SELECT id, player_id, kind, gold_delta FROM monster_attacks WHERE encounter_id=? ORDER BY id DESC LIMIT 1',
+    ).get(encounter.id) as { id: number; player_id: number; kind: 'gold' | 'debuff'; gold_delta: number } | undefined;
+    if (row) monsterAttack = { id: row.id, playerId: row.player_id, kind: row.kind, amount: row.gold_delta };
+  }
+
   // Defeat popup during the window.
   let defeat: TvDefeat | null = null;
   if (gs.defeat_until && now < gs.defeat_until && gs.last_defeat_encounter_id) {
@@ -111,5 +127,5 @@ export function buildTvState(db: Database.Database, now: number): TvState {
     defeat = { ...summary, creatureUrl: creatureSpriteUrl(summary.creatureIndex) };
   }
 
-  return { dungeonId: gs.current_dungeon_id, paused: !!gs.paused, encounter, players, defeat };
+  return { dungeonId: gs.current_dungeon_id, paused: !!gs.paused, encounter, players, defeat, monsterAttack };
 }
