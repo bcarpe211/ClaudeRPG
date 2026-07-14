@@ -42,6 +42,15 @@ const tickTimer = setInterval(() => {
 }, tickMs);
 console.log(`[ClaudeRPG] game engine ticking every ${tickMs}ms`);
 
+const LEADERBOARD_MS = 15000;
+const lbTimer = setInterval(() => {
+  try {
+    tvHub.broadcastLeaderboards(Date.now());
+  } catch (err) {
+    console.error('[ClaudeRPG] leaderboards broadcast error:', err);
+  }
+}, LEADERBOARD_MS);
+
 const server = app.listen(config.port, () => {
   console.log(`[ClaudeRPG] listening on http://localhost:${config.port}`);
   console.log(`[ClaudeRPG] admin panel: http://localhost:${config.port}/admin`);
@@ -55,6 +64,7 @@ let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  clearInterval(lbTimer);
   gracefulShutdown(signal, {
     db,
     server,

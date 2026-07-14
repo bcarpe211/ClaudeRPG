@@ -112,14 +112,23 @@ battle stays cohesive), others decorated flavor. Spec/plan:
       confidently same-family tile found without a visual pass); enrich them for
       full "wallpaper-quality" floors. Overlaps #14.
 
-## 8. Leaderboard improvements
-Larger text and better showcasing of player stats — current token-usage streak
-and other fun things. Consider rotating the leaderboard every ~30s through
-different views:
-- [ ] Larger leaderboard text
-- [ ] Show more/better player stats (e.g. current token-usage streak)
-- [ ] Rotating leaderboards (~30s): daily win streaks, daily token usage,
-      overall leaderboard, and other fun leaderboards
+## 8. Leaderboard improvements ✅ DONE (2026-07-13)
+Rotating leaderboards with bigger text, titles, numeric ranks, and per-board
+stats. Spec/plan: `docs/superpowers/{specs,plans}/2026-07-13-rotating-leaderboards*`.
+- [x] Larger leaderboard text (board title + rank + avatar + stat, all scaled up).
+- [x] Richer stats — `src/domain/leaderboards.ts` computes **14 boards**
+      (overall/today/week tokens, total damage, biggest hit, gold, level,
+      monsters slain, MVP count, on-fire multiplier, all-time peak multiplier,
+      days-as-champion, most-battered, most-robbed). Delivered on a separate 15s
+      SSE `leaderboards` channel (`TvHub.broadcastLeaderboards`).
+- [x] Rotating views (~30s crossfade): the TV rotates **6** — overall tokens →
+      total damage → gold → on-fire → days-as-champion → most-battered — with
+      position dots. (Consecutive-day *streaks* were rejected — they break on
+      weekends; "days as champion" is the weekend-proof count instead.)
+- [ ] (Future, enabled) surface the other 8 computed boards somewhere (a web
+      page / admin), and a "most-battered / most-robbed" flavor page.
+- [ ] (Minor) the non-rotated `level` board uses a uniform name-asc tiebreak
+      rather than `effective_tokens desc` — cosmetic; revisit if it ever shows.
 
 ## 9. Damage modifier should not decay during active play ✅ DONE (2026-07-12)
 Grew into a full **combat & reward economy redesign** (spec/plan

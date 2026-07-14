@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import { buildTvLayout, buildTvState } from './tvview';
+import { buildLeaderboards } from '../domain/leaderboards';
+import { loadEngineConfig } from '../domain/encounters';
 
 export interface SseClient {
   write(chunk: string): void;
@@ -23,6 +25,7 @@ export class TvHub {
       this.lastDungeonId = layout.dungeonId;
     }
     client.write(frame('state', buildTvState(this.db, now)));
+    client.write(frame('leaderboards', buildLeaderboards(this.db, now, loadEngineConfig(this.db))));
   }
 
   removeClient(client: SseClient): void {
@@ -43,6 +46,13 @@ export class TvHub {
     }
     const sf = frame('state', state);
     for (const c of this.clients) this.safeWrite(c, sf);
+  }
+
+  /** Push the full leaderboard set to all clients (slow cadence; decoupled from state). */
+  broadcastLeaderboards(now: number): void {
+    if (this.clients.size === 0) return;
+    const f = frame('leaderboards', buildLeaderboards(this.db, now, loadEngineConfig(this.db)));
+    for (const c of this.clients) this.safeWrite(c, f);
   }
 
   private safeWrite(c: SseClient, f: string): void {

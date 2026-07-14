@@ -228,9 +228,11 @@ export class GameEngine {
       const next = this.nextAttackAt.get(p.id) ?? this.scheduleNext(now, cfg);
       if (now >= next) {
         const score = activityScore(this.db, p.id, now, cfg);
-        const mod = tokenModifier(score, cfg.tokenModifierK) * debuffFactor(this.db, p.id, now, cfg);
+        const am = tokenModifier(score, cfg.tokenModifierK);           // player's own activity modifier
+        const mod = am * debuffFactor(this.db, p.id, now, cfg);
         const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelCurveSlope, mod);
         this.applyHit(encId, p.id, dmg);
+        this.db.prepare('UPDATE players SET peak_modifier=? WHERE id=? AND peak_modifier < ?').run(am, p.id, am);
         this.nextAttackAt.set(p.id, this.scheduleNext(now, cfg));
       } else {
         this.nextAttackAt.set(p.id, next);

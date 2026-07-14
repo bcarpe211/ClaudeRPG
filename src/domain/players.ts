@@ -12,6 +12,7 @@ export interface Player {
   total_tokens: number;
   effective_tokens: number;
   gold: number;
+  peak_modifier: number;
   disabled: number;
   last_token_at: number | null;
   created_at: number;
