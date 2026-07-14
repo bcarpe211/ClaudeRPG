@@ -45,23 +45,33 @@ Choosing gender at registration selects the correct class sprite variant.
       sprite, so female variants render on the TV (`spriteIndexFor` = maleIndex+9
       for F). Verified 2026-07-13.
 
-## 3. Attack animation direction
-Attacks currently only nudge downward a little, which looks wrong when the
-monster is above the player. The animation should move *toward* the monster
-regardless of relative position.
-- [ ] Direct attack animation toward the monster's position
+## 3. Attack animation direction ✅ DONE (2026-07-13)
+Attacks now lunge *toward* the monster regardless of relative position (was a
+downward nudge). Pure `tv.js` change: `dirToMonster(hx,hy)` unit-vector from the
+hero tile to `layout.monster` centre; the swing offset follows it (monster recoil
+in #5 reuses it). Spec/plan: `docs/superpowers/{specs,plans}/2026-07-13-combat-feel-pass*`.
+- [x] Direct attack animation toward the monster's position
 
 ## 4. Class-appropriate attack animations *(possibly a later phase)*
 Different classes get visually distinct attacks — e.g. mages shoot a fireball
 that explodes on the monster, etc.
 - [ ] Per-class attack visuals (mage fireball + explosion, etc.)
 
-## 5. Monsters attack back
-Monsters should attack a random player. Since there is no player HP, the hit
-should affect something else minor — e.g. remove a couple gold, or lower the
-player's damage modifier by an insignificant amount.
-- [ ] Monster retaliates against a random player
-- [ ] Define the (non-HP) consequence (small gold loss / tiny damage-mod debuff)
+## 5. Monsters attack back ✅ DONE (2026-07-13)
+The monster strikes back every ~15s (tunable) at a random enabled player,
+rolling 50/50: a small gold loss (up to `monster_gold_steal`, re-rolls to debuff
+if broke) OR a brief damage debuff (`monster_debuff_factor` for
+`monster_debuff_seconds`). Each hit is logged to a durable `monster_attacks`
+table; the debuff is *derived from that log* (`debuffFactor`), read by both the
+engine swing loop and the TV view-model (one source of truth, restart-safe,
+concurrency-safe). TV shows a monster lunge, hero flinch + red flash, impact FX
+(gold star / red X), a `-Ng`/`WEAKENED` floater, and a persistent red "!" badge
+while debuffed. Six admin-tunable settings under a new "Monster retaliation"
+group. Controller visual-verified live. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-13-combat-feel-pass*`.
+- [x] Monster retaliates against a random player
+- [x] Consequence: random gold loss OR damage-mod debuff (non-HP, minor)
+- [ ] (Enabled by the log) future "most-battered player" leaderboard view — ties into #8.
 
 ## 6. Dungeon decorations ✅ ALL BUILDS DONE (2026-07-12)
 Themed decor now renders in `/tv`. Spec/plan/reference:
