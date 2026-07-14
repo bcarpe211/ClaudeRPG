@@ -102,3 +102,14 @@ th{color:var(--muted);font-weight:600}
 .err{color:#ff9b9b;border-color:rgba(224,72,63,.4)}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important}.loot{opacity:.5}}
+
+/* class picker (register) */
+.avatars{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:12px;margin-top:8px}
+.avatar{position:relative;text-align:center;padding:14px 8px 10px;border:1px solid var(--line);border-radius:13px;
+  background:linear-gradient(180deg,var(--panel2),var(--panel));cursor:pointer;transition:transform .14s,border-color .14s,box-shadow .14s}
+.avatar img{image-rendering:pixelated;width:64px;height:64px;transition:transform .16s;filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))}
+.avatar div{margin-top:6px;font-size:13px;font-weight:650;color:var(--ink)}
+.avatar:hover{transform:translateY(-4px);border-color:var(--gold-dim);box-shadow:0 16px 30px -16px rgba(232,201,106,.5)}
+.avatar:hover img{transform:scale(1.12) translateY(-2px)}
+.avatar.selected{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),0 16px 30px -16px rgba(232,201,106,.5)}
+.avatar.selected div{color:var(--gold)}

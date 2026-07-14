@@ -1,5 +1,7 @@
 <div class="panel">
+  <p class="eyebrow" style="color:var(--gold2);font-family:ui-monospace,monospace;font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;margin:0 0 10px">Enlist</p>
   <h1>Create your character</h1>
+  <p style="color:var(--muted);max-width:52ch">Pick a name, a look, and a class. Your Claude Code usage powers this fighter on the office TV.</p>
   <% if (typeof error !== 'undefined' && error) { %>
     <p class="flash err"><%= error %></p>
   <% } %>
@@ -8,7 +10,7 @@
     <input id="name" name="name" maxlength="40" required
            value="<%= typeof name !== 'undefined' ? name : '' %>" />
 
-    <label>Gender</label>
+    <label for="gender">Gender</label>
     <select name="gender" id="gender" onchange="applyGender()">
       <option value="M">Male</option>
       <option value="F">Female</option>
@@ -18,10 +20,10 @@
     <% var sel = typeof selected !== 'undefined' ? selected : 'knight'; %>
     <input type="hidden" name="class_key" id="class_key" value="<%= sel %>" />
     <div class="avatars">
-      <% classes.forEach(function(c, i) { %>
+      <% classes.forEach(function (c, i) { %>
         <div class="avatar <%= c.key === sel ? 'selected' : '' %>"
              data-key="<%= c.key %>" onclick="pick(this)">
-          <img src="<%= c.spriteM %>" data-sprite-m="<%= c.spriteM %>"
+          <img class="px" src="<%= c.spriteM %>" data-sprite-m="<%= c.spriteM %>"
                data-sprite-f="<%= c.spriteF %>" alt="<%= c.name %>" />
           <div><%= c.name %></div>
         </div>
