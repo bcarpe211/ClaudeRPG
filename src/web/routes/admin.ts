@@ -48,7 +48,7 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
   app.get(
     '/admin/login',
     asyncHandler(async (_req, res) => {
-      res.send(await renderPage('admin-login', { title: 'Admin Login' }));
+      res.send(await renderPage('admin-login', { title: 'Admin Login', frame: 'lite' }));
     }),
   );
 
@@ -63,6 +63,7 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
         res.status(401).send(
           await renderPage('admin-login', {
             title: 'Admin Login',
+            frame: 'lite',
             error: 'Invalid username or password.',
           }),
         );
@@ -84,6 +85,7 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
       res.send(
         await renderPage('admin-players', {
           title: 'Players',
+          frame: 'lite',
           players: listPlayers(db),
         }),
       );
@@ -102,6 +104,7 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
       res.send(
         await renderPage('admin-player-edit', {
           title: `Edit ${player.name}`,
+          frame: 'lite',
           player,
           classes: CLASSES,
         }),
@@ -161,7 +164,7 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
       for (const key of Object.keys(DEFAULT_SETTINGS)) {
         values[key] = all[key] ?? DEFAULT_SETTINGS[key];
       }
-      res.send(await renderPage('admin-settings', { title: 'Settings', groups: groupedSettings(values) }));
+      res.send(await renderPage('admin-settings', { title: 'Settings', frame: 'lite', groups: groupedSettings(values) }));
     }),
   );
 

@@ -1,14 +1,20 @@
 <div class="panel">
-  <h1><%= player.name %></h1>
-  <img src="<%= avatarUrl %>" alt="avatar" style="image-rendering:pixelated;width:96px;height:96px;" />
-  <table>
-    <tr><th>Class</th><td><%= className %> (<%= player.gender === 'M' ? 'Male' : 'Female' %>)</td></tr>
-    <tr><th>Level</th><td><%= player.level %></td></tr>
-    <tr><th>XP (effective tokens)</th><td><%= player.effective_tokens %></td></tr>
-    <tr><th>Total tokens</th><td><%= player.total_tokens %></td></tr>
-    <tr><th>Gold</th><td><%= player.gold %></td></tr>
-    <tr><th>Status</th><td><%= connected ? 'Connected' : 'Not seen yet' %></td></tr>
-  </table>
+  <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+    <div style="flex:0 0 auto;width:112px;height:112px;border-radius:16px;background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);display:grid;place-items:center;box-shadow:inset 0 1px 0 #ffffff0d">
+      <img src="<%= avatarUrl %>" alt="avatar" class="px" style="width:88px;height:88px;filter:drop-shadow(0 8px 10px rgba(0,0,0,.5))" />
+    </div>
+    <div>
+      <h1 style="margin:0 0 6px"><%= player.name %></h1>
+      <p style="margin:0;color:var(--muted)"><span style="color:var(--gold2);font-weight:700"><%= className %></span> · <%= player.gender === 'M' ? 'Male' : 'Female' %> · <%= connected ? 'Connected' : 'Not seen yet' %></p>
+    </div>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-card"><span class="stat-k">Level</span><span class="stat-v"><%= player.level %></span></div>
+    <div class="stat-card"><span class="stat-k">XP (effective tokens)</span><span class="stat-v"><%= player.effective_tokens %></span></div>
+    <div class="stat-card"><span class="stat-k">Total tokens</span><span class="stat-v"><%= player.total_tokens %></span></div>
+    <div class="stat-card"><span class="stat-k">Gold</span><span class="stat-v" style="color:var(--gold2)"><%= player.gold %></span></div>
+  </div>
 </div>
 
 <div class="panel">
@@ -28,9 +34,10 @@
 
 <div class="panel">
   <h2>Delete character</h2>
+  <p style="color:var(--muted)">This permanently removes your character and its progress.</p>
   <form method="post" action="/character/delete"
         onsubmit="return confirm('Delete this character permanently?');">
     <input type="hidden" name="token" value="<%= player.auth_token %>" />
-    <button type="submit" style="background:#c0564a;color:#fff;">Delete</button>
+    <button type="submit" class="btn-danger">Delete</button>
   </form>
 </div>

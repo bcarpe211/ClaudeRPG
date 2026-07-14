@@ -40,7 +40,7 @@ export function registerCatalogRoutes(app: Express, { config }: AppDeps): void {
         classAvatars,
         themes: TILE_MANIFEST,
       });
-      res.send(await renderPage('catalog', { title: 'Sprite Catalog', view }));
+      res.send(await renderPage('catalog', { title: 'Sprite Catalog', frame: 'lite', view }));
     }),
   );
 }

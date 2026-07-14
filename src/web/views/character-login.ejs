@@ -1,6 +1,7 @@
-<div class="panel">
+<div class="panel" style="max-width:520px">
+  <p class="eyebrow" style="color:var(--gold2);font-family:ui-monospace,monospace;font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;margin:0 0 10px">Return</p>
   <h1>Character login</h1>
-  <p>Enter your auth token to view your character sheet.</p>
+  <p style="color:var(--muted)">Enter your auth token to view your character sheet.</p>
   <% if (typeof error !== 'undefined' && error) { %>
     <p class="flash err"><%= error %></p>
   <% } %>

@@ -4,20 +4,29 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title><%= title %> — ClaudeRPG</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%E2%9A%94%EF%B8%8F</text></svg>" />
+  <link rel="stylesheet" href="/static/dungeon.css" />
+  <% (typeof styles !== 'undefined' ? styles : []).forEach(function (s) { %><link rel="stylesheet" href="/static/<%= s %>" />
+  <% }); %>
 </head>
-<body>
-  <header class="site-header">
-    <a href="/" class="brand">⚔️ ClaudeRPG</a>
-    <nav>
-      <a href="/">Home</a>
-      <a href="/register">Register</a>
-      <a href="/character">Character Login</a>
-      <a href="/admin">Admin</a>
-    </nav>
+<% var _frame = (typeof frame !== 'undefined' ? frame : 'full'); %>
+<body class="<%= _frame === 'lite' ? 'frame-lite' : '' %>">
+  <div class="wall wall-l"><span class="sconce top"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span><span class="sconce bot"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span></div>
+  <div class="wall wall-r"><span class="sconce top"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span><span class="sconce bot"><img class="px t-a" src="/static/landing/torch_a.png" alt=""><img class="px t-b" src="/static/landing/torch_b.png" alt=""></span></div>
+  <% if (_frame !== 'lite') { %>
+  <% var LOOT_L=[["orb_cyan","9%","9","1.6"],["book","44%","10","1.9"],["key","72%","11","1.3"],["amulet","28%","12","1.4"],["crown","88%","13","1.8"]]; %>
+  <div class="loot-rail left" aria-hidden="true"><% LOOT_L.forEach(function (f, i) { %><span class="loot l" style="--x:<%= 10 + (i % 3) * 22 %>px;--t:<%= f[1] %>;--d:<%= f[2] %>s;--s:<%= f[3] %>"><img class="px" src="/static/landing/<%= f[0] %>.png" alt=""></span><% }); %></div>
+  <% var LOOT_R=[["coins","13%","10","1.9"],["scroll","33%","11","1.3"],["gem_red","55%","13","1.4"],["ring_gold","74%","10.5","1.2"],["potion","90%","11","1.6"]]; %>
+  <div class="loot-rail right" aria-hidden="true"><% LOOT_R.forEach(function (f, i) { %><span class="loot r" style="--x:<%= 12 + (i % 3) * 20 %>px;--t:<%= f[1] %>;--d:<%= f[2] %>s;--s:<%= f[3] %>"><img class="px" src="/static/landing/<%= f[0] %>.png" alt=""></span><% }); %></div>
+  <% } %>
+
+  <header class="bar">
+    <a class="brand" href="/"><img class="px" src="/static/landing/sword.png" alt=""><span>CLAUDE<b>RPG</b></span></a>
+    <nav><a href="/">Home</a><a href="/tv">Watch the TV</a><a href="/register">Register</a><a href="/character">Log in</a><a class="mini" href="/admin">Admin</a></nav>
   </header>
-  <main class="container">
-    <%- body %>
-  </main>
+
+  <main><%- body %></main>
+
+  <footer class="foot"><span><img class="px si" src="/static/landing/skull.png" alt=""> Runs on the office TV · your usage, gamified</span><span>Pixel art &copy; Oryx Design Lab</span></footer>
 </body>
 </html>

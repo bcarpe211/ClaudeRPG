@@ -31,15 +31,9 @@ export async function renderPage(
   return ejs.renderFile(path.join(VIEWS, 'layout.ejs'), {
     title: data.title ?? 'ClaudeRPG',
     body,
+    frame: data.frame ?? 'full',
+    styles: data.styles ?? [],
   });
-}
-
-// Renders a self-contained full-page view (its own <html>), NOT wrapped in layout.ejs.
-export async function renderStandalone(
-  view: string,
-  data: Record<string, unknown>,
-): Promise<string> {
-  return ejs.renderFile(path.join(VIEWS, `${view}.ejs`), data);
 }
 
 export function createApp({ db, config }: AppDeps): Express {

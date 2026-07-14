@@ -22,6 +22,9 @@ describe('registration', () => {
     expect(res.text).toContain('href="/register"');
     expect(res.text).toContain('href="/tv"');
     expect(res.text).toContain('The dungeon rests');         // idle boss fallback (no encounter)
+    expect(res.text).toContain('href="/static/dungeon.css"'); // now on the shared shell
+    expect(res.text).toContain('class="wall wall-l"');
+    expect(res.text).toContain('href="/static/landing.css"'); // landing-unique styles still linked
   });
 
   it('GET /register shows the form with all 9 classes', async () => {
