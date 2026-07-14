@@ -42,6 +42,19 @@ describe('TvHub', () => {
     expect(evs.some((e) => e.event === 'state')).toBe(true);
   });
 
+  it('sends a version frame before state so the kiosk can self-reload on redeploy', () => {
+    const hub = new TvHub(db);
+    const c = fakeClient();
+    hub.addClient(c, 1);
+    const evs = events(c.chunks);
+    const vIdx = evs.findIndex((e) => e.event === 'version');
+    const sIdx = evs.findIndex((e) => e.event === 'state');
+    expect(vIdx).toBeGreaterThanOrEqual(0);
+    expect(typeof evs[vIdx].data).toBe('string');
+    expect((evs[vIdx].data as string).length).toBeGreaterThan(0);
+    expect(vIdx).toBeLessThan(sIdx); // version arrives before state
+  });
+
   it('broadcast pushes state to all clients and a layout only when the dungeon changes', () => {
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(p.auth_token, 1000), 100000, { cacheReadWeight: 0 });

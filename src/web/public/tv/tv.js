@@ -154,6 +154,16 @@ function buildBackground() {
 }
 
 const evt = new EventSource('/tv/stream');
+// Self-reload on redeploy: the server sends its deployed-commit marker on every
+// (re)connection. The page survives a server restart — only the EventSource
+// reconnects — so if the marker changes from what we first saw, the server was
+// redeployed and this kiosk is running stale code; reload to pick it up.
+let bootVersion = null;
+evt.addEventListener('version', (e) => {
+  const v = JSON.parse(e.data);
+  if (bootVersion === null) bootVersion = v;
+  else if (v !== bootVersion) location.reload();
+});
 evt.addEventListener('layout', (e) => { layout = JSON.parse(e.data); buildBackground(); });
 evt.addEventListener('leaderboards', (e) => { leaderboards = JSON.parse(e.data); });
 evt.addEventListener('state', (e) => {

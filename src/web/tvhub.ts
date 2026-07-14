@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { buildTvLayout, buildTvState } from './tvview';
 import { buildLeaderboards } from '../domain/leaderboards';
 import { loadEngineConfig } from '../domain/encounters';
+import { SERVER_VERSION } from '../version';
 
 export interface SseClient {
   write(chunk: string): void;
@@ -19,6 +20,9 @@ export class TvHub {
 
   addClient(client: SseClient, now: number): void {
     this.clients.add(client);
+    // Deployed-commit marker first — the kiosk reloads itself if this changes
+    // across an SSE reconnect (i.e. the server was redeployed).
+    client.write(frame('version', SERVER_VERSION));
     const layout = buildTvLayout(this.db);
     if (layout) {
       client.write(frame('layout', layout));
