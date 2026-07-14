@@ -124,4 +124,8 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_monster_attacks_encounter ON monster_attacks (encounter_id);
     `,
   },
+  {
+    id: '006_peak_modifier',
+    sql: `ALTER TABLE players ADD COLUMN peak_modifier REAL NOT NULL DEFAULT 1;`,
+  },
 ];
