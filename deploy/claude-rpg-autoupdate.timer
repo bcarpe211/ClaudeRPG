@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodically run the ClaudeRPG kiosk auto-updater
+
+[Timer]
+# First check shortly after boot, then every 2 minutes. The updater is a no-op
+# unless origin is ahead AND the game is idle-paused, so frequent ticks are cheap.
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=claude-rpg-autoupdate.service
+
+[Install]
+WantedBy=timers.target

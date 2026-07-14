@@ -92,11 +92,36 @@ is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
   page, which never happens on a kiosk; and `unclutter` is X11-only.)
 
 ## Updating the game
+
+**Manual:**
 ```bash
-cd ~/ClaudeRPG && git pull && npm install && sudo systemctl restart claude-rpg
+cd ~/ClaudeRPG && git pull --ff-only && sudo systemctl restart claude-rpg
+# add `npm ci` only if package-lock.json changed in the pull
 ```
 (The kiosk page auto-reconnects via SSE; refresh isn't usually needed, but you
 can reboot for a clean slate.)
+
+### Automatic updates during downtime
+
+A systemd timer (`claude-rpg-autoupdate.timer`) checks every ~2 min and, **only
+when the game is idle-paused** (`game_state.paused=1` — "the dungeon rests"),
+fast-forward-pulls `origin/main` and restarts the service. It never interrupts a
+live fight, never touches `data/`/`node_modules`, and holds off on a dirty or
+diverged tree. Restarts are safe: state persists in SQLite (WAL + graceful
+shutdown), so an idle-window restart is invisible.
+
+Install (one-time):
+```bash
+sudo install -m 755 ~/ClaudeRPG/scripts/pi/auto-update.sh /usr/local/bin/claude-rpg-autoupdate
+sudo cp ~/ClaudeRPG/deploy/claude-rpg-autoupdate.service ~/ClaudeRPG/deploy/claude-rpg-autoupdate.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now claude-rpg-autoupdate.timer
+```
+Inspect: `systemctl list-timers claude-rpg-autoupdate` · logs
+`journalctl -u claude-rpg-autoupdate -n 30`. Force a check now (respects the
+idle gate): `sudo systemctl start claude-rpg-autoupdate`. Disable:
+`sudo systemctl disable --now claude-rpg-autoupdate.timer`. After editing the
+script in the repo, re-copy it to `/usr/local/bin/claude-rpg-autoupdate`.
 
 ## Uninstall
 ```bash

@@ -1,0 +1,17 @@
+[Unit]
+Description=ClaudeRPG kiosk auto-updater (git pull + restart during downtime only)
+Documentation=file:///home/rluser/ClaudeRPG/docs/PI_SETUP.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rluser
+WorkingDirectory=/home/rluser/ClaudeRPG
+# The executable lives outside the repo so pulling the repo never races its own
+# script. Keep it in sync with scripts/pi/auto-update.sh (setup copies it there).
+ExecStart=/usr/local/bin/claude-rpg-autoupdate
+# Optional overrides (defaults shown in the script):
+# Environment=CLAUDE_RPG_REPO=/home/rluser/ClaudeRPG
+# Environment=CLAUDE_RPG_BRANCH=main
+# Environment=CLAUDE_RPG_SERVICE=claude-rpg
