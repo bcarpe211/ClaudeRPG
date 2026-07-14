@@ -31,6 +31,8 @@ export async function renderPage(
   return ejs.renderFile(path.join(VIEWS, 'layout.ejs'), {
     title: data.title ?? 'ClaudeRPG',
     body,
+    frame: data.frame ?? 'full',
+    styles: data.styles ?? [],
   });
 }
 
