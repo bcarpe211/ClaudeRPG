@@ -76,6 +76,7 @@ h1,h2,h3{color:var(--head);letter-spacing:-.01em;margin:0 0 14px;font-weight:800
 h1{font-size:clamp(26px,4vw,40px);font-weight:850} h2{font-size:24px} h3{font-size:18px}
 p{margin:0 0 12px}
 .sec-head{margin-bottom:24px}
+section{padding:44px 0}
 label{display:block;margin:14px 0 6px;color:var(--muted);font-size:14px}
 input,select,textarea{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
   background:#120d1a;color:var(--head);font-size:15px;font-family:inherit}
@@ -89,6 +90,9 @@ a.btn{text-decoration:none}
 .btn-ghost{background:#ffffff0d;border-color:var(--line);color:var(--head);box-shadow:none}
 .btn-ghost:hover{border-color:var(--gold-dim);color:var(--gold)}
 .btn-danger{background:linear-gradient(180deg,#e8675c,var(--red));color:#fff;box-shadow:0 10px 24px -12px rgba(224,72,63,.6)}
+.btn .bi{width:20px;height:20px}
+.big{padding:16px 28px;font-size:17px}
+.btn-gold:hover{box-shadow:0 16px 30px -10px rgba(232,201,106,.7)}
 pre{background:#0c0912ee;border:1px solid var(--line);padding:14px 16px;border-radius:12px;overflow-x:auto;color:#cfe4d2;font-size:13px}
 code{color:var(--gold2)}
 table{width:100%;border-collapse:collapse}
