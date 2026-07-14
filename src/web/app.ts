@@ -36,14 +36,6 @@ export async function renderPage(
   });
 }
 
-// Renders a self-contained full-page view (its own <html>), NOT wrapped in layout.ejs.
-export async function renderStandalone(
-  view: string,
-  data: Record<string, unknown>,
-): Promise<string> {
-  return ejs.renderFile(path.join(VIEWS, `${view}.ejs`), data);
-}
-
 export function createApp({ db, config }: AppDeps): Express {
   const app = express();
   app.set('view engine', 'ejs');

@@ -1,7 +1,7 @@
 import type { Express } from 'express';
 import { z } from 'zod';
 import type { AppDeps } from '../app';
-import { renderPage, renderStandalone } from '../app';
+import { renderPage } from '../app';
 import { asyncHandler } from '../async';
 import { CLASSES, getClass, classSpriteUrl } from '../../domain/classes';
 import { createPlayer } from '../../domain/players';
@@ -49,7 +49,16 @@ export function registerRegistrationRoutes(
       };
     }
     const snippet = buildSetupSnippet({ token: '<your-token>', endpoint: config.publicUrl });
-    res.send(await renderStandalone('landing', { classes, boss, snippet }));
+    res.send(
+      await renderPage('landing', {
+        title: 'ClaudeRPG',
+        frame: 'full',
+        styles: ['landing.css'],
+        classes,
+        boss,
+        snippet,
+      }),
+    );
   }));
 
   // Registration form (moved off `/`). `?class=` preselects a fighter from the landing.
