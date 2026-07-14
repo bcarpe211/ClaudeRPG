@@ -6,6 +6,7 @@ import { tokenModifier, attackDamage } from './combat';
 import { activityScore } from './activity';
 import { splitGold } from './rewards';
 import { getAllSettings } from './settings';
+import { pickTarget, rollConsequence, goldSteal, debuffFactor } from './retaliation';
 
 export interface DefeatParticipant {
   playerId: number;
@@ -114,6 +115,7 @@ interface ActivePlayer {
 export class GameEngine {
   private rng: () => number;
   private nextAttackAt = new Map<number, number>();
+  private nextMonsterAttackAt = 0; // 0 = unscheduled (armed on the next active tick)
   private wasPaused = true;
 
   constructor(private db: Database.Database, deps: EngineDeps = {}) {
@@ -203,6 +205,7 @@ export class GameEngine {
     setPaused(this.db, false, now);
     if (this.wasPaused) {
       this.nextAttackAt.clear();
+      this.nextMonsterAttackAt = 0;
       this.wasPaused = false;
     }
 
@@ -225,7 +228,7 @@ export class GameEngine {
       const next = this.nextAttackAt.get(p.id) ?? this.scheduleNext(now, cfg);
       if (now >= next) {
         const score = activityScore(this.db, p.id, now, cfg);
-        const mod = tokenModifier(score, cfg.tokenModifierK);
+        const mod = tokenModifier(score, cfg.tokenModifierK) * debuffFactor(this.db, p.id, now, cfg);
         const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelCurveSlope, mod);
         this.applyHit(encId, p.id, dmg);
         this.nextAttackAt.set(p.id, this.scheduleNext(now, cfg));
@@ -233,6 +236,42 @@ export class GameEngine {
         this.nextAttackAt.set(p.id, next);
       }
     }
+    this.maybeMonsterAttack(encId, now, cfg);
     this.resolveKillIfDead(encId, now, cfg);
+  }
+
+  private scheduleMonsterAttack(now: number, cfg: EngineConfig): number {
+    const jitter = (this.rng() * 2 - 1) * cfg.monsterAttackJitterMs;
+    return now + cfg.monsterAttackIntervalMs + jitter;
+  }
+
+  private maybeMonsterAttack(encId: number, now: number, cfg: EngineConfig): void {
+    if (cfg.monsterAttacksEnabled <= 0) return;
+    if (this.nextMonsterAttackAt === 0) {
+      this.nextMonsterAttackAt = this.scheduleMonsterAttack(now, cfg); // arm; don't strike yet
+      return;
+    }
+    if (now < this.nextMonsterAttackAt) return;
+    this.nextMonsterAttackAt = this.scheduleMonsterAttack(now, cfg);
+
+    const target = pickTarget(this.activePlayers(), this.rng);
+    if (!target) return;
+
+    let kind = rollConsequence(this.rng);
+    let amount = 0;
+    if (kind === 'gold') {
+      const cur = (this.db.prepare('SELECT gold FROM players WHERE id=?').get(target.id) as { gold: number }).gold;
+      amount = goldSteal(cur, cfg.monsterGoldSteal);
+      if (amount <= 0) kind = 'debuff'; // broke -> debuff so a hit always lands
+    }
+
+    this.db.transaction(() => {
+      if (kind === 'gold' && amount > 0) {
+        this.db.prepare('UPDATE players SET gold = gold - ? WHERE id=?').run(amount, target.id);
+      }
+      this.db.prepare(
+        'INSERT INTO monster_attacks (encounter_id, player_id, kind, gold_delta, ts) VALUES (?, ?, ?, ?, ?)',
+      ).run(encId, target.id, kind, amount, now);
+    })();
   }
 }
