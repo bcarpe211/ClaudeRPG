@@ -61,7 +61,7 @@ body.frame-lite .loot-rail{display:none}
 .brand{display:flex;align-items:center;gap:12px;font-weight:850;letter-spacing:.13em;font-size:21px;color:var(--head)}
 .brand img{width:32px;height:32px} .brand b{color:var(--gold)}
 .bar nav{display:flex;gap:20px;font-size:14px;color:var(--muted);align-items:center;flex-wrap:wrap}
-.bar nav a:hover{color:var(--gold)} .bar nav .mini{opacity:.6;font-size:13px}
+.bar nav a:hover{color:var(--gold)}
 main{max-width:1120px;margin:0 auto;padding:8px 34px 40px}
 body.frame-lite main{max-width:1180px}
 .foot{max-width:1120px;margin:20px auto 34px;padding:20px 34px 0;border-top:1px solid var(--line);
@@ -87,6 +87,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gold-dim
   box-shadow:0 10px 24px -10px rgba(232,201,106,.6),inset 0 1px 0 #fff6}
 .btn:hover,button:hover{transform:translateY(-2px)}
 a.btn{text-decoration:none}
+form button{margin-top:18px}
 .btn-ghost{background:#ffffff0d;border-color:var(--line);color:var(--head);box-shadow:none}
 .btn-ghost:hover{border-color:var(--gold-dim);color:var(--gold)}
 .btn-danger{background:linear-gradient(180deg,#e8675c,var(--red));color:#fff;box-shadow:0 10px 24px -12px rgba(224,72,63,.6)}
@@ -107,7 +108,7 @@ th{color:var(--muted);font-weight:600}
 .avatars{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:12px;margin-top:8px}
 .avatar{position:relative;text-align:center;padding:14px 8px 10px;border:1px solid var(--line);border-radius:13px;
   background:linear-gradient(180deg,var(--panel2),var(--panel));cursor:pointer;transition:transform .14s,border-color .14s,box-shadow .14s}
-.avatar img{image-rendering:pixelated;width:64px;height:64px;transition:transform .16s;filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))}
+.avatar img{image-rendering:pixelated;width:64px;height:64px;margin:0 auto;transition:transform .16s;filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))}
 .avatar div{margin-top:6px;font-size:13px;font-weight:650;color:var(--ink)}
 .avatar:hover{transform:translateY(-4px);border-color:var(--gold-dim);box-shadow:0 16px 30px -16px rgba(232,201,106,.5)}
 .avatar:hover img{transform:scale(1.12) translateY(-2px)}
