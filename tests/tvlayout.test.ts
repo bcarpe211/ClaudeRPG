@@ -128,6 +128,24 @@ describe('currentTvLayout', () => {
     expect(L.monster.footprint).toBe(2);
   });
 
+  it('keeps hero slots clear of the pack mob-fan, not just the 2x2 monster zone', () => {
+    // A pack encounter (tv.js drawMonster) draws up to 3 extra mummies fanning RIGHT
+    // of the monster, landing ~2 columns past the 2x2 zone. Hero slots must avoid that
+    // whole footprint, or a hero renders sitting on a mummy. Checked across the roster
+    // so any theme/seed that currently collides gives a genuine red.
+    activeDungeon();
+    for (const d of DUNGEONS) {
+      setTheme(d.name);
+      const L = currentTvLayout(db)!;
+      for (const s of L.heroSlots) {
+        const inMobFan =
+          s.x >= L.monster.x && s.x <= L.monster.x + 3 &&
+          s.y >= L.monster.y && s.y <= L.monster.y + 1;
+        expect(inMobFan, `hero at ${s.x},${s.y} overlaps mob-fan on ${d.name}`).toBe(false);
+      }
+    }
+  });
+
   it('never throws across the full dungeon roster (live adapter, never-throw guard)', () => {
     activeDungeon();
     for (const d of DUNGEONS) {

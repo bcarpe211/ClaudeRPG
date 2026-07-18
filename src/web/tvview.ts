@@ -26,7 +26,7 @@ import { debuffFactor } from '../domain/retaliation';
 import { classSpriteUrl, creatureSpriteFile, type Gender } from '../domain/classes';
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
 import { monsterByIndex, monsterName } from '../domain/bestiary';
-import { monsterTitle } from '../domain/monstername';
+import { monsterTitle, pluralizeCreature } from '../domain/monstername';
 
 export function creatureSpriteUrl(index: number): string {
   return `/sprites/creatures_24x24/${creatureSpriteFile(index)}`;
@@ -68,11 +68,13 @@ export function buildTvState(db: Database.Database, now: number): TvState {
     const e = db.prepare('SELECT * FROM encounters WHERE id=?').get(gs.current_encounter_id) as any;
     if (e && e.status === 'active') {
       const meta = monsterByIndex(e.creature_index);
+      const isPack = e.kind === 'pack' && e.pack_count > 1; // a mob of several -> plural name
       encounter = {
         id: e.id, creatureIndex: e.creature_index, creatureUrl: creatureSpriteUrl(e.creature_index),
         footprint: e.footprint, kind: e.kind, packCount: e.pack_count,
         hp: e.current_hp, maxHp: e.max_hp,
-        name: meta ? monsterTitle(e.id, e.creature_index, meta.category) : monsterName(e.creature_index),
+        name: meta ? monsterTitle(e.id, e.creature_index, meta.category, isPack)
+          : (isPack ? pluralizeCreature(monsterName(e.creature_index)) : monsterName(e.creature_index)),
         size: meta?.size ?? 'M',
         flying: meta?.flying ?? false,
       };

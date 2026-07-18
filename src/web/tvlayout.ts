@@ -70,8 +70,14 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
 
   // Arena centre 2x2 monster zone (drawn on top of floor) from dungeon2.
   const monster = auto.monster;
-  const inMonster = (x: number, y: number) =>
-    x >= monster.x && x <= monster.x + 1 && y >= monster.y && y <= monster.y + 1;
+  // Keep-out for hero placement: the 2x2 zone PLUS the two columns to its right that
+  // a pack's "mob" fan can spill into. tv.js drawMonster renders up to 3 extra pack
+  // members fanning right (centres at monster + 0.6*i tiles), which reach ~2 columns
+  // past the zone; a hero placed there renders sitting on a mummy. Reserve it
+  // unconditionally (the layout is encounter-agnostic) — costs a few floor cells.
+  const PACK_FAN_COLS = 2;
+  const inMonsterZone = (x: number, y: number) =>
+    x >= monster.x && x <= monster.x + 1 + PACK_FAN_COLS && y >= monster.y && y <= monster.y + 1;
 
   // Hero slots: shuffled arena floor cells clear of the monster zone, so the
   // whole co-op battle (monster + heroes) stays in one room. Own deterministic
@@ -82,7 +88,7 @@ export function currentTvLayout(db: Database.Database): TvLayout | null {
   const candidates: { x: number; y: number }[] = [];
   for (let y = A.y; y < A.y + A.h; y++)
     for (let x = A.x; x < A.x + A.w; x++)
-      if (cells[y][x].type === 'floor' && !inMonster(x, y) && !blocked.has(`${x},${y}`)) candidates.push({ x, y });
+      if (cells[y][x].type === 'floor' && !inMonsterZone(x, y) && !blocked.has(`${x},${y}`)) candidates.push({ x, y });
   const rng = makeRng(d.seed);
   for (let i = candidates.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));

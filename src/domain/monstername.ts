@@ -32,13 +32,34 @@ function hash(n: number): number {
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** "<Adjective> <Creature>", stable for a given encounter id. */
+// Pluralize one word by regular English rules — enough for the bestiary's head
+// nouns (Mummy->Mummies, Wolf->Wolves, Witch->Witches, Skeleton->Skeletons).
+function pluralWord(w: string): string {
+  if (/(?:s|x|z|ch|sh)$/i.test(w)) return `${w}es`;
+  if (/[^aeiou]y$/i.test(w)) return `${w.slice(0, -1)}ies`;
+  if (/fe$/i.test(w)) return `${w.slice(0, -2)}ves`;
+  if (/f$/i.test(w)) return `${w.slice(0, -1)}ves`;
+  return `${w}s`;
+}
+
+/** Pluralize a creature name by its head noun (the last word): "Grey Wolf" -> "Grey Wolves". */
+export function pluralizeCreature(name: string): string {
+  const i = name.lastIndexOf(' ');
+  return name.slice(0, i + 1) + pluralWord(name.slice(i + 1));
+}
+
+/**
+ * "<Adjective> <Creature>", stable for a given encounter id. When `plural` is set
+ * (a pack of several mobs), the creature noun is pluralized: "Grim Mummies".
+ */
 export function monsterTitle(
   encounterId: number,
   index: number,
   category: MonsterCategory,
+  plural = false,
 ): string {
   const pool = GENERAL.concat(BY_CATEGORY[category] ?? []);
   const adj = pool[hash(encounterId) % pool.length];
-  return `${cap(adj)} ${monsterName(index)}`;
+  const noun = plural ? pluralizeCreature(monsterName(index)) : monsterName(index);
+  return `${cap(adj)} ${noun}`;
 }

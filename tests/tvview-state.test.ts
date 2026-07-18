@@ -79,6 +79,17 @@ describe('buildTvState', () => {
     if (m) { expect(e.size).toBe(m.size); expect(e.flying).toBe(m.flying); }
   });
 
+  it('names a multi-mob pack in the plural (Grim Mummy -> Grim Mummies)', () => {
+    const a = createPlayer(db, { name: 'Big', class_key: 'wizard', gender: 'M' }, 1);
+    ingestTokenUsage(db, tokens(a.auth_token, 40000), 100000, { cacheReadWeight: 0 });
+    new GameEngine(db, { rng: () => 0.5 }).tick(100000);
+    // Pin the active encounter to a Mummy pack of several so the name is deterministic.
+    db.prepare("UPDATE encounters SET creature_index=296, kind='pack', pack_count=4 WHERE status='active'").run();
+    const e = buildTvState(db, 100000).encounter!;
+    expect(e.name.endsWith('Mummies')).toBe(true);
+    expect(e.name.endsWith('Mummy')).toBe(false);
+  });
+
   it('includes a defeat summary during the defeat window', () => {
     setSetting(db, 'min_encounter_hp', '1');
     setSetting(db, 'baseline_battle_minutes', '0');
