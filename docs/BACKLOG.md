@@ -358,5 +358,21 @@ another reason to prefer it. (This also shelves the original "activity-aware
 **Reconsider trigger:** if, after the roster levels up more, active-hours boss /
 deep fights still routinely drag (not just overnight paused stalls). Start with
 backstop-A + relative threshold; measure fights/day and gold influx over a week.
-Separate, already-approved and still pending: gold steal → 0.008% of target gold,
-and a ~200× modifier cap.
+Separate, already-approved and shipped 2026-07-21: gold steal → 0.008% of held
+gold (`monster_gold_steal_pct`), and a 200× activity-modifier cap (`modifier_cap`).
+
+## 21. Reskin the dungeon during a long fight (cosmetic, no gameplay change)
+A gentler answer to "long fights feel like a slog" (#20) that touches *visuals
+only*: while a single encounter drags on, periodically swap the **dungeon
+theme/background** — same monster, same HP, same combat — so the backdrop stays
+fresh through the day while the grind continues uninterrupted. Decouples "how
+long the fight lasts" from "how monotonous it looks," so we may not need to
+shorten fights at all (see #20). The TV already regenerates a full themed layout
+per dungeon (`tvlayout.ts` / `dungeon2`), so this is a periodic re-roll of the
+*layout theme* for the active encounter without touching `encounters` HP/state.
+- [ ] Re-roll the render theme on a timer (or every N monster-attacks) mid-fight,
+      independent of the encounter row — monster + HP + hero slots unchanged
+- [ ] Pick a cadence that reads as "fresh," not flickery (e.g. every ~20-30 min
+      of active time), and re-use the existing kiosk layout push
+- [ ] Confirm hero-slot / monster-zone continuity across the reskin (no actors
+      jumping) — keep positions, swap only wall/floor/decor theme

@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   attack_interval_ms: '4000',  // base swing interval
   attack_jitter_ms: '1500',    // +/- jitter on swing interval
   token_modifier_k: '20000',   // recent tokens that add +1.0 to modifier
+  modifier_cap: '200',         // ceiling on the activity multiplier (trims the burst tail)
   baseline_battle_minutes: '45', // quiet-office battle length (activity shortens it)
   level_curve_slope: '0.5',      // damage multiplier = 1 + slope*ln(level)
   decay_after_minutes: '5',      // idle before the activity modifier decays
@@ -27,7 +28,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   monster_attacks_enabled: '1',    // 1 = monster strikes back at players; 0 = off
   monster_attack_interval_ms: '15000', // base time between monster counter-attacks
   monster_attack_jitter_ms: '5000',    // +/- jitter on the strike interval
-  monster_gold_steal: '5',         // max gold a strike steals (broke -> debuff instead)
+  monster_gold_steal_pct: '0.008', // percent of held gold a strike steals (broke -> debuff instead)
   monster_debuff_factor: '0.85',   // swing-damage multiplier while debuffed
   monster_debuff_seconds: '8',     // debuff duration
 };

@@ -7,7 +7,7 @@ export type BoardFormat = 'tokens' | 'gold' | 'count' | 'multiplier' | 'damage' 
 export interface BoardEntry { playerId: number; name: string; avatarUrl: string; value: number; }
 export interface Leaderboard { key: string; title: string; format: BoardFormat; entries: BoardEntry[]; }
 export type Leaderboards = Leaderboard[];
-export interface LeaderboardCfg extends ActivityCfg { tokenModifierK: number; }
+export interface LeaderboardCfg extends ActivityCfg { tokenModifierK: number; modifierCap: number; }
 
 interface PlayerRow {
   id: number; name: string; class_key: string; gender: string;
@@ -68,7 +68,7 @@ export function buildLeaderboards(
 
   // Live: current activity modifier.
   const fire = new Map<number, number>();
-  for (const p of players) fire.set(p.id, tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK));
+  for (const p of players) fire.set(p.id, tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK, cfg.modifierCap));
 
   // Windowed: one 90-day scan, bucketed in JS by server-local day.
   const events = db.prepare(

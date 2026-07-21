@@ -56,9 +56,9 @@ describe('engine monster retaliation', () => {
     expect(getPlayerById(db, p.id)!.gold).toBe(0);    // unchanged
   });
 
-  it('a gold roll on a player with gold steals up to the cap and logs it', () => {
+  it('a gold roll on a player with gold steals a percent of their holdings and logs it', () => {
     const p = activeGame();
-    db.prepare('UPDATE players SET gold=100 WHERE id=?').run(p.id);
+    db.prepare('UPDATE players SET gold=1000000 WHERE id=?').run(p.id);
     // Same draw order as above; 4th draw clamps to 0.1 -> gold. Player has gold -> steal.
     const seq = [0, 0, 0.1]; let i = 0;
     const eng = new GameEngine(db, { rng: () => seq[Math.min(i++, seq.length - 1)] });
@@ -67,8 +67,8 @@ describe('engine monster retaliation', () => {
     eng.tick(116000);
     const row = db.prepare('SELECT * FROM monster_attacks ORDER BY id DESC LIMIT 1').get() as any;
     expect(row.kind).toBe('gold');
-    expect(row.gold_delta).toBe(5);                   // monster_gold_steal default
-    expect(getPlayerById(db, p.id)!.gold).toBe(95);
+    expect(row.gold_delta).toBe(80);                  // 0.008% of 1,000,000 (monster_gold_steal_pct default)
+    expect(getPlayerById(db, p.id)!.gold).toBe(999920);
   });
 
   it('monster_attacks_enabled=0 suppresses all retaliation', () => {

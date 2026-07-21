@@ -228,7 +228,7 @@ export class GameEngine {
       const next = this.nextAttackAt.get(p.id) ?? this.scheduleNext(now, cfg);
       if (now >= next) {
         const score = activityScore(this.db, p.id, now, cfg);
-        const am = tokenModifier(score, cfg.tokenModifierK);           // player's own activity modifier
+        const am = tokenModifier(score, cfg.tokenModifierK, cfg.modifierCap); // player's own activity modifier (capped)
         const mod = am * debuffFactor(this.db, p.id, now, cfg);
         const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelCurveSlope, mod);
         this.applyHit(encId, p.id, dmg);
@@ -263,7 +263,7 @@ export class GameEngine {
     let amount = 0;
     if (kind === 'gold') {
       const cur = (this.db.prepare('SELECT gold FROM players WHERE id=?').get(target.id) as { gold: number }).gold;
-      amount = goldSteal(cur, cfg.monsterGoldSteal);
+      amount = goldSteal(cur, cfg.monsterGoldStealPct);
       if (amount <= 0) kind = 'debuff'; // broke -> debuff so a hit always lands
     }
 

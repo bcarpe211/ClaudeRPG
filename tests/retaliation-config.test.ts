@@ -5,7 +5,7 @@ import { loadEngineConfig } from '../src/domain/encounters';
 import { SETTINGS_META } from '../src/domain/settings-meta';
 
 const KEYS = ['monster_attacks_enabled', 'monster_attack_interval_ms', 'monster_attack_jitter_ms',
-  'monster_gold_steal', 'monster_debuff_factor', 'monster_debuff_seconds'];
+  'monster_gold_steal_pct', 'monster_debuff_factor', 'monster_debuff_seconds'];
 
 describe('monster-retaliation settings', () => {
   it('defines defaults + metadata for every new key', () => {
@@ -22,7 +22,7 @@ describe('monster-retaliation settings', () => {
     expect(cfg.monsterAttacksEnabled).toBe(1);
     expect(cfg.monsterAttackIntervalMs).toBe(15000);
     expect(cfg.monsterAttackJitterMs).toBe(5000);
-    expect(cfg.monsterGoldSteal).toBe(5);
+    expect(cfg.monsterGoldStealPct).toBe(0.008);
     expect(cfg.monsterDebuffFactor).toBeCloseTo(0.85);
     expect(cfg.monsterDebuffSeconds).toBe(8);
   });

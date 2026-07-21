@@ -8,7 +8,7 @@ import { pickWeighted } from './tilesheet';
 export interface EngineConfig {
   baseXp: number; xpGrowth: number;
   baseHit: number; attackIntervalMs: number; attackJitterMs: number;
-  tokenModifierK: number; bossHpMult: number; goldFactor: number;
+  tokenModifierK: number; modifierCap: number; bossHpMult: number; goldFactor: number;
   minEncounterHp: number; difficultyRampPerEncounter: number;
   difficultyRampPerDungeon: number; regularEncountersMin: number;
   regularEncountersMax: number; pauseAfterMinutes: number;
@@ -16,7 +16,7 @@ export interface EngineConfig {
   baselineBattleMinutes: number; levelCurveSlope: number;
   decayAfterMinutes: number; decaySpanMinutes: number; goldDamageWeight: number;
   monsterAttacksEnabled: number; monsterAttackIntervalMs: number;
-  monsterAttackJitterMs: number; monsterGoldSteal: number;
+  monsterAttackJitterMs: number; monsterGoldStealPct: number;
   monsterDebuffFactor: number; monsterDebuffSeconds: number;
 }
 
@@ -30,7 +30,7 @@ export function loadEngineConfig(db: Database.Database): EngineConfig {
     baseXp: n('base_xp', 50000), xpGrowth: n('xp_growth', 1.5),
     baseHit: n('base_hit', 100), attackIntervalMs: n('attack_interval_ms', 4000),
     attackJitterMs: n('attack_jitter_ms', 1500),
-    tokenModifierK: n('token_modifier_k', 20000),
+    tokenModifierK: n('token_modifier_k', 20000), modifierCap: n('modifier_cap', 200),
     bossHpMult: n('boss_hp_mult', 3), goldFactor: n('gold_factor', 0.01),
     minEncounterHp: n('min_encounter_hp', 2000),
     difficultyRampPerEncounter: n('difficulty_ramp_per_encounter', 0.15),
@@ -48,7 +48,7 @@ export function loadEngineConfig(db: Database.Database): EngineConfig {
     monsterAttacksEnabled: n('monster_attacks_enabled', 1),
     monsterAttackIntervalMs: n('monster_attack_interval_ms', 15000),
     monsterAttackJitterMs: n('monster_attack_jitter_ms', 5000),
-    monsterGoldSteal: n('monster_gold_steal', 5),
+    monsterGoldStealPct: n('monster_gold_steal_pct', 0.008),
     monsterDebuffFactor: n('monster_debuff_factor', 0.85),
     monsterDebuffSeconds: n('monster_debuff_seconds', 8),
   };

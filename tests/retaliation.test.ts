@@ -18,11 +18,12 @@ describe('retaliation helpers', () => {
     expect(rollConsequence(() => 0.9)).toBe('debuff');
   });
 
-  it('goldSteal clamps to balance and never goes negative', () => {
-    expect(goldSteal(100, 5)).toBe(5);
-    expect(goldSteal(3, 5)).toBe(3);
-    expect(goldSteal(0, 5)).toBe(0);
-    expect(goldSteal(-10, 5)).toBe(0);
+  it('goldSteal takes a percent of held gold, floored at 1, never over balance', () => {
+    expect(goldSteal(1_000_000, 0.008)).toBe(80);   // 0.008% of 1M
+    expect(goldSteal(6_500_000, 0.008)).toBe(520);  // scales with wealth
+    expect(goldSteal(100, 0.008)).toBe(1);          // rounds to 0 -> floored to 1
+    expect(goldSteal(0, 0.008)).toBe(0);            // broke -> 0 (caller re-rolls to debuff)
+    expect(goldSteal(-10, 0.008)).toBe(0);
   });
 
   it('debuffFactor is <1 only while a debuff row is inside the window', () => {

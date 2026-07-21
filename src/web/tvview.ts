@@ -95,7 +95,7 @@ export function buildTvState(db: Database.Database, now: number): TvState {
   const players: TvHero[] = rows.map((p) => ({
     id: p.id, name: p.name, avatarUrl: classSpriteUrl(p.class_key, p.gender as Gender),
     level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,
-    gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK),
+    gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK, cfg.modifierCap),
     disabled: !!p.disabled, connected: p.last_token_at != null,
     damage: dmgByPlayer.get(p.id) ?? 0, x: null, y: null,
     debuffed: debuffFactor(db, p.id, now, cfg) < 1,

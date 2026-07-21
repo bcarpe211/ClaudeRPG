@@ -6,7 +6,7 @@ import { buildLeaderboards } from '../src/domain/leaderboards';
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); });
 
-const cfg = { decayAfterMinutes: 5, decaySpanMinutes: 5, tokenModifierK: 20000 };
+const cfg = { decayAfterMinutes: 5, decaySpanMinutes: 5, tokenModifierK: 20000, modifierCap: 200 };
 
 function mkPlayer(name: string, over: Partial<{ level: number; effective_tokens: number; gold: number; peak_modifier: number; disabled: number }> = {}) {
   const p = createPlayer(db, { name, class_key: 'knight', gender: 'M' }, 1);

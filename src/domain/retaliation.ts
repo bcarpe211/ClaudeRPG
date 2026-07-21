@@ -16,9 +16,16 @@ export function rollConsequence(rng: () => number): 'gold' | 'debuff' {
   return rng() < 0.5 ? 'gold' : 'debuff';
 }
 
-/** Gold a strike steals: min(currentGold, max), never negative. */
-export function goldSteal(currentGold: number, max: number): number {
-  return Math.max(0, Math.min(currentGold, max));
+/**
+ * Gold a strike steals: `pctOfHeld` percent of the target's CURRENT gold
+ * (0.008 => 0.008%), floored at 1 when they hold any, never more than they have,
+ * 0 when broke (the caller re-rolls a broke gold hit into a debuff). Percentage-
+ * based so it scales with wealth and stays meaningful as the economy inflates,
+ * unlike a flat amount that goes stale.
+ */
+export function goldSteal(currentGold: number, pctOfHeld: number): number {
+  if (currentGold <= 0) return 0;
+  return Math.min(currentGold, Math.max(1, Math.round((currentGold * pctOfHeld) / 100)));
 }
 
 /**

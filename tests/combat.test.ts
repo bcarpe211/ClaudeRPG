@@ -6,6 +6,11 @@ describe('combat', () => {
     expect(tokenModifier(0, 20000)).toBe(1);
   });
 
+  it('tokenModifier caps at the given ceiling (trims the burst tail)', () => {
+    expect(tokenModifier(100_000_000, 20000, 200)).toBe(200); // 5001 uncapped -> 200
+    expect(tokenModifier(20000, 20000, 200)).toBeCloseTo(2);  // below the cap: unaffected
+    expect(tokenModifier(0, 20000, 200)).toBe(1);
+  });
   it('tokenModifier rises with recent tokens', () => {
     expect(tokenModifier(20000, 20000)).toBeCloseTo(2); // 1 + 20000/20000
     expect(tokenModifier(10000, 20000)).toBeCloseTo(1.5);
