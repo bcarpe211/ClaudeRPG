@@ -376,3 +376,49 @@ per dungeon (`tvlayout.ts` / `dungeon2`), so this is a periodic re-roll of the
       of active time), and re-use the existing kiosk layout push
 - [ ] Confirm hero-slot / monster-zone continuity across the reskin (no actors
       jumping) — keep positions, swap only wall/floor/decor theme
+
+## 22. Player shop — spend gold (the missing gold sink) 🔥 most-requested
+Players spend accumulated gold on something. **Repeatedly requested by players**,
+and it's the **missing gold sink**: the 2026-07-19 balance review found gold only
+inflates (38M+ in circulation, ~6.7M/day minted, near-zero removal even after the
+new 0.008% steal — see #20). A shop is the natural sink, so it solves two things
+at once. Prices must be scaled to the *inflated* economy (millions, not hundreds).
+Needs a real design pass before building.
+- [ ] Brainstorm scope: catalog (cosmetics? class upgrades? consumable buffs?
+      revives? name/title flair?), pricing scaled to the live economy, permanence
+      (permanent vs per-fight), gold-only vs a second currency
+- [ ] Fairness guardrail: don't let whales simply buy dominance
+- [ ] Shop page on the `dungeon.css` shell (#18), gated to a logged-in character
+- [ ] Server-authoritative, atomic purchase + gold deduction
+- [ ] Surface effects (character sheet and/or TV)
+
+## 23. Heroes face the monster (flip sprite by side)
+On the TV a hero sprite always faces the same direction regardless of which side
+of the monster it stands on. Flip the hero sprite horizontally to face the monster
+based on `hero.x` vs the monster-zone centre — a hero to the monster's right faces
+left, and vice-versa. Small `tv.js` render change (`drawSprite` with an x-flip).
+Pairs with #3 (attack lunge direction, done) and #4 (class attacks).
+- [ ] Flip hero sprite to face the monster by relative x-position
+- [ ] (Optional) monster / pack faces the cluster of heroes
+
+## 24. Richer / more complex dungeon decorations
+Spruce up the dungeon further beyond the #6 pass: more elaborate, layered, varied
+decorations — larger multi-tile props, denser themed arrangements, structural
+pieces — so each room reads as a more detailed place. Follow-on to #6 (decor
+library + placement) and #7 (lively floors); keep the walkability / hero-slot /
+monster-zone clearance rules intact.
+- [ ] Expand the decor library with more complex / multi-tile pieces per theme
+- [ ] Denser, more varied placement without crowding the actors
+- [ ] Preserve walkability + monster-zone clearance guarantees
+
+## 25. Local/personal view — enhanced & interactive (distinct from the big-screen TV)
+Players have started watching `/tv` on their own computers. Build a view tuned for
+a personal screen rather than the shared office TV: a **smaller dungeon panel**,
+**more stats on-screen**, and some **player-to-player interactivity**. The TV kiosk
+stays lean and readable from across the room; the personal view trades that for
+density + interaction. Needs a design pass.
+- [ ] Brainstorm the interactivity — what "between players" means (emotes/reactions,
+      cheering a player, live chat, spectator predictions?) and how it's gated
+- [ ] Route/mode decision: a new `/watch` vs a `?mode=local` on `/tv`
+- [ ] Denser layout: smaller dungeon + expanded stats/leaderboard panes
+- [ ] Reuse the SSE stream + `dungeon.css` shell; do NOT regress the TV kiosk
