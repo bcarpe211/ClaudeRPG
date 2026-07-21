@@ -10,3 +10,6 @@ assets/
 
 # raw flooring import (data vendored into src/domain/floordata; provenance in the spec)
 docs/oryx_flooring_package/
+
+# Claude Code local workspace (worktrees, local settings) — never commit
+.claude/
