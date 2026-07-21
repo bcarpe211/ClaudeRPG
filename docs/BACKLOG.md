@@ -296,3 +296,67 @@ Spec 1: `docs/superpowers/specs/2026-07-14-dungeon-shell-design-language-design.
       player-edit/settings).
 - [ ] **Spec 3 (follow-up)** — dev-tools cohort (catalog, dungeon-preview).
 - [ ] (Free) eventual shop / character-editor inherit the shell when built.
+
+## 19. Daily-stats page — permanent "balance ledger" for players
+Turn the one-off balance dashboard (built 2026-07-19 for the gold/damage tuning
+review) into a permanent, fun stats page for players. Prototype artifact:
+https://claude.ai/code/artifact/310f3824-11c3-4020-a6b0-99c70bd0e2dc (dungeon-
+ledger look: torch-dark ground, leaderboard-gold accent, grimoire serif).
+Candidate stats: gold in circulation + daily mint, per-player effective-power
+ranking (raw→effective compression), fight pace vs. target, peak modifiers,
+steal/debuff tallies, fights/day. Inherit the `dungeon.css` shell (#18). Feed it
+live from a stats endpoint rather than a DB snapshot (the prototype is static).
+Fits the "fun daily stats" framing — leaderboard flavour, not admin telemetry.
+- [ ] Stats endpoint (aggregate queries; cache/refresh cadence)
+- [ ] Page on the dungeon shell, linked from the player/character pages
+- [ ] "Daily" framing — day-over-day deltas, a rotating highlight or two
+
+## 20. Combat pacing — fight-duration backstop (DEFERRED, observe first)
+**Decision 2026-07-21: DEFER ~1 week and re-observe before building anything.**
+Fight durations vary wildly and we want to know if that's actually a problem
+before adding machinery. Right now a boss has run all day — but that may self-
+correct as players level.
+
+**Why fights drag (mechanics, confirmed 2026-07-19 review):** every enabled
+player swings each interval; an idle player still hits at modifier 1×, so the
+monster always takes a *floor DPM*. HP is `floorDPM × 45min × difficulty`, but
+`difficulty` ramps *multiplicatively* (0.15/encounter, 0.25/dungeon, ×3 boss)
+while floorDPM only tracks player *levels* (which crawl up). So a floor-paced
+fight at depth is `45min × difficulty` — ~3.6h for a L16 single, ~10h for a boss.
+Bursts (own-activity modifier, observed up to 194×) collapse that to 7–13 min.
+Plus the 15-min auto-pause freezes ticks but not the wall clock, so overnight
+"26-hour fights" are mostly *paused* time, not combat.
+
+**Key reason to wait:** floorDPM is level-based, so as the roster levels up the
+deep-fight floor time shrinks on its own — the drag may resolve without code.
+
+**Options explored (pick up here if we act):**
+- **A. Festering bleed (leaning).** Monster loses a growing % of max-HP per
+  minute of *active* (unpaused) combat. Un-griefable (HP not derived from anyone's
+  output, so a pre-spawn burst does nothing), idle-safe, simple. TV shows only a
+  proportional bar, so the fudge is invisible there; homepage numbers just tick down.
+- **B. Rubber-band controller.** Per-tick correction toward a 45-min schedule both
+  ways. Most precise, but padding fast fights fights the "let whales cook" goal and
+  makes homepage numbers stall. Rejected as too artificial.
+- **C. Smoothed spawn calc.** HP from a rolling-average DPM instead of instantaneous
+  — fixes only the grief vector, not the stalls. Minimal-change fallback.
+
+**Philosophy leaning = backstop, NOT pacer.** Rescue only pathological stalls;
+let real damage decide fights. Threshold scaled to each fight's *expected floor
+time* (`45 × difficulty`): ramp bleed at ~1.5×, force finish by ~2.5×. Never
+truncates a fair-clip fight; adapts to depth automatically.
+
+**Gold interaction (important):** the bleed does NOT change gold-per-fight (pool =
+`max_hp × level × gold_factor`, independent of how the fight ends). It only raises
+*fights/day*, which compounds: faster fights → faster dungeon descent → deeper
+levels → pools grow super-linearly (`HP × level`, both rising). An aggressive
+pacer would need a compensating `gold_factor` cut (~0.01 → ~0.007 for +40%
+fights/day); the backstop barely moves fights/day, keeping gold predictable —
+another reason to prefer it. (This also shelves the original "activity-aware
+`calibrateHp`" idea, which had the same grief vector as C without the bleed.)
+
+**Reconsider trigger:** if, after the roster levels up more, active-hours boss /
+deep fights still routinely drag (not just overnight paused stalls). Start with
+backstop-A + relative threshold; measure fights/day and gold influx over a week.
+Separate, already-approved and still pending: gold steal → 0.008% of target gold,
+and a ~200× modifier cap.
