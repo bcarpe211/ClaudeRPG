@@ -6,12 +6,13 @@ import type { AppDeps } from '../app';
 import { renderPage } from '../app';
 import { asyncHandler } from '../async';
 import { getClass, classSpriteUrl, creatureSpriteFile, type Gender } from '../../domain/classes';
-import { getPlayerByToken } from '../../domain/players';
+import { getPlayerByToken, getPlayerById } from '../../domain/players';
 import {
   CLOTHING, spriteFileIndex, getCosmetics, cosmeticSpriteUrl, spriteId,
 } from '../../domain/cosmetics';
 import { recolorSprite, recolorSpriteSlots } from '../../domain/spritetint';
 import { loadSlotmap, SLOTS } from '../../domain/slots';
+import { getSlotConfig, slotConfigHash } from '../../domain/slotcosmetics';
 import { purchase, setCosmeticHue, SKUS } from '../../domain/shop';
 import { getSetting } from '../../domain/settings';
 
@@ -52,6 +53,32 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
         : { hexes: c.dominant, op: 'hue' as const, hue };
       out = recolorSprite(src, [rule]);
     }
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(cacheFile, out);
+    res.send(out);
+  }));
+
+  // Per-slot skin: render a player's full slot config through the slot-map, cached by config hash.
+  app.get('/sprite/skin/:playerId/:frame/:hash.png', asyncHandler(async (req, res) => {
+    const playerId = Number(req.params.playerId);
+    const frame = req.params.frame === 'b' ? 'b' : 'a';
+    if (!Number.isInteger(playerId)) { res.sendStatus(400); return; }
+    const player = getPlayerById(db, playerId);
+    if (!player) { res.sendStatus(404); return; }
+
+    const slotConfig = getSlotConfig(db, playerId);
+    const hash = slotConfigHash(slotConfig);
+    res.type('png').set('Cache-Control', 'public, max-age=31536000, immutable');
+    const cacheFile = path.join(cacheDir, `skin_${playerId}_${frame}_${hash}.png`);
+    if (fs.existsSync(cacheFile)) { res.sendFile(path.resolve(cacheFile)); return; }
+
+    const srcFile = path.resolve(
+      config.spritesDir, 'creatures_24x24',
+      creatureSpriteFile(spriteFileIndex(player.class_key, player.gender as Gender, frame)),
+    );
+    const src = fs.readFileSync(srcFile);
+    const slotIds = loadSlotmap(spriteId(player.class_key, player.gender as Gender), frame);
+    const out = slotIds ? recolorSpriteSlots(src, slotIds, slotConfig) : src; // no slot-map (female) → plain
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(cacheFile, out);
     res.send(out);
