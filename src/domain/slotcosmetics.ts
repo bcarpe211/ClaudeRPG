@@ -43,3 +43,22 @@ export function setSlotRule(db: Database.Database, playerId: number, slot: numbe
 export function clearSlot(db: Database.Database, playerId: number, slot: number): void {
   db.prepare('DELETE FROM player_slot_cosmetics WHERE player_id = ? AND slot = ?').run(playerId, slot);
 }
+
+import { classSpriteUrl, type Gender } from './classes';
+
+/** Stable 8-hex content hash of a slot config (order-independent). Cache-bust token for the skin URL. */
+export function slotConfigHash(config: Map<number, SlotRule>): string {
+  const s = [...config.entries()].sort((a, b) => a[0] - b[0])
+    .map(([slot, r]) => `${slot}:${r.op}:${r.hue ?? ''}:${r.sat ?? ''}:${r.lo ?? ''}:${r.hi ?? ''}`).join('|');
+  let h = 2166136261 >>> 0; // FNV-1a
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** Sprite URL for a character: the hashed skin URL when they have any cosmetics, else the plain sprite. */
+export function cosmeticSkinUrl(
+  playerId: number, classKey: string, gender: Gender, config: Map<number, SlotRule>, frame: 'a' | 'b' = 'a',
+): string {
+  if (config.size === 0) return classSpriteUrl(classKey, gender);
+  return `/sprite/skin/${playerId}/${frame}/${slotConfigHash(config)}.png`;
+}

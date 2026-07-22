@@ -4,7 +4,8 @@ import { seedSettings } from '../src/domain/settings';
 import { createPlayer } from '../src/domain/players';
 import { purchase, setCosmeticHue } from '../src/domain/shop';
 import { SLOTS } from '../src/domain/slots';
-import { getSlotConfig, setSlotRule, clearSlot } from '../src/domain/slotcosmetics';
+import { getSlotConfig, setSlotRule, clearSlot, slotConfigHash, cosmeticSkinUrl } from '../src/domain/slotcosmetics';
+import { classSpriteUrl } from '../src/domain/classes';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -40,5 +41,22 @@ describe('getSlotConfig', () => {
     setSlotRule(db, p.id, SLOTS.cape, { op: 'hue', hue: 90 }, 300);
     clearSlot(db, p.id, SLOTS.cape);
     expect(getSlotConfig(db, p.id).has(SLOTS.cape)).toBe(false);
+  });
+});
+
+describe('slotConfigHash + cosmeticSkinUrl', () => {
+  it('hash is stable and order-independent, changes with the config', () => {
+    const a = new Map([[1, { op: 'hue' as const, hue: 10 }], [7, { op: 'value' as const, lo: 0, hi: 0.3 }]]);
+    const b = new Map([[7, { op: 'value' as const, lo: 0, hi: 0.3 }], [1, { op: 'hue' as const, hue: 10 }]]);
+    const c = new Map([[1, { op: 'hue' as const, hue: 11 }]]);
+    expect(slotConfigHash(a)).toBe(slotConfigHash(b)); // order-independent
+    expect(slotConfigHash(a)).not.toBe(slotConfigHash(c));
+    expect(slotConfigHash(a)).toMatch(/^[0-9a-f]{8}$/);
+  });
+  it('cosmeticSkinUrl: plain sprite when empty, skin URL otherwise', () => {
+    const empty = new Map();
+    expect(cosmeticSkinUrl(5, 'wizard', 'M', empty)).toBe(classSpriteUrl('wizard', 'M'));
+    const cfg = new Map([[1, { op: 'hue' as const, hue: 210 }]]);
+    expect(cosmeticSkinUrl(5, 'wizard', 'M', cfg, 'a')).toBe(`/sprite/skin/5/a/${slotConfigHash(cfg)}.png`);
   });
 });
