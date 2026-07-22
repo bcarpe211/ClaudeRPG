@@ -1,17 +1,26 @@
 import type Database from 'better-sqlite3';
 import { spriteIndexFor, classSpriteUrl, type Gender } from './classes';
 
-/** Which palette colors are the recolorable clothing ramp, per class. Hand-authored + verified. */
-export const CLOTHING: Record<string, { dominant: string[]; secondary?: string[]; weapon?: string[] }> = {
+/** Which palette colors are the recolorable clothing ramp, per class. Hand-authored + verified.
+ *  `op` selects the recolor operation for the dominant ramp: 'hue' (chromatic, default) or
+ *  'colorize' (achromatic — white/grey garments, keeps shading via injected saturation). */
+export interface ClothingRule {
+  dominant: string[];
+  op?: 'hue' | 'colorize';
+  sat?: number;
+  secondary?: string[];
+  weapon?: string[];
+}
+export const CLOTHING: Record<string, ClothingRule> = {
   knight: { dominant: ['#3cbcfc', '#9adcfd', '#2985b2'] },
   thief: { dominant: ['#1eba4a', '#24e35a'] },
   ranger: { dominant: ['#476575', '#7c94a4'] },
   wizard: { dominant: ['#cf3232', '#ff3d3d'] },
-  priest: { dominant: ['#cf3232'] },
+  priest: { dominant: ['#c9c9c9', '#f3f3f3', '#919191'], op: 'colorize', sat: 0.6 }, // white robe
   shaman: { dominant: ['#887000', '#b89600'] },
-  berserker: { dominant: ['#887000', '#b89600'] },
-  swordsman: { dominant: ['#0e7cb3', '#b86e28'] },
-  paladin: { dominant: ['#0e7cb3'] },
+  berserker: { dominant: ['#616060', '#919191', '#9c9c9c', '#c9c9c9'], op: 'colorize', sat: 0.55 }, // grey helm
+  swordsman: { dominant: ['#0e7cb3'] },
+  paladin: { dominant: ['#f3f3f3', '#ffffff', '#c9c9c9', '#bdbdbd', '#919191'], op: 'colorize', sat: 0.5 }, // white plate
 };
 
 export function spriteId(classKey: string, gender: Gender): string {

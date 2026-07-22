@@ -34,7 +34,11 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
       config.spritesDir, 'creatures_24x24',
       creatureSpriteFile(spriteFileIndex(classKey, gender as Gender, frame)),
     );
-    const out = recolorSprite(fs.readFileSync(srcFile), CLOTHING[classKey].dominant, hue);
+    const c = CLOTHING[classKey];
+    const rule = c.op === 'colorize'
+      ? { hexes: c.dominant, op: 'colorize' as const, hue, sat: c.sat ?? 0.6 }
+      : { hexes: c.dominant, op: 'hue' as const, hue };
+    const out = recolorSprite(fs.readFileSync(srcFile), [rule]);
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(cacheFile, out);
     res.send(out);
