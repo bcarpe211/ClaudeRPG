@@ -5,6 +5,9 @@ import { seedSettings } from '../src/domain/settings';
 import { createApp } from '../src/web/app';
 import { loadConfig } from '../src/config';
 import { PNG } from 'pngjs';
+import { readFileSync } from 'node:fs';
+import { spriteFileIndex } from '../src/domain/cosmetics';
+import { creatureSpriteFile } from '../src/domain/classes';
 
 function app() {
   const db = openDb(':memory:'); seedSettings(db);
@@ -35,5 +38,19 @@ describe('GET /sprite/tint', () => {
       if (png.data[i + 3] > 0 && r > 120 && r - Math.max(g, b) > 60) saturatedReds++;
     }
     expect(saturatedReds).toBeGreaterThan(20); // the robe is now red, not grey
+  });
+  it('renders via slot-map: wizard eyes (#cf3232 in the hood) stay while the robe recolors', async () => {
+    const base = PNG.sync.read(readFileSync(
+      `assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24/${creatureSpriteFile(spriteFileIndex('wizard', 'M', 'a'))}`));
+    const green = PNG.sync.read((await request(app()).get('/sprite/tint/wizard_M/a/120.png')).body);
+    let checkedEye = false;
+    for (let y = 8; y <= 11; y++) for (let x = 8; x <= 13; x++) {
+      const i = (y * 24 + x) * 4;
+      if (base.data[i] === 0xcf && base.data[i + 1] === 0x32 && base.data[i + 2] === 0x32) {
+        expect([green.data[i], green.data[i + 1], green.data[i + 2]]).toEqual([0xcf, 0x32, 0x32]); // eye unchanged
+        checkedEye = true;
+      }
+    }
+    expect(checkedEye).toBe(true); // there is an eye pixel to check
   });
 });

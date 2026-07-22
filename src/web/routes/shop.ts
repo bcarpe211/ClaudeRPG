@@ -10,7 +10,8 @@ import { getPlayerByToken } from '../../domain/players';
 import {
   CLOTHING, spriteFileIndex, getCosmetics, cosmeticSpriteUrl, spriteId,
 } from '../../domain/cosmetics';
-import { recolorSprite } from '../../domain/spritetint';
+import { recolorSprite, recolorSpriteSlots } from '../../domain/spritetint';
+import { loadSlotmap, SLOTS } from '../../domain/slots';
 import { purchase, setCosmeticHue, SKUS } from '../../domain/shop';
 import { getSetting } from '../../domain/settings';
 
@@ -35,10 +36,22 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
       creatureSpriteFile(spriteFileIndex(classKey, gender as Gender, frame)),
     );
     const c = CLOTHING[classKey];
-    const rule = c.op === 'colorize'
-      ? { hexes: c.dominant, op: 'colorize' as const, hue, sat: c.sat ?? 0.6 }
-      : { hexes: c.dominant, op: 'hue' as const, hue };
-    const out = recolorSprite(fs.readFileSync(srcFile), [rule]);
+    const src = fs.readFileSync(srcFile);
+    const slotIds = loadSlotmap(`${classKey}_${gender}`, frame);
+    let out: Buffer;
+    if (slotIds) {
+      // slot-map render: color only the body slot (collisions isolated by the map)
+      const bodyRule = c.op === 'colorize'
+        ? { op: 'colorize' as const, hue, sat: c.sat ?? 0.6 }
+        : { op: 'hue' as const, hue };
+      out = recolorSpriteSlots(src, slotIds, new Map([[SLOTS.body, bodyRule]]));
+    } else {
+      // no slot-map (e.g. female) — fall back to the Phase-1 hex recolor
+      const rule = c.op === 'colorize'
+        ? { hexes: c.dominant, op: 'colorize' as const, hue, sat: c.sat ?? 0.6 }
+        : { hexes: c.dominant, op: 'hue' as const, hue };
+      out = recolorSprite(src, [rule]);
+    }
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(cacheFile, out);
     res.send(out);
