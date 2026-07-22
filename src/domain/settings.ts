@@ -31,6 +31,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   monster_gold_steal_pct: '0.008', // percent of held gold a strike steals (broke -> debuff instead)
   monster_debuff_factor: '0.85',   // swing-damage multiplier while debuffed
   monster_debuff_seconds: '8',     // debuff duration
+  cosmetic_wheel_t1_price: '1500000', // gold to unlock the Tier-1 clothing dye wheel
 };
 
 export function seedSettings(db: Database.Database): void {

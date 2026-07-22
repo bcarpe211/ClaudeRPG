@@ -1,4 +1,5 @@
-import { spriteIndexFor, type Gender } from './classes';
+import type Database from 'better-sqlite3';
+import { spriteIndexFor, classSpriteUrl, type Gender } from './classes';
 
 /** Which palette colors are the recolorable clothing ramp, per class. Hand-authored + verified. */
 export const CLOTHING: Record<string, { dominant: string[]; secondary?: string[]; weapon?: string[] }> = {
@@ -19,4 +20,20 @@ export function spriteId(classKey: string, gender: Gender): string {
 export function spriteFileIndex(classKey: string, gender: Gender, frame: 'a' | 'b'): number {
   const base = spriteIndexFor(classKey, gender);
   return frame === 'b' ? base + 18 : base;
+}
+
+export interface CosmeticState { wheel_tier: number; primary_hue: number | null }
+
+export function getCosmetics(db: Database.Database, playerId: number): CosmeticState | undefined {
+  return db.prepare('SELECT wheel_tier, primary_hue FROM player_cosmetics WHERE player_id = ?')
+    .get(playerId) as CosmeticState | undefined;
+}
+
+/** Sprite URL for a character on any surface: tinted if a hue is set, else the plain class sprite. */
+export function cosmeticSpriteUrl(
+  classKey: string, gender: Gender, cos: CosmeticState | undefined, frame: 'a' | 'b' = 'a',
+): string {
+  if (cos && cos.primary_hue != null)
+    return `/sprite/tint/${spriteId(classKey, gender)}/${frame}/${cos.primary_hue}.png`;
+  return classSpriteUrl(classKey, gender);
 }

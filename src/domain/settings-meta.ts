@@ -10,7 +10,7 @@ export interface SettingMeta {
 
 export const GROUP_ORDER = [
   'Progression', 'Combat', 'Activity modifier', 'Monster HP & difficulty',
-  'Monster retaliation', 'Economy', 'Encounters & pacing', 'System',
+  'Monster retaliation', 'Economy', 'Encounters & pacing', 'Shop', 'System',
 ] as const;
 
 export const SETTINGS_META: Record<string, SettingMeta> = {
@@ -75,6 +75,9 @@ export const SETTINGS_META: Record<string, SettingMeta> = {
     description: 'How long the victory summary stays on the TV before the next monster spawns. Higher = players have longer to read the results.' },
   pause_after_minutes: { group: 'Encounters & pacing', label: 'Idle-pause delay', unit: 'min', min: 1, step: 1,
     description: 'Office-wide minutes with no tokens from anyone before the game pauses ("the dungeon rests"). Higher = the game keeps running through longer lulls.' },
+  // Shop
+  cosmetic_wheel_t1_price: { group: 'Shop', label: 'Dye wheel (T1) price', unit: 'gold', min: 0, step: 10000,
+    description: 'Gold to unlock the Tier-1 clothing color wheel. Cosmetic only (no combat effect). Recoloring is free once unlocked.' },
   // System
   cache_read_weight: { group: 'System', label: 'Cache-read token weight', unit: '0–1', min: 0, max: 1, step: 0.05,
     description: "Fraction of cache-read tokens counted toward effective tokens (XP + damage). 0 = ignore cache reads; 1 = count them fully. Cache reads are cheap, so they're usually discounted." },
