@@ -377,20 +377,51 @@ per dungeon (`tvlayout.ts` / `dungeon2`), so this is a periodic re-roll of the
 - [ ] Confirm hero-slot / monster-zone continuity across the reskin (no actors
       jumping) — keep positions, swap only wall/floor/decor theme
 
-## 22. Player shop — spend gold (the missing gold sink) 🔥 most-requested
-Players spend accumulated gold on something. **Repeatedly requested by players**,
-and it's the **missing gold sink**: the 2026-07-19 balance review found gold only
-inflates (38M+ in circulation, ~6.7M/day minted, near-zero removal even after the
-new 0.008% steal — see #20). A shop is the natural sink, so it solves two things
-at once. Prices must be scaled to the *inflated* economy (millions, not hundreds).
-Needs a real design pass before building.
-- [ ] Brainstorm scope: catalog (cosmetics? class upgrades? consumable buffs?
-      revives? name/title flair?), pricing scaled to the live economy, permanence
-      (permanent vs per-fight), gold-only vs a second currency
-- [ ] Fairness guardrail: don't let whales simply buy dominance
-- [ ] Shop page on the `dungeon.css` shell (#18), gated to a logged-in character
-- [ ] Server-authoritative, atomic purchase + gold deduction
-- [ ] Surface effects (character sheet and/or TV)
+## 22. Player shop — a multi-phase PROGRAM (spend gold; the missing gold sink) 🔥
+Most-requested feature, and the **missing gold sink**: the 2026-07-19 balance
+review found gold only inflates (38M+ in circulation, ~6.7M/day minted, near-zero
+removal even after the new 0.008% steal — see #20). Player vision (2026-07-21) is a
+program of ~5 interlocking subsystems — **decompose into sequenced sub-projects,
+each its own spec→plan→build.** Dependencies: Phase 0 → {1,2,3} → 4.
+
+**Phase 0 — Foundation (shared spine).** Player inventory/ownership model + currency
+balances (gold now; gems later), a shop page on the `dungeon.css` shell (#18) gated
+to a logged-in character, and an **atomic, server-authoritative** purchase +
+gold-deduction. Every product line plugs into this; ship with one product to prove
+the loop end-to-end.
+
+**Phase 1 — Cosmetics: character color customization.** Unlock a **color wheel**
+that recolors the character's dominant clothing colour to any chosen colour. Tiered
+(pay more to unlock deeper): T1 single dominant colour; T2 split — primary (body) +
+secondary (hood/etc.); T3 adds a weapon colour. Expensive (~1–2M gold/tier), meant
+to take a couple weeks of play to earn. **OPEN TECH:** can we recolour the oryx
+class sprites programmatically (palette-swap)? — needs a feasibility spike (gates
+this phase). Classes are cosmetic-only today, so this is the first customization.
+
+**Phase 2 — Consumables: timed boosts.** Cheaper, self-consuming (a couple hours):
+damage boost, gold-gain multiplier. **Data-driven balance** so relative value is
+tuned (a gold-gain boost should out-earn a damage boost's derived gold, which
+out-earns doing nothing — measure with real DB data like the steal tuning).
+**DECISION (recommended): NO token boosts** — keep tokens the pure earned-from-work
+metric; letting gold buy tokens would corrupt the leaderboard / the game's premise.
+
+**Phase 3 — Loot boxes + equipment progression (the addicting endgame sink).** Loot
+boxes output random parts (some gold, weapon/armor parts, gems). **Doubling upgrade
+curve to level 10: 1,2,4,8,16,32,64,128,256,512 parts** per successive level.
+Weapon: sharpening stones / gems. Armor split into parts, each a slight effect +
+own curve — gloves (attack speed), cloak (reduce monster attacks), boots (gold
+gain), etc. **Gems** = a second currency (feeds Phase 4). The endgame sink once
+cosmetics are exhausted.
+
+**Phase 4 — Pets (later, plan separately).** Gated on **gems** earned from loot
+boxes (Phase 3). Design later.
+
+**Fairness guardrail throughout:** whales hold the most gold, so avoid permanent
+pay-to-win runaway — favour self-consuming (Phase 2), diminishing returns, and
+catch-up. Prices scaled to the inflated economy (millions, not hundreds).
+- [ ] Confirm decomposition + build order; brainstorm **Phase 0 (+ first product)**
+- [ ] Recoloring feasibility spike (gates Phase 1)
+- [ ] Per-phase spec→plan→build as we get to each
 
 ## 23. Heroes face the monster (flip sprite by side)
 On the TV a hero sprite always faces the same direction regardless of which side
