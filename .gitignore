@@ -13,3 +13,5 @@ docs/oryx_flooring_package/
 
 # Claude Code local workspace (worktrees, local settings) — never commit
 .claude/
+
+data/tint-cache/

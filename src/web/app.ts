@@ -7,6 +7,7 @@ import type Database from 'better-sqlite3';
 import type { Config } from '../config';
 import { registerRegistrationRoutes } from './routes/registration';
 import { registerCharacterRoutes } from './routes/character';
+import { registerShopRoutes } from './routes/shop';
 import { registerAdminRoutes } from './routes/admin';
 import { registerMetricsRoutes } from './routes/metrics';
 import { TvHub } from './tvhub';
@@ -58,6 +59,7 @@ export function createApp({ db, config }: AppDeps): Express {
 
   registerRegistrationRoutes(app, { db, config });
   registerCharacterRoutes(app, { db, config });
+  registerShopRoutes(app, { db, config });
   registerAdminRoutes(app, { db, config });
   registerMetricsRoutes(app, { db, config });
 
