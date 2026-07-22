@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hueSwap, recolorSprite } from '../src/domain/spritetint';
+import { hueSwap, recolorSprite, colorize } from '../src/domain/spritetint';
 import { PNG } from 'pngjs';
 
 describe('hueSwap', () => {
@@ -12,6 +12,21 @@ describe('hueSwap', () => {
   it('keeps a shade dark (dark red -> dark green)', () => {
     const [, g] = hueSwap(0xcf, 0x32, 0x32, 120);
     expect(g).toBe(0xcf); // same V as the input's max channel
+  });
+});
+
+describe('colorize (keeps per-pixel brightness, repaints chroma)', () => {
+  it('turns a white pixel into a light saturated color', () => {
+    // #f3f3f3 (near-white robe highlight) -> hue 0 (red), sat 0.6
+    expect(colorize(243, 243, 243, 0, 0.6)).toEqual([243, 97, 97]);
+  });
+  it('preserves shading: a darker source stays a darker result', () => {
+    const hi = colorize(243, 243, 243, 0, 0.6)[0]; // robe highlight -> R
+    const lo = colorize(145, 145, 145, 0, 0.6)[0]; // robe shadow    -> R
+    expect(hi).toBeGreaterThan(lo);
+  });
+  it('hueSwap still leaves a grey pixel grey (documents the limitation colorize fixes)', () => {
+    expect(hueSwap(200, 200, 200, 120)).toEqual([200, 200, 200]);
   });
 });
 
