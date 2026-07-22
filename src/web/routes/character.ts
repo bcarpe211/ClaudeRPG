@@ -9,7 +9,7 @@ import {
   deletePlayer,
 } from '../../domain/players';
 import { getClass, type Gender } from '../../domain/classes';
-import { getCosmetics, cosmeticSpriteUrl } from '../../domain/cosmetics';
+import { cosmeticSkinUrl, getSlotConfig } from '../../domain/slotcosmetics';
 import { buildSetupSnippet } from '../../domain/snippet';
 
 const RenameInput = z.object({
@@ -43,7 +43,7 @@ export function registerCharacterRoutes(
         title: player.name,
         player,
         className: getClass(player.class_key)?.name ?? player.class_key,
-        avatarUrl: cosmeticSpriteUrl(player.class_key, player.gender as Gender, getCosmetics(db, player.id), 'a'),
+        avatarUrl: cosmeticSkinUrl(player.id, player.class_key, player.gender as Gender, getSlotConfig(db, player.id), 'a'),
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({
           token: player.auth_token,
