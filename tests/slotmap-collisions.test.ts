@@ -17,6 +17,7 @@ const COLLISIONS: Array<{ cls: string; hex: string; bbox: [number, number, numbe
   { cls: 'shaman', hex: '#887000', bbox: [0, 0, 6, 23], slot: SLOTS.weapon },      // staff
   { cls: 'berserker', hex: '#887000', bbox: [0, 0, 5, 23], slot: SLOTS.weapon },   // axe handle (left)
   { cls: 'paladin', hex: '#f3f3f3', bbox: [0, 0, 23, 10], slot: SLOTS.headgear },  // white wings/helmet must NOT be body
+  { cls: 'paladin', hex: '#887000', bbox: [0, 0, 23, 23], slot: SLOTS.boots },     // olive boots/trim must NOT be body
 ];
 
 describe('slot-maps isolate collision pixels from the body slot', () => {
@@ -37,4 +38,19 @@ describe('slot-maps isolate collision pixels from the body slot', () => {
       expect(mislabeled).toBe(0);        // and none of them are in the body slot
     });
   }
+
+  it('paladin garment (#b4c21d helmet+shirt) IS the body slot', () => {
+    const map = loadSlotmap('paladin_M', 'a')!;
+    const png = spritePng('paladin');
+    let total = 0, body = 0;
+    for (let p = 0; p < map.length; p++) {
+      const i = p * 4;
+      if (png.data[i + 3] === 0) continue;
+      if (((png.data[i] << 16) | (png.data[i + 1] << 8) | png.data[i + 2]) !== hx('#b4c21d')) continue;
+      total++;
+      if (map[p] === SLOTS.body) body++;
+    }
+    expect(total).toBeGreaterThan(0);
+    expect(body).toBe(total); // the whole helmet+shirt garment recolors with the body channel
+  });
 });

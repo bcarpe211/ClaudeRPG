@@ -20,7 +20,7 @@ export const CLOTHING: Record<string, ClothingRule> = {
   shaman: { dominant: ['#887000', '#b89600'] },
   berserker: { dominant: ['#887000', '#b89600'] }, // body/tunic (hue) — color the body, not the helm; helm + cape are Phase-2 slots (cape shares the body olive for now)
   swordsman: { dominant: ['#0e7cb3'] },
-  paladin: { dominant: ['#887000', '#b89600'] }, // olive torso/legs garment (hue); white plate = wings/helmet (headgear slot), shield + plume left alone
+  paladin: { dominant: ['#b4c21d'] }, // yellow-green helmet + shirt garment (hue); white wings = headgear, olive = boots, shield left alone
 };
 
 export function spriteId(classKey: string, gender: Gender): string {
