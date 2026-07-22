@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { hueSwap, recolorSprite, colorize, valueRemap } from '../src/domain/spritetint';
+import { hueSwap, recolorSprite, colorize, valueRemap, recolorSpriteSlots, type SlotRule } from '../src/domain/spritetint';
 import { PNG } from 'pngjs';
 
 const PRIEST_M_A = 'assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24/oryx_16bit_fantasy_creatures_05.png';
@@ -65,5 +65,18 @@ describe('valueRemap (greyscale finish, brightness remapped)', () => {
     const hi = valueRemap(243, 243, 243, 0, 0.5)[0];
     const lo = valueRemap(145, 145, 145, 0, 0.5)[0];
     expect(hi).toBeGreaterThan(lo);
+  });
+});
+
+describe('recolorSpriteSlots (per-slot rules, isolation by slot-map)', () => {
+  it('applies a slot rule only to that slot; unmapped slots pass through', () => {
+    const png = new PNG({ width: 2, height: 1 });
+    png.data.set([0xff, 0x3d, 0x3d, 255], 0); // px0, slot 1 (body)
+    png.data.set([0xff, 0x3d, 0x3d, 255], 4); // px1, slot 7 (weapon) — SAME colour, different slot
+    const slotIds = Uint8Array.from([1, 7]);
+    const perSlot = new Map<number, SlotRule>([[1, { op: 'hue', hue: 120 }]]); // only body
+    const out = PNG.sync.read(recolorSpriteSlots(PNG.sync.write(png), slotIds, perSlot));
+    expect([out.data[0], out.data[1], out.data[2]]).not.toEqual([0xff, 0x3d, 0x3d]); // body recoloured
+    expect([out.data[4], out.data[5], out.data[6]]).toEqual([0xff, 0x3d, 0x3d]);     // weapon UNTOUCHED
   });
 });

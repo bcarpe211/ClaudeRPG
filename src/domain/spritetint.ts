@@ -82,3 +82,34 @@ export function recolorSprite(pngBuffer: Buffer, rules: RecolorRule[]): Buffer {
   }
   return PNG.sync.write(png);
 }
+
+export interface SlotRule {
+  op: 'hue' | 'colorize' | 'value';
+  hue?: number;   // 'hue', 'colorize'
+  sat?: number;   // 'colorize'
+  lo?: number;    // 'value'
+  hi?: number;    // 'value'
+}
+
+/** Recolour a sprite by per-pixel slot ids. `slotIds[p]` labels pixel p; each slot's
+ *  rule is applied to its pixels. Slot 0 and slots with no rule pass through. */
+export function recolorSpriteSlots(
+  pngBuffer: Buffer, slotIds: Uint8Array, perSlot: Map<number, SlotRule>,
+): Buffer {
+  const png = PNG.sync.read(pngBuffer);
+  const d = png.data;
+  const n = Math.min(slotIds.length, d.length / 4);
+  for (let p = 0; p < n; p++) {
+    const i = p * 4;
+    if (d[i + 3] === 0) continue;
+    const rule = perSlot.get(slotIds[p]);
+    if (!rule) continue;
+    const [r, g, b] = rule.op === 'colorize'
+      ? colorize(d[i], d[i + 1], d[i + 2], rule.hue ?? 0, rule.sat ?? 0.6)
+      : rule.op === 'value'
+        ? valueRemap(d[i], d[i + 1], d[i + 2], rule.lo ?? 0, rule.hi ?? 1)
+        : hueSwap(d[i], d[i + 1], d[i + 2], rule.hue ?? 0);
+    d[i] = r; d[i + 1] = g; d[i + 2] = b;
+  }
+  return PNG.sync.write(png);
+}
