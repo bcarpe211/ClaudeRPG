@@ -128,4 +128,17 @@ export const migrations: Migration[] = [
     id: '006_peak_modifier',
     sql: `ALTER TABLE players ADD COLUMN peak_modifier REAL NOT NULL DEFAULT 1;`,
   },
+  {
+    id: '007_player_cosmetics',
+    sql: `
+      CREATE TABLE player_cosmetics (
+        player_id     INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+        wheel_tier    INTEGER NOT NULL DEFAULT 0,
+        primary_hue   INTEGER,
+        secondary_hue INTEGER,
+        weapon_hue    INTEGER,
+        updated_at    INTEGER NOT NULL
+      );
+    `,
+  },
 ];
