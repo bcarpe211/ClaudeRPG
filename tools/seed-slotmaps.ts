@@ -27,11 +27,11 @@ export const SLOT_SEED: Record<string, SeedRule[]> = {
     { slot: SLOTS.skin, hexes: ['#fc9838', '#ffd1a6', '#b86e28'] },
   ],
   berserker: [
-    { slot: SLOTS.cape, hexes: ['#887000', '#b89600'], bbox: [17, 4, 23, 23] },  // cape drape (right)
-    { slot: SLOTS.weapon, hexes: ['#887000', '#b89600', '#919191', '#c9c9c9'], bbox: [0, 0, 5, 23] }, // axe (left)
-    { slot: SLOTS.headgear, hexes: ['#616060', '#919191', '#9c9c9c', '#c9c9c9'] }, // helm (grey)
+    { slot: SLOTS.cape, hexes: ['#b89600'] },                            // cape = lighter olive (right), hex-separated
+    { slot: SLOTS.weapon, hexes: ['#887000', '#616060', '#919191', '#9c9c9c', '#c9c9c9'], bbox: [0, 0, 5, 23] }, // axe (left: handle olive + head grey)
+    { slot: SLOTS.headgear, hexes: ['#616060', '#919191', '#9c9c9c', '#c9c9c9'] }, // helm (remaining grey)
     { slot: SLOTS.trim, hexes: ['#eaff00'] },                             // headband
-    { slot: SLOTS.body, hexes: ['#887000', '#b89600'] },                  // tunic (what's left, center)
+    { slot: SLOTS.body, hexes: ['#887000'] },                            // tunic (remaining olive, center)
     { slot: SLOTS.skin, hexes: ['#fc9838', '#ffd1a6', '#b86e28'] },
   ],
   paladin: [
