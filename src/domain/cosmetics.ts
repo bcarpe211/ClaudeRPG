@@ -18,9 +18,9 @@ export const CLOTHING: Record<string, ClothingRule> = {
   wizard: { dominant: ['#cf3232', '#ff3d3d'] },
   priest: { dominant: ['#c9c9c9', '#f3f3f3', '#919191'], op: 'colorize', sat: 0.6 }, // white robe
   shaman: { dominant: ['#887000', '#b89600'] },
-  berserker: { dominant: ['#616060', '#9c9c9c'], op: 'colorize', sat: 0.55 }, // grey helm (helm-only greys; #919191/#c9c9c9 also on the axe blade → excluded, needs a mask to include, see regions §2)
+  berserker: { dominant: ['#887000', '#b89600'] }, // body/tunic (hue) — color the body, not the helm; helm + cape are Phase-2 slots (cape shares the body olive for now)
   swordsman: { dominant: ['#0e7cb3'] },
-  paladin: { dominant: ['#f3f3f3', '#ffffff', '#c9c9c9', '#bdbdbd', '#919191'], op: 'colorize', sat: 0.5 }, // white plate
+  paladin: { dominant: ['#f3f3f3', '#c9c9c9', '#bdbdbd', '#919191'], op: 'colorize', sat: 0.5 }, // helmet + body plate; #ffffff dropped = shield cross stays white (plume + blue shield field already excluded)
 };
 
 export function spriteId(classKey: string, gender: Gender): string {
