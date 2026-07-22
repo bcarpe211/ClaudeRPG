@@ -35,10 +35,10 @@ export const SLOT_SEED: Record<string, SeedRule[]> = {
     { slot: SLOTS.skin, hexes: ['#fc9838', '#ffd1a6', '#b86e28'] },
   ],
   paladin: [
-    { slot: SLOTS.shield, hexes: ['#ffffff', '#0e7cb3', '#0b5e87'], bbox: [12, 11, 23, 23] }, // shield (front-right)
-    { slot: SLOTS.flair, hexes: ['#b4c21d'] },                            // plume/crest
-    { slot: SLOTS.trim, hexes: ['#887000', '#b89600', '#eaff00'] },       // gold trim/tabard
-    { slot: SLOTS.body, hexes: ['#f3f3f3', '#ffffff', '#c9c9c9', '#bdbdbd', '#919191'] }, // helm + plate
+    { slot: SLOTS.shield, hexes: ['#ffffff', '#f3f3f3', '#c9c9c9', '#bdbdbd', '#919191', '#0e7cb3', '#0b5e87'], bbox: [11, 11, 22, 23] }, // shield (field + cross + rim)
+    { slot: SLOTS.flair, hexes: ['#b4c21d', '#eaff00'] },                 // plume/crest + gold
+    { slot: SLOTS.headgear, hexes: ['#f3f3f3', '#ffffff', '#c9c9c9', '#bdbdbd', '#919191'] }, // helmet + wings (the white "feather") — NOT colored in 2A
+    { slot: SLOTS.body, hexes: ['#887000', '#b89600'] },                  // olive torso/legs garment — the clothes
     { slot: SLOTS.skin, hexes: ['#fc9838', '#ffd1a6', '#b86e28'] },
   ],
   // knight/thief/ranger/swordsman: no collisions — body = the current CLOTHING dominant.

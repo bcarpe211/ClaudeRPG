@@ -16,7 +16,7 @@ const COLLISIONS: Array<{ cls: string; hex: string; bbox: [number, number, numbe
   { cls: 'wizard', hex: '#cf3232', bbox: [8, 8, 13, 11], slot: SLOTS.flair },     // eyes
   { cls: 'shaman', hex: '#887000', bbox: [0, 0, 6, 23], slot: SLOTS.weapon },      // staff
   { cls: 'berserker', hex: '#887000', bbox: [0, 0, 5, 23], slot: SLOTS.weapon },   // axe handle (left)
-  { cls: 'paladin', hex: '#ffffff', bbox: [12, 11, 23, 23], slot: SLOTS.shield },  // shield cross
+  { cls: 'paladin', hex: '#f3f3f3', bbox: [0, 0, 23, 10], slot: SLOTS.headgear },  // white wings/helmet must NOT be body
 ];
 
 describe('slot-maps isolate collision pixels from the body slot', () => {
