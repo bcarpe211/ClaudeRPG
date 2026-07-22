@@ -53,8 +53,10 @@ function img(url) {
   return im;
 }
 
-// The +18 animation-partner URL for a frame-A creature sprite URL.
+// The frame-B partner URL for a frame-A creature sprite URL. Tint URLs carry the
+// frame in the path (/a/ -> /b/); plain sheet sprites use the +18 file-index rule.
 function partnerUrl(url) {
+  if (url.startsWith('/sprite/tint/')) return url.replace('/a/', '/b/');
   return url.replace(/_(\d+)\.png$/, (_m, n) =>
     '_' + String(Number(n) + ANIM_ROW).padStart(2, '0') + '.png');
 }
