@@ -18,7 +18,7 @@ export const CLOTHING: Record<string, ClothingRule> = {
   wizard: { dominant: ['#cf3232', '#ff3d3d'] },
   priest: { dominant: ['#c9c9c9', '#f3f3f3', '#919191'], op: 'colorize', sat: 0.6 }, // white robe
   shaman: { dominant: ['#887000', '#b89600'] },
-  berserker: { dominant: ['#616060', '#919191', '#9c9c9c', '#c9c9c9'], op: 'colorize', sat: 0.55 }, // grey helm
+  berserker: { dominant: ['#616060', '#9c9c9c'], op: 'colorize', sat: 0.55 }, // grey helm (helm-only greys; #919191/#c9c9c9 also on the axe blade → excluded, needs a mask to include, see regions §2)
   swordsman: { dominant: ['#0e7cb3'] },
   paladin: { dominant: ['#f3f3f3', '#ffffff', '#c9c9c9', '#bdbdbd', '#919191'], op: 'colorize', sat: 0.5 }, // white plate
 };
