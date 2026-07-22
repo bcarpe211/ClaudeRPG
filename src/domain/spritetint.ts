@@ -45,6 +45,13 @@ export function colorize(r: number, g: number, b: number, hueDeg: number, sat: n
   return hsvToRgb(hueDeg, sat, v);
 }
 
+/** Keep greyscale; remap brightness into [lo,hi]. lo=0,hi=1 is identity. */
+export function valueRemap(r: number, g: number, b: number, lo: number, hi: number): [number, number, number] {
+  const v = Math.max(r, g, b) / 255;
+  const c = Math.round((lo + v * (hi - lo)) * 255);
+  return [c, c, c];
+}
+
 /** Hue-swap every pixel whose RGB is in `clothing` (hex strings). Returns a new PNG buffer. */
 export function recolorSprite(pngBuffer: Buffer, clothing: string[], hueDeg: number): Buffer {
   const png = PNG.sync.read(pngBuffer);

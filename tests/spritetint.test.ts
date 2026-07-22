@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hueSwap, recolorSprite, colorize } from '../src/domain/spritetint';
+import { hueSwap, recolorSprite, colorize, valueRemap } from '../src/domain/spritetint';
 import { PNG } from 'pngjs';
 
 describe('hueSwap', () => {
@@ -39,5 +39,17 @@ describe('recolorSprite', () => {
     const out = PNG.sync.read(recolorSprite(PNG.sync.write(png), ['#ff3d3d'], 120));
     expect([out.data[0], out.data[1], out.data[2]]).not.toEqual([0xff, 0x3d, 0x3d]); // px0 changed
     expect([out.data[4], out.data[5], out.data[6]]).toEqual([0xff, 0xd1, 0xa6]);     // px1 untouched
+  });
+});
+
+describe('valueRemap (greyscale finish, brightness remapped)', () => {
+  it('compresses a white pixel toward mid-grey when hi=0.5', () => {
+    // 243/255 * 0.5 * 255 = 121.5 -> Math.round rounds up to 122 (plan doc said 121; rounding typo)
+    expect(valueRemap(243, 243, 243, 0, 0.5)).toEqual([122, 122, 122]);
+  });
+  it('keeps relative order (highlight stays lighter than shadow)', () => {
+    const hi = valueRemap(243, 243, 243, 0, 0.5)[0];
+    const lo = valueRemap(145, 145, 145, 0, 0.5)[0];
+    expect(hi).toBeGreaterThan(lo);
   });
 });
