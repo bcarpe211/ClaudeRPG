@@ -23,7 +23,8 @@ import { loadEngineConfig } from '../domain/encounters';
 import { activityScore } from '../domain/activity';
 import { tokenModifier } from '../domain/combat';
 import { debuffFactor } from '../domain/retaliation';
-import { classSpriteUrl, creatureSpriteFile, type Gender } from '../domain/classes';
+import { creatureSpriteFile, type Gender } from '../domain/classes';
+import { getCosmetics, cosmeticSpriteUrl } from '../domain/cosmetics';
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
 import { monsterByIndex, monsterName } from '../domain/bestiary';
 import { monsterTitle, pluralizeCreature } from '../domain/monstername';
@@ -93,7 +94,7 @@ export function buildTvState(db: Database.Database, now: number): TvState {
     'SELECT * FROM players ORDER BY effective_tokens DESC, id ASC',
   ).all() as any[];
   const players: TvHero[] = rows.map((p) => ({
-    id: p.id, name: p.name, avatarUrl: classSpriteUrl(p.class_key, p.gender as Gender),
+    id: p.id, name: p.name, avatarUrl: cosmeticSpriteUrl(p.class_key, p.gender as Gender, getCosmetics(db, p.id), 'a'),
     level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,
     gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK, cfg.modifierCap),
     disabled: !!p.disabled, connected: p.last_token_at != null,
