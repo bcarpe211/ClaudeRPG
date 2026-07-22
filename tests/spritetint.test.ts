@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { hueSwap, recolorSprite, colorize, valueRemap } from '../src/domain/spritetint';
 import { PNG } from 'pngjs';
+
+const PRIEST_M_A = 'assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24/oryx_16bit_fantasy_creatures_05.png';
 
 describe('hueSwap', () => {
   it('preserves brightness/saturation, replaces hue (red -> green at 120)', () => {
@@ -30,15 +33,26 @@ describe('colorize (keeps per-pixel brightness, repaints chroma)', () => {
   });
 });
 
-describe('recolorSprite', () => {
-  it('recolors only clothing pixels; leaves others intact', () => {
+describe('recolorSprite (rule list)', () => {
+  it('recolors only matching pixels; leaves others intact', () => {
     const png = new PNG({ width: 2, height: 1 });
     // px0 = clothing red #ff3d3d, px1 = skin #ffd1a6
     png.data.set([0xff, 0x3d, 0x3d, 255], 0);
     png.data.set([0xff, 0xd1, 0xa6, 255], 4);
-    const out = PNG.sync.read(recolorSprite(PNG.sync.write(png), ['#ff3d3d'], 120));
+    const out = PNG.sync.read(recolorSprite(PNG.sync.write(png), [{ hexes: ['#ff3d3d'], op: 'hue', hue: 120 }]));
     expect([out.data[0], out.data[1], out.data[2]]).not.toEqual([0xff, 0x3d, 0x3d]); // px0 changed
     expect([out.data[4], out.data[5], out.data[6]]).toEqual([0xff, 0xd1, 0xa6]);     // px1 untouched
+  });
+  it('colorizes the priest white robe into a saturated red', () => {
+    const out = recolorSprite(readFileSync(PRIEST_M_A), [
+      { hexes: ['#c9c9c9', '#f3f3f3', '#919191'], op: 'colorize', hue: 0, sat: 0.6 },
+    ]);
+    const png = PNG.sync.read(out);
+    let found = false;
+    for (let i = 0; i < png.data.length; i += 4) {
+      if (png.data[i] === 243 && png.data[i + 1] === 97 && png.data[i + 2] === 97) { found = true; break; }
+    }
+    expect(found).toBe(true); // #f3f3f3 robe highlight -> (243,97,97)
   });
 });
 

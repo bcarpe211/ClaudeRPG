@@ -52,18 +52,33 @@ export function valueRemap(r: number, g: number, b: number, lo: number, hi: numb
   return [c, c, c];
 }
 
-/** Hue-swap every pixel whose RGB is in `clothing` (hex strings). Returns a new PNG buffer. */
-export function recolorSprite(pngBuffer: Buffer, clothing: string[], hueDeg: number): Buffer {
+export interface RecolorRule {
+  hexes: string[];
+  op: 'hue' | 'colorize' | 'value';
+  hue?: number;   // 'hue', 'colorize'
+  sat?: number;   // 'colorize'
+  lo?: number;    // 'value'
+  hi?: number;    // 'value'
+}
+
+/** Apply per-slot transforms to matching pixels. Later rules win on hex collision. */
+export function recolorSprite(pngBuffer: Buffer, rules: RecolorRule[]): Buffer {
   const png = PNG.sync.read(pngBuffer);
-  const set = new Set(clothing.map((h) => h.replace('#', '').toLowerCase()));
+  const map = new Map<string, (r: number, g: number, b: number) => [number, number, number]>();
+  for (const rule of rules) {
+    const fn = rule.op === 'colorize'
+      ? (r: number, g: number, b: number) => colorize(r, g, b, rule.hue ?? 0, rule.sat ?? 0.6)
+      : rule.op === 'value'
+        ? (r: number, g: number, b: number) => valueRemap(r, g, b, rule.lo ?? 0, rule.hi ?? 1)
+        : (r: number, g: number, b: number) => hueSwap(r, g, b, rule.hue ?? 0);
+    for (const h of rule.hexes) map.set(h.replace('#', '').toLowerCase(), fn);
+  }
   const d = png.data;
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] === 0) continue;
     const hex = ((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]).toString(16).padStart(6, '0');
-    if (set.has(hex)) {
-      const [r, g, b] = hueSwap(d[i], d[i + 1], d[i + 2], hueDeg);
-      d[i] = r; d[i + 1] = g; d[i + 2] = b;
-    }
+    const fn = map.get(hex);
+    if (fn) { const [r, g, b] = fn(d[i], d[i + 1], d[i + 2]); d[i] = r; d[i + 1] = g; d[i + 2] = b; }
   }
   return PNG.sync.write(png);
 }
