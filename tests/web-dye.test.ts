@@ -165,3 +165,47 @@ describe('character dye endpoints', () => {
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
   });
 });
+
+describe('character wardrobe panel', () => {
+  it('offers the unlock on the character page without choosing a default color', async () => {
+    const { app, player } = ctx();
+
+    const res = await request(app)
+      .get('/character')
+      .query({ token: player.auth_token });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Unlock Dye Wheel');
+    expect(res.text).toContain('1,500,000g');
+    expect(res.text).not.toContain('window.__DYE__');
+  });
+
+  it('renders the workbench, authored channels, and client config after unlock', async () => {
+    const { app, player } = ctx();
+    await unlock(app, player.auth_token);
+
+    const res = await request(app)
+      .get('/character')
+      .query({ token: player.auth_token });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Dye Workbench');
+    expect(res.text).toContain('data-finish="none"');
+    expect(res.text).toContain('Restore default');
+    expect(res.text).toContain('window.__DYE__');
+    expect(res.text).toContain('"label":"Eyes"');
+    expect(res.text).toContain('/static/dye.js');
+  });
+
+  it('shows an unavailable state instead of charging a sprite without a slot-map', async () => {
+    const { app, player } = ctx('F');
+
+    const res = await request(app)
+      .get('/character')
+      .query({ token: player.auth_token });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Tailoring in progress');
+    expect(res.text).not.toContain('/character/dye/unlock');
+  });
+});
