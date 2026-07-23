@@ -6,6 +6,7 @@ import { purchase, setCosmeticHue } from '../src/domain/shop';
 import { SLOTS } from '../src/domain/slots';
 import { getSlotConfig, setSlotRule, clearSlot, slotConfigHash, cosmeticSkinUrl } from '../src/domain/slotcosmetics';
 import { classSpriteUrl } from '../src/domain/classes';
+import { getCosmetics } from '../src/domain/cosmetics';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -39,8 +40,19 @@ describe('getSlotConfig', () => {
   it('clearSlot removes a slot', () => {
     const p = player();
     setSlotRule(db, p.id, SLOTS.cape, { op: 'hue', hue: 90 }, 300);
-    clearSlot(db, p.id, SLOTS.cape);
+    clearSlot(db, p.id, SLOTS.cape, 400);
     expect(getSlotConfig(db, p.id).has(SLOTS.cape)).toBe(false);
+  });
+  it('clearSlot body also clears the legacy hue fallback', () => {
+    const p = player();
+    purchase(db, p.id, 'cosmetic_wheel_t1', 100);
+    setCosmeticHue(db, p.id, 'primary', 210, 200);
+    expect(getSlotConfig(db, p.id).has(SLOTS.body)).toBe(true);
+
+    clearSlot(db, p.id, SLOTS.body, 300);
+
+    expect(getSlotConfig(db, p.id).has(SLOTS.body)).toBe(false);
+    expect(getCosmetics(db, p.id)?.primary_hue).toBeNull();
   });
 });
 

@@ -40,8 +40,24 @@ export function setSlotRule(db: Database.Database, playerId: number, slot: numbe
   ).run(playerId, slot, rule.op, rule.hue ?? null, rule.sat ?? null, rule.lo ?? null, rule.hi ?? null, now);
 }
 
-export function clearSlot(db: Database.Database, playerId: number, slot: number): void {
-  db.prepare('DELETE FROM player_slot_cosmetics WHERE player_id = ? AND slot = ?').run(playerId, slot);
+export function clearSlot(
+  db: Database.Database,
+  playerId: number,
+  slot: number,
+  now: number,
+): void {
+  db.transaction(() => {
+    db.prepare(
+      'DELETE FROM player_slot_cosmetics WHERE player_id = ? AND slot = ?',
+    ).run(playerId, slot);
+    if (slot === SLOTS.body) {
+      db.prepare(
+        `UPDATE player_cosmetics
+         SET primary_hue = NULL, updated_at = ?
+         WHERE player_id = ?`,
+      ).run(now, playerId);
+    }
+  })();
 }
 
 import { classSpriteUrl, type Gender } from './classes';
