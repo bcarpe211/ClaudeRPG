@@ -1,37 +1,60 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { openDb } from '../src/db/db';
-import { seedSettings } from '../src/domain/settings';
-import { createPlayer, getPlayerById } from '../src/domain/players';
-import { createApp } from '../src/web/app';
 import { loadConfig } from '../src/config';
+import { openDb } from '../src/db/db';
+import { createPlayer } from '../src/domain/players';
+import { seedSettings } from '../src/domain/settings';
+import { createApp } from '../src/web/app';
 
 function ctx() {
-  const db = openDb(':memory:'); seedSettings(db);
+  const db = openDb(':memory:');
+  seedSettings(db);
   const app = createApp({ db, config: loadConfig({}) });
-  const p = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
-  db.prepare('UPDATE players SET gold = 2000000 WHERE id = ?').run(p.id);
-  return { db, app, p };
+  const player = createPlayer(
+    db,
+    { name: 'A', class_key: 'wizard', gender: 'M' },
+    1,
+  );
+  return { app, player };
 }
 
-describe('shop', () => {
-  it('GET /shop without a token shows the character login', async () => {
+describe('shop closed bazaar', () => {
+  it('shows the closed state and suspicious mimic without requiring login', async () => {
     const { app } = ctx();
+
     const res = await request(app).get('/shop');
+
     expect(res.status).toBe(200);
-    expect(res.text).toContain('Character Login');
+    expect(res.text).toContain('The Bazaar is Closed');
+    expect(res.text).toContain('suspicious treasure chest');
+    expect(res.text).toContain('oryx_16bit_fantasy_creatures_198.png');
   });
-  it('POST /shop/unlock deducts gold and unlocks the wheel', async () => {
-    const { db, app, p } = ctx();
-    const res = await request(app).post('/shop/unlock').type('form').send({ token: p.auth_token });
-    expect(res.status).toBe(302);
-    expect(getPlayerById(db, p.id)!.gold).toBe(500000);
+
+  it('links a supplied character token back to its wardrobe', async () => {
+    const { app, player } = ctx();
+
+    const res = await request(app)
+      .get('/shop')
+      .query({ token: player.auth_token });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(
+      `/character?token=${player.auth_token}`,
+    );
   });
-  it('POST /shop/color sets the hue after unlock', async () => {
-    const { db, app, p } = ctx();
-    await request(app).post('/shop/unlock').type('form').send({ token: p.auth_token });
-    const res = await request(app).post('/shop/color').type('form').send({ token: p.auth_token, hue: '210' });
-    expect(res.status).toBe(302);
-    expect((db.prepare('SELECT primary_hue FROM player_cosmetics WHERE player_id=?').get(p.id) as any).primary_hue).toBe(210);
+
+  it('removes both retired single-hue picker routes', async () => {
+    const { app, player } = ctx();
+    const color = await request(app)
+      .post('/shop/color')
+      .type('form')
+      .send({ token: player.auth_token, hue: '1' });
+    const unlock = await request(app)
+      .post('/shop/unlock')
+      .type('form')
+      .send({ token: player.auth_token });
+
+    expect(color.status).toBe(404);
+    expect(unlock.status).toBe(404);
   });
 });

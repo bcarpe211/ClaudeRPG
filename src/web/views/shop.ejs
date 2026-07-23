@@ -1,42 +1,28 @@
-<div class="panel">
-  <div class="sec-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-    <h1 class="brand" style="margin:0">The Dye Vault</h1>
-    <a class="btn btn-ghost" href="/character?token=<%= token %>">← Character</a>
+<div class="panel bazaar-closed">
+  <div class="bazaar-scene">
+    <div class="bazaar-sign">
+      <span>THE BAZAAR</span>
+      <b>CLOSED</b>
+    </div>
+    <span class="bazaar-spark bazaar-spark-a" aria-hidden="true">✦</span>
+    <span class="bazaar-spark bazaar-spark-b" aria-hidden="true">·</span>
+    <img class="px bazaar-mimic" src="<%= mimicUrl %>" width="168" height="168" alt="a suspicious treasure chest mimic guarding the empty stall" />
+    <span class="bazaar-warning">Definitely not merchandise</span>
   </div>
-  <div class="stat-card"><span class="stat-k">Your gold</span>
-    <span class="stat-v"><%= player.gold.toLocaleString() %></span></div>
 
-  <% if (!unlocked) { %>
-    <div style="text-align:center;margin-top:20px">
-      <img class="px" src="<%= baseSpriteUrl %>" width="120" height="120" alt="your character" style="margin:0 auto 12px" />
-      <p>Unlock the <b>Dye Wheel</b> to recolor your clothing to any color, forever.</p>
-      <form method="post" action="/shop/unlock">
-        <input type="hidden" name="token" value="<%= token %>">
-        <button class="btn btn-gold" <%= player.gold < price ? 'disabled' : '' %>>
-          Unlock — <%= price.toLocaleString() %>g
-        </button>
-        <% if (player.gold < price) { %><p class="err">Need <%= (price - player.gold).toLocaleString() %> more gold.</p><% } %>
-      </form>
+  <div class="bazaar-copy">
+    <p class="dye-kicker">A note nailed to the stall</p>
+    <h1>The Bazaar is Closed</h1>
+    <p class="bazaar-lead">The merchant has packed up for now. Come back soon — new wares are being dragged up from the dungeon.</p>
+    <div class="bazaar-note">
+      <span aria-hidden="true">⚠</span>
+      <p>Please do not feed, pet, or attempt to purchase the treasure chest. It has already eaten one inventory ledger.</p>
     </div>
-  <% } else { %>
-    <div style="margin-top:20px">
-      <div class="avatars" style="justify-content:center">
-        <canvas id="preview" width="120" height="120" class="px" aria-label="live preview"></canvas>
-      </div>
-      <canvas id="wheel" width="220" height="220" style="display:block;margin:12px auto;cursor:crosshair"></canvas>
-      <form method="post" action="/shop/color" id="colorForm" style="text-align:center">
-        <input type="hidden" name="token" value="<%= token %>">
-        <input type="hidden" name="hue" id="hue" value="<%= currentHue == null ? 0 : currentHue %>">
-        <button class="btn btn-gold">Save color</button>
-      </form>
-    </div>
-    <script>
-      window.__SHOP__ = {
-        baseSprite: "<%= baseSpriteUrl %>",
-        clothing: <%- JSON.stringify(clothing) %>,
-        hue: <%= currentHue == null ? 0 : currentHue %>
-      };
-    </script>
-    <script src="/static/shop.js"></script>
-  <% } %>
+    <p class="bazaar-wardrobe">Looking for your Dye Wheel? It now lives in the <b>Wardrobe</b> on your character page.</p>
+    <% if (token) { %>
+      <a class="btn btn-gold" href="/character?token=<%= token %>">← Back to your character</a>
+    <% } else { %>
+      <a class="btn btn-ghost" href="/character">Go to your character</a>
+    <% } %>
+  </div>
 </div>

@@ -243,3 +243,50 @@ button:disabled:hover{transform:none;box-shadow:none}
   .dye-unlock-art{min-height:160px}
   .dye-unlock-copy form button{width:100%;min-width:0}
 }
+
+/* closed bazaar — the mimic has the stall to itself */
+.bazaar-closed{display:grid;grid-template-columns:minmax(280px,.85fr) minmax(0,1.15fr);
+  gap:38px;align-items:center;min-height:500px;padding:34px;overflow:hidden}
+.bazaar-scene{position:relative;min-height:405px;display:grid;place-items:center;border:1px solid #493456;
+  border-radius:14px;background:
+    linear-gradient(180deg,transparent 64%,#0a0710 64% 67%,transparent 67%),
+    radial-gradient(ellipse at 50% 77%,#5b3d1d 0 8%,#2a1a12 9% 23%,transparent 24%),
+    radial-gradient(circle at 50% 53%,#392144,#120c1b 63%);
+  box-shadow:inset 0 0 70px #0009}
+.bazaar-scene::before,.bazaar-scene::after{content:"";position:absolute;top:0;bottom:0;width:30px;
+  background:repeating-linear-gradient(90deg,#25172e 0 8px,#150e1d 8px 14px);
+  border-inline:1px solid #3e2a48;opacity:.72}
+.bazaar-scene::before{left:18px}.bazaar-scene::after{right:18px}
+.bazaar-sign{position:absolute;z-index:2;left:50%;top:24px;min-width:200px;padding:10px 16px;
+  transform:translateX(-50%) rotate(-2deg);border:3px solid #2b1a10;border-radius:3px;
+  background:linear-gradient(180deg,#8c6333,#5d3b20);box-shadow:0 8px 18px #000a,inset 0 0 0 2px #b98b4e;
+  text-align:center;font-family:ui-monospace,monospace;text-shadow:1px 2px #3a210f}
+.bazaar-sign::before,.bazaar-sign::after{content:"";position:absolute;top:-26px;width:2px;height:28px;background:#806445}
+.bazaar-sign::before{left:38px;transform:rotate(-11deg)}.bazaar-sign::after{right:38px;transform:rotate(11deg)}
+.bazaar-sign span{display:block;color:#e9d6ad;font-size:10px;font-weight:900;letter-spacing:.2em}
+.bazaar-sign b{display:block;margin-top:2px;color:#ffd77b;font-size:25px;letter-spacing:.12em}
+.bazaar-mimic{position:relative;z-index:1;margin-top:78px;filter:drop-shadow(0 18px 10px #000b);
+  animation:bazaar-breathe 2.4s steps(2,end) infinite}
+.bazaar-warning{position:absolute;z-index:2;bottom:22px;padding:5px 8px;border:1px solid #5b3e2b;
+  border-radius:5px;background:#100a18;color:#d0a681;font:800 9px/1 ui-monospace,monospace;
+  letter-spacing:.08em;text-transform:uppercase;transform:rotate(1deg)}
+.bazaar-spark{position:absolute;z-index:2;color:var(--gold);text-shadow:0 0 10px var(--gold)}
+.bazaar-spark-a{left:22%;top:44%;font-size:20px;animation:bazaar-glint 1.8s steps(2,end) infinite}
+.bazaar-spark-b{right:21%;top:53%;font-size:28px;animation:bazaar-glint 1.8s .5s steps(2,end) infinite}
+@keyframes bazaar-breathe{50%{transform:translateY(-3px) scaleY(1.02)}}
+@keyframes bazaar-glint{50%{opacity:.2;transform:scale(.65)}}
+
+.bazaar-copy{padding-right:18px}.bazaar-copy h1{max-width:540px;margin-bottom:10px}
+.bazaar-lead{max-width:600px;color:var(--ink);font-size:17px;line-height:1.65}
+.bazaar-note{display:flex;gap:12px;align-items:flex-start;margin:22px 0;padding:14px 15px;
+  border:1px dashed #6b4a31;border-radius:9px;background:#1b1016}
+.bazaar-note>span{color:#eab35e;font-size:18px;line-height:1.2}
+.bazaar-note p{margin:0;color:#d2b99f;font-size:13px}
+.bazaar-wardrobe{margin-bottom:20px;color:var(--muted)}
+.bazaar-wardrobe b{color:var(--gold2)}
+
+@media (max-width:760px){
+  .bazaar-closed{grid-template-columns:1fr;gap:24px;padding:20px}
+  .bazaar-scene{min-height:330px}.bazaar-mimic{width:138px;height:138px}
+  .bazaar-copy{padding-right:0}.bazaar-copy h1{font-size:32px}
+}
