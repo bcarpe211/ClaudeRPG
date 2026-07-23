@@ -45,3 +45,45 @@ export function loadSlotmap(sprite: string, frame: 'a' | 'b'): Uint8Array | null
   cache.set(key, res);
   return res;
 }
+
+/** Friendly default labels for the character-page picker. */
+export const SLOT_LABELS: Record<number, string> = {
+  [SLOTS.body]: 'Clothing',
+  [SLOTS.headgear]: 'Headgear',
+  [SLOTS.hair]: 'Hair',
+  [SLOTS.facePaint]: 'Face paint',
+  [SLOTS.cape]: 'Cape',
+  [SLOTS.trim]: 'Trim',
+  [SLOTS.weapon]: 'Weapon',
+  [SLOTS.shield]: 'Shield',
+  [SLOTS.boots]: 'Boots',
+  [SLOTS.skin]: 'Skin',
+  [SLOTS.flair]: 'Details',
+};
+
+/** Display order for all recolorable materials; outline is intentionally absent. */
+export const PICKER_ORDER: number[] = [
+  SLOTS.body,
+  SLOTS.trim,
+  SLOTS.cape,
+  SLOTS.headgear,
+  SLOTS.hair,
+  SLOTS.boots,
+  SLOTS.weapon,
+  SLOTS.shield,
+  SLOTS.facePaint,
+  SLOTS.flair,
+  SLOTS.skin,
+];
+
+/** Distinct recolorable slots present in a sprite's frame-A map, in picker order. */
+export function presentSlots(sprite: string): number[] {
+  const ids = loadSlotmap(sprite, 'a');
+  if (!ids) return [];
+
+  const seen = new Set<number>();
+  for (const slot of ids) {
+    if (slot !== SLOTS.outline) seen.add(slot);
+  }
+  return PICKER_ORDER.filter((slot) => seen.has(slot));
+}
