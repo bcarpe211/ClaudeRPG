@@ -20,6 +20,17 @@ import {
   SLOTS,
 } from '../../domain/slots';
 
+function optionalQueryInteger(max: number) {
+  return z.preprocess(
+    (value) => (
+      typeof value === 'string' && value.trim() !== ''
+        ? Number(value)
+        : value
+    ),
+    z.number().int().min(0).max(max).optional(),
+  );
+}
+
 const ReviewQuery = z.object({
   mode: z.enum([
     'original',
@@ -30,8 +41,8 @@ const ReviewQuery = z.object({
     'white',
     'steel',
   ]).default('original'),
-  slot: z.coerce.number().int().min(0).max(11).optional(),
-  hue: z.coerce.number().int().min(0).max(359).optional(),
+  slot: optionalQueryInteger(11),
+  hue: optionalQueryInteger(359),
 });
 
 const SLOT_MODES = new Set<ReviewMode>([
@@ -68,7 +79,7 @@ export function registerCosmeticsReviewRoutes(
         title: 'Cosmetics Review',
         frame: 'lite',
         styles: ['cosmetics-review.css'],
-        roster: buildCosmeticsReviewRoster(),
+        roster: buildCosmeticsReviewRoster(slotmapsDir),
         slots: PICKER_ORDER.map((slot) => ({
           slot,
           label: SLOT_LABELS[slot],

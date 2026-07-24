@@ -118,12 +118,12 @@ function warnChannelDifferences(
   }
 }
 
-export function buildCosmeticsReviewRoster(): ReviewVariant[] {
+export function buildCosmeticsReviewRoster(slotmapsDir?: string): ReviewVariant[] {
   return CLASSES.flatMap(({ key: classKey, name: className }) => (
     (['M', 'F'] as const).map((gender) => {
       const sprite = spriteId(classKey, gender);
-      const frameAIds = loadSlotmapFresh(sprite, 'a');
-      const frameBIds = loadSlotmapFresh(sprite, 'b');
+      const frameAIds = loadSlotmapFresh(sprite, 'a', slotmapsDir);
+      const frameBIds = loadSlotmapFresh(sprite, 'b', slotmapsDir);
       const frameA = channelsFor(frameAIds);
       const frameB = channelsFor(frameBIds);
       const expected = EXPECTED_CHANNELS[classKey][gender];

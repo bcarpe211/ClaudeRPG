@@ -187,6 +187,25 @@ describe('cosmetics review page', () => {
     expect(res.text).toContain('"initialSlot":1');
     expect(res.text).toContain('"initialHue":210');
   });
+
+  it('uses the injected slot-map directory for page inventory and render output', async () => {
+    const reviewApp = app();
+    const page = await request(reviewApp).get('/cosmetics-review');
+    const wizardCard = page.text.match(
+      /<article class="review-variant"\s+data-sprite="wizard_M"[\s\S]*?<\/article>/,
+    )?.[0] ?? '';
+    const rendered = await request(reviewApp)
+      .get('/cosmetics-review/render/wizard_M/a.png?mode=slots');
+
+    expect(page.status).toBe(200);
+    expect(wizardCard.match(/class="review-channel"/g)).toHaveLength(1);
+    expect(wizardCard).toContain('Missing expected A channel: Trim');
+    expect(wizardCard).toContain('Missing expected B channel: Weapon');
+    expect(wizardCard).not.toContain('Map inventory matches');
+    expect(rendered.status).toBe(200);
+    expect(Array.from(PNG.sync.read(rendered.body as Buffer).data.slice(0, 3)))
+      .toEqual([255, 0, 0]);
+  });
 });
 
 describe('cosmetics review renderer', () => {
@@ -237,6 +256,17 @@ describe('cosmetics review renderer', () => {
     ['/cosmetics-review/render/wizard_M/a.png?mode=hue&slot=1&hue=360', 400],
   ] as const)('returns %s for %s', async (url, status) => {
     expect((await request(app()).get(url)).status).toBe(status);
+  });
+
+  it.each([
+    '/cosmetics-review/render/wizard_M/a.png?mode=hue&slot=1&hue=',
+    '/cosmetics-review/render/wizard_M/a.png?mode=hue&slot=1&hue=%20%20',
+    '/cosmetics-review/render/wizard_M/a.png?mode=original&slot=',
+    '/cosmetics-review/render/wizard_M/a.png?mode=original&slot=%20%20',
+    '/cosmetics-review/render/wizard_M/a.png?mode=original&hue=',
+    '/cosmetics-review/render/wizard_M/a.png?mode=original&hue=%20%20',
+  ])('rejects an empty or whitespace numeric query value: %s', async (url) => {
+    expect((await request(app()).get(url)).status).toBe(400);
   });
 
   it('reads changed slot-map bytes on every render request', async () => {
