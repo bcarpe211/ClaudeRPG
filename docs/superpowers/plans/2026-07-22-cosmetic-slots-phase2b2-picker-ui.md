@@ -273,7 +273,7 @@ export function dyeViewModel(
 - Produces routes: `POST /character/dye/unlock` (redirect / 409 unsupported),
   `POST /character/dye/set|clear` (204 / 400 / 403 / 404). Both mutation routes
   require the unlock and a slot present in the player's authored map.
-- `clearSlot(db, playerId, SLOTS.body)` also nulls `player_cosmetics.primary_hue`,
+- `clearSlot(db, playerId, SLOTS.body, now)` also nulls `player_cosmetics.primary_hue`,
   preventing the compatibility fallback from resurrecting a cleared body dye.
 
 - [ ] **Step 1: Write the failing test**
@@ -419,7 +419,7 @@ Register the three routes inside `registerCharacterRoutes` (after `/character/de
     if (!cos || cos.wheel_tier < 1) { res.sendStatus(403); return; }
     const sprite = spriteId(player.class_key, player.gender as Gender);
     if (!presentSlots(sprite).includes(parsed.data.slot)) { res.sendStatus(400); return; }
-    clearSlot(db, player.id, parsed.data.slot);
+    clearSlot(db, player.id, parsed.data.slot, Date.now());
     res.sendStatus(204);
   });
 ```
@@ -427,18 +427,20 @@ Register the three routes inside `registerCharacterRoutes` (after `/character/de
 Update `clearSlot` so its post-condition is true even for migrated legacy body hues:
 
 ```ts
-export function clearSlot(db: Database.Database, playerId: number, slot: number): void {
+export function clearSlot(db: Database.Database, playerId: number, slot: number, now: number): void {
   db.transaction(() => {
     db.prepare('DELETE FROM player_slot_cosmetics WHERE player_id = ? AND slot = ?').run(playerId, slot);
     if (slot === SLOTS.body) {
-      db.prepare('UPDATE player_cosmetics SET primary_hue = NULL WHERE player_id = ?').run(playerId);
+      db.prepare(
+        'UPDATE player_cosmetics SET primary_hue = NULL, updated_at = ? WHERE player_id = ?',
+      ).run(now, playerId);
     }
   })();
 }
 ```
 
 Add a regression test in `tests/slotcosmetics.test.ts`: purchase the wheel, save a legacy
-body hue with `setCosmeticHue`, call `clearSlot(..., SLOTS.body)`, and assert
+body hue with `setCosmeticHue`, call `clearSlot(..., SLOTS.body, now)`, and assert
 `getSlotConfig(...).has(SLOTS.body) === false`.
 
 - [ ] **Step 4: Run — expect PASS** (`npm test -- web-dye`).

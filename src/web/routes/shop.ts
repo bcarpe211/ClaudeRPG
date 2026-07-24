@@ -65,6 +65,10 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
 
     const slotConfig = getSlotConfig(db, playerId);
     const hash = slotConfigHash(slotConfig);
+    if (req.params.hash !== hash) {
+      res.redirect(302, `/sprite/skin/${playerId}/${frame}/${hash}.png`);
+      return;
+    }
     res.type('png').set('Cache-Control', 'public, max-age=31536000, immutable');
     const cacheFile = path.join(cacheDir, `skin_${playerId}_${frame}_${hash}.png`);
     if (fs.existsSync(cacheFile)) { res.sendFile(path.resolve(cacheFile)); return; }

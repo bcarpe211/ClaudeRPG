@@ -45,4 +45,17 @@ describe('GET /sprite/skin', () => {
     }
     expect(checkedEye).toBe(true);
   });
+  it('redirects a stale hash to the current immutable skin URL', async () => {
+    const { db, app, p } = ctx();
+    setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 210, sat: 0.6 }, 100);
+    const currentHash = slotConfigHash(getSlotConfig(db, p.id));
+
+    const res = await request(app).get(`/sprite/skin/${p.id}/a/stale000.png`);
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(
+      `/sprite/skin/${p.id}/a/${currentHash}.png`,
+    );
+    expect(res.headers['cache-control']).toBeUndefined();
+  });
 });

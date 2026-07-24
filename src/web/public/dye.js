@@ -178,37 +178,57 @@
 
   // --- ordered, per-slot autosave ---
   const timers = new Map();
+  const pendingSets = new Map();
   const queues = new Map();
+  const failedSlots = new Set();
 
   function setStatus(message, state) {
     status.textContent = message;
     status.dataset.state = state || '';
   }
 
+  function showSettledStatus() {
+    if (queues.size > 0 || timers.size > 0) return;
+    if (failedSlots.size > 0) {
+      const noun = failedSlots.size === 1 ? 'change needs' : 'changes need';
+      setStatus(
+        `${failedSlots.size} ${noun} saving — try again`,
+        'error',
+      );
+      return;
+    }
+    setStatus('All changes saved', 'saved');
+  }
+
+  async function postSave(endpoint, body) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      body,
+      credentials: 'same-origin',
+      keepalive: true,
+    });
+    if (!response.ok) throw new Error(`Save failed (${response.status})`);
+  }
+
   function enqueue(slot, endpoint, body) {
     setStatus('Saving…', 'saving');
-    const previous = queues.get(slot) || Promise.resolve();
+    const previous = queues.get(slot);
     const request = previous
-      .catch(function () {})
-      .then(async function () {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          body,
-          credentials: 'same-origin',
-        });
-        if (!response.ok) throw new Error(`Save failed (${response.status})`);
-      });
+      ? previous.catch(function () {}).then(function () {
+          return postSave(endpoint, body);
+        })
+      : postSave(endpoint, body);
     queues.set(slot, request);
     request.then(
       function () {
+        failedSlots.delete(slot);
         if (queues.get(slot) === request) queues.delete(slot);
-        if (queues.size === 0 && timers.size === 0) {
-          setStatus('All changes saved', 'saved');
-        }
+        showSettledStatus();
       },
       function () {
+        failedSlots.add(slot);
         if (queues.get(slot) === request) queues.delete(slot);
-        setStatus('Save failed — try that change again', 'error');
+        showSettledStatus();
       },
     );
   }
@@ -222,12 +242,15 @@
     if (hue != null) body.set('hue', String(hue));
 
     clearTimeout(timers.get(slot));
+    pendingSets.set(slot, body);
     setStatus('Change queued…', 'saving');
     timers.set(
       slot,
       setTimeout(function () {
         timers.delete(slot);
-        enqueue(slot, '/character/dye/set', body);
+        const pending = pendingSets.get(slot);
+        pendingSets.delete(slot);
+        if (pending) enqueue(slot, '/character/dye/set', pending);
       }, 120),
     );
   }
@@ -235,12 +258,27 @@
   function saveClear(slot) {
     clearTimeout(timers.get(slot));
     timers.delete(slot);
+    pendingSets.delete(slot);
     enqueue(
       slot,
       '/character/dye/clear',
       new URLSearchParams({ token: D.token, slot: String(slot) }),
     );
   }
+
+  // A reload/navigation can happen inside the 120ms wheel debounce. Start those
+  // final requests synchronously during pagehide; keepalive lets the browser
+  // finish the small form POST after the document is gone.
+  function flushPendingSets() {
+    for (const [slot, body] of pendingSets) {
+      clearTimeout(timers.get(slot));
+      timers.delete(slot);
+      pendingSets.delete(slot);
+      enqueue(slot, '/character/dye/set', body);
+    }
+  }
+  window.addEventListener('beforeunload', flushPendingSets);
+  window.addEventListener('pagehide', flushPendingSets);
 
   // --- channel and finish controls ---
   function rulesMatch(left, right) {
