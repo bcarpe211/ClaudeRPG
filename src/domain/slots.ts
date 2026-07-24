@@ -8,6 +8,8 @@ export const SLOTS = {
   trim: 6, weapon: 7, shield: 8, boots: 9, skin: 10, flair: 11,
 } as const;
 
+export type SpriteFrame = 'a' | 'b';
+
 /** Slot id ⇄ legend colour used inside the slot-map PNGs (human-viewable/editable). */
 export const LEGEND: Array<[number, [number, number, number]]> = [
   [SLOTS.body, [255, 0, 0]], [SLOTS.headgear, [255, 127, 0]], [SLOTS.hair, [255, 255, 0]],
@@ -35,15 +37,26 @@ export function readSlotmap(pngBuffer: Buffer): Uint8Array {
 const SLOTMAP_DIR = path.resolve('slotmaps');
 const cache = new Map<string, Uint8Array | null>();
 
+export function slotmapFile(sprite: string, frame: SpriteFrame): string {
+  return path.join(SLOTMAP_DIR, `${sprite}_${frame}.png`);
+}
+
+export function loadSlotmapFresh(
+  sprite: string,
+  frame: SpriteFrame,
+): Uint8Array | null {
+  const file = slotmapFile(sprite, frame);
+  return fs.existsSync(file) ? readSlotmap(fs.readFileSync(file)) : null;
+}
+
 /** Load `slotmaps/<sprite>_<frame>.png` → slot ids, cached. null when the file is absent. */
-export function loadSlotmap(sprite: string, frame: 'a' | 'b'): Uint8Array | null {
+export function loadSlotmap(sprite: string, frame: SpriteFrame): Uint8Array | null {
   const key = `${sprite}_${frame}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
-  const file = path.join(SLOTMAP_DIR, `${key}.png`);
-  const res = fs.existsSync(file) ? readSlotmap(fs.readFileSync(file)) : null;
-  cache.set(key, res);
-  return res;
+  const result = loadSlotmapFresh(sprite, frame);
+  cache.set(key, result);
+  return result;
 }
 
 /** Friendly default labels for the character-page picker. */

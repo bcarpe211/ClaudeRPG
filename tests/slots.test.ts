@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import { PNG } from 'pngjs';
-import { SLOTS, LEGEND, readSlotmap, loadSlotmap } from '../src/domain/slots';
+import {
+  SLOTS,
+  LEGEND,
+  readSlotmap,
+  loadSlotmap,
+  slotmapFile,
+  loadSlotmapFresh,
+} from '../src/domain/slots';
 
 describe('slot taxonomy + legend', () => {
   it('has 12 slots and a bijective legend', () => {
@@ -28,5 +36,13 @@ describe('readSlotmap', () => {
 describe('loadSlotmap', () => {
   it('returns null when a slot-map file is absent', () => {
     expect(loadSlotmap('doesnotexist_M', 'a')).toBeNull();
+  });
+
+  it('resolves a committed slot-map path and fresh-loads it', () => {
+    expect(slotmapFile('wizard_M', 'a')).toBe(
+      path.resolve('slotmaps/wizard_M_a.png'),
+    );
+    expect(loadSlotmapFresh('wizard_M', 'a')).toHaveLength(24 * 24);
+    expect(loadSlotmapFresh('doesnotexist_M', 'a')).toBeNull();
   });
 });
