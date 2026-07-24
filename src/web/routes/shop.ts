@@ -10,7 +10,7 @@ import {
   CLOTHING, spriteFileIndex, spriteId,
 } from '../../domain/cosmetics';
 import { recolorSprite, recolorSpriteSlots } from '../../domain/spritetint';
-import { loadSlotmap, SLOTS } from '../../domain/slots';
+import { loadSlotmap, loadSlotmapFresh, SLOTS } from '../../domain/slots';
 import { getSlotConfig, skinRenderHash } from '../../domain/slotcosmetics';
 
 export function registerShopRoutes(app: Express, { db, config }: AppDeps): void {
@@ -79,7 +79,7 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
       creatureSpriteFile(spriteFileIndex(player.class_key, player.gender as Gender, frame)),
     );
     const src = fs.readFileSync(srcFile);
-    const slotIds = loadSlotmap(sprite, frame);
+    const slotIds = loadSlotmapFresh(sprite, frame);
     const out = slotIds ? recolorSpriteSlots(src, slotIds, slotConfig) : src; // no slot-map (female) → plain
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(cacheFile, out);
