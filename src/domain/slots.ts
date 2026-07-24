@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
 
 /** The 12 material slots (per the regions doc §4). Slot 0 is never tinted. */
@@ -36,6 +37,7 @@ export function readSlotmap(pngBuffer: Buffer): Uint8Array {
 
 const SLOTMAP_DIR = path.resolve('slotmaps');
 const cache = new Map<string, Uint8Array | null>();
+const MISSING_MAP = Buffer.from('clauderpg:missing-slotmap:v1');
 
 export function slotmapFile(sprite: string, frame: SpriteFrame): string {
   return path.join(SLOTMAP_DIR, `${sprite}_${frame}.png`);
@@ -47,6 +49,29 @@ export function loadSlotmapFresh(
 ): Uint8Array | null {
   const file = slotmapFile(sprite, frame);
   return fs.existsSync(file) ? readSlotmap(fs.readFileSync(file)) : null;
+}
+
+/** Stable fingerprint of both raw slot-map frames, distinguishing missing and empty maps. */
+export function slotmapFingerprintFromBuffers(
+  frameA: Buffer | null,
+  frameB: Buffer | null,
+): string {
+  const hash = createHash('sha256');
+  for (const [frame, bytes] of [['a', frameA], ['b', frameB]] as const) {
+    hash.update(`frame:${frame}:`);
+    hash.update(bytes ?? MISSING_MAP);
+    hash.update('\0');
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
+/** Stable fingerprint of a sprite's raw slot-map frames. */
+export function slotmapFingerprint(sprite: string): string {
+  const read = (frame: SpriteFrame): Buffer | null => {
+    const file = slotmapFile(sprite, frame);
+    return fs.existsSync(file) ? fs.readFileSync(file) : null;
+  };
+  return slotmapFingerprintFromBuffers(read('a'), read('b'));
 }
 
 /** Load `slotmaps/<sprite>_<frame>.png` → slot ids, cached. null when the file is absent. */

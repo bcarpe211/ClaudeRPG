@@ -11,7 +11,7 @@ import {
 } from '../../domain/cosmetics';
 import { recolorSprite, recolorSpriteSlots } from '../../domain/spritetint';
 import { loadSlotmap, SLOTS } from '../../domain/slots';
-import { getSlotConfig, slotConfigHash } from '../../domain/slotcosmetics';
+import { getSlotConfig, skinRenderHash } from '../../domain/slotcosmetics';
 
 export function registerShopRoutes(app: Express, { db, config }: AppDeps): void {
   const cacheDir = path.join(path.dirname(config.dbPath), 'tint-cache');
@@ -55,7 +55,7 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
     res.send(out);
   }));
 
-  // Per-slot skin: render a player's full slot config through the slot-map, cached by config hash.
+  // Per-slot skin: render a player's full slot config through the slot-map, cached by render hash.
   app.get('/sprite/skin/:playerId/:frame/:hash.png', asyncHandler(async (req, res) => {
     const playerId = Number(req.params.playerId);
     const frame = req.params.frame === 'b' ? 'b' : 'a';
@@ -64,7 +64,8 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
     if (!player) { res.sendStatus(404); return; }
 
     const slotConfig = getSlotConfig(db, playerId);
-    const hash = slotConfigHash(slotConfig);
+    const sprite = spriteId(player.class_key, player.gender as Gender);
+    const hash = skinRenderHash(sprite, slotConfig);
     if (req.params.hash !== hash) {
       res.redirect(302, `/sprite/skin/${playerId}/${frame}/${hash}.png`);
       return;
@@ -78,7 +79,7 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
       creatureSpriteFile(spriteFileIndex(player.class_key, player.gender as Gender, frame)),
     );
     const src = fs.readFileSync(srcFile);
-    const slotIds = loadSlotmap(spriteId(player.class_key, player.gender as Gender), frame);
+    const slotIds = loadSlotmap(sprite, frame);
     const out = slotIds ? recolorSpriteSlots(src, slotIds, slotConfig) : src; // no slot-map (female) → plain
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(cacheFile, out);

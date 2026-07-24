@@ -8,6 +8,7 @@ import {
   loadSlotmap,
   slotmapFile,
   loadSlotmapFresh,
+  slotmapFingerprintFromBuffers,
 } from '../src/domain/slots';
 
 describe('slot taxonomy + legend', () => {
@@ -44,5 +45,21 @@ describe('loadSlotmap', () => {
     );
     expect(loadSlotmapFresh('wizard_M', 'a')).toHaveLength(24 * 24);
     expect(loadSlotmapFresh('doesnotexist_M', 'a')).toBeNull();
+  });
+});
+
+describe('slotmapFingerprintFromBuffers', () => {
+  it('is a 16-character hash that changes with either frame', () => {
+    expect(slotmapFingerprintFromBuffers(Buffer.from('a'), Buffer.from('b')))
+      .toMatch(/^[0-9a-f]{16}$/);
+    expect(slotmapFingerprintFromBuffers(Buffer.from('a'), Buffer.from('b')))
+      .not.toBe(slotmapFingerprintFromBuffers(Buffer.from('a2'), Buffer.from('b')));
+    expect(slotmapFingerprintFromBuffers(Buffer.from('a'), Buffer.from('b')))
+      .not.toBe(slotmapFingerprintFromBuffers(Buffer.from('a'), Buffer.from('b2')));
+  });
+
+  it('treats a missing map differently from an empty map', () => {
+    expect(slotmapFingerprintFromBuffers(null, Buffer.from('b')))
+      .not.toBe(slotmapFingerprintFromBuffers(Buffer.alloc(0), Buffer.from('b')));
   });
 });

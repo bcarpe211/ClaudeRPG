@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 import type { SlotRule } from './spritetint';
-import { SLOTS } from './slots';
-import { getCosmetics, CLOTHING } from './cosmetics';
+import { SLOTS, slotmapFingerprint } from './slots';
+import { getCosmetics, CLOTHING, spriteId } from './cosmetics';
 
 interface Row { slot: number; op: string; hue: number | null; sat: number | null; lo: number | null; hi: number | null }
 const clean = (r: Row): SlotRule => ({
@@ -62,13 +63,28 @@ export function clearSlot(
 
 import { classSpriteUrl, type Gender } from './classes';
 
-/** Stable 8-hex content hash of a slot config (order-independent). Cache-bust token for the skin URL. */
-export function slotConfigHash(config: Map<number, SlotRule>): string {
-  const s = [...config.entries()].sort((a, b) => a[0] - b[0])
-    .map(([slot, r]) => `${slot}:${r.op}:${r.hue ?? ''}:${r.sat ?? ''}:${r.lo ?? ''}:${r.hi ?? ''}`).join('|');
-  let h = 2166136261 >>> 0; // FNV-1a
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-  return h.toString(16).padStart(8, '0');
+function canonicalSlotConfig(config: Map<number, SlotRule>): string {
+  return [...config.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([slot, r]) =>
+      `${slot}:${r.op}:${r.hue ?? ''}:${r.sat ?? ''}:${r.lo ?? ''}:${r.hi ?? ''}`)
+    .join('|');
+}
+
+/** Stable content hash of a skin's sprite identity, slot maps, and ordered rules. */
+export function skinRenderHash(
+  sprite: string,
+  config: Map<number, SlotRule>,
+): string {
+  return createHash('sha256')
+    .update('clauderpg:skin:v2\0')
+    .update(sprite)
+    .update('\0')
+    .update(slotmapFingerprint(sprite))
+    .update('\0')
+    .update(canonicalSlotConfig(config))
+    .digest('hex')
+    .slice(0, 16);
 }
 
 /** Sprite URL for a character: the hashed skin URL when they have any cosmetics, else the plain sprite. */
@@ -76,5 +92,6 @@ export function cosmeticSkinUrl(
   playerId: number, classKey: string, gender: Gender, config: Map<number, SlotRule>, frame: 'a' | 'b' = 'a',
 ): string {
   if (config.size === 0) return classSpriteUrl(classKey, gender);
-  return `/sprite/skin/${playerId}/${frame}/${slotConfigHash(config)}.png`;
+  const sprite = spriteId(classKey, gender);
+  return `/sprite/skin/${playerId}/${frame}/${skinRenderHash(sprite, config)}.png`;
 }

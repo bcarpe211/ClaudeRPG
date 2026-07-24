@@ -8,8 +8,8 @@ import { createPlayer } from '../src/domain/players';
 import { createApp } from '../src/web/app';
 import { loadConfig } from '../src/config';
 import { SLOTS } from '../src/domain/slots';
-import { setSlotRule, slotConfigHash, getSlotConfig } from '../src/domain/slotcosmetics';
-import { spriteFileIndex } from '../src/domain/cosmetics';
+import { setSlotRule, skinRenderHash, getSlotConfig } from '../src/domain/slotcosmetics';
+import { spriteFileIndex, spriteId } from '../src/domain/cosmetics';
 import { creatureSpriteFile } from '../src/domain/classes';
 
 function ctx() {
@@ -27,7 +27,7 @@ describe('GET /sprite/skin', () => {
   it('renders the player per-slot config: body recolors, weapon/eye slots stay', async () => {
     const { db, app, p } = ctx();
     setSlotRule(db, p.id, SLOTS.body, { op: 'hue', hue: 120 }, 100); // green robe
-    const hash = slotConfigHash(getSlotConfig(db, p.id));
+    const hash = skinRenderHash(spriteId(p.class_key, p.gender), getSlotConfig(db, p.id));
     const res = await request(app).get(`/sprite/skin/${p.id}/a/${hash}.png`);
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('image/png');
@@ -48,7 +48,7 @@ describe('GET /sprite/skin', () => {
   it('redirects a stale hash to the current immutable skin URL', async () => {
     const { db, app, p } = ctx();
     setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 210, sat: 0.6 }, 100);
-    const currentHash = slotConfigHash(getSlotConfig(db, p.id));
+    const currentHash = skinRenderHash(spriteId(p.class_key, p.gender), getSlotConfig(db, p.id));
 
     const res = await request(app).get(`/sprite/skin/${p.id}/a/stale000.png`);
 

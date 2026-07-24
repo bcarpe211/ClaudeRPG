@@ -4,9 +4,9 @@ import { seedSettings } from '../src/domain/settings';
 import { createPlayer } from '../src/domain/players';
 import { purchase, setCosmeticHue } from '../src/domain/shop';
 import { SLOTS } from '../src/domain/slots';
-import { getSlotConfig, setSlotRule, clearSlot, slotConfigHash, cosmeticSkinUrl } from '../src/domain/slotcosmetics';
+import { getSlotConfig, setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl } from '../src/domain/slotcosmetics';
 import { classSpriteUrl } from '../src/domain/classes';
-import { getCosmetics } from '../src/domain/cosmetics';
+import { getCosmetics, spriteId } from '../src/domain/cosmetics';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -56,19 +56,20 @@ describe('getSlotConfig', () => {
   });
 });
 
-describe('slotConfigHash + cosmeticSkinUrl', () => {
-  it('hash is stable and order-independent, changes with the config', () => {
-    const a = new Map([[1, { op: 'hue' as const, hue: 10 }], [7, { op: 'value' as const, lo: 0, hi: 0.3 }]]);
-    const b = new Map([[7, { op: 'value' as const, lo: 0, hi: 0.3 }], [1, { op: 'hue' as const, hue: 10 }]]);
-    const c = new Map([[1, { op: 'hue' as const, hue: 11 }]]);
-    expect(slotConfigHash(a)).toBe(slotConfigHash(b)); // order-independent
-    expect(slotConfigHash(a)).not.toBe(slotConfigHash(c));
-    expect(slotConfigHash(a)).toMatch(/^[0-9a-f]{8}$/);
+describe('skinRenderHash + cosmeticSkinUrl', () => {
+  it('is stable, map-aware, and changes with the render inputs', () => {
+    const a = new Map([[SLOTS.body, { op: 'hue' as const, hue: 120 }]]);
+    const b = new Map([[SLOTS.body, { op: 'hue' as const, hue: 120 }]]);
+    const c = new Map([[SLOTS.body, { op: 'hue' as const, hue: 220 }]]);
+    expect(skinRenderHash('wizard_M', a)).toBe(skinRenderHash('wizard_M', b));
+    expect(skinRenderHash('wizard_M', a)).not.toBe(skinRenderHash('wizard_M', c));
+    expect(skinRenderHash('wizard_M', a)).not.toBe(skinRenderHash('priest_M', a));
+    expect(skinRenderHash('wizard_M', a)).toMatch(/^[0-9a-f]{16}$/);
   });
   it('cosmeticSkinUrl: plain sprite when empty, skin URL otherwise', () => {
     const empty = new Map();
     expect(cosmeticSkinUrl(5, 'wizard', 'M', empty)).toBe(classSpriteUrl('wizard', 'M'));
     const cfg = new Map([[1, { op: 'hue' as const, hue: 210 }]]);
-    expect(cosmeticSkinUrl(5, 'wizard', 'M', cfg, 'a')).toBe(`/sprite/skin/5/a/${slotConfigHash(cfg)}.png`);
+    expect(cosmeticSkinUrl(5, 'wizard', 'M', cfg, 'a')).toBe(`/sprite/skin/5/a/${skinRenderHash(spriteId('wizard', 'M'), cfg)}.png`);
   });
 });
