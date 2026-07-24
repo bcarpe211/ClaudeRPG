@@ -44,14 +44,14 @@ describe('character dye endpoints', () => {
     expect(getCosmetics(db, player.id)?.wheel_tier).toBe(1);
   });
 
-  it('does not charge a sprite whose slot-map has not been authored', async () => {
+  it('unlocks the wheel for an authored female sprite', async () => {
     const { db, app, player } = ctx('F');
 
     const res = await unlock(app, player.auth_token);
 
-    expect(res.status).toBe(409);
-    expect(getPlayerById(db, player.id)?.gold).toBe(2_000_000);
-    expect(getCosmetics(db, player.id)).toBeUndefined();
+    expect(res.status).toBe(302);
+    expect(getPlayerById(db, player.id)?.gold).toBe(500_000);
+    expect(getCosmetics(db, player.id)?.wheel_tier).toBe(1);
   });
 
   it('rejects set and clear until the wheel is unlocked', async () => {
@@ -197,7 +197,7 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('/static/dye.js');
   });
 
-  it('shows an unavailable state instead of charging a sprite without a slot-map', async () => {
+  it('offers the unlock to an authored female sprite', async () => {
     const { app, player } = ctx('F');
 
     const res = await request(app)
@@ -205,7 +205,8 @@ describe('character wardrobe panel', () => {
       .query({ token: player.auth_token });
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain('Tailoring in progress');
-    expect(res.text).not.toContain('/character/dye/unlock');
+    expect(res.text).toContain('Unlock Dye Wheel');
+    expect(res.text).toContain('/character/dye/unlock');
+    expect(res.text).not.toContain('Tailoring in progress');
   });
 });

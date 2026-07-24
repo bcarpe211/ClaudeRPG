@@ -79,12 +79,12 @@ describe('dyeViewModel', () => {
     expect(vm.config[SLOTS.body]).toEqual(wheelRule(120));
   });
 
-  it('marks a female sprite without a slotmap unavailable', () => {
+  it('makes the authored female sprite and its channels available', () => {
     const player = wizard('F');
     const vm = dyeViewModel(db, player);
 
-    expect(vm.available).toBe(false);
-    expect(vm.channels).toEqual([]);
-    expect(vm.slotmap).toEqual([]);
+    expect(vm.available).toBe(true);
+    expect(vm.channels.some((channel) => channel.slot === SLOTS.flair)).toBe(true);
+    expect(vm.slotmap).toHaveLength(24 * 24);
   });
 });

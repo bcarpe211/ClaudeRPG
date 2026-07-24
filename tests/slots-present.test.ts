@@ -1,17 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { EXPECTED_CHANNELS } from '../src/domain/cosmeticsreview';
 import { PICKER_ORDER, presentSlots, SLOTS } from '../src/domain/slots';
 
 describe('presentSlots', () => {
-  it('lists the wizard_M slots present in the map, outline excluded, in picker order', () => {
-    const got = presentSlots('wizard_M');
-
-    expect(got.length).toBeGreaterThan(0);
-    expect(got).toContain(SLOTS.body);
-    expect(got).not.toContain(SLOTS.outline);
-
-    const indexes = got.map((slot) => PICKER_ORDER.indexOf(slot));
-    expect(indexes.every((index) => index >= 0)).toBe(true);
-    expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
+  it('lists the exact authored wizard channels in picker order', () => {
+    expect(presentSlots('wizard_M')).toEqual(EXPECTED_CHANNELS.wizard.M);
+    expect(presentSlots('wizard_F')).toEqual(EXPECTED_CHANNELS.wizard.F);
   });
 
   it('defines every non-outline material once in picker order', () => {

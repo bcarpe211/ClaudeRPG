@@ -103,7 +103,7 @@ describe('EXPECTED_CHANNELS', () => {
 });
 
 describe('buildCosmeticsReviewRoster', () => {
-  it('builds all class and gender variants with fresh-map warnings and friendly flair labels', () => {
+  it('builds the complete warning-free roster with friendly flair labels', () => {
     const roster = buildCosmeticsReviewRoster();
 
     expect(roster).toHaveLength(18);
@@ -114,10 +114,7 @@ describe('buildCosmeticsReviewRoster', () => {
     ]);
     expect(roster.find(({ sprite }) => sprite === 'wizard_M')?.channels)
       .toContainEqual({ slot: SLOTS.flair, label: 'Eyes' });
-    expect(roster.find(({ sprite }) => sprite === 'knight_F')?.warnings)
-      .toContain('Missing frame A slot map');
-    expect(roster.find(({ sprite }) => sprite === 'knight_F')?.warnings)
-      .toContain('Missing frame B slot map');
+    expect(roster.every(({ warnings }) => warnings.length === 0)).toBe(true);
   });
 });
 

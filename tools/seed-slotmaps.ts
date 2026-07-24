@@ -79,17 +79,33 @@ export function seedSlotmap(spritePng: Buffer, rules: SeedRule[]): Buffer {
   return PNG.sync.write(out);
 }
 
-// CLI: `npx tsx tools/seed-slotmaps.ts` — writes slotmaps/<class>_M_<a|b>.png for every class.
-export function main(): void {
+export function shouldWriteSeed(
+  exists: boolean,
+  argv: readonly string[],
+): boolean {
+  return !exists || argv.includes('--force-bootstrap');
+}
+
+// CLI: `npx tsx tools/seed-slotmaps.ts` bootstraps missing male maps.
+// Existing reviewed maps require the explicit --force-bootstrap escape hatch.
+export function main(argv: readonly string[] = process.argv.slice(2)): void {
   const dir = path.resolve('slotmaps');
   fs.mkdirSync(dir, { recursive: true });
   const spritesDir = 'assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24';
+  console.warn(
+    'WARNING: bootstrap slot maps are incomplete and must not replace reviewed artifacts.',
+  );
   for (const [cls, rules] of Object.entries(SLOT_SEED)) {
     for (const frame of ['a', 'b'] as const) {
+      const output = path.join(dir, `${cls}_M_${frame}.png`);
+      if (!shouldWriteSeed(fs.existsSync(output), argv)) {
+        console.log(`skipped slotmaps/${cls}_M_${frame}.png (reviewed map exists)`);
+        continue;
+      }
       const idx = spriteFileIndex(cls, 'M' as Gender, frame);
       const sprite = fs.readFileSync(path.join(spritesDir, creatureSpriteFile(idx)));
-      fs.writeFileSync(path.join(dir, `${cls}_M_${frame}.png`), seedSlotmap(sprite, rules));
-      console.log(`seeded slotmaps/${cls}_M_${frame}.png`);
+      fs.writeFileSync(output, seedSlotmap(sprite, rules));
+      console.log(`bootstrapped slotmaps/${cls}_M_${frame}.png`);
     }
   }
 }

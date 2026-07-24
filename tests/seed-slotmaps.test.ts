@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { seedSlotmap, SLOT_SEED } from '../tools/seed-slotmaps';
+import {
+  seedSlotmap,
+  shouldWriteSeed,
+  SLOT_SEED,
+} from '../tools/seed-slotmaps';
 import { readSlotmap, SLOTS } from '../src/domain/slots';
 
 const WIZARD = 'assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24/oryx_16bit_fantasy_creatures_04.png';
@@ -12,5 +16,16 @@ describe('seedSlotmap', () => {
     const eyePixels = Array.from(map).filter((s) => s === SLOTS.flair).length;
     expect(bodyPixels).toBeGreaterThan(30); // the robe is labeled body
     expect(eyePixels).toBeGreaterThan(0);   // the eyes are carved out into flair, not body
+  });
+});
+
+describe('shouldWriteSeed', () => {
+  it('writes a missing bootstrap map without a force flag', () => {
+    expect(shouldWriteSeed(false, [])).toBe(true);
+  });
+
+  it('protects an existing reviewed map unless bootstrap overwrite is explicit', () => {
+    expect(shouldWriteSeed(true, [])).toBe(false);
+    expect(shouldWriteSeed(true, ['--force-bootstrap'])).toBe(true);
   });
 });
