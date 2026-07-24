@@ -75,12 +75,13 @@ function canonicalSlotConfig(config: Map<number, SlotRule>): string {
 export function skinRenderHash(
   sprite: string,
   config: Map<number, SlotRule>,
+  slotmapsDir?: string,
 ): string {
   return createHash('sha256')
     .update('clauderpg:skin:v2\0')
     .update(sprite)
     .update('\0')
-    .update(slotmapFingerprint(sprite))
+    .update(slotmapFingerprint(sprite, slotmapsDir))
     .update('\0')
     .update(canonicalSlotConfig(config))
     .digest('hex')

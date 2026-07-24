@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { PNG } from 'pngjs';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../src/db/db';
@@ -14,9 +14,9 @@ import { setSlotRule, skinRenderHash, getSlotConfig } from '../src/domain/slotco
 import { spriteFileIndex, spriteId } from '../src/domain/cosmetics';
 import { creatureSpriteFile } from '../src/domain/classes';
 
-function ctx(env: NodeJS.ProcessEnv = {}) {
+function ctx(env: NodeJS.ProcessEnv = {}, slotmapsDir?: string) {
   const db = openDb(':memory:'); seedSettings(db);
-  const app = createApp({ db, config: loadConfig(env) });
+  const app = createApp({ db, config: loadConfig(env), slotmapsDir });
   const p = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
   return { db, app, p };
 }
@@ -61,10 +61,14 @@ describe('GET /sprite/skin', () => {
     expect(res.headers['cache-control']).toBeUndefined();
   });
   it('renders a newly hashed URL with fresh slot-map data', async () => {
-    const cacheDir = mkdtempSync(join(tmpdir(), 'claude-rpg-skin-cache-'));
-    const { db, app, p } = ctx({ DB_PATH: join(cacheDir, 'test.db') });
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'claude-rpg-skin-fixture-'));
+    const slotmapsDir = join(fixtureDir, 'slotmaps');
+    mkdirSync(slotmapsDir);
+    const { db, app, p } = ctx({ DB_PATH: join(fixtureDir, 'test.db') }, slotmapsDir);
     const sprite = spriteId(p.class_key, p.gender);
-    const file = slotmapFile(sprite, 'a');
+    const file = join(slotmapsDir, `${sprite}_a.png`);
+    copyFileSync(slotmapFile(sprite, 'a'), file);
+    copyFileSync(slotmapFile(sprite, 'b'), join(slotmapsDir, `${sprite}_b.png`));
     const original = readFileSync(file);
     const source = PNG.sync.read(readFileSync(
       `assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24/${creatureSpriteFile(spriteFileIndex('wizard', 'M', 'a'))}`));
@@ -79,21 +83,21 @@ describe('GET /sprite/skin', () => {
     const i = pixel * 4;
 
     try {
-      expect(loadSlotmap(sprite, 'a')).toEqual(originalSlots); // warm decoded-map cache
+      expect(loadSlotmap(sprite, 'a', slotmapsDir)).toEqual(originalSlots); // warm decoded-map cache
       expect(pixel).toBeGreaterThanOrEqual(0);
       map.data.set([...body, 255], i);
       writeFileSync(file, PNG.sync.write(map));
 
       setSlotRule(db, p.id, SLOTS.body, { op: 'value', lo: 1, hi: 1 }, 100);
-      const hash = skinRenderHash(sprite, getSlotConfig(db, p.id));
+      const hash = skinRenderHash(sprite, getSlotConfig(db, p.id), slotmapsDir);
       const res = await request(app).get(`/sprite/skin/${p.id}/a/${hash}.png`);
-      const out = PNG.sync.read(res.body);
 
       expect(res.status).toBe(200);
+      const out = PNG.sync.read(res.body);
       expect([out.data[i], out.data[i + 1], out.data[i + 2]]).toEqual([255, 255, 255]);
     } finally {
       writeFileSync(file, original);
-      rmSync(cacheDir, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
 });

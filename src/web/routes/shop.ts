@@ -13,7 +13,7 @@ import { recolorSprite, recolorSpriteSlots } from '../../domain/spritetint';
 import { loadSlotmap, loadSlotmapFresh, SLOTS } from '../../domain/slots';
 import { getSlotConfig, skinRenderHash } from '../../domain/slotcosmetics';
 
-export function registerShopRoutes(app: Express, { db, config }: AppDeps): void {
+export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: AppDeps): void {
   const cacheDir = path.join(path.dirname(config.dbPath), 'tint-cache');
 
   app.get('/sprite/tint/:sprite/:frame/:hue.png', asyncHandler(async (req, res) => {
@@ -65,7 +65,7 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
 
     const slotConfig = getSlotConfig(db, playerId);
     const sprite = spriteId(player.class_key, player.gender as Gender);
-    const hash = skinRenderHash(sprite, slotConfig);
+    const hash = skinRenderHash(sprite, slotConfig, slotmapsDir);
     if (req.params.hash !== hash) {
       res.redirect(302, `/sprite/skin/${playerId}/${frame}/${hash}.png`);
       return;
@@ -79,7 +79,7 @@ export function registerShopRoutes(app: Express, { db, config }: AppDeps): void 
       creatureSpriteFile(spriteFileIndex(player.class_key, player.gender as Gender, frame)),
     );
     const src = fs.readFileSync(srcFile);
-    const slotIds = loadSlotmapFresh(sprite, frame);
+    const slotIds = loadSlotmapFresh(sprite, frame, slotmapsDir);
     const out = slotIds ? recolorSpriteSlots(src, slotIds, slotConfig) : src; // no slot-map (female) → plain
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(cacheFile, out);

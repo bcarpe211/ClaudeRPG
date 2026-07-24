@@ -21,6 +21,7 @@ const VIEWS = path.join(__dirname, 'views');
 export interface AppDeps {
   db: Database.Database;
   config: Config;
+  slotmapsDir?: string;
 }
 
 // Renders a page template, wraps it in layout.ejs, returns HTML.
@@ -37,7 +38,7 @@ export async function renderPage(
   });
 }
 
-export function createApp({ db, config }: AppDeps): Express {
+export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
   const app = express();
   app.set('view engine', 'ejs');
   app.set('views', VIEWS);
@@ -59,7 +60,7 @@ export function createApp({ db, config }: AppDeps): Express {
 
   registerRegistrationRoutes(app, { db, config });
   registerCharacterRoutes(app, { db, config });
-  registerShopRoutes(app, { db, config });
+  registerShopRoutes(app, { db, config, slotmapsDir });
   registerAdminRoutes(app, { db, config });
   registerMetricsRoutes(app, { db, config });
 
