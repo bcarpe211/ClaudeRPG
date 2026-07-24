@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { loadConfig } from '../src/config';
@@ -10,10 +13,10 @@ import { presentSlots, SLOTS } from '../src/domain/slots';
 import { seedSettings } from '../src/domain/settings';
 import { createApp } from '../src/web/app';
 
-function ctx(gender: 'M' | 'F' = 'M') {
+function ctx(gender: 'M' | 'F' = 'M', slotmapsDir?: string) {
   const db = openDb(':memory:');
   seedSettings(db);
-  const app = createApp({ db, config: loadConfig({}) });
+  const app = createApp({ db, config: loadConfig({}), slotmapsDir });
   const player = createPlayer(
     db,
     { name: 'A', class_key: 'wizard', gender },
@@ -52,6 +55,29 @@ describe('character dye endpoints', () => {
     expect(res.status).toBe(302);
     expect(getPlayerById(db, player.id)?.gold).toBe(500_000);
     expect(getCosmetics(db, player.id)?.wheel_tier).toBe(1);
+  });
+
+  it('does not charge or offer unlock when the configured slot-map directory is empty', async () => {
+    const slotmapsDir = mkdtempSync(join(tmpdir(), 'clauderpg-empty-slotmaps-'));
+    try {
+      const { db, app, player } = ctx('F', slotmapsDir);
+
+      const unlockRes = await unlock(app, player.auth_token);
+
+      expect(unlockRes.status).toBe(409);
+      expect(getPlayerById(db, player.id)?.gold).toBe(2_000_000);
+      expect(getCosmetics(db, player.id)).toBeUndefined();
+
+      const pageRes = await request(app)
+        .get('/character')
+        .query({ token: player.auth_token });
+
+      expect(pageRes.status).toBe(200);
+      expect(pageRes.text).toContain('Tailoring in progress');
+      expect(pageRes.text).not.toContain('/character/dye/unlock');
+    } finally {
+      rmSync(slotmapsDir, { recursive: true });
+    }
   });
 
   it('rejects set and clear until the wheel is unlocked', async () => {

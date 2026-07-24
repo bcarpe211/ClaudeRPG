@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { EXPECTED_CHANNELS } from '../src/domain/cosmeticsreview';
 import { PICKER_ORDER, presentSlots, SLOTS } from '../src/domain/slots';
@@ -16,5 +19,14 @@ describe('presentSlots', () => {
 
   it('is empty for a sprite with no authored slot-map', () => {
     expect(presentSlots('nope_M')).toEqual([]);
+  });
+
+  it('uses an explicitly configured empty slot-map directory', () => {
+    const slotmapsDir = mkdtempSync(join(tmpdir(), 'clauderpg-empty-slotmaps-'));
+    try {
+      expect(presentSlots('wizard_F', slotmapsDir)).toEqual([]);
+    } finally {
+      rmSync(slotmapsDir, { recursive: true });
+    }
   });
 });

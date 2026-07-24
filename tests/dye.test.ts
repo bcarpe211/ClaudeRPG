@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { createPlayer } from '../src/domain/players';
@@ -86,5 +89,19 @@ describe('dyeViewModel', () => {
     expect(vm.available).toBe(true);
     expect(vm.channels.some((channel) => channel.slot === SLOTS.flair)).toBe(true);
     expect(vm.slotmap).toHaveLength(24 * 24);
+  });
+
+  it('marks a valid player unavailable when the configured slot-map directory is empty', () => {
+    const slotmapsDir = mkdtempSync(join(tmpdir(), 'clauderpg-empty-slotmaps-'));
+    try {
+      const player = wizard('F');
+      const vm = dyeViewModel(db, player, slotmapsDir);
+
+      expect(vm.available).toBe(false);
+      expect(vm.channels).toEqual([]);
+      expect(vm.slotmap).toEqual([]);
+    } finally {
+      rmSync(slotmapsDir, { recursive: true });
+    }
   });
 });

@@ -60,7 +60,7 @@ export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   registerRegistrationRoutes(app, { db, config });
-  registerCharacterRoutes(app, { db, config });
+  registerCharacterRoutes(app, { db, config, slotmapsDir });
   registerShopRoutes(app, { db, config, slotmapsDir });
   registerAdminRoutes(app, { db, config });
   registerMetricsRoutes(app, { db, config });

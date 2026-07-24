@@ -117,8 +117,8 @@ export const PICKER_ORDER: number[] = [
 ];
 
 /** Distinct recolorable slots present in a sprite's frame-A map, in picker order. */
-export function presentSlots(sprite: string): number[] {
-  const ids = loadSlotmap(sprite, 'a');
+export function presentSlots(sprite: string, slotmapsDir?: string): number[] {
+  const ids = loadSlotmap(sprite, 'a', slotmapsDir);
   if (!ids) return [];
 
   const seen = new Set<number>();

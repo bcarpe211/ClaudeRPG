@@ -78,11 +78,12 @@ function wheelPrice(db: Database.Database): number {
 export function dyeViewModel(
   db: Database.Database,
   player: { id: number; class_key: string; gender: string },
+  slotmapsDir?: string,
 ): DyeViewModel {
   const gender = player.gender as Gender;
   const sprite = spriteId(player.class_key, gender);
-  const ids = loadSlotmap(sprite, 'a');
-  const present = presentSlots(sprite);
+  const ids = loadSlotmap(sprite, 'a', slotmapsDir);
+  const present = presentSlots(sprite, slotmapsDir);
   const cosmetics = getCosmetics(db, player.id);
   const config: Record<number, SlotRule> = {};
   for (const [slot, rule] of getSlotConfig(db, player.id)) {

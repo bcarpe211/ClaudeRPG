@@ -18,10 +18,63 @@ import {
   SLOTS,
   type SpriteFrame,
 } from '../src/domain/slots';
-import { FEMALE_OVERRIDES } from '../tools/transfer-female-slotmaps';
+import {
+  FEMALE_OVERRIDES,
+  transferFemaleSlotmap,
+} from '../tools/transfer-female-slotmaps';
 
 const GENDERS = ['M', 'F'] as const satisfies readonly Gender[];
 const FRAMES = ['a', 'b'] as const satisfies readonly SpriteFrame[];
+const CLASS_KEYS = [
+  'berserker',
+  'knight',
+  'paladin',
+  'priest',
+  'ranger',
+  'shaman',
+  'swordsman',
+  'thief',
+  'wizard',
+] as const;
+const EXPECTED_SLOTMAP_FILES = [
+  'berserker_F_a.png',
+  'berserker_F_b.png',
+  'berserker_M_a.png',
+  'berserker_M_b.png',
+  'knight_F_a.png',
+  'knight_F_b.png',
+  'knight_M_a.png',
+  'knight_M_b.png',
+  'paladin_F_a.png',
+  'paladin_F_b.png',
+  'paladin_M_a.png',
+  'paladin_M_b.png',
+  'priest_F_a.png',
+  'priest_F_b.png',
+  'priest_M_a.png',
+  'priest_M_b.png',
+  'ranger_F_a.png',
+  'ranger_F_b.png',
+  'ranger_M_a.png',
+  'ranger_M_b.png',
+  'shaman_F_a.png',
+  'shaman_F_b.png',
+  'shaman_M_a.png',
+  'shaman_M_b.png',
+  'swordsman_F_a.png',
+  'swordsman_F_b.png',
+  'swordsman_M_a.png',
+  'swordsman_M_b.png',
+  'thief_F_a.png',
+  'thief_F_b.png',
+  'thief_M_a.png',
+  'thief_M_b.png',
+  'wizard_F_a.png',
+  'wizard_F_b.png',
+  'wizard_M_a.png',
+  'wizard_M_b.png',
+] as const;
+const SLOTMAPS_DIR = path.resolve('slotmaps');
 const SPRITES_DIR = path.resolve(
   'assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24',
 );
@@ -48,6 +101,38 @@ function uniqueSlots(ids: Uint8Array | null): number[] {
 }
 
 describe('authored slot-map artifact integrity', () => {
+  it('contains exactly the 36 expected slot-map PNG filenames', () => {
+    const actual = fs.readdirSync(SLOTMAPS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.png'))
+      .map((entry) => entry.name)
+      .sort();
+
+    expect(actual).toEqual(EXPECTED_SLOTMAP_FILES);
+  });
+
+  it('reproduces every committed female map byte-for-byte from authored inputs', () => {
+    for (const classKey of CLASS_KEYS) {
+      for (const frame of FRAMES) {
+        const result = transferFemaleSlotmap(
+          fs.readFileSync(slotmapFile(`${classKey}_M`, frame)),
+          fs.readFileSync(sourceFile(classKey, 'M', frame)),
+          fs.readFileSync(sourceFile(classKey, 'F', frame)),
+          FEMALE_OVERRIDES[`${classKey}_F_${frame}`] ?? [],
+        );
+        const committed = fs.readFileSync(slotmapFile(`${classKey}_F`, frame));
+
+        expect(
+          result.unresolved,
+          `${classKey}_F_${frame} must resolve every female-only visible coordinate`,
+        ).toEqual([]);
+        expect(
+          result.png.equals(committed),
+          `${classKey}_F_${frame} must equal deterministic transfer output`,
+        ).toBe(true);
+      }
+    }
+  });
+
   for (const { key: classKey } of CLASSES) {
     for (const gender of GENDERS) {
       for (const frame of FRAMES) {

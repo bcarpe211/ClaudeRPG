@@ -39,7 +39,7 @@ const DyeClearInput = z.object({
 
 export function registerCharacterRoutes(
   app: Express,
-  { db, config }: AppDeps,
+  { db, config, slotmapsDir }: AppDeps,
 ): void {
   app.get('/character', asyncHandler(async (req, res) => {
     const token = typeof req.query.token === 'string' ? req.query.token : '';
@@ -63,7 +63,7 @@ export function registerCharacterRoutes(
         player,
         className: getClass(player.class_key)?.name ?? player.class_key,
         avatarUrl: cosmeticSkinUrl(player.id, player.class_key, player.gender as Gender, getSlotConfig(db, player.id), 'a'),
-        dye: dyeViewModel(db, player),
+        dye: dyeViewModel(db, player, slotmapsDir),
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({
           token: player.auth_token,
@@ -115,7 +115,7 @@ export function registerCharacterRoutes(
       return;
     }
     const sprite = spriteId(player.class_key, player.gender as Gender);
-    if (presentSlots(sprite).length === 0) {
+    if (presentSlots(sprite, slotmapsDir).length === 0) {
       res.status(409).send('Dyes are not available for this sprite yet');
       return;
     }
@@ -154,7 +154,7 @@ export function registerCharacterRoutes(
       return;
     }
     const sprite = spriteId(player.class_key, player.gender as Gender);
-    if (!presentSlots(sprite).includes(parsed.data.slot)) {
+    if (!presentSlots(sprite, slotmapsDir).includes(parsed.data.slot)) {
       res.sendStatus(400);
       return;
     }
@@ -185,7 +185,7 @@ export function registerCharacterRoutes(
       return;
     }
     const sprite = spriteId(player.class_key, player.gender as Gender);
-    if (!presentSlots(sprite).includes(parsed.data.slot)) {
+    if (!presentSlots(sprite, slotmapsDir).includes(parsed.data.slot)) {
       res.sendStatus(400);
       return;
     }
