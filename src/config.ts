@@ -13,6 +13,7 @@ export interface Config {
   spritesDir: string;
   enableCatalog: boolean;
   enableDungeonPreview: boolean;
+  enableCosmeticsReview: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -33,5 +34,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       env.ENABLE_CATALOG === '1' || env.ENABLE_CATALOG === 'true',
     enableDungeonPreview:
       env.ENABLE_DUNGEON_PREVIEW === '1' || env.ENABLE_DUNGEON_PREVIEW === 'true',
+    enableCosmeticsReview:
+      env.ENABLE_COSMETICS_REVIEW === '1'
+      || env.ENABLE_COSMETICS_REVIEW === 'true',
   };
 }

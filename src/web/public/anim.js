@@ -29,12 +29,41 @@ export function frameAt(nowMs, periodMs) {
  */
 export function start(opts) {
   const periodMs = (opts && opts.periodMs) || 1000;
+  let paused = false;
+  let stopped = false;
+  let timer = null;
   const tick = () => {
     const showB = frameAt(Date.now(), periodMs) === 1;
     document.querySelectorAll('.sprite-anim').forEach((el) => {
       el.classList.toggle('show-b', showB);
     });
   };
+  const clearTimer = () => {
+    if (timer === null) return;
+    clearInterval(timer);
+    timer = null;
+  };
   tick();
-  setInterval(tick, periodMs);
+  timer = setInterval(tick, periodMs);
+  return {
+    pause() {
+      if (paused || stopped) return;
+      paused = true;
+      clearTimer();
+    },
+    resume() {
+      if (!paused || stopped) return;
+      paused = false;
+      timer = setInterval(tick, periodMs);
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      paused = true;
+      clearTimer();
+    },
+    isPaused() {
+      return paused;
+    },
+  };
 }

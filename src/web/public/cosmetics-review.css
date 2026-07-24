@@ -1,0 +1,170 @@
+.cosmetics-review-page{
+  --review-violet:#160f20;
+  --review-plum:#221631;
+  --review-gold:#e8c96a;
+  --review-ink:#c9bce0;
+  --review-success:#7bd88f;
+  --review-warning:#e0483f;
+  padding-bottom:24px;
+}
+.t-a,.t-b{animation:none}
+.cosmetics-review-page [hidden]{display:none!important}
+.review-intro{max-width:760px;margin:18px 0 24px}
+.review-kicker,.review-class-heading p,.review-variant-heading p,.review-data-label,
+.review-tool-label,.review-stage-label{
+  margin:0;color:var(--gold);font:800 10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.12em;text-transform:uppercase;
+}
+.review-intro h1{margin:5px 0 8px}
+.review-intro>p:last-child{max-width:680px;margin:0;color:var(--muted)}
+
+.review-toolbar{
+  position:sticky;z-index:20;top:0;display:grid;
+  grid-template-columns:minmax(0,1fr) auto;gap:12px 18px;align-items:end;
+  margin:0 0 26px;padding:14px;border:2px solid #3e2d50;border-radius:9px;
+  background:linear-gradient(180deg,#291a38,#160f20 80%);
+  box-shadow:0 16px 34px #08050dbf,inset 0 1px 0 #ffffff14,inset 0 -3px 0 #0d0913;
+}
+.review-tool{min-width:0}
+.review-mode-tool{grid-column:1;grid-row:1}
+.review-tool-label{display:block;margin:0 0 8px}
+.review-mode-buttons{display:flex;flex-wrap:wrap;gap:6px}
+.review-toolbar button{
+  margin:0;min-height:34px;padding:7px 10px;border:1px solid #49375d;border-radius:5px;
+  background:#160f20;color:var(--ink);box-shadow:inset 0 1px 0 #ffffff0c;
+  font-size:12px;line-height:1.1;transition:none;
+}
+.review-toolbar button:hover{
+  transform:none;border-color:var(--gold-dim);color:var(--head);box-shadow:inset 0 1px 0 #ffffff0c;
+}
+.review-toolbar button:focus-visible,.review-toolbar select:focus-visible,
+.review-toolbar input:focus-visible{
+  outline:2px solid var(--review-gold);outline-offset:2px;
+}
+.review-mode.is-active,.review-slot-choice.is-active{
+  border-color:var(--review-gold);background:#e8c96a16;color:var(--gold2);
+  box-shadow:inset 0 0 0 1px #e8c96a38;
+}
+.review-material-tool,.review-hue-tool{grid-column:1/-1}
+.review-material-tool{grid-row:2}
+.review-hue-tool{grid-row:3}
+#review-slot{
+  width:min(260px,100%);margin:0 0 9px;padding:8px 10px;border-radius:5px;
+  border:1px solid #49375d;background:#100a18;color:var(--head);
+  font:700 12px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.review-slot-key{display:flex;flex-wrap:wrap;gap:5px}
+.review-slot-choice{display:inline-flex;align-items:center;gap:6px}
+.review-slot-choice span:last-child{
+  font:700 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.review-gem{
+  --slot-color:#777;display:inline-block;flex:0 0 auto;width:12px;height:12px;
+  border:1px solid #08050c;border-radius:2px;background:var(--slot-color);
+  box-shadow:inset 1px 1px 0 #ffffff70,inset -1px -1px 0 #0008,0 0 0 1px #ffffff12;
+}
+[data-slot="1"]{--slot-color:#ff0000}
+[data-slot="2"]{--slot-color:#ff7f00}
+[data-slot="3"]{--slot-color:#ffff00}
+[data-slot="4"]{--slot-color:#7fff00}
+[data-slot="5"]{--slot-color:#00ff00}
+[data-slot="6"]{--slot-color:#00ff7f}
+[data-slot="7"]{--slot-color:#00ffff}
+[data-slot="8"]{--slot-color:#007fff}
+[data-slot="9"]{--slot-color:#0000ff}
+[data-slot="10"]{--slot-color:#7f00ff}
+[data-slot="11"]{--slot-color:#ff00ff}
+.review-hue-row{display:flex;align-items:center;gap:12px}
+#review-hue{width:min(520px,calc(100% - 62px));margin:0;padding:0;accent-color:var(--review-gold)}
+#review-hue-value{
+  min-width:48px;color:var(--gold2);
+  font:800 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.review-motion{grid-column:2;grid-row:1;justify-self:end;white-space:nowrap}
+
+.review-roster{display:grid;gap:22px}
+.review-class-row{
+  scroll-margin-top:320px;padding:16px;border:2px solid #332441;border-radius:10px;
+  background:linear-gradient(180deg,#1a1125,#100b18);
+  box-shadow:inset 0 1px 0 #ffffff0a,0 18px 40px -30px #000;
+}
+.review-class-heading{
+  display:flex;align-items:center;gap:10px;margin:0 0 13px;padding:0 2px 10px;
+  border-bottom:1px solid #39294a;
+}
+.review-class-mark{
+  width:9px;height:28px;border:1px solid #7a6435;background:var(--review-gold);
+  box-shadow:inset 2px 0 #fff6,inset -2px 0 #4e3d18;
+}
+.review-class-heading p{color:var(--muted)}
+.review-class-heading h2{margin:1px 0 0;font-size:20px}
+.review-variants{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.review-variant{
+  min-width:0;padding:13px;border:2px solid #3b2b4e;border-radius:7px;
+  background:var(--review-plum);box-shadow:inset 0 1px 0 #ffffff12,inset 0 -3px 0 #160f20;
+}
+.review-variant-heading{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px;
+}
+.review-variant-heading p{color:var(--muted)}
+.review-variant-heading h3{margin:2px 0 0;font-size:16px}
+.review-variant-heading code{
+  padding:4px 6px;border:1px solid #49375d;border-radius:4px;background:#100a18;
+  color:var(--gold2);font-size:10px;white-space:nowrap;
+}
+.review-stage{
+  position:relative;display:grid;place-items:center;min-height:160px;border:1px solid #3b2b4e;
+  border-radius:5px;overflow:hidden;background:
+    linear-gradient(90deg,transparent 49.7%,#ffffff08 50%,transparent 50.3%),
+    linear-gradient(180deg,#1c1228,#100a18);
+  box-shadow:inset 0 0 30px #0007;
+}
+.review-stage::after{
+  content:"";position:absolute;left:50%;bottom:19px;width:104px;height:14px;
+  transform:translateX(-50%);border:1px solid #5e492a;border-radius:50%;
+  background:#2b2017;box-shadow:0 5px 12px #0009;
+}
+.review-stage-label{position:absolute;left:8px;top:8px;color:var(--muted)}
+.sprite-anim{position:relative;z-index:1;width:144px;height:144px}
+.sprite-anim img{
+  position:absolute;inset:0;width:144px;height:144px;object-fit:contain;
+  image-rendering:pixelated;image-rendering:crisp-edges;
+}
+.sprite-anim .frame-b{visibility:hidden}
+.sprite-anim.show-b .frame-a{visibility:hidden}
+.sprite-anim.show-b .frame-b{visibility:visible}
+.review-inventory{margin-top:12px}
+.review-data-label{color:var(--muted)}
+.review-channel-list{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.review-channel{
+  display:inline-flex;align-items:center;gap:5px;padding:4px 6px;border:1px solid #49375d;
+  border-radius:4px;background:#160f20;color:var(--review-ink);
+  font:700 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.review-channel .review-gem{width:9px;height:9px}
+.review-status{margin:11px 0 0;padding:9px 10px;border:1px solid;border-radius:5px;font-size:11px}
+.review-status strong{display:block;margin-bottom:4px;color:#ffaaa5}
+.review-status ul{margin:0;padding-left:17px}
+.review-status--warning{border-color:#6d302f;background:#281114;color:#e8b3b0}
+.review-status--success{border-color:#376645;background:#102118;color:var(--review-success);font-weight:750}
+
+@media (max-width:760px){
+  .review-toolbar{grid-template-columns:1fr}
+  .review-mode-tool,.review-material-tool,.review-hue-tool,.review-motion{
+    grid-column:1;grid-row:auto;
+  }
+  .review-motion{justify-self:start}
+  .review-variants{grid-template-columns:1fr}
+  .review-class-row{scroll-margin-top:420px}
+}
+@media (max-width:520px){
+  .cosmetics-review-page{margin-inline:-8px}
+  .review-toolbar{padding:11px}
+  .review-class-row{padding:10px}
+  .review-variant-heading{display:block}
+  .review-variant-heading code{display:inline-block;margin-top:6px}
+  .review-slot-choice span:last-child{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  .review-toolbar button{transition:none}
+}

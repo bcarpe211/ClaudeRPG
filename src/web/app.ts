@@ -14,6 +14,7 @@ import { TvHub } from './tvhub';
 import { registerTvRoutes } from './routes/tv';
 import { registerCatalogRoutes } from './routes/catalog';
 import { registerDungeonPreviewRoutes } from './routes/dungeon-preview';
+import { registerCosmeticsReviewRoutes } from './routes/cosmetics-review';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -70,6 +71,7 @@ export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
 
   registerCatalogRoutes(app, { db, config });
   registerDungeonPreviewRoutes(app, { db, config });
+  registerCosmeticsReviewRoutes(app, { db, config, slotmapsDir });
 
   // Final safety net: turn any handler error into a 500 instead of crashing.
   app.use(

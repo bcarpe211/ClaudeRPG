@@ -1,0 +1,165 @@
+<div class="cosmetics-review-page">
+  <header class="review-intro">
+    <p class="review-kicker">Tailor's inspection board</p>
+    <h1>Cosmetics Roster Review</h1>
+    <p>
+      Read-only material inventory for comparing every class, gender, and
+      animation frame. Changes here affect only this inspection view.
+    </p>
+  </header>
+
+  <div class="review-toolbar" aria-label="Dye bench">
+    <div class="review-tool review-mode-tool">
+      <span class="review-tool-label">Render</span>
+      <div class="review-mode-buttons" role="group" aria-label="Render mode">
+        <% [
+          ['original', 'Original'],
+          ['slots', 'Slot map'],
+          ['focus', 'Focus'],
+          ['hue', 'Hue'],
+          ['black', 'Black'],
+          ['white', 'White'],
+          ['steel', 'Steel'],
+        ].forEach(function (mode) { %>
+          <button
+            type="button"
+            class="review-mode<%= mode[0] === 'original' ? ' is-active' : '' %>"
+            data-review-mode="<%= mode[0] %>"
+            aria-pressed="<%= mode[0] === 'original' ? 'true' : 'false' %>"
+          ><%= mode[1] %></button>
+        <% }); %>
+      </div>
+    </div>
+
+    <div class="review-tool review-material-tool" id="review-material-tool" hidden>
+      <label class="review-tool-label" for="review-slot">Material</label>
+      <select id="review-slot">
+        <% slots.forEach(function (item) { %>
+          <option value="<%= item.slot %>"<%= item.slot === 1 ? ' selected' : '' %>>
+            <%= item.label %>
+          </option>
+        <% }); %>
+      </select>
+      <div class="review-slot-key" aria-label="Material slot legend">
+        <% slots.forEach(function (item) { %>
+          <button
+            type="button"
+            class="review-slot-choice<%= item.slot === 1 ? ' is-active' : '' %>"
+            data-review-slot-choice="<%= item.slot %>"
+            aria-label="Select <%= item.label %>"
+            aria-pressed="<%= item.slot === 1 ? 'true' : 'false' %>"
+          >
+            <span class="review-gem" data-slot="<%= item.slot %>" aria-hidden="true"></span>
+            <span><%= item.label %></span>
+          </button>
+        <% }); %>
+      </div>
+    </div>
+
+    <div class="review-tool review-hue-tool" id="review-hue-tool" hidden>
+      <label class="review-tool-label" for="review-hue">Hue</label>
+      <div class="review-hue-row">
+        <input id="review-hue" type="range" min="0" max="359" value="210" />
+        <output id="review-hue-value" for="review-hue">210°</output>
+      </div>
+    </div>
+
+    <button
+      type="button"
+      class="review-motion"
+      id="review-motion"
+      aria-pressed="false"
+    >Pause animation</button>
+  </div>
+
+  <div class="review-roster">
+    <% for (let index = 0; index < roster.length; index += 2) {
+      const variants = [roster[index], roster[index + 1]];
+    %>
+      <section class="review-class-row" data-class="<%= variants[0].classKey %>">
+        <header class="review-class-heading">
+          <span class="review-class-mark" aria-hidden="true"></span>
+          <div>
+            <p>Class tray</p>
+            <h2><%= variants[0].className %></h2>
+          </div>
+        </header>
+
+        <div class="review-variants">
+          <% variants.forEach(function (variant) { %>
+            <article class="review-variant"
+              data-sprite="<%= variant.sprite %>"
+              data-gender="<%= variant.gender %>"
+            >
+              <header class="review-variant-heading">
+                <div>
+                  <p><%= variant.gender === 'M' ? 'Male specimen' : 'Female specimen' %></p>
+                  <h3><%= variant.className %> <%= variant.gender %></h3>
+                </div>
+                <code><%= variant.sprite %></code>
+              </header>
+
+              <div class="review-stage">
+                <div class="sprite-anim">
+                  <img
+                    class="frame-a"
+                    src="/cosmetics-review/render/<%= variant.sprite %>/a.png?mode=original"
+                    alt="<%= variant.className %> <%= variant.gender === 'M' ? 'male' : 'female' %> frame A"
+                    width="24"
+                    height="24"
+                  />
+                  <img
+                    class="frame-b"
+                    src="/cosmetics-review/render/<%= variant.sprite %>/b.png?mode=original"
+                    alt="<%= variant.className %> <%= variant.gender === 'M' ? 'male' : 'female' %> frame B"
+                    width="24"
+                    height="24"
+                  />
+                </div>
+                <span class="review-stage-label">A / B shared clock</span>
+              </div>
+
+              <div class="review-inventory">
+                <p class="review-data-label">Mapped channels</p>
+                <div class="review-channel-list">
+                  <% variant.channels.forEach(function (channel) { %>
+                    <span class="review-channel">
+                      <span class="review-gem" data-slot="<%= channel.slot %>" aria-hidden="true"></span>
+                      <%= channel.label %>
+                    </span>
+                  <% }); %>
+                </div>
+              </div>
+
+              <% if (variant.warnings.length > 0) { %>
+                <div class="review-status review-status--warning" role="status">
+                  <strong>Inventory warning</strong>
+                  <ul>
+                    <% variant.warnings.forEach(function (warning) { %>
+                      <li><%= warning %></li>
+                    <% }); %>
+                  </ul>
+                </div>
+              <% } else { %>
+                <p class="review-status review-status--success" role="status">
+                  Map inventory matches
+                </p>
+              <% } %>
+            </article>
+          <% }); %>
+        </div>
+      </section>
+    <% } %>
+  </div>
+</div>
+
+<script>
+  window.__COSMETICS_REVIEW__ = <%- JSON.stringify({
+    roster,
+    initialMode: 'original',
+    initialSlot: 1,
+    initialHue: 210,
+  }).replace(/</g, '\\u003c') %>;
+</script>
+<script type="module" src="/static/anim.js"></script>
+<script type="module" src="/static/cosmetics-review.js"></script>

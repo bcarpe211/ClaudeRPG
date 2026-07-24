@@ -41,3 +41,13 @@ describe('loadConfig enableCatalog', () => {
     expect(loadConfig({ ENABLE_CATALOG: 'true' }).enableCatalog).toBe(true);
   });
 });
+
+describe('loadConfig enableCosmeticsReview', () => {
+  it('defaults to false', () => {
+    expect(loadConfig({}).enableCosmeticsReview).toBe(false);
+  });
+  it.each(['1', 'true'])('is true for %s', (value) => {
+    expect(loadConfig({ ENABLE_COSMETICS_REVIEW: value }).enableCosmeticsReview)
+      .toBe(true);
+  });
+});
