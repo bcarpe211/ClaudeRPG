@@ -8,6 +8,7 @@ import { seedSettings } from '../src/domain/settings';
 import { purchase } from '../src/domain/shop';
 import { setSlotRule } from '../src/domain/slotcosmetics';
 import { SLOTS } from '../src/domain/slots';
+import { EXPECTED_CHANNELS } from '../src/domain/cosmeticsreview';
 import {
   dyeRule,
   dyeViewModel,
@@ -82,12 +83,14 @@ describe('dyeViewModel', () => {
     expect(vm.config[SLOTS.body]).toEqual(wheelRule(120));
   });
 
-  it('makes the authored female sprite and its channels available', () => {
+  it('offers the authored channels and slotmap for a female wizard', () => {
     const player = wizard('F');
     const vm = dyeViewModel(db, player);
 
     expect(vm.available).toBe(true);
-    expect(vm.channels.some((channel) => channel.slot === SLOTS.flair)).toBe(true);
+    expect(vm.unlocked).toBe(false);
+    expect(vm.channels.map((channel) => channel.slot))
+      .toEqual(EXPECTED_CHANNELS.wizard.F);
     expect(vm.slotmap).toHaveLength(24 * 24);
   });
 

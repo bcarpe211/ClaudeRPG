@@ -47,7 +47,7 @@ describe('character dye endpoints', () => {
     expect(getCosmetics(db, player.id)?.wheel_tier).toBe(1);
   });
 
-  it('unlocks the wheel for an authored female sprite', async () => {
+  it('unlocks female dyes and deducts exactly the configured price', async () => {
     const { db, app, player } = ctx('F');
 
     const res = await unlock(app, player.auth_token);
@@ -223,8 +223,8 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('/static/dye.js');
   });
 
-  it('offers the unlock to an authored female sprite', async () => {
-    const { app, player } = ctx('F');
+  it('offers the unlock and persists a rule for an authored female slot', async () => {
+    const { db, app, player } = ctx('F');
 
     const res = await request(app)
       .get('/character')
@@ -234,5 +234,23 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('Unlock Dye Wheel');
     expect(res.text).toContain('/character/dye/unlock');
     expect(res.text).not.toContain('Tailoring in progress');
+
+    await unlock(app, player.auth_token);
+    const set = await request(app)
+      .post('/character/dye/set')
+      .type('form')
+      .send({
+        token: player.auth_token,
+        slot: String(SLOTS.flair),
+        finish: 'wheel',
+        hue: '200',
+      });
+
+    expect(set.status).toBe(204);
+    expect(getSlotConfig(db, player.id).get(SLOTS.flair)).toEqual({
+      op: 'colorize',
+      hue: 200,
+      sat: 0.6,
+    });
   });
 });

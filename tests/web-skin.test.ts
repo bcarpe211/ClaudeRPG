@@ -14,10 +14,14 @@ import { setSlotRule, skinRenderHash, getSlotConfig } from '../src/domain/slotco
 import { spriteFileIndex, spriteId } from '../src/domain/cosmetics';
 import { creatureSpriteFile } from '../src/domain/classes';
 
-function ctx(env: NodeJS.ProcessEnv = {}, slotmapsDir?: string) {
+function ctx(
+  env: NodeJS.ProcessEnv = {},
+  slotmapsDir?: string,
+  gender: 'M' | 'F' = 'M',
+) {
   const db = openDb(':memory:'); seedSettings(db);
   const app = createApp({ db, config: loadConfig(env), slotmapsDir });
-  const p = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
+  const p = createPlayer(db, { name: 'A', class_key: 'wizard', gender }, 1);
   return { db, app, p };
 }
 
@@ -46,6 +50,42 @@ describe('GET /sprite/skin', () => {
       }
     }
     expect(checkedEye).toBe(true);
+  });
+  it('renders a female body rule without changing a mapped flair eye pixel', async () => {
+    const { db, app, p } = ctx({}, undefined, 'F');
+    const sprite = 'wizard_F';
+    const slotmap = loadSlotmap(sprite, 'a')!;
+    const source = PNG.sync.read(readFileSync(
+      `assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24/${creatureSpriteFile(spriteFileIndex('wizard', 'F', 'a'))}`,
+    ));
+    const bodyPixel = slotmap.findIndex((slot, pixel) => {
+      const i = pixel * 4;
+      return slot === SLOTS.body && source.data[i + 3] !== 0
+        && (source.data[i] !== 0 || source.data[i + 1] !== 0 || source.data[i + 2] !== 0);
+    });
+    const flairEyePixel = slotmap.findIndex((slot, pixel) => {
+      const i = pixel * 4;
+      return slot === SLOTS.flair && source.data[i] === 0xcf
+        && source.data[i + 1] === 0x32 && source.data[i + 2] === 0x32;
+    });
+    expect(bodyPixel).toBeGreaterThanOrEqual(0);
+    expect(flairEyePixel).toBeGreaterThanOrEqual(0);
+
+    setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 120, sat: 0.6 }, 100);
+    const hash = skinRenderHash(sprite, getSlotConfig(db, p.id));
+    const res = await request(app).get(`/sprite/skin/${p.id}/a/${hash}.png`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/png');
+    expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    const out = PNG.sync.read(res.body);
+    for (const pixel of [bodyPixel, flairEyePixel]) {
+      expect(out.data[pixel * 4 + 3]).toBe(source.data[pixel * 4 + 3]);
+    }
+    expect(Array.from(out.data.slice(bodyPixel * 4, bodyPixel * 4 + 3)))
+      .not.toEqual(Array.from(source.data.slice(bodyPixel * 4, bodyPixel * 4 + 3)));
+    expect(Array.from(out.data.slice(flairEyePixel * 4, flairEyePixel * 4 + 3)))
+      .toEqual(Array.from(source.data.slice(flairEyePixel * 4, flairEyePixel * 4 + 3)));
   });
   it('redirects a stale hash to the current immutable skin URL', async () => {
     const { db, app, p } = ctx();
