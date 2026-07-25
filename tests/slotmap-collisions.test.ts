@@ -637,6 +637,13 @@ const FIXTURES: readonly CollisionFixture[] = [
     sourceHex: '#919191',
   },
   {
+    name: 'paladin helmet pixel at the mace contact',
+    classKey: 'paladin',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 6, y: 7 }, b: { x: 6, y: 8 } },
+    sourceHex: '#887000',
+  },
+  {
     name: 'paladin shield field',
     classKey: 'paladin',
     slot: SLOTS.shield,
