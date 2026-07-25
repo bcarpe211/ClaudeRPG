@@ -10,6 +10,7 @@ import { setSlotRule } from '../src/domain/slotcosmetics';
 import { SLOTS } from '../src/domain/slots';
 import { EXPECTED_CHANNELS } from '../src/domain/cosmeticsreview';
 import {
+  channelLabel,
   dyeRule,
   dyeViewModel,
   FINISHES,
@@ -57,6 +58,20 @@ describe('dye rules', () => {
       white: { op: 'value', lo: 0.74, hi: 1 },
       steel: { op: 'colorize', hue: 212, sat: 0.13 },
     });
+  });
+
+  it('uses class-facing equipment labels for repurposed material channels', () => {
+    expect(channelLabel('thief', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('thief', SLOTS.shield)).toBe('Accessory');
+    expect(channelLabel('ranger', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('ranger', SLOTS.cape)).toBe('Cloak');
+    expect(channelLabel('ranger', SLOTS.shield)).toBe('Quiver');
+    expect(channelLabel('ranger', SLOTS.flair)).toBe('Feather');
+    expect(channelLabel('wizard', SLOTS.headgear)).toBe('Cloak');
+    expect(channelLabel('wizard', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('priest', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('shaman', SLOTS.headgear)).toBe('Pelt');
+    expect(channelLabel('berserker', SLOTS.trim)).toBe('Helmet trim');
   });
 });
 

@@ -228,6 +228,7 @@ describe('male and female semantic channel parity', () => {
       const male = uniqueSlots(loadSlotmapFresh(`${classKey}_M`, 'a'));
       const female = uniqueSlots(loadSlotmapFresh(`${classKey}_F`, 'a'));
       const additions: Record<string, readonly number[]> = {
+        berserker: [SLOTS.hair],
         knight: [SLOTS.hair],
         priest: [SLOTS.hair],
         swordsman: [SLOTS.flair],

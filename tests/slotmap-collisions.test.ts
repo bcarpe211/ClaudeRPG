@@ -20,7 +20,8 @@ interface Position {
 
 interface CollisionFixture {
   name: string;
-  classKey: 'knight' | 'thief' | 'wizard' | 'shaman' | 'berserker' | 'paladin';
+  classKey: 'knight' | 'thief' | 'ranger' | 'wizard' | 'priest'
+    | 'shaman' | 'berserker' | 'paladin';
   slot: number | { M: number; F: number };
   positions: Record<SpriteFrame, Position>;
   sourceHex: string | { M: string; F: string };
@@ -33,6 +34,20 @@ const SPRITES_DIR = path.resolve(
 // These are hand-inspected semantic coordinates, not source-color searches.
 // The source RGB assertion keeps each fixture attached to the intended art.
 const FIXTURES: readonly CollisionFixture[] = [
+  {
+    name: 'knight detached helmet highlight beside the sword',
+    classKey: 'knight',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 6, y: 5 }, b: { x: 6, y: 6 } },
+    sourceHex: '#c9c9c9',
+  },
+  {
+    name: 'knight grey collar under the face',
+    classKey: 'knight',
+    slot: SLOTS.body,
+    positions: { a: { x: 9, y: 15 }, b: { x: 9, y: 16 } },
+    sourceHex: '#c9c9c9',
+  },
   {
     name: 'knight plume',
     classKey: 'knight',
@@ -139,16 +154,23 @@ const FIXTURES: readonly CollisionFixture[] = [
     sourceHex: '#3d3d3d',
   },
   {
-    name: 'thief dark sword hilt',
+    name: 'thief hand-held dagger hilt',
     classKey: 'thief',
     slot: SLOTS.weapon,
+    positions: { a: { x: 3, y: 17 }, b: { x: 3, y: 18 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'thief dark back accessory',
+    classKey: 'thief',
+    slot: SLOTS.shield,
     positions: { a: { x: 20, y: 10 }, b: { x: 20, y: 11 } },
     sourceHex: '#887000',
   },
   {
-    name: 'thief bright sword hilt',
+    name: 'thief bright back accessory',
     classKey: 'thief',
-    slot: SLOTS.weapon,
+    slot: SLOTS.shield,
     positions: { a: { x: 20, y: 9 }, b: { x: 20, y: 10 } },
     sourceHex: '#b89600',
   },
@@ -172,6 +194,118 @@ const FIXTURES: readonly CollisionFixture[] = [
     slot: { M: SLOTS.skin, F: SLOTS.hair },
     positions: { a: { x: 9, y: 7 }, b: { x: 9, y: 8 } },
     sourceHex: { M: '#b86e28', F: '#eaff00' },
+  },
+  {
+    name: 'ranger hat remains separate from the cloak',
+    classKey: 'ranger',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 11, y: 3 }, b: { x: 11, y: 3 } },
+    sourceHex: { M: '#476575', F: '#b86e28' },
+  },
+  {
+    name: 'ranger feather above the cloak',
+    classKey: 'ranger',
+    slot: SLOTS.flair,
+    positions: { a: { x: 18, y: 5 }, b: { x: 18, y: 6 } },
+    sourceHex: '#f3f3f3',
+  },
+  {
+    name: 'ranger quiver fletching',
+    classKey: 'ranger',
+    slot: SLOTS.shield,
+    positions: { a: { x: 20, y: 8 }, b: { x: 20, y: 8 } },
+    sourceHex: '#ff0000',
+  },
+  {
+    name: 'ranger quiver body',
+    classKey: 'ranger',
+    slot: SLOTS.shield,
+    positions: { a: { x: 20, y: 12 }, b: { x: 20, y: 13 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'ranger belt',
+    classKey: 'ranger',
+    slot: SLOTS.trim,
+    positions: { a: { x: 12, y: 17 }, b: { x: 13, y: 17 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'ranger cloak field at the back',
+    classKey: 'ranger',
+    slot: SLOTS.cape,
+    positions: { a: { x: 19, y: 19 }, b: { x: 19, y: 20 } },
+    sourceHex: { M: '#476575', F: '#b86e28' },
+  },
+  {
+    name: 'ranger gold cloak edging',
+    classKey: 'ranger',
+    slot: SLOTS.cape,
+    positions: { a: { x: 8, y: 5 }, b: { x: 8, y: 5 } },
+    sourceHex: '#eaff00',
+  },
+  {
+    name: 'ranger shadowed face',
+    classKey: 'ranger',
+    slot: SLOTS.skin,
+    positions: { a: { x: 12, y: 9 }, b: { x: 12, y: 9 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'wizard cloak field',
+    classKey: 'wizard',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 14, y: 2 }, b: { x: 14, y: 3 } },
+    sourceHex: { M: '#cf3232', F: '#7c6098' },
+  },
+  {
+    name: 'wizard gold cloak edging',
+    classKey: 'wizard',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 9, y: 5 }, b: { x: 9, y: 6 } },
+    sourceHex: '#eaff00',
+  },
+  {
+    name: 'wizard dark clothing',
+    classKey: 'wizard',
+    slot: SLOTS.body,
+    positions: { a: { x: 8, y: 19 }, b: { x: 8, y: 16 } },
+    sourceHex: '#3d3d3d',
+  },
+  {
+    name: 'wizard belt',
+    classKey: 'wizard',
+    slot: SLOTS.trim,
+    positions: { a: { x: 12, y: 17 }, b: { x: 12, y: 18 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'wizard boots',
+    classKey: 'wizard',
+    slot: SLOTS.boots,
+    positions: { a: { x: 9, y: 22 }, b: { x: 9, y: 22 } },
+    sourceHex: '#b89600',
+  },
+  {
+    name: 'priest robe edging stays with the robe',
+    classKey: 'priest',
+    slot: SLOTS.body,
+    positions: { a: { x: 10, y: 2 }, b: { x: 10, y: 3 } },
+    sourceHex: '#cf3232',
+  },
+  {
+    name: 'priest belt',
+    classKey: 'priest',
+    slot: SLOTS.trim,
+    positions: { a: { x: 10, y: 17 }, b: { x: 10, y: 18 } },
+    sourceHex: '#cf3232',
+  },
+  {
+    name: 'priest red boots',
+    classKey: 'priest',
+    slot: SLOTS.boots,
+    positions: { a: { x: 9, y: 22 }, b: { x: 9, y: 22 } },
+    sourceHex: '#ff3d3d',
   },
   {
     name: 'wizard left eye',
@@ -207,6 +341,41 @@ const FIXTURES: readonly CollisionFixture[] = [
     slot: SLOTS.weapon,
     positions: { a: { x: 3, y: 8 }, b: { x: 3, y: 9 } },
     sourceHex: '#b89600',
+  },
+  {
+    name: 'shaman pelt field',
+    classKey: 'shaman',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 11, y: 4 }, b: { x: 11, y: 5 } },
+    sourceHex: { M: '#887000', F: '#919191' },
+  },
+  {
+    name: 'shaman light pelt edging',
+    classKey: 'shaman',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 15, y: 8 }, b: { x: 15, y: 9 } },
+    sourceHex: { M: '#ffd1a6', F: '#ffffff' },
+  },
+  {
+    name: 'shaman dark body',
+    classKey: 'shaman',
+    slot: SLOTS.body,
+    positions: { a: { x: 9, y: 16 }, b: { x: 9, y: 17 } },
+    sourceHex: { M: '#696969', F: '#2985b2' },
+  },
+  {
+    name: 'shaman pelt drawstring',
+    classKey: 'shaman',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 11, y: 15 }, b: { x: 11, y: 16 } },
+    sourceHex: '#ffffff',
+  },
+  {
+    name: 'shaman right boot',
+    classKey: 'shaman',
+    slot: SLOTS.boots,
+    positions: { a: { x: 16, y: 22 }, b: { x: 16, y: 22 } },
+    sourceHex: '#696969',
   },
   {
     name: 'shaman fixed staff outline',
@@ -270,6 +439,48 @@ const FIXTURES: readonly CollisionFixture[] = [
     slot: SLOTS.boots,
     positions: { a: { x: 8, y: 22 }, b: { x: 8, y: 22 } },
     sourceHex: '#696969',
+  },
+  {
+    name: 'berserker white helmet trim pixel',
+    classKey: 'berserker',
+    slot: SLOTS.trim,
+    positions: { a: { x: 13, y: 6 }, b: { x: 13, y: 7 } },
+    sourceHex: '#ffffff',
+  },
+  {
+    name: 'berserker cap tail joins the cape',
+    classKey: 'berserker',
+    slot: SLOTS.cape,
+    positions: { a: { x: 17, y: 6 }, b: { x: 17, y: 7 } },
+    sourceHex: '#919191',
+  },
+  {
+    name: 'berserker lower cap tail joins the cape',
+    classKey: 'berserker',
+    slot: SLOTS.cape,
+    positions: { a: { x: 19, y: 19 }, b: { x: 19, y: 20 } },
+    sourceHex: { M: '#616060', F: '#ba1a1a' },
+  },
+  {
+    name: 'berserker clothing beside the axe hilt',
+    classKey: 'berserker',
+    slot: SLOTS.body,
+    positions: { a: { x: 5, y: 15 }, b: { x: 5, y: 16 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'berserker female brown pixel below the belt',
+    classKey: 'berserker',
+    slot: { M: SLOTS.outline, F: SLOTS.body },
+    positions: { a: { x: 14, y: 13 }, b: { x: 14, y: 14 } },
+    sourceHex: { M: '#5d4b00', F: '#887000' },
+  },
+  {
+    name: 'berserker female gold hair strand',
+    classKey: 'berserker',
+    slot: { M: SLOTS.skin, F: SLOTS.hair },
+    positions: { a: { x: 13, y: 8 }, b: { x: 13, y: 9 } },
+    sourceHex: { M: '#b86e28', F: '#eaff00' },
   },
   {
     name: 'paladin body helmet',
@@ -385,18 +596,25 @@ describe('position-specific slot-map collision regressions', () => {
 });
 
 describe('gender-specific hair boundaries', () => {
-  for (const classKey of ['knight', 'thief'] as const) {
+  const hairCounts = {
+    berserker: { M: 0, F: 4 },
+    knight: { M: 0, F: 2 },
+    ranger: { M: 0, F: 0 },
+    thief: { M: 0, F: 2 },
+  } as const;
+
+  for (const [classKey, expected] of Object.entries(hairCounts)) {
     for (const frame of ['a', 'b'] as const) {
-      it(`${classKey}_${frame}: only the female has exactly two hair pixels`, () => {
+      it(`${classKey}_${frame}: exposes only the authored hair pixels`, () => {
         const male = loadSlotmapFresh(`${classKey}_M`, frame);
         const female = loadSlotmapFresh(`${classKey}_F`, frame);
 
         expect(male, 'male slot map must exist').not.toBeNull();
         expect(female, 'female slot map must exist').not.toBeNull();
         expect(Array.from(male ?? []).filter((slot) => slot === SLOTS.hair))
-          .toHaveLength(0);
+          .toHaveLength(expected.M);
         expect(Array.from(female ?? []).filter((slot) => slot === SLOTS.hair))
-          .toHaveLength(2);
+          .toHaveLength(expected.F);
       });
     }
   }

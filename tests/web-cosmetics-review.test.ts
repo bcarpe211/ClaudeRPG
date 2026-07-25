@@ -199,7 +199,7 @@ describe('cosmetics review page', () => {
 
     expect(page.status).toBe(200);
     expect(wizardCard.match(/class="review-channel"/g)).toHaveLength(1);
-    expect(wizardCard).toContain('Missing expected A channel: Trim');
+    expect(wizardCard).toContain('Missing expected A channel: Belt');
     expect(wizardCard).toContain('Missing expected B channel: Weapon');
     expect(wizardCard).not.toContain('Map inventory matches');
     expect(rendered.status).toBe(200);

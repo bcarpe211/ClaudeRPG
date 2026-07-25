@@ -53,21 +53,46 @@ export interface DyeViewModel {
   wheelSat: number;
 }
 
-const FLAIR_LABELS: Record<string, string> = {
-  knight: 'Plume',
-  thief: 'Feather',
-  ranger: 'Fletching',
-  wizard: 'Eyes',
-  priest: 'Holy symbol',
-  berserker: 'Horns',
-  paladin: 'Wings',
+const CLASS_SLOT_LABELS: Record<string, Partial<Record<number, string>>> = {
+  knight: {
+    [SLOTS.flair]: 'Plume',
+  },
+  thief: {
+    [SLOTS.trim]: 'Belt',
+    [SLOTS.shield]: 'Accessory',
+    [SLOTS.flair]: 'Feather',
+  },
+  ranger: {
+    [SLOTS.trim]: 'Belt',
+    [SLOTS.cape]: 'Cloak',
+    [SLOTS.shield]: 'Quiver',
+    [SLOTS.flair]: 'Feather',
+  },
+  wizard: {
+    [SLOTS.trim]: 'Belt',
+    [SLOTS.headgear]: 'Cloak',
+    [SLOTS.flair]: 'Eyes',
+  },
+  priest: {
+    [SLOTS.trim]: 'Belt',
+    [SLOTS.flair]: 'Holy symbol',
+  },
+  shaman: {
+    [SLOTS.headgear]: 'Pelt',
+  },
+  berserker: {
+    [SLOTS.trim]: 'Helmet trim',
+    [SLOTS.flair]: 'Horns',
+  },
+  paladin: {
+    [SLOTS.flair]: 'Wings',
+  },
 };
 
 export function channelLabel(classKey: string, slot: number): string {
-  if (slot === SLOTS.flair && FLAIR_LABELS[classKey]) {
-    return FLAIR_LABELS[classKey];
-  }
-  return SLOT_LABELS[slot] ?? `Slot ${slot}`;
+  return CLASS_SLOT_LABELS[classKey]?.[slot]
+    ?? SLOT_LABELS[slot]
+    ?? `Slot ${slot}`;
 }
 
 function wheelPrice(db: Database.Database): number {
