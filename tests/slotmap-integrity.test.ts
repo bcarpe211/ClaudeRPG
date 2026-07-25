@@ -231,6 +231,7 @@ describe('male and female semantic channel parity', () => {
         knight: [SLOTS.hair],
         priest: [SLOTS.hair],
         swordsman: [SLOTS.flair],
+        thief: [SLOTS.hair],
       };
       const expectedFemale = PICKER_ORDER.filter(
         (slot) => male.includes(slot) || (additions[classKey] ?? []).includes(slot),

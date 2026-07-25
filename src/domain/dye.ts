@@ -54,6 +54,7 @@ export interface DyeViewModel {
 }
 
 const FLAIR_LABELS: Record<string, string> = {
+  knight: 'Plume',
   thief: 'Feather',
   ranger: 'Fletching',
   wizard: 'Eyes',
@@ -62,7 +63,7 @@ const FLAIR_LABELS: Record<string, string> = {
   paladin: 'Wings',
 };
 
-function channelLabel(classKey: string, slot: number): string {
+export function channelLabel(classKey: string, slot: number): string {
   if (slot === SLOTS.flair && FLAIR_LABELS[classKey]) {
     return FLAIR_LABELS[classKey];
   }

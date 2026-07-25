@@ -43,14 +43,14 @@ describe('EXPECTED_CHANNELS', () => {
     expect(EXPECTED_CHANNELS).toEqual({
       knight: {
         M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon, SLOTS.shield, SLOTS.skin],
+          SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
         F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.skin],
+          SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
       },
       thief: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
+        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
+        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
           SLOTS.weapon, SLOTS.flair, SLOTS.skin],
       },
       ranger: {
@@ -114,6 +114,8 @@ describe('buildCosmeticsReviewRoster', () => {
     ]);
     expect(roster.find(({ sprite }) => sprite === 'wizard_M')?.channels)
       .toContainEqual({ slot: SLOTS.flair, label: 'Eyes' });
+    expect(roster.find(({ sprite }) => sprite === 'knight_M')?.channels)
+      .toContainEqual({ slot: SLOTS.flair, label: 'Plume' });
     expect(roster.every(({ warnings }) => warnings.length === 0)).toBe(true);
   });
 });

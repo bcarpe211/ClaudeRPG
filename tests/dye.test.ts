@@ -94,6 +94,19 @@ describe('dyeViewModel', () => {
     expect(vm.slotmap).toHaveLength(24 * 24);
   });
 
+  it('labels the Knight flair channel as Plume in the player picker', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Knight', class_key: 'knight', gender: 'M' },
+      1,
+    );
+
+    const vm = dyeViewModel(db, player);
+
+    expect(vm.channels.find((channel) => channel.slot === SLOTS.flair)?.label)
+      .toBe('Plume');
+  });
+
   it('marks a valid player unavailable when the configured slot-map directory is empty', () => {
     const slotmapsDir = mkdtempSync(join(tmpdir(), 'clauderpg-empty-slotmaps-'));
     try {

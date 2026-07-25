@@ -1,12 +1,11 @@
 import { PNG } from 'pngjs';
 import { CLASSES, type Gender } from './classes';
 import { spriteId } from './cosmetics';
-import { FINISHES, wheelRule } from './dye';
+import { channelLabel, FINISHES, wheelRule } from './dye';
 import {
   LEGEND,
   loadSlotmapFresh,
   PICKER_ORDER,
-  SLOT_LABELS,
   SLOTS,
 } from './slots';
 import { recolorSpriteSlots } from './spritetint';
@@ -30,14 +29,14 @@ export const EXPECTED_CHANNELS: Record<
 > = {
   knight: {
     M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon, SLOTS.shield, SLOTS.skin],
+      SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
     F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.skin],
+      SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
   },
   thief: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
+    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
+    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
       SLOTS.weapon, SLOTS.flair, SLOTS.skin],
   },
   ranger: {
@@ -82,25 +81,11 @@ export const EXPECTED_CHANNELS: Record<
 };
 
 const LEGEND_RGB = new Map<number, [number, number, number]>(LEGEND);
-const FLAIR_LABELS: Record<string, string> = {
-  thief: 'Feather',
-  ranger: 'Fletching',
-  wizard: 'Eyes',
-  priest: 'Holy symbol',
-  berserker: 'Horns',
-  swordsman: 'Details',
-  paladin: 'Wings',
-};
 
 function channelsFor(ids: Uint8Array | null): number[] {
   if (!ids) return [];
   const present = new Set(ids);
   return PICKER_ORDER.filter((slot) => present.has(slot));
-}
-
-function labelFor(classKey: string, slot: number): string {
-  if (slot === SLOTS.flair && FLAIR_LABELS[classKey]) return FLAIR_LABELS[classKey];
-  return SLOT_LABELS[slot] ?? `Slot ${slot}`;
 }
 
 function warnChannelDifferences(
@@ -111,10 +96,10 @@ function warnChannelDifferences(
   classKey: string,
 ): void {
   for (const slot of expected) {
-    if (!actual.includes(slot)) warnings.push(`Missing expected ${frame} channel: ${labelFor(classKey, slot)}`);
+    if (!actual.includes(slot)) warnings.push(`Missing expected ${frame} channel: ${channelLabel(classKey, slot)}`);
   }
   for (const slot of actual) {
-    if (!expected.includes(slot)) warnings.push(`Unexpected ${frame} channel: ${labelFor(classKey, slot)}`);
+    if (!expected.includes(slot)) warnings.push(`Unexpected ${frame} channel: ${channelLabel(classKey, slot)}`);
   }
 }
 
@@ -142,7 +127,7 @@ export function buildCosmeticsReviewRoster(slotmapsDir?: string): ReviewVariant[
         className,
         gender,
         channels: PICKER_ORDER.filter((slot) => available.has(slot))
-          .map((slot) => ({ slot, label: labelFor(classKey, slot) })),
+          .map((slot) => ({ slot, label: channelLabel(classKey, slot) })),
         warnings,
       };
     })
