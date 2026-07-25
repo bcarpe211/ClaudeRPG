@@ -20,7 +20,14 @@ import { loadConfig } from '../src/config';
 import { openDb } from '../src/db/db';
 import { creatureSpriteFile, type Gender } from '../src/domain/classes';
 import { spriteFileIndex } from '../src/domain/cosmetics';
-import { LEGEND, PICKER_ORDER, SLOT_LABELS, slotmapFile, SLOTS } from '../src/domain/slots';
+import {
+  LEGEND,
+  MAX_RECOLOR_SLOT,
+  PICKER_ORDER,
+  SLOT_LABELS,
+  slotmapFile,
+  SLOTS,
+} from '../src/domain/slots';
 import { createApp } from '../src/web/app';
 
 let fixtureDir: string;
@@ -173,7 +180,7 @@ describe('cosmetics review page', () => {
     const select = res.text.match(
       /<select id="review-slot"[\s\S]*?<\/select>/,
     )?.[0] ?? '';
-    expect(select.match(/<option /g)).toHaveLength(11);
+    expect(select.match(/<option /g)).toHaveLength(12);
     for (const slot of PICKER_ORDER) {
       expect(select).toContain(`value="${slot}"`);
       expect(select).toContain(SLOT_LABELS[slot]);
@@ -209,6 +216,20 @@ describe('cosmetics review page', () => {
 });
 
 describe('cosmetics review renderer', () => {
+  it('accepts the appended Belt slot in review render requests', async () => {
+    for (const frame of ['a', 'b'] as const) {
+      writeMap('wizard_M', frame, SLOTS.belt);
+    }
+
+    const res = await request(app())
+      .get(`/cosmetics-review/render/wizard_M/a.png?mode=focus&slot=${SLOTS.belt}`);
+
+    expect(res.status).toBe(200);
+    const output = PNG.sync.read(res.body as Buffer);
+    expect(Array.from(output.data.slice(0, 3)))
+      .toEqual(LEGEND.find(([slot]) => slot === SLOTS.belt)?.[1]);
+  });
+
   it('returns an uncached PNG for the original frame', async () => {
     const res = await request(app())
       .get('/cosmetics-review/render/wizard_M/a.png?mode=original');
@@ -250,7 +271,7 @@ describe('cosmetics review renderer', () => {
     ['/cosmetics-review/render/wizard_M/a.png?mode=steel', 400],
     ['/cosmetics-review/render/wizard_M/a.png?mode=focus&slot=0', 400],
     ['/cosmetics-review/render/wizard_M/a.png?mode=focus&slot=-1', 400],
-    ['/cosmetics-review/render/wizard_M/a.png?mode=focus&slot=12', 400],
+    [`/cosmetics-review/render/wizard_M/a.png?mode=focus&slot=${MAX_RECOLOR_SLOT + 1}`, 400],
     ['/cosmetics-review/render/wizard_M/a.png?mode=focus&slot=1.5', 400],
     ['/cosmetics-review/render/wizard_M/a.png?mode=hue&slot=1&hue=-1', 400],
     ['/cosmetics-review/render/wizard_M/a.png?mode=hue&slot=1&hue=360', 400],

@@ -12,9 +12,10 @@ describe('presentSlots', () => {
   });
 
   it('defines every non-outline material once in picker order', () => {
-    expect(PICKER_ORDER).toHaveLength(11);
+    expect(PICKER_ORDER).toHaveLength(12);
     expect(new Set(PICKER_ORDER).size).toBe(PICKER_ORDER.length);
     expect(PICKER_ORDER).not.toContain(SLOTS.outline);
+    expect(PICKER_ORDER.indexOf(SLOTS.belt)).toBe(PICKER_ORDER.indexOf(SLOTS.trim) + 1);
   });
 
   it('is empty for a sprite with no authored slot-map', () => {

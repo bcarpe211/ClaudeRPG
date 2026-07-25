@@ -3,11 +3,15 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
 
-/** The 12 material slots (per the regions doc §4). Slot 0 is never tinted. */
+/** The 13 material slots. Slot 0 is never tinted. */
 export const SLOTS = {
   outline: 0, body: 1, headgear: 2, hair: 3, facePaint: 4, cape: 5,
   trim: 6, weapon: 7, shield: 8, boots: 9, skin: 10, flair: 11,
+  belt: 12,
 } as const;
+
+/** Highest valid persisted/reviewed recolor slot id. */
+export const MAX_RECOLOR_SLOT = SLOTS.belt;
 
 export type SpriteFrame = 'a' | 'b';
 
@@ -17,6 +21,7 @@ export const LEGEND: Array<[number, [number, number, number]]> = [
   [SLOTS.facePaint, [127, 255, 0]], [SLOTS.cape, [0, 255, 0]], [SLOTS.trim, [0, 255, 127]],
   [SLOTS.weapon, [0, 255, 255]], [SLOTS.shield, [0, 127, 255]], [SLOTS.boots, [0, 0, 255]],
   [SLOTS.skin, [127, 0, 255]], [SLOTS.flair, [255, 0, 255]],
+  [SLOTS.belt, [127, 127, 127]],
   // slot 0 (outline) has no legend colour: transparent / unknown ⇒ 0.
 ];
 const LOOKUP = new Map<number, number>(); // packed rgb -> slot id
@@ -94,6 +99,7 @@ export const SLOT_LABELS: Record<number, string> = {
   [SLOTS.facePaint]: 'Face paint',
   [SLOTS.cape]: 'Cape',
   [SLOTS.trim]: 'Trim',
+  [SLOTS.belt]: 'Belt',
   [SLOTS.weapon]: 'Weapon',
   [SLOTS.shield]: 'Shield',
   [SLOTS.boots]: 'Boots',
@@ -105,6 +111,7 @@ export const SLOT_LABELS: Record<number, string> = {
 export const PICKER_ORDER: number[] = [
   SLOTS.body,
   SLOTS.trim,
+  SLOTS.belt,
   SLOTS.cape,
   SLOTS.headgear,
   SLOTS.hair,

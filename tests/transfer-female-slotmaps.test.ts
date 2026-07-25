@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PNG } from 'pngjs';
-import { LEGEND, readSlotmap, SLOTS } from '../src/domain/slots';
+import { LEGEND, MAX_RECOLOR_SLOT, readSlotmap, SLOTS } from '../src/domain/slots';
 import { transferFemaleSlotmap } from '../tools/transfer-female-slotmaps';
 
 const LEGEND_RGB = new Map<number, [number, number, number]>(LEGEND);
@@ -90,6 +90,18 @@ describe('transferFemaleSlotmap', () => {
     expect(readSlotmap(result.png)).toEqual(Uint8Array.from([SLOTS.body, 0, 0, 0]));
   });
 
+  it('accepts the appended Belt slot in authored maps and overrides', () => {
+    const result = transferFemaleSlotmap(
+      slotmap(2, 1, [SLOTS.belt, 0]),
+      sprite(2, 1, [true, false]),
+      sprite(2, 1, [true, true]),
+      [{ x: 1, y: 0, slot: SLOTS.belt }],
+    );
+
+    expect(result.unresolved).toEqual([]);
+    expect(readSlotmap(result.png)).toEqual(Uint8Array.from([SLOTS.belt, SLOTS.belt]));
+  });
+
   it('rejects invalid dimensions and invalid overrides', () => {
     const maleMap = slotmap(2, 2, [SLOTS.body, 0, 0, 0]);
     const maleSprite = sprite(2, 2, [true, false, false, false]);
@@ -109,7 +121,8 @@ describe('transferFemaleSlotmap', () => {
       maleMap, maleSprite, femaleSprite, [{ x: 1.5, y: 1, slot: SLOTS.cape }],
     )).toThrow();
     expect(() => transferFemaleSlotmap(
-      maleMap, maleSprite, femaleSprite, [{ x: 1, y: 1, slot: 12 }],
+      maleMap, maleSprite, femaleSprite,
+      [{ x: 1, y: 1, slot: MAX_RECOLOR_SLOT + 1 }],
     )).toThrow();
   });
 });

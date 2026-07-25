@@ -14,6 +14,7 @@ import {
 } from '../../domain/cosmeticsreview';
 import {
   PICKER_ORDER,
+  MAX_RECOLOR_SLOT,
   readSlotmap,
   SLOT_LABELS,
   slotmapFile,
@@ -41,7 +42,7 @@ const ReviewQuery = z.object({
     'white',
     'steel',
   ]).default('original'),
-  slot: optionalQueryInteger(11),
+  slot: optionalQueryInteger(MAX_RECOLOR_SLOT),
   hue: optionalQueryInteger(359),
 });
 

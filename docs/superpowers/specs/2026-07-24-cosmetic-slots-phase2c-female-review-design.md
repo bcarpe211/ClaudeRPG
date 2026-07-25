@@ -47,9 +47,10 @@ slotmaps/<class>_M_a.png
 slotmaps/<class>_M_b.png
 ```
 
-Each 24×24 map assigns visible pixels to the established 12-slot taxonomy:
-outline, body, headgear, hair, face paint, cape, trim, weapon, shield, boots,
-skin, and flair. Phase 2B stores one recolor rule per player and material, serves
+Each 24×24 map assigns visible pixels to the original 12-slot taxonomy, now
+extended with the backward-compatible Belt slot: outline, body, headgear, hair,
+face paint, cape, trim, weapon, shield, boots, skin, flair, and belt. Phase 2B
+stores one recolor rule per player and material, serves
 content-addressed composite skins, and exposes the per-slot workbench on the
 character page.
 
@@ -146,19 +147,26 @@ channel unless the pixels are visibly separate materials. This prevents the
 presence-matrix shorthand from creating two controls that recolor the same
 garment.
 
+The 2026-07-25 review loop approved one backward-compatible taxonomy extension:
+slot `12` is **Belt**. It is appended after the original slots, so existing slot
+ids and saved player rules remain valid. Belt is independent from Trim wherever
+a character has both a waist piece and garment edging. The slot-map legend,
+picker order, request validation, transfer validation, and review tooling all
+recognize `0..12` after this amendment.
+
 The target picker channels are:
 
 | Class | Shared target channels | Gender-specific channels |
 |---|---|---|
-| Knight | body (clothing), trim, cape, headgear, boots, weapon, shield, flair (plume), skin | female hair and lips |
-| Thief | body (clothing), trim (belt), cape, headgear, boots, weapon, shield (back accessory), flair (feather), skin | female hair and lips |
-| Ranger | body (clothing), trim (belt), cape (cloak), headgear, boots, weapon, shield (quiver), flair (feather), skin | female lips |
-| Wizard | body (clothing), trim (belt), cape (gold trim), headgear (cloak), boots, weapon, flair (eyes), skin (hand) | none; no visible mouth pixels |
-| Priest | body (clothing), trim (belt), boots, weapon, flair (holy symbol), skin | female hair and lips |
+| Knight | body (clothing), belt, cape, headgear, boots, weapon, shield, flair (plume), skin | female hair and lips |
+| Thief | body (clothing), trim (headgear/cape edging), belt, cape, headgear, boots, weapon, shield (back accessory), flair (feather), skin | female hair and lips |
+| Ranger | body (clothing), trim (gold headgear edging), belt, cape (cloak), headgear, boots, weapon, shield (quiver), flair (feather), skin | female lips |
+| Wizard | body (clothing), trim (gold edging), belt, headgear (cloak), boots, weapon, flair (eyes), skin (hand) | none; no visible mouth pixels |
+| Priest | body (clothing), belt, boots, weapon, flair (holy symbol), skin | female hair and lips |
 | Shaman | body (clothing), headgear (pelt and its light edging), boots, weapon, face paint, skin | female flair (lips) |
 | Berserker | body (clothing), trim (helmet trim), cape, headgear, boots, weapon, flair (horns), skin | female hair and lips |
 | Swordsman | body (shirt), trim (silver shirt edging), cape, headgear (brown clothing/robe), hair, boots, weapon, skin | female face paint (lips) and flair (earring/details) |
-| Paladin | body (clothing and front panel), cape, headgear (helmet and integrated edging), boots, weapon, shield, flair (plume), skin | female lips |
+| Paladin | body (clothing and front panel), cape, headgear (helmet and integrated edging), boots, weapon, shield, flair (plume), skin | female hair and lips |
 
 Opaque outline and intentionally fixed artwork remain slot 0. “Complete” means
 every intended recolorable material above is mapped; it does not mean every
@@ -274,7 +282,7 @@ validated query is:
 
 ```text
 mode=original|slots|focus|hue|black|white|steel
-slot=<0..11>
+slot=<0..12>
 hue=<0..359>
 ```
 

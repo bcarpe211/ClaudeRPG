@@ -42,37 +42,37 @@ describe('EXPECTED_CHANNELS', () => {
   it('defines the exact target inventory in picker order', () => {
     expect(EXPECTED_CHANNELS).toEqual({
       knight: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+        M: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+        F: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
           SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
           SLOTS.skin],
       },
       thief: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
           SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
           SLOTS.skin],
       },
       ranger: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       wizard: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon,
           SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon,
           SLOTS.flair, SLOTS.skin],
       },
       priest: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
+        M: [SLOTS.body, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
           SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
+        F: [SLOTS.body, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
           SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       shaman: {
@@ -97,7 +97,7 @@ describe('EXPECTED_CHANNELS', () => {
         M: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
           SLOTS.shield,
           SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+        F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
           SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
     });
@@ -123,13 +123,23 @@ describe('buildCosmeticsReviewRoster', () => {
     expect(roster.find(({ sprite }) => sprite === 'wizard_M')?.channels)
       .toContainEqual({ slot: SLOTS.flair, label: 'Eyes' });
     expect(roster.find(({ sprite }) => sprite === 'wizard_M')?.channels)
-      .toContainEqual({ slot: SLOTS.cape, label: 'Gold trim' });
+      .toContainEqual({ slot: SLOTS.trim, label: 'Gold trim' });
+    expect(roster.find(({ sprite }) => sprite === 'wizard_M')?.channels)
+      .toContainEqual({ slot: SLOTS.belt, label: 'Belt' });
     expect(roster.find(({ sprite }) => sprite === 'knight_M')?.channels)
       .toContainEqual({ slot: SLOTS.flair, label: 'Plume' });
     expect(roster.find(({ sprite }) => sprite === 'thief_M')?.channels)
       .toContainEqual({ slot: SLOTS.shield, label: 'Accessory' });
+    expect(roster.find(({ sprite }) => sprite === 'thief_M')?.channels)
+      .toContainEqual({ slot: SLOTS.trim, label: 'Trim' });
+    expect(roster.find(({ sprite }) => sprite === 'thief_M')?.channels)
+      .toContainEqual({ slot: SLOTS.belt, label: 'Belt' });
     expect(roster.find(({ sprite }) => sprite === 'ranger_M')?.channels)
       .toContainEqual({ slot: SLOTS.shield, label: 'Quiver' });
+    expect(roster.find(({ sprite }) => sprite === 'ranger_M')?.channels)
+      .toContainEqual({ slot: SLOTS.trim, label: 'Trim' });
+    expect(roster.find(({ sprite }) => sprite === 'ranger_M')?.channels)
+      .toContainEqual({ slot: SLOTS.belt, label: 'Belt' });
     expect(roster.find(({ sprite }) => sprite === 'shaman_M')?.channels)
       .toContainEqual({ slot: SLOTS.headgear, label: 'Pelt' });
     expect(roster.find(({ sprite }) => sprite === 'swordsman_F')?.channels)

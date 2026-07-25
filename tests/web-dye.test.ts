@@ -122,6 +122,28 @@ describe('character dye endpoints', () => {
     });
   });
 
+  it('stores an authored Belt color after unlock', async () => {
+    const { db, app, player } = ctx();
+    await unlock(app, player.auth_token);
+
+    const res = await request(app)
+      .post('/character/dye/set')
+      .type('form')
+      .send({
+        token: player.auth_token,
+        slot: String(SLOTS.belt),
+        finish: 'wheel',
+        hue: '30',
+      });
+
+    expect(res.status).toBe(204);
+    expect(getSlotConfig(db, player.id).get(SLOTS.belt)).toEqual({
+      op: 'colorize',
+      hue: 30,
+      sat: 0.6,
+    });
+  });
+
   it('stores each named finish using the shared domain rule', async () => {
     const { db, app, player } = ctx();
     await unlock(app, player.auth_token);
@@ -153,6 +175,7 @@ describe('character dye endpoints', () => {
       SLOTS.facePaint,
       SLOTS.cape,
       SLOTS.trim,
+      SLOTS.belt,
       SLOTS.weapon,
       SLOTS.shield,
       SLOTS.boots,

@@ -28,37 +28,37 @@ export const EXPECTED_CHANNELS: Record<
   { M: readonly number[]; F: readonly number[] }
 > = {
   knight: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+    M: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+    F: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
       SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
       SLOTS.skin],
   },
   thief: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
       SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
       SLOTS.skin],
   },
   ranger: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   wizard: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon,
       SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon,
       SLOTS.flair, SLOTS.skin],
   },
   priest: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
+    M: [SLOTS.body, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
       SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
+    F: [SLOTS.body, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
       SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   shaman: {
@@ -83,7 +83,7 @@ export const EXPECTED_CHANNELS: Record<
     M: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
       SLOTS.shield,
       SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+    F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
       SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
 };

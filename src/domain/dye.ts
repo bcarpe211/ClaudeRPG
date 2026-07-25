@@ -58,24 +58,20 @@ const CLASS_SLOT_LABELS: Record<string, Partial<Record<number, string>>> = {
     [SLOTS.flair]: 'Plume',
   },
   thief: {
-    [SLOTS.trim]: 'Belt',
     [SLOTS.shield]: 'Accessory',
     [SLOTS.flair]: 'Feather',
   },
   ranger: {
-    [SLOTS.trim]: 'Belt',
     [SLOTS.cape]: 'Cloak',
     [SLOTS.shield]: 'Quiver',
     [SLOTS.flair]: 'Feather',
   },
   wizard: {
-    [SLOTS.trim]: 'Belt',
-    [SLOTS.cape]: 'Gold trim',
+    [SLOTS.trim]: 'Gold trim',
     [SLOTS.headgear]: 'Cloak',
     [SLOTS.flair]: 'Eyes',
   },
   priest: {
-    [SLOTS.trim]: 'Belt',
     [SLOTS.flair]: 'Holy symbol',
   },
   shaman: {

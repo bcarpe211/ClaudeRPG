@@ -61,16 +61,19 @@ describe('dye rules', () => {
   });
 
   it('uses class-facing equipment labels for repurposed material channels', () => {
-    expect(channelLabel('thief', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('knight', SLOTS.belt)).toBe('Belt');
+    expect(channelLabel('thief', SLOTS.trim)).toBe('Trim');
+    expect(channelLabel('thief', SLOTS.belt)).toBe('Belt');
     expect(channelLabel('thief', SLOTS.shield)).toBe('Accessory');
-    expect(channelLabel('ranger', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('ranger', SLOTS.trim)).toBe('Trim');
+    expect(channelLabel('ranger', SLOTS.belt)).toBe('Belt');
     expect(channelLabel('ranger', SLOTS.cape)).toBe('Cloak');
     expect(channelLabel('ranger', SLOTS.shield)).toBe('Quiver');
     expect(channelLabel('ranger', SLOTS.flair)).toBe('Feather');
     expect(channelLabel('wizard', SLOTS.headgear)).toBe('Cloak');
-    expect(channelLabel('wizard', SLOTS.trim)).toBe('Belt');
-    expect(channelLabel('wizard', SLOTS.cape)).toBe('Gold trim');
-    expect(channelLabel('priest', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('wizard', SLOTS.trim)).toBe('Gold trim');
+    expect(channelLabel('wizard', SLOTS.belt)).toBe('Belt');
+    expect(channelLabel('priest', SLOTS.belt)).toBe('Belt');
     expect(channelLabel('shaman', SLOTS.headgear)).toBe('Pelt');
     expect(channelLabel('berserker', SLOTS.trim)).toBe('Helmet trim');
     expect(channelLabel('swordsman', SLOTS.body)).toBe('Shirt');

@@ -3,7 +3,13 @@ import path from 'node:path';
 import { PNG } from 'pngjs';
 import { CLASSES, creatureSpriteFile } from '../src/domain/classes';
 import { spriteFileIndex } from '../src/domain/cosmetics';
-import { LEGEND, SLOTS, slotmapFile, type SpriteFrame } from '../src/domain/slots';
+import {
+  LEGEND,
+  MAX_RECOLOR_SLOT,
+  SLOTS,
+  slotmapFile,
+  type SpriteFrame,
+} from '../src/domain/slots';
 
 export interface PixelOverride {
   x: number;
@@ -53,7 +59,7 @@ function validateOverrides(
       || x < 0 || x >= width || y < 0 || y >= height) {
       throw new Error(`Invalid override coordinate (${x},${y})`);
     }
-    if (!Number.isInteger(slot) || slot < SLOTS.outline || slot > SLOTS.flair) {
+    if (!Number.isInteger(slot) || slot < SLOTS.outline || slot > MAX_RECOLOR_SLOT) {
       throw new Error(`Invalid override slot ${slot}`);
     }
     const key = `${x},${y}`;
@@ -150,6 +156,7 @@ export const FEMALE_OVERRIDES: Record<string, readonly PixelOverride[]> = {
     { x: 10, y: 17, slot: SLOTS.skin },
     { x: 8, y: 18, slot: SLOTS.outline },
     { x: 7, y: 20, slot: SLOTS.outline },
+    { x: 15, y: 20, slot: SLOTS.body },
     { x: 19, y: 20, slot: SLOTS.cape },
     { x: 19, y: 21, slot: SLOTS.cape },
     { x: 20, y: 21, slot: SLOTS.cape },
@@ -174,8 +181,8 @@ export const FEMALE_OVERRIDES: Record<string, readonly PixelOverride[]> = {
     { x: 8, y: 18, slot: SLOTS.outline },
   ],
   paladin_F_a: [
-    { x: 8, y: 7, slot: SLOTS.headgear },
-    { x: 9, y: 7, slot: SLOTS.headgear },
+    { x: 8, y: 7, slot: SLOTS.hair },
+    { x: 9, y: 7, slot: SLOTS.hair },
     { x: 15, y: 8, slot: SLOTS.outline },
     { x: 23, y: 8, slot: SLOTS.outline },
     { x: 21, y: 9, slot: SLOTS.outline },
@@ -188,8 +195,8 @@ export const FEMALE_OVERRIDES: Record<string, readonly PixelOverride[]> = {
     { x: 7, y: 19, slot: SLOTS.outline },
   ],
   paladin_F_b: [
-    { x: 8, y: 8, slot: SLOTS.headgear },
-    { x: 9, y: 8, slot: SLOTS.headgear },
+    { x: 8, y: 8, slot: SLOTS.hair },
+    { x: 9, y: 8, slot: SLOTS.hair },
     { x: 15, y: 9, slot: SLOTS.outline },
     { x: 23, y: 9, slot: SLOTS.outline },
     { x: 21, y: 10, slot: SLOTS.outline },
@@ -303,12 +310,14 @@ export const FEMALE_OVERRIDES: Record<string, readonly PixelOverride[]> = {
   ],
   wizard_F_a: [
     { x: 8, y: 16, slot: SLOTS.outline },
+    { x: 9, y: 17, slot: SLOTS.outline },
     { x: 19, y: 17, slot: SLOTS.outline },
     { x: 20, y: 18, slot: SLOTS.outline },
   ],
   wizard_F_b: [
     { x: 21, y: 6, slot: SLOTS.outline },
     { x: 8, y: 17, slot: SLOTS.outline },
+    { x: 9, y: 18, slot: SLOTS.outline },
     { x: 19, y: 18, slot: SLOTS.outline },
     { x: 20, y: 19, slot: SLOTS.outline },
   ],

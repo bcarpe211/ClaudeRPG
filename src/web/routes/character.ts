@@ -19,7 +19,7 @@ import { buildSetupSnippet } from '../../domain/snippet';
 import { getCosmetics, spriteId } from '../../domain/cosmetics';
 import { dyeRule, dyeViewModel } from '../../domain/dye';
 import { purchase } from '../../domain/shop';
-import { presentSlots } from '../../domain/slots';
+import { MAX_RECOLOR_SLOT, presentSlots } from '../../domain/slots';
 
 const RenameInput = z.object({
   token: z.string().min(1),
@@ -28,13 +28,13 @@ const RenameInput = z.object({
 const TokenInput = z.object({ token: z.string().min(1) });
 const DyeSetInput = z.object({
   token: z.string().min(1),
-  slot: z.coerce.number().int().min(0).max(11),
+  slot: z.coerce.number().int().min(0).max(MAX_RECOLOR_SLOT),
   finish: z.enum(['wheel', 'black', 'white', 'steel']),
   hue: z.coerce.number().int().min(0).max(359).optional(),
 });
 const DyeClearInput = z.object({
   token: z.string().min(1),
-  slot: z.coerce.number().int().min(0).max(11),
+  slot: z.coerce.number().int().min(0).max(MAX_RECOLOR_SLOT),
 });
 
 export function registerCharacterRoutes(

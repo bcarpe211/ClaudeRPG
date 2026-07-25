@@ -11,6 +11,7 @@ import { spriteFileIndex } from '../src/domain/cosmetics';
 import { EXPECTED_CHANNELS } from '../src/domain/cosmeticsreview';
 import {
   LEGEND,
+  MAX_RECOLOR_SLOT,
   loadSlotmapFresh,
   PICKER_ORDER,
   readSlotmap,
@@ -159,7 +160,7 @@ describe('authored slot-map artifact integrity', () => {
               expect(LEGEND_RGB.has(rgb), `unknown legend RGB at pixel ${pixel}`).toBe(true);
             }
             expect(ids[pixel]).toBeGreaterThanOrEqual(SLOTS.outline);
-            expect(ids[pixel]).toBeLessThanOrEqual(SLOTS.flair);
+            expect(ids[pixel]).toBeLessThanOrEqual(MAX_RECOLOR_SLOT);
             if (ids[pixel] !== SLOTS.outline) {
               expect(source.data[offset + 3], `slot ${ids[pixel]} labels transparent source pixel ${pixel}`)
                 .not.toBe(0);
@@ -214,7 +215,7 @@ describe('authored slot-map artifact integrity', () => {
         expect(y).toBeGreaterThanOrEqual(0);
         expect(y).toBeLessThan(24);
         expect(slot).toBeGreaterThanOrEqual(SLOTS.outline);
-        expect(slot).toBeLessThanOrEqual(SLOTS.flair);
+        expect(slot).toBeLessThanOrEqual(MAX_RECOLOR_SLOT);
         expect(isVisible(female, x, y), `${key} override (${x},${y}) targets transparency`)
           .toBe(true);
       }
@@ -230,7 +231,7 @@ describe('male and female semantic channel parity', () => {
       const additions: Record<string, readonly number[]> = {
         berserker: [SLOTS.hair, SLOTS.facePaint],
         knight: [SLOTS.hair, SLOTS.facePaint],
-        paladin: [SLOTS.facePaint],
+        paladin: [SLOTS.hair, SLOTS.facePaint],
         priest: [SLOTS.hair, SLOTS.facePaint],
         ranger: [SLOTS.facePaint],
         shaman: [SLOTS.flair],
