@@ -45,55 +45,60 @@ describe('EXPECTED_CHANNELS', () => {
         M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
         F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
+          SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
+          SLOTS.skin],
       },
       thief: {
         M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
-          SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
+        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+          SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
+          SLOTS.skin],
       },
       ranger: {
         M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
         F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
+          SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       wizard: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+          SLOTS.weapon,
           SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+          SLOTS.weapon,
           SLOTS.flair, SLOTS.skin],
       },
       priest: {
         M: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
           SLOTS.skin],
         F: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-          SLOTS.flair, SLOTS.skin],
+          SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       shaman: {
         M: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
           SLOTS.facePaint, SLOTS.skin],
         F: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-          SLOTS.facePaint, SLOTS.skin],
+          SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       berserker: {
         M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
           SLOTS.weapon, SLOTS.flair, SLOTS.skin],
         F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.flair, SLOTS.skin],
+          SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       swordsman: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-          SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-          SLOTS.flair, SLOTS.skin],
+        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+          SLOTS.boots, SLOTS.weapon, SLOTS.skin],
+        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+          SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       paladin: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.shield,
+        M: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+          SLOTS.shield,
           SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.shield,
-          SLOTS.flair, SLOTS.skin],
+        F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+          SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
     });
     for (const variants of Object.values(EXPECTED_CHANNELS)) {
@@ -117,6 +122,8 @@ describe('buildCosmeticsReviewRoster', () => {
     ]);
     expect(roster.find(({ sprite }) => sprite === 'wizard_M')?.channels)
       .toContainEqual({ slot: SLOTS.flair, label: 'Eyes' });
+    expect(roster.find(({ sprite }) => sprite === 'wizard_M')?.channels)
+      .toContainEqual({ slot: SLOTS.cape, label: 'Gold trim' });
     expect(roster.find(({ sprite }) => sprite === 'knight_M')?.channels)
       .toContainEqual({ slot: SLOTS.flair, label: 'Plume' });
     expect(roster.find(({ sprite }) => sprite === 'thief_M')?.channels)
@@ -125,6 +132,12 @@ describe('buildCosmeticsReviewRoster', () => {
       .toContainEqual({ slot: SLOTS.shield, label: 'Quiver' });
     expect(roster.find(({ sprite }) => sprite === 'shaman_M')?.channels)
       .toContainEqual({ slot: SLOTS.headgear, label: 'Pelt' });
+    expect(roster.find(({ sprite }) => sprite === 'swordsman_F')?.channels)
+      .toContainEqual({ slot: SLOTS.facePaint, label: 'Lips' });
+    expect(roster.find(({ sprite }) => sprite === 'swordsman_F')?.channels)
+      .toContainEqual({ slot: SLOTS.flair, label: 'Details' });
+    expect(roster.find(({ sprite }) => sprite === 'paladin_F')?.channels)
+      .toContainEqual({ slot: SLOTS.flair, label: 'Plume' });
     expect(roster.every(({ warnings }) => warnings.length === 0)).toBe(true);
   });
 });

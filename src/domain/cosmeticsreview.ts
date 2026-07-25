@@ -31,55 +31,60 @@ export const EXPECTED_CHANNELS: Record<
     M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
     F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
+      SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
+      SLOTS.skin],
   },
   thief: {
     M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots,
-      SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
+    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+      SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
+      SLOTS.skin],
   },
   ranger: {
     M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
     F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
+      SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   wizard: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+      SLOTS.weapon,
       SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
+      SLOTS.weapon,
       SLOTS.flair, SLOTS.skin],
   },
   priest: {
     M: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
       SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
-      SLOTS.skin],
+    F: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
+      SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   shaman: {
     M: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
       SLOTS.facePaint, SLOTS.skin],
     F: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-      SLOTS.facePaint, SLOTS.skin],
+      SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   berserker: {
     M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
       SLOTS.weapon, SLOTS.flair, SLOTS.skin],
     F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.flair, SLOTS.skin],
+      SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   swordsman: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-      SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-      SLOTS.flair, SLOTS.skin],
+    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+      SLOTS.boots, SLOTS.weapon, SLOTS.skin],
+    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
+      SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   paladin: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.shield,
+    M: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+      SLOTS.shield,
       SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.boots, SLOTS.weapon, SLOTS.shield,
-      SLOTS.flair, SLOTS.skin],
+    F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
+      SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
 };
 
@@ -97,12 +102,13 @@ function warnChannelDifferences(
   actual: readonly number[],
   frame: 'A' | 'B',
   classKey: string,
+  gender: Gender,
 ): void {
   for (const slot of expected) {
-    if (!actual.includes(slot)) warnings.push(`Missing expected ${frame} channel: ${channelLabel(classKey, slot)}`);
+    if (!actual.includes(slot)) warnings.push(`Missing expected ${frame} channel: ${channelLabel(classKey, slot, gender)}`);
   }
   for (const slot of actual) {
-    if (!expected.includes(slot)) warnings.push(`Unexpected ${frame} channel: ${channelLabel(classKey, slot)}`);
+    if (!expected.includes(slot)) warnings.push(`Unexpected ${frame} channel: ${channelLabel(classKey, slot, gender)}`);
   }
 }
 
@@ -120,8 +126,8 @@ export function buildCosmeticsReviewRoster(slotmapsDir?: string): ReviewVariant[
       if (!frameAIds) warnings.push('Missing frame A slot map');
       if (!frameBIds) warnings.push('Missing frame B slot map');
       if (frameA.join(',') !== frameB.join(',')) warnings.push('Frame A/B channel mismatch');
-      warnChannelDifferences(warnings, expected, frameA, 'A', classKey);
-      warnChannelDifferences(warnings, expected, frameB, 'B', classKey);
+      warnChannelDifferences(warnings, expected, frameA, 'A', classKey, gender);
+      warnChannelDifferences(warnings, expected, frameB, 'B', classKey, gender);
 
       const available = new Set([...frameA, ...frameB]);
       return {
@@ -130,7 +136,7 @@ export function buildCosmeticsReviewRoster(slotmapsDir?: string): ReviewVariant[
         className,
         gender,
         channels: PICKER_ORDER.filter((slot) => available.has(slot))
-          .map((slot) => ({ slot, label: channelLabel(classKey, slot) })),
+          .map((slot) => ({ slot, label: channelLabel(classKey, slot, gender) })),
         warnings,
       };
     })

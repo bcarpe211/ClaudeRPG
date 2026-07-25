@@ -70,6 +70,7 @@ const CLASS_SLOT_LABELS: Record<string, Partial<Record<number, string>>> = {
   },
   wizard: {
     [SLOTS.trim]: 'Belt',
+    [SLOTS.cape]: 'Gold trim',
     [SLOTS.headgear]: 'Cloak',
     [SLOTS.flair]: 'Eyes',
   },
@@ -84,12 +85,36 @@ const CLASS_SLOT_LABELS: Record<string, Partial<Record<number, string>>> = {
     [SLOTS.trim]: 'Helmet trim',
     [SLOTS.flair]: 'Horns',
   },
+  swordsman: {
+    [SLOTS.body]: 'Shirt',
+    [SLOTS.headgear]: 'Clothing',
+    [SLOTS.flair]: 'Details',
+  },
   paladin: {
-    [SLOTS.flair]: 'Wings',
+    [SLOTS.flair]: 'Plume',
   },
 };
 
-export function channelLabel(classKey: string, slot: number): string {
+const FEMALE_SLOT_LABELS: Record<string, Partial<Record<number, string>>> = {
+  knight: { [SLOTS.facePaint]: 'Lips' },
+  thief: { [SLOTS.facePaint]: 'Lips' },
+  ranger: { [SLOTS.facePaint]: 'Lips' },
+  priest: { [SLOTS.facePaint]: 'Lips' },
+  shaman: { [SLOTS.flair]: 'Lips' },
+  berserker: { [SLOTS.facePaint]: 'Lips' },
+  swordsman: { [SLOTS.facePaint]: 'Lips' },
+  paladin: { [SLOTS.facePaint]: 'Lips' },
+};
+
+export function channelLabel(
+  classKey: string,
+  slot: number,
+  gender?: Gender,
+): string {
+  if (gender === 'F') {
+    const femaleLabel = FEMALE_SLOT_LABELS[classKey]?.[slot];
+    if (femaleLabel) return femaleLabel;
+  }
   return CLASS_SLOT_LABELS[classKey]?.[slot]
     ?? SLOT_LABELS[slot]
     ?? `Slot ${slot}`;
@@ -122,7 +147,7 @@ export function dyeViewModel(
     price: wheelPrice(db),
     channels: present.map((slot) => ({
       slot,
-      label: channelLabel(player.class_key, slot),
+      label: channelLabel(player.class_key, slot, gender),
     })),
     slotmap: ids ? Array.from(ids) : [],
     base: classSpriteUrl(player.class_key, gender),

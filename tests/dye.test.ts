@@ -69,9 +69,25 @@ describe('dye rules', () => {
     expect(channelLabel('ranger', SLOTS.flair)).toBe('Feather');
     expect(channelLabel('wizard', SLOTS.headgear)).toBe('Cloak');
     expect(channelLabel('wizard', SLOTS.trim)).toBe('Belt');
+    expect(channelLabel('wizard', SLOTS.cape)).toBe('Gold trim');
     expect(channelLabel('priest', SLOTS.trim)).toBe('Belt');
     expect(channelLabel('shaman', SLOTS.headgear)).toBe('Pelt');
     expect(channelLabel('berserker', SLOTS.trim)).toBe('Helmet trim');
+    expect(channelLabel('swordsman', SLOTS.body)).toBe('Shirt');
+    expect(channelLabel('swordsman', SLOTS.headgear)).toBe('Clothing');
+    expect(channelLabel('swordsman', SLOTS.flair, 'F')).toBe('Details');
+    expect(channelLabel('paladin', SLOTS.flair)).toBe('Plume');
+  });
+
+  it('labels each applicable female-only mouth channel as Lips', () => {
+    for (const classKey of [
+      'knight', 'thief', 'ranger', 'priest', 'berserker', 'swordsman', 'paladin',
+    ]) {
+      expect(channelLabel(classKey, SLOTS.facePaint, 'F')).toBe('Lips');
+    }
+    expect(channelLabel('shaman', SLOTS.flair, 'F')).toBe('Lips');
+    expect(channelLabel('shaman', SLOTS.facePaint, 'F')).toBe('Face paint');
+    expect(channelLabel('shaman', SLOTS.flair, 'M')).toBe('Details');
   });
 });
 

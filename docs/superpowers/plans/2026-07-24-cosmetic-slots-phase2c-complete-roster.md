@@ -1450,3 +1450,33 @@ three-tier cosmetic ownership system, not timed consumables.
   timed consumables remain out of scope.
 - **Completion gate:** automated green is not completion; explicit user pixel
   approval is mandatory.
+
+---
+
+## Review-loop amendment — 2026-07-25
+
+The Task 3 inventory and collision examples above record the pre-review
+implementation target. Pixel-by-pixel review expanded and corrected that target.
+The authoritative final-review inventory is now §5.2 of
+`docs/superpowers/specs/2026-07-24-cosmetic-slots-phase2c-female-review-design.md`
+and the executable `EXPECTED_CHANNELS` table in
+`src/domain/cosmeticsreview.ts`.
+
+The review-loop decisions that supersede the earlier examples are:
+
+- Wizard belt and gold robe edging are independent; the latter is presented as
+  **Gold trim**.
+- Female visible mouth pixels are presented as **Lips**. Wizard has no visible
+  mouth pixels. Shaman uses the otherwise-free flair slot for Lips because face
+  paint is already independent.
+- Swordsman separates Shirt, brown Clothing, silver Trim, grey Cape, Weapon,
+  Boots, Hair, and Skin. Female Lips and earring Details remain independent.
+- Paladin separates Clothing/front panel, Cape, Headgear, Shield, Weapon,
+  Boots, Plume, and Skin. The white plume is not a wing, integrated helmet
+  edging remains Headgear, and the front panel remains Clothing.
+- Knight and Paladin shoulder pixels that visibly continue their rear cloth are
+  Cape. Berserker’s female moving gold strand is Hair.
+
+The correction-loop tests in `tests/slotmap-collisions.test.ts` are the
+position-specific source of truth for these accepted boundaries in both
+animation frames.

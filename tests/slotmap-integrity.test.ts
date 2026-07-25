@@ -228,11 +228,14 @@ describe('male and female semantic channel parity', () => {
       const male = uniqueSlots(loadSlotmapFresh(`${classKey}_M`, 'a'));
       const female = uniqueSlots(loadSlotmapFresh(`${classKey}_F`, 'a'));
       const additions: Record<string, readonly number[]> = {
-        berserker: [SLOTS.hair],
-        knight: [SLOTS.hair],
-        priest: [SLOTS.hair],
-        swordsman: [SLOTS.flair],
-        thief: [SLOTS.hair],
+        berserker: [SLOTS.hair, SLOTS.facePaint],
+        knight: [SLOTS.hair, SLOTS.facePaint],
+        paladin: [SLOTS.facePaint],
+        priest: [SLOTS.hair, SLOTS.facePaint],
+        ranger: [SLOTS.facePaint],
+        shaman: [SLOTS.flair],
+        swordsman: [SLOTS.facePaint, SLOTS.flair],
+        thief: [SLOTS.hair, SLOTS.facePaint],
       };
       const expectedFemale = PICKER_ORDER.filter(
         (slot) => male.includes(slot) || (additions[classKey] ?? []).includes(slot),

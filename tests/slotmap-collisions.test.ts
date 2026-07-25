@@ -21,7 +21,7 @@ interface Position {
 interface CollisionFixture {
   name: string;
   classKey: 'knight' | 'thief' | 'ranger' | 'wizard' | 'priest'
-    | 'shaman' | 'berserker' | 'paladin';
+    | 'shaman' | 'berserker' | 'swordsman' | 'paladin';
   slot: number | { M: number; F: number };
   positions: Record<SpriteFrame, Position>;
   sourceHex: string | { M: string; F: string };
@@ -261,7 +261,7 @@ const FIXTURES: readonly CollisionFixture[] = [
   {
     name: 'wizard gold cloak edging',
     classKey: 'wizard',
-    slot: SLOTS.headgear,
+    slot: SLOTS.cape,
     positions: { a: { x: 9, y: 5 }, b: { x: 9, y: 6 } },
     sourceHex: '#eaff00',
   },
@@ -483,9 +483,65 @@ const FIXTURES: readonly CollisionFixture[] = [
     sourceHex: { M: '#b86e28', F: '#eaff00' },
   },
   {
+    name: 'berserker female flipping gold hair strand',
+    classKey: 'berserker',
+    slot: { M: SLOTS.cape, F: SLOTS.hair },
+    positions: { a: { x: 17, y: 11 }, b: { x: 17, y: 12 } },
+    sourceHex: { M: '#b89600', F: '#eaff00' },
+  },
+  {
+    name: 'swordsman brown clothing behind the head',
+    classKey: 'swordsman',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 18, y: 7 }, b: { x: 18, y: 8 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'swordsman shirt',
+    classKey: 'swordsman',
+    slot: SLOTS.body,
+    positions: { a: { x: 8, y: 14 }, b: { x: 8, y: 15 } },
+    sourceHex: { M: '#0e7cb3', F: '#9b0456' },
+  },
+  {
+    name: 'swordsman silver shirt trim',
+    classKey: 'swordsman',
+    slot: SLOTS.trim,
+    positions: { a: { x: 7, y: 13 }, b: { x: 7, y: 14 } },
+    sourceHex: '#919191',
+  },
+  {
+    name: 'swordsman grey cape',
+    classKey: 'swordsman',
+    slot: SLOTS.cape,
+    positions: { a: { x: 19, y: 18 }, b: { x: 19, y: 19 } },
+    sourceHex: '#595959',
+  },
+  {
+    name: 'swordsman sword hilt',
+    classKey: 'swordsman',
+    slot: SLOTS.weapon,
+    positions: { a: { x: 3, y: 13 }, b: { x: 3, y: 14 } },
+    sourceHex: '#887000',
+  },
+  {
+    name: 'swordsman female lips',
+    classKey: 'swordsman',
+    slot: { M: SLOTS.skin, F: SLOTS.facePaint },
+    positions: { a: { x: 9, y: 12 }, b: { x: 9, y: 13 } },
+    sourceHex: { M: '#b86e28', F: '#8e2020' },
+  },
+  {
+    name: 'swordsman female earring detail',
+    classKey: 'swordsman',
+    slot: { M: SLOTS.outline, F: SLOTS.flair },
+    positions: { a: { x: 16, y: 10 }, b: { x: 16, y: 11 } },
+    sourceHex: { M: '#262626', F: '#eaff00' },
+  },
+  {
     name: 'paladin body helmet',
     classKey: 'paladin',
-    slot: SLOTS.body,
+    slot: SLOTS.headgear,
     positions: { a: { x: 11, y: 3 }, b: { x: 11, y: 4 } },
     sourceHex: '#b4c21d',
   },
@@ -499,7 +555,7 @@ const FIXTURES: readonly CollisionFixture[] = [
   {
     name: 'paladin front panel',
     classKey: 'paladin',
-    slot: SLOTS.trim,
+    slot: SLOTS.body,
     positions: { a: { x: 9, y: 19 }, b: { x: 9, y: 20 } },
     sourceHex: '#f3f3f3',
   },
@@ -532,14 +588,70 @@ const FIXTURES: readonly CollisionFixture[] = [
     sourceHex: '#b89600',
   },
   {
-    name: 'paladin white wing',
+    name: 'paladin white plume',
     classKey: 'paladin',
     slot: SLOTS.flair,
     positions: { a: { x: 20, y: 7 }, b: { x: 20, y: 8 } },
     sourceHex: '#f3f3f3',
   },
   {
-    name: 'paladin fixed outline below the wing',
+    name: 'paladin white headgear trim',
+    classKey: 'paladin',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 9, y: 5 }, b: { x: 9, y: 6 } },
+    sourceHex: '#f3f3f3',
+  },
+  {
+    name: 'paladin pale headgear streak',
+    classKey: 'paladin',
+    slot: SLOTS.headgear,
+    positions: { a: { x: 10, y: 2 }, b: { x: 10, y: 3 } },
+    sourceHex: '#ffd1a6',
+  },
+  {
+    name: 'paladin cape at the left shoulder',
+    classKey: 'paladin',
+    slot: SLOTS.cape,
+    positions: { a: { x: 6, y: 12 }, b: { x: 6, y: 13 } },
+    sourceHex: { M: '#887000', F: '#cf3232' },
+  },
+  {
+    name: 'paladin cape below the shield',
+    classKey: 'paladin',
+    slot: SLOTS.cape,
+    positions: { a: { x: 19, y: 21 }, b: { x: 19, y: 22 } },
+    sourceHex: { M: '#0e7cb3', F: '#cf3232' },
+  },
+  {
+    name: 'paladin clothing below the face',
+    classKey: 'paladin',
+    slot: SLOTS.body,
+    positions: { a: { x: 8, y: 15 }, b: { x: 8, y: 16 } },
+    sourceHex: '#ffd1a6',
+  },
+  {
+    name: 'paladin white clothing below the belt',
+    classKey: 'paladin',
+    slot: SLOTS.body,
+    positions: { a: { x: 9, y: 19 }, b: { x: 9, y: 20 } },
+    sourceHex: '#f3f3f3',
+  },
+  {
+    name: 'paladin female gold helmet edge',
+    classKey: 'paladin',
+    slot: { M: SLOTS.skin, F: SLOTS.headgear },
+    positions: { a: { x: 8, y: 7 }, b: { x: 8, y: 8 } },
+    sourceHex: { M: '#b86e28', F: '#eaff00' },
+  },
+  {
+    name: 'paladin female lips',
+    classKey: 'paladin',
+    slot: { M: SLOTS.skin, F: SLOTS.facePaint },
+    positions: { a: { x: 9, y: 12 }, b: { x: 9, y: 13 } },
+    sourceHex: { M: '#fc9838', F: '#cf3232' },
+  },
+  {
+    name: 'paladin fixed outline below the plume',
     classKey: 'paladin',
     slot: SLOTS.outline,
     positions: { a: { x: 18, y: 10 }, b: { x: 18, y: 11 } },
@@ -595,9 +707,33 @@ describe('position-specific slot-map collision regressions', () => {
   }
 });
 
+describe('female-only lip channels', () => {
+  const fixtures = [
+    { classKey: 'knight', x: 9, yB: 13, slot: SLOTS.facePaint },
+    { classKey: 'thief', x: 9, yB: 13, slot: SLOTS.facePaint },
+    { classKey: 'ranger', x: 9, yB: 12, slot: SLOTS.facePaint },
+    { classKey: 'priest', x: 10, yB: 13, slot: SLOTS.facePaint },
+    { classKey: 'shaman', x: 10, yB: 13, slot: SLOTS.flair },
+    { classKey: 'berserker', x: 9, yB: 13, slot: SLOTS.facePaint },
+  ] as const;
+
+  for (const { classKey, x, yB, slot } of fixtures) {
+    for (const frame of ['a', 'b'] as const) {
+      it(`${classKey}_F_${frame}: maps the visible mouth independently`, () => {
+        const position = { x, y: frame === 'a' ? 12 : yB };
+        const source = sourceAt(classKey, 'F', frame, position);
+        const map = loadSlotmapFresh(`${classKey}_F`, frame);
+
+        expect(source).toEqual({ hex: '#cf3232', alpha: 255 });
+        expect(map?.[position.y * 24 + position.x]).toBe(slot);
+      });
+    }
+  }
+});
+
 describe('gender-specific hair boundaries', () => {
   const hairCounts = {
-    berserker: { M: 0, F: 4 },
+    berserker: { M: 0, F: 7 },
     knight: { M: 0, F: 2 },
     ranger: { M: 0, F: 0 },
     thief: { M: 0, F: 2 },

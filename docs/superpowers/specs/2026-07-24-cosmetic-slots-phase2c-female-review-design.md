@@ -150,15 +150,15 @@ The target picker channels are:
 
 | Class | Shared target channels | Gender-specific channels |
 |---|---|---|
-| Knight | headgear (cap), body (tunic), cape, trim, weapon, shield, boots, skin | female hair |
-| Thief | headgear (cap), body (cloak), trim, weapon, hair, boots, skin, flair (feather) | none |
-| Ranger | headgear (hat), body (shirt), hair, weapon (bow/arrow), boots, skin, flair (fletching) | none |
-| Wizard | body (hood/robe), trim, weapon, skin (hand), flair (eyes) | none |
-| Priest | body (hood/robe), trim, weapon, skin, flair (holy symbol) | female hair |
-| Shaman | body (pelt hood/cloak), face paint, trim (loincloth), weapon, boots, skin | none |
-| Berserker | body (tunic), headgear (helmet), cape, trim (headband), weapon, boots, skin, flair (horns) | none |
-| Swordsman | body (shirt), hair, trim (pauldron/belt), weapon, boots, skin | female flair (earring/lips) |
-| Paladin | body (`#b4c21d` helmet/shirt), trim (front panel), weapon, shield, boots, skin, flair (white feather/wings) | none |
+| Knight | body (clothing), trim, cape, headgear, boots, weapon, shield, flair (plume), skin | female hair and lips |
+| Thief | body (clothing), trim (belt), cape, headgear, boots, weapon, shield (back accessory), flair (feather), skin | female hair and lips |
+| Ranger | body (clothing), trim (belt), cape (cloak), headgear, boots, weapon, shield (quiver), flair (feather), skin | female lips |
+| Wizard | body (clothing), trim (belt), cape (gold trim), headgear (cloak), boots, weapon, flair (eyes), skin (hand) | none; no visible mouth pixels |
+| Priest | body (clothing), trim (belt), boots, weapon, flair (holy symbol), skin | female hair and lips |
+| Shaman | body (clothing), headgear (pelt and its light edging), boots, weapon, face paint, skin | female flair (lips) |
+| Berserker | body (clothing), trim (helmet trim), cape, headgear, boots, weapon, flair (horns), skin | female hair and lips |
+| Swordsman | body (shirt), trim (silver shirt edging), cape, headgear (brown clothing/robe), hair, boots, weapon, skin | female face paint (lips) and flair (earring/details) |
+| Paladin | body (clothing and front panel), cape, headgear (helmet and integrated edging), boots, weapon, shield, flair (plume), skin | female lips |
 
 Opaque outline and intentionally fixed artwork remain slot 0. “Complete” means
 every intended recolorable material above is mapped; it does not mean every
@@ -174,13 +174,21 @@ propagates before female-specific overrides are applied.
 The female maps inherit all accepted male material boundaries:
 
 - Wizard eyes remain flair and never follow the robe.
+- Wizard gold edging is an independent picker channel and never follows the
+  belt, robe, or staff.
 - Shaman staff remains weapon.
-- Berserker tunic/body, helmet, cape, axe, and horns remain independent.
-- Paladin shield, white feather/wings, front panel, and boots remain independent
-  from the helmet-and-shirt garment.
-- Paladin’s authoritative source-sprite garment color is `#b4c21d`; the slot map,
-  not runtime color matching, is authoritative. This is the region previously
-  identified from the rendered sample as approximately RGB 183/193/68.
+- Berserker tunic/body, helmet, helmet trim, cape, axe, horns, and female gold
+  hair remain independent.
+- Swordsman shirt, brown clothing/robe, silver trim, grey cape, sword, boots,
+  and hair remain independent. Female lips and gold earring/details use
+  separate channels.
+- Paladin shield, plume, cape, helmet, clothing/front panel, boots, and weapon
+  remain independent. The olive `#b4c21d` pixels belong to the helmet or
+  clothing according to their authored coordinates; the slot map, not runtime
+  color matching, is authoritative. This is the palette previously identified
+  from the rendered sample as approximately RGB 183/193/68.
+- Every female sprite with visible mouth pixels exposes those pixels as Lips.
+  Wizard has no visible mouth pixels and therefore has no Lips channel.
 - Outline pixels remain slot 0 and are never recolored.
 
 The transfer is only an initial authoring pass. Any material differences visible
@@ -315,7 +323,7 @@ Automated acceptance covers:
   per-character inventory, collapsing only the document's explicit same-garment
   aliases;
 - female and male variants expose matching channels except for documented
-  female-only materials such as hair, cape, or flair;
+  female-only hair, lips, or details;
 - known collision regions remain isolated in both genders and both frames;
 - the skin render hash changes when either frame’s map fingerprint changes;
 - stale skin hashes redirect before receiving immutable cache headers;

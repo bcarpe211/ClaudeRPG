@@ -52,6 +52,13 @@ Type: **hue** = chromatic (works today) · **colorize/value** = achromatic (need
 M/F = present on male / female. ⭐ = the slot that most defines the class.
 "mask" = needs a spatial mask because its hex collides with another slot.
 
+> **Historical palette-analysis note:** The inventories and matrix in §§3–4
+> describe the initial color-collision investigation. The authored Phase 2C
+> slot maps and the accepted picker inventory in
+> `docs/superpowers/specs/2026-07-24-cosmetic-slots-phase2c-female-review-design.md`
+> §5.2 are now authoritative. In particular, later pixel review split several
+> materials that this palette-only analysis grouped together.
+
 ### 1 · Knight (base 1) — blue man-at-arms
 | Slot | Element | Hex / ramp | Type | M | F | Notes |
 |---|---|---|---|---|---|---|
