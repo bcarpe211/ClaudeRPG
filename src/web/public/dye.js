@@ -210,6 +210,7 @@
   async function saveDraft() {
     const changes = operations();
     if (saving || stale || changes.length === 0) return;
+    const submittedStates = Draft.cloneStates(states);
     saving = true;
     renderSaveState('Saving');
     let message = 'Save failed';
@@ -239,14 +240,29 @@
       for (const [slot, rule] of canonicalConfig) {
         canonicalStates.set(slot, stateFromRule(rule));
       }
-      config = canonicalConfig;
-      states = canonicalStates;
+      const rebasedConfig = cloneConfig(canonicalConfig);
+      const rebasedStates = Draft.cloneStates(canonicalStates);
+      const touchedWhileSaving = new Set([...submittedStates.keys(), ...states.keys()]);
+      for (const slot of touchedWhileSaving) {
+        const currentState = states.get(slot);
+        if (Draft.equalState(submittedStates.get(slot), currentState)) continue;
+        if (!currentState) {
+          rebasedConfig.delete(slot);
+          rebasedStates.delete(slot);
+          continue;
+        }
+        const currentRule = config.get(slot);
+        rebasedConfig.set(slot, currentRule ? { ...currentRule } : ruleFromState(currentState));
+        rebasedStates.set(slot, { ...currentState });
+      }
       savedConfig = cloneConfig(canonicalConfig);
       savedStates = Draft.cloneStates(canonicalStates);
+      config = rebasedConfig;
+      states = rebasedStates;
       nextRevision += 1;
       renderPreview();
       renderControls();
-      message = 'Saved';
+      message = operations().length > 0 ? 'Unsaved changes' : 'Saved';
     } catch (_error) {
       // Keep the current draft so the same revision can be retried safely.
     } finally {

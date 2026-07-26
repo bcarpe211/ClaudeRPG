@@ -372,6 +372,48 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.status.textContent).toBe('Saved');
   });
 
+  it('rebases edits made while Save is in flight onto the canonical response', async () => {
+    const harness = createWardrobeHarness();
+    const first = deferred<ResponseLike>();
+    const second = deferred<ResponseLike>();
+    harness.responses.push(first, second);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    expect(changes(harness.requests[0])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 6, tone: 0 },
+    ]);
+    expect(harness.wheel.disabled).toBe(false);
+    expect(harness.tone.disabled).toBe(false);
+    expect(harness.steelButton.disabled).toBe(false);
+    expect(harness.clothing.disabled).toBe(false);
+    expect(harness.cloak.disabled).toBe(false);
+
+    pressWheel(harness, 'ArrowRight');
+    first.resolve(response({
+      1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 },
+    }));
+    await harness.settle();
+
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('12');
+    expect(harness.status.textContent).toBe('Unsaved changes');
+    expect(harness.saveButton.disabled).toBe(false);
+    expect(harness.discardButton.disabled).toBe(false);
+
+    harness.saveButton.dispatch('click');
+    expect(harness.requests).toHaveLength(2);
+    expect(harness.requests[1].body.get('revision')).toBe('1001');
+    expect(changes(harness.requests[1])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 12, tone: 0 },
+    ]);
+
+    second.resolve(response({
+      1: { op: 'colorize', hue: 12, sat: 0.6, tone: 0 },
+    }));
+    await harness.settle();
+    expect(harness.status.textContent).toBe('Saved');
+  });
+
   it('discards every edited channel back to its saved rule without a request', () => {
     const harness = createWardrobeHarness({
       1: { op: 'colorize', hue: 20, sat: 0.6, tone: 0.1 },
