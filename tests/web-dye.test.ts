@@ -167,6 +167,19 @@ describe('character wardrobe panel', () => {
     expect(res.text).not.toContain('data-finish="white"');
   });
 
+  it('serializes exact material presets without locked Tier-3 rules', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    setSlotRule(db, player.id, SLOTS.weapon, MATERIAL_PRESETS.gold, 20);
+
+    const res = await request(app).get('/character').query({ token: player.auth_token });
+
+    expect(res.text).toContain('"steel":{"op":"colorize","hue":212,"sat":0.13,"tone":0}');
+    expect(res.text).toContain('"bronze":{"op":"colorize","hue":28,"sat":0.58,"tone":-0.12}');
+    expect(res.text).toContain('"gold":{"op":"colorize","hue":46,"sat":0.75,"tone":0.1}');
+    expect(res.text).not.toContain(`"7":{"op":"colorize","hue":46,"sat":0.75,"tone":0.1}`);
+  });
+
   it('removes the purchase prompt at Tier 3 while keeping the complete workbench', async () => {
     const { db, app, player } = ctx();
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);

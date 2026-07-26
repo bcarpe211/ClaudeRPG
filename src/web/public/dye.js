@@ -4,15 +4,18 @@
 // source of truth; this mirrors its slot operations for immediate local preview.
 (function () {
   const D = window.__DYE__;
-  if (!D) return;
+  const colorMath = window.ClaudeRpgDyeColor;
+  if (!D || !colorMath) return;
 
   const preview = document.getElementById('dye-preview');
   const wheel = document.getElementById('dye-wheel');
   const channelWrap = document.getElementById('dye-channels');
   const status = document.getElementById('dye-save-status');
   const activeLabel = document.getElementById('dye-active-label');
+  const toneInput = document.getElementById('dye-tone');
+  const toneValue = document.getElementById('dye-tone-value');
   const pageAvatar = document.getElementById('character-avatar');
-  if (!preview || !wheel || !channelWrap || !status || !activeLabel) return;
+  if (!preview || !wheel || !channelWrap || !status || !activeLabel || !toneInput || !toneValue) return;
 
   const previewContext = preview.getContext('2d');
   const wheelContext = wheel.getContext('2d');
@@ -20,61 +23,62 @@
   previewContext.imageSmoothingEnabled = false;
   wheelContext.imageSmoothingEnabled = false;
 
-  // --- color operations: mirrors src/domain/spritetint.ts exactly ---
-  function hsvToRgb(hueDegrees, saturation, value) {
-    const hue = (((hueDegrees % 360) + 360) % 360) / 360;
-    const index = Math.floor(hue * 6);
-    const fraction = hue * 6 - index;
-    const p = value * (1 - saturation);
-    const q = value * (1 - fraction * saturation);
-    const t = value * (1 - (1 - fraction) * saturation);
-    const channels = [
-      [value, t, p],
-      [q, value, p],
-      [p, value, t],
-      [p, q, value],
-      [t, p, value],
-      [value, p, q],
-    ][index % 6];
-    return channels.map((channel) => Math.round(channel * 255));
-  }
-
-  function applyRule(rule, red, green, blue) {
-    const value = Math.max(red, green, blue) / 255;
-    if (rule.op === 'value') {
-      const lo = rule.lo == null ? 0 : rule.lo;
-      const hi = rule.hi == null ? 1 : rule.hi;
-      const channel = Math.round((lo + value * (hi - lo)) * 255);
-      return [channel, channel, channel];
-    }
-    if (rule.op === 'colorize') {
-      return hsvToRgb(
-        rule.hue == null ? 0 : rule.hue,
-        rule.sat == null ? 0.6 : rule.sat,
-        value,
-      );
-    }
-    const min = Math.min(red, green, blue) / 255;
-    const saturation = value === 0 ? 0 : (value - min) / value;
-    return hsvToRgb(rule.hue == null ? 0 : rule.hue, saturation, value);
-  }
-
   const config = new Map(
     Object.entries(D.config).map(([slot, rule]) => [Number(slot), rule]),
   );
-  const hues = new Map();
-  for (const [slot, rule] of config) {
-    if (rule.hue != null) hues.set(slot, rule.hue);
-  }
+  const states = new Map();
+  for (const [slot, rule] of config) states.set(slot, stateFromRule(rule));
   const slotmap = D.slotmap;
-  let active = D.channels.length > 0 ? D.channels[0].slot : null;
+  const channelButtons = Array.from(document.querySelectorAll('.dye-chan:not(:disabled)'));
+  let active = channelButtons.length > 0 ? Number(channelButtons[0].dataset.slot) : null;
   let sourcePixels = null;
+
+  function stateFromRule(rule) {
+    if (!rule) return { recipe: 'wheel', hue: 0, sat: D.wheelSat, tone: 0 };
+    if (rule.op === 'value') {
+      const black = rule.lo === 0 && rule.hi === 0.32;
+      return { recipe: 'wheel', hue: 0, sat: D.wheelSat, tone: black ? -1 : 1 };
+    }
+    const preset = Object.entries(D.presets).find(([, value]) => (
+      value.hue === rule.hue && value.sat === rule.sat
+    ));
+    return {
+      recipe: preset ? preset[0] : 'wheel',
+      hue: rule.hue == null ? 0 : rule.hue,
+      sat: rule.sat == null ? D.wheelSat : rule.sat,
+      tone: rule.tone == null ? 0 : rule.tone,
+    };
+  }
+
+  function stateFor(slot) {
+    let state = states.get(slot);
+    if (!state) {
+      state = stateFromRule(null);
+      states.set(slot, state);
+    }
+    return state;
+  }
+
+  function ruleFromState(state) {
+    if (state.recipe !== 'wheel' && D.presets[state.recipe]) {
+      return { ...D.presets[state.recipe], tone: state.tone };
+    }
+    return { op: 'colorize', hue: state.hue, sat: state.sat, tone: state.tone };
+  }
+
+  function toneDisplay(tone) {
+    const value = Math.round(tone * 100);
+    if (value === -100) return 'Black';
+    if (value === 0) return 'Natural';
+    if (value === 100) return 'White';
+    return `${value > 0 ? '+' : ''}${value}%`;
+  }
 
   // --- low-resolution pixel wheel ---
   const wheelRadius = wheel.width / 2;
 
   function currentHue() {
-    return active == null ? 0 : (hues.get(active) || 0);
+    return active == null ? 0 : stateFor(active).hue;
   }
 
   function drawWheel() {
@@ -93,14 +97,14 @@
         } else {
           const raw = Math.atan2(dy, dx) * 180 / Math.PI;
           const hue = (Math.round(raw / 6) * 6 + 360) % 360;
-          const color = hsvToRgb(hue, D.wheelSat, 1);
+          const color = colorMath.hsvToRgb(hue, D.wheelSat, 1);
           wheelContext.fillStyle = `rgb(${color[0]} ${color[1]} ${color[2]})`;
         }
         wheelContext.fillRect(x, y, 1, 1);
       }
     }
 
-    const core = hsvToRgb(selectedHue, D.wheelSat, 0.9);
+    const core = colorMath.hsvToRgb(selectedHue, D.wheelSat, 0.9);
     wheelContext.fillStyle = '#0c0912';
     wheelContext.fillRect(wheelRadius - 7, wheelRadius - 7, 14, 14);
     wheelContext.fillStyle = `rgb(${core[0]} ${core[1]} ${core[2]})`;
@@ -153,7 +157,7 @@
 
       const rule = config.get(slotmap[pixel]);
       if (!rule) continue;
-      const color = applyRule(
+      const color = colorMath.applyRule(
         rule,
         source[index],
         source[index + 1],
@@ -166,13 +170,7 @@
 
     spriteContext.putImageData(output, 0, 0);
     previewContext.clearRect(0, 0, preview.width, preview.height);
-    previewContext.drawImage(
-      spriteCanvas,
-      0,
-      0,
-      preview.width,
-      preview.height,
-    );
+    previewContext.drawImage(spriteCanvas, 0, 0, preview.width, preview.height);
     if (pageAvatar) pageAvatar.src = preview.toDataURL('image/png');
   }
 
@@ -191,10 +189,7 @@
     if (queues.size > 0 || timers.size > 0) return;
     if (failedSlots.size > 0) {
       const noun = failedSlots.size === 1 ? 'change needs' : 'changes need';
-      setStatus(
-        `${failedSlots.size} ${noun} saving — try again`,
-        'error',
-      );
+      setStatus(`${failedSlots.size} ${noun} saving — try again`, 'error');
       return;
     }
     setStatus('All changes saved', 'saved');
@@ -202,10 +197,7 @@
 
   async function postSave(endpoint, body) {
     const response = await fetch(endpoint, {
-      method: 'POST',
-      body,
-      credentials: 'same-origin',
-      keepalive: true,
+      method: 'POST', body, credentials: 'same-origin', keepalive: true,
     });
     if (!response.ok) throw new Error(`Save failed (${response.status})`);
   }
@@ -214,9 +206,7 @@
     setStatus('Saving…', 'saving');
     const previous = queues.get(slot);
     const request = previous
-      ? previous.catch(function () {}).then(function () {
-          return postSave(endpoint, body);
-        })
+      ? previous.catch(function () {}).then(function () { return postSave(endpoint, body); })
       : postSave(endpoint, body);
     queues.set(slot, request);
     request.then(
@@ -233,26 +223,22 @@
     );
   }
 
-  function saveSet(slot, finish, hue) {
-    const body = new URLSearchParams({
-      token: D.token,
-      slot: String(slot),
-      finish,
-    });
-    if (hue != null) body.set('hue', String(hue));
+  function saveSet(slot, state) {
+    const body = new URLSearchParams({ token: D.token, slot: String(slot) });
+    const recipe = state.recipe;
+    body.set('recipe', recipe);
+    if (recipe === 'wheel') body.set('hue', String(state.hue));
+    body.set('tone', String(state.tone));
 
     clearTimeout(timers.get(slot));
     pendingSets.set(slot, body);
     setStatus('Change queued…', 'saving');
-    timers.set(
-      slot,
-      setTimeout(function () {
-        timers.delete(slot);
-        const pending = pendingSets.get(slot);
-        pendingSets.delete(slot);
-        if (pending) enqueue(slot, '/character/dye/set', pending);
-      }, 120),
-    );
+    timers.set(slot, setTimeout(function () {
+      timers.delete(slot);
+      const pending = pendingSets.get(slot);
+      pendingSets.delete(slot);
+      if (pending) enqueue(slot, '/character/dye/set', pending);
+    }, 120));
   }
 
   function saveClear(slot) {
@@ -280,14 +266,7 @@
   window.addEventListener('beforeunload', flushPendingSets);
   window.addEventListener('pagehide', flushPendingSets);
 
-  // --- channel and finish controls ---
-  function rulesMatch(left, right) {
-    if (!left || !right) return false;
-    return ['op', 'hue', 'sat', 'lo', 'hi'].every(
-      (key) => left[key] === right[key],
-    );
-  }
-
+  // --- server-rendered channels and material controls ---
   function ruleColor(rule) {
     if (!rule) return null;
     if (rule.op === 'value') {
@@ -296,63 +275,45 @@
       const value = Math.round(((lo + hi) / 2) * 255);
       return `rgb(${value} ${value} ${value})`;
     }
-    const color = hsvToRgb(
+    const color = colorMath.hsvToRgb(
       rule.hue == null ? 0 : rule.hue,
-      rule.sat == null ? 0.6 : rule.sat,
+      rule.sat == null ? D.wheelSat : rule.sat,
       0.9,
     );
     return `rgb(${color[0]} ${color[1]} ${color[2]})`;
   }
 
   function renderChannels() {
-    channelWrap.textContent = '';
-    for (const channel of D.channels) {
-      const button = document.createElement('button');
-      const rule = config.get(channel.slot);
-      button.type = 'button';
-      button.className = 'dye-chan';
-      button.classList.toggle('active', channel.slot === active);
+    for (const button of channelButtons) {
+      const slot = Number(button.dataset.slot);
+      const rule = config.get(slot);
+      button.classList.toggle('active', slot === active);
       button.classList.toggle('configured', !!rule);
-      button.setAttribute('aria-pressed', String(channel.slot === active));
-
-      const dot = document.createElement('span');
-      dot.className = 'dye-dot';
-      const color = ruleColor(rule);
-      if (color) dot.style.background = color;
-      else dot.classList.add('is-default');
-
-      const label = document.createElement('span');
-      label.textContent = channel.label;
-      button.append(dot, label);
-      button.addEventListener('click', function () {
-        active = channel.slot;
-        renderControls();
-      });
-      channelWrap.appendChild(button);
+      button.setAttribute('aria-pressed', String(slot === active));
+      const dot = button.querySelector('.dye-dot');
+      if (dot) {
+        const color = ruleColor(rule);
+        dot.classList.toggle('is-default', !color);
+        dot.style.background = color || '';
+      }
     }
-  }
-
-  function selectedFinish(rule) {
-    for (const [name, finishRule] of Object.entries(D.finishes)) {
-      if (rulesMatch(rule, finishRule)) return name;
-    }
-    return rule ? 'wheel' : 'none';
   }
 
   function renderControls() {
     const channel = D.channels.find((item) => item.slot === active);
-    const rule = active == null ? null : config.get(active);
-    const finish = selectedFinish(rule);
+    const state = active == null ? null : stateFor(active);
+    const recipe = state ? state.recipe : 'none';
+    const tone = state ? state.tone : 0;
 
-    activeLabel.textContent = channel
-      ? `${channel.label} selected`
-      : 'Choose a material';
-    wheel.classList.toggle('active', finish === 'wheel');
+    activeLabel.textContent = channel ? `${channel.label} selected` : 'Choose a material';
+    wheel.classList.toggle('active', recipe === 'wheel');
     wheel.setAttribute('aria-valuenow', String(currentHue()));
     wheel.setAttribute('aria-valuetext', `${currentHue()} degrees`);
+    toneInput.value = String(Math.round(tone * 100));
+    toneValue.textContent = toneDisplay(tone);
 
     document.querySelectorAll('.dye-fin').forEach(function (button) {
-      const selected = button.getAttribute('data-finish') === finish;
+      const selected = button.dataset.recipe === recipe;
       button.classList.toggle('active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
@@ -360,28 +321,44 @@
     renderChannels();
   }
 
-  function applySelection(rule, finish, hue) {
+  function applyState(next) {
     if (active == null) return;
-    if (rule) {
-      const stored = { ...rule };
-      config.set(active, stored);
-      if (hue != null) hues.set(active, hue);
-      saveSet(active, finish, hue);
-    } else {
-      config.delete(active);
-      saveClear(active);
-    }
+    states.set(active, next);
+    config.set(active, ruleFromState(next));
+    saveSet(active, next);
     renderPreview();
     renderControls();
   }
 
   function selectHue(hue) {
     const normalized = ((hue % 360) + 360) % 360;
-    applySelection(
-      { op: 'colorize', hue: normalized, sat: D.wheelSat },
-      'wheel',
-      normalized,
-    );
+    const state = stateFor(active);
+    applyState({ ...state, recipe: 'wheel', hue: normalized, sat: D.wheelSat });
+  }
+
+  function selectTone(value) {
+    const state = stateFor(active);
+    applyState({ ...state, tone: Number(value) / 100 });
+  }
+
+  function selectRecipe(recipe) {
+    if (recipe === 'none') {
+      if (active == null) return;
+      states.delete(active);
+      config.delete(active);
+      saveClear(active);
+      renderPreview();
+      renderControls();
+      return;
+    }
+    const preset = D.presets[recipe];
+    if (!preset) return;
+    applyState({
+      recipe,
+      hue: preset.hue,
+      sat: preset.sat,
+      tone: preset.tone == null ? 0 : preset.tone,
+    });
   }
 
   function pickHue(event) {
@@ -409,9 +386,7 @@
     dragging = false;
     wheel.releasePointerCapture(event.pointerId);
   });
-  wheel.addEventListener('pointercancel', function () {
-    dragging = false;
-  });
+  wheel.addEventListener('pointercancel', function () { dragging = false; });
   wheel.addEventListener('keydown', function (event) {
     let hue = currentHue();
     if (event.key === 'Home') hue = 0;
@@ -422,16 +397,15 @@
     event.preventDefault();
     selectHue(hue);
   });
-
-  document.querySelectorAll('.dye-fin').forEach(function (button) {
+  toneInput.addEventListener('input', function () { selectTone(toneInput.value); });
+  for (const button of channelButtons) {
     button.addEventListener('click', function () {
-      const finish = button.getAttribute('data-finish');
-      if (finish === 'none') {
-        applySelection(null, 'none', null);
-        return;
-      }
-      applySelection(D.finishes[finish], finish, null);
+      active = Number(button.dataset.slot);
+      renderControls();
     });
+  }
+  document.querySelectorAll('.dye-fin').forEach(function (button) {
+    button.addEventListener('click', function () { selectRecipe(button.dataset.recipe); });
   });
 
   renderControls();

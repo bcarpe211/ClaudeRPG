@@ -19,4 +19,13 @@ describe('dye browser color parity', () => {
       expect(Array.from(browser.toneColorize(...args))).toEqual(toneColorize(...args));
     }
   });
+
+  it('client script delegates pixel math and posts normalized Tone recipes', () => {
+    const source = readFileSync('src/web/public/dye.js', 'utf8');
+    expect(source).toContain('window.ClaudeRpgDyeColor');
+    expect(source).toContain("body.set('recipe'");
+    expect(source).toContain("body.set('tone'");
+    expect(source).toContain("document.getElementById('dye-tone')");
+    expect(source).not.toContain('data-finish');
+  });
 });
