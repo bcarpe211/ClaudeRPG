@@ -6,6 +6,7 @@ import { getCosmetics } from '../src/domain/cosmetics';
 import { createPlayer } from '../src/domain/players';
 import { purchase, setCosmeticHue } from '../src/domain/shop';
 import {
+  beginSlotMutationSession,
   getSlotConfig,
   setSlotRule,
 } from '../src/domain/slotcosmetics';
@@ -24,7 +25,8 @@ function ctx(gender: 'M' | 'F' = 'M') {
     1,
   );
   db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
-  return { db, app, player };
+  const browserSession = beginSlotMutationSession(db, player.id, 1);
+  return { db, app, player, browserSession };
 }
 
 function buy(db: ReturnType<typeof openDb>, playerId: number, tier: 1 | 2 | 3) {
@@ -41,6 +43,7 @@ describe('character dye endpoints', () => {
     const { app } = ctx();
     const res = await request(app).post('/character/dye/set').type('form').send({
       token: 'missing-token', slot: SLOTS.body, recipe: 'wheel', hue: 200,
+      session: 1, revision: 1,
     });
     expect(res.status).toBe(404);
   });
@@ -49,19 +52,62 @@ describe('character dye endpoints', () => {
     const { db, app, player } = ctx();
     expect(buy(db, player.id, 1)).toMatchObject({ ok: true, tier: 1 });
     const clothing = await request(app).post('/character/dye/set').type('form')
-      .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, tone: -0.25 });
+      .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, tone: -0.25, session: 1, revision: 1 });
     const weapon = await request(app).post('/character/dye/set').type('form')
-      .send({ token: player.auth_token, slot: SLOTS.weapon, recipe: 'gold' });
+      .send({ token: player.auth_token, slot: SLOTS.weapon, recipe: 'gold', session: 1, revision: 1 });
     expect(clothing.status).toBe(204);
     expect(weapon.status).toBe(403);
     expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({ op: 'colorize', hue: 200, sat: 0.6, tone: -0.25 });
+  });
+
+  it('keeps the newest set or clear when browser requests arrive out of order', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    const postSet = (revision: number, hue: number) => request(app)
+      .post('/character/dye/set').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue, session: 1, revision });
+    const postClear = (revision: number) => request(app)
+      .post('/character/dye/clear').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.body, session: 1, revision });
+
+    expect((await postSet(2_000, 40)).status).toBe(204);
+    expect((await postSet(2_002, 200)).status).toBe(204);
+    expect((await postSet(2_001, 100)).status).toBe(204);
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({
+      op: 'colorize', hue: 200, sat: 0.6, tone: 0,
+    });
+
+    expect((await postClear(2_004)).status).toBe(204);
+    expect((await postSet(2_003, 80)).status).toBe(204);
+    expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
+    expect(db.prepare('SELECT session, revision FROM player_slot_cosmetic_revisions WHERE player_id = ? AND slot = ?')
+      .get(player.id, SLOTS.body)).toEqual({ session: 1, revision: 2_004 });
+  });
+
+  it('rejects a delayed pre-reload set after a newer session has cleared the slot', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    const post = (endpoint: 'set' | 'clear', session: number, revision: number, hue?: number) => request(app)
+      .post(`/character/dye/${endpoint}`).type('form').send({
+        token: player.auth_token, slot: SLOTS.body, session, revision,
+        ...(endpoint === 'set' ? { recipe: 'wheel', hue } : {}),
+      });
+
+    expect((await post('set', browserSession.session, 1, 40)).status).toBe(204);
+    const reloaded = beginSlotMutationSession(db, player.id, 2);
+    expect((await post('clear', reloaded.session, 1)).status).toBe(204);
+    expect((await post('set', browserSession.session, 2, 200)).status).toBe(204);
+
+    expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
+    expect(db.prepare('SELECT session, revision FROM player_slot_cosmetic_revisions WHERE player_id = ? AND slot = ?')
+      .get(player.id, SLOTS.body)).toEqual({ session: reloaded.session, revision: 1 });
   });
 
   it('accepts the exact Bronze recipe and bounded Tone override', async () => {
     const { db, app, player } = ctx();
     buy(db, player.id, 1);
     const res = await request(app).post('/character/dye/set').type('form')
-      .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'bronze', tone: 0.2 });
+      .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'bronze', tone: 0.2, session: 1, revision: 1 });
     expect(res.status).toBe(204);
     expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({ op: 'colorize', hue: 28, sat: 0.58, tone: 0.2 });
   });
@@ -72,7 +118,7 @@ describe('character dye endpoints', () => {
     setSlotRule(db, player.id, SLOTS.body, wheelRule(100), 20);
     for (const tone of ['1.01', '-1.01', 'NaN', 'Infinity']) {
       const res = await request(app).post('/character/dye/set').type('form')
-        .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, tone });
+        .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, tone, session: 1, revision: 1 });
       expect(res.status).toBe(400);
     }
     expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual(wheelRule(100));
@@ -89,7 +135,7 @@ describe('character dye endpoints', () => {
       { recipe: 'wheel', hue: 'NaN' },
     ]) {
       const res = await request(app).post('/character/dye/set').type('form').send({
-        token: player.auth_token, slot: SLOTS.body, ...body,
+        token: player.auth_token, slot: SLOTS.body, session: 1, revision: 1, ...body,
       });
       expect(res.status).toBe(400);
     }
@@ -101,7 +147,7 @@ describe('character dye endpoints', () => {
     setSlotRule(db, player.id, SLOTS.weapon, MATERIAL_PRESETS.gold, 10);
     buy(db, player.id, 1);
     const res = await request(app).post('/character/dye/clear').type('form')
-      .send({ token: player.auth_token, slot: SLOTS.weapon });
+      .send({ token: player.auth_token, slot: SLOTS.weapon, session: 1, revision: 1 });
     expect(res.status).toBe(403);
     expect(getSlotConfig(db, player.id).has(SLOTS.weapon)).toBe(true);
   });
@@ -110,7 +156,7 @@ describe('character dye endpoints', () => {
     const { db, app, player } = ctx();
     buy(db, player.id, 1);
     const res = await request(app).post('/character/dye/set').type('form').send({
-      token: player.auth_token, slot: SLOTS.facePaint, recipe: 'steel',
+      token: player.auth_token, slot: SLOTS.facePaint, recipe: 'steel', session: 1, revision: 1,
     });
     expect(res.status).toBe(400);
   });
@@ -118,10 +164,10 @@ describe('character dye endpoints', () => {
   it('rejects set and clear until the required tier is owned', async () => {
     const { app, player } = ctx();
     const set = await request(app).post('/character/dye/set').type('form').send({
-      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200,
+      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, session: 1, revision: 1,
     });
     const clear = await request(app).post('/character/dye/clear').type('form')
-      .send({ token: player.auth_token, slot: SLOTS.body });
+      .send({ token: player.auth_token, slot: SLOTS.body, session: 1, revision: 1 });
     expect(set.status).toBe(403);
     expect(clear.status).toBe(403);
   });
@@ -132,7 +178,7 @@ describe('character dye endpoints', () => {
     setCosmeticHue(db, player.id, 'primary', 210, 100);
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(true);
     const res = await request(app).post('/character/dye/clear').type('form')
-      .send({ token: player.auth_token, slot: SLOTS.body });
+      .send({ token: player.auth_token, slot: SLOTS.body, session: 1, revision: 1 });
     expect(res.status).toBe(204);
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
   });
@@ -196,7 +242,7 @@ describe('character wardrobe panel', () => {
     const { db, app, player } = ctx('F');
     buy(db, player.id, 1);
     const set = await request(app).post('/character/dye/set').type('form').send({
-      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200,
+      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, session: 1, revision: 1,
     });
     expect(set.status).toBe(204);
     expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({

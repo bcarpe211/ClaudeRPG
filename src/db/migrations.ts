@@ -161,4 +161,20 @@ export const migrations: Migration[] = [
     id: '009_player_slot_cosmetic_tone',
     sql: `ALTER TABLE player_slot_cosmetics ADD COLUMN tone REAL;`,
   },
+  {
+    id: '010_player_slot_cosmetic_revisions',
+    sql: `
+      CREATE TABLE player_slot_cosmetic_revisions (
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        slot      INTEGER NOT NULL,
+        session   INTEGER NOT NULL,
+        revision  INTEGER NOT NULL,
+        PRIMARY KEY (player_id, slot)
+      );
+      CREATE TABLE player_cosmetic_mutation_sessions (
+        player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+        session   INTEGER NOT NULL
+      );
+    `,
+  },
 ];

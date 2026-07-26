@@ -10,9 +10,8 @@ import {
 } from '../../domain/players';
 import { getClass } from '../../domain/classes';
 import {
-  clearSlot,
+  applySlotMutation,
   cosmeticSkinUrlForPlayer,
-  setSlotRule,
 } from '../../domain/slotcosmetics';
 import { buildSetupSnippet } from '../../domain/snippet';
 import { getCosmetics } from '../../domain/cosmetics';
@@ -31,10 +30,14 @@ const DyeSetInput = z.object({
   recipe: z.enum(['wheel', 'steel', 'bronze', 'gold']),
   hue: z.coerce.number().int().min(0).max(359).optional(),
   tone: z.coerce.number().finite().min(-1).max(1).optional(),
+  session: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  revision: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 });
 const DyeClearInput = z.object({
   token: z.string().min(1),
   slot: z.coerce.number().int().min(0).max(MAX_RECOLOR_SLOT),
+  session: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  revision: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 });
 
 export function registerCharacterRoutes(
@@ -63,7 +66,7 @@ export function registerCharacterRoutes(
         player,
         className: getClass(player.class_key)?.name ?? player.class_key,
         avatarUrl: cosmeticSkinUrlForPlayer(db, player, 'a'),
-        dye: dyeViewModel(db, player, slotmapsDir),
+        dye: dyeViewModel(db, player, slotmapsDir, Date.now()),
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({
           token: player.auth_token,
@@ -130,7 +133,9 @@ export function registerCharacterRoutes(
       return;
     }
 
-    setSlotRule(db, player.id, parsed.data.slot, rule, Date.now());
+    applySlotMutation(
+      db, player.id, parsed.data.slot, parsed.data.session, parsed.data.revision, rule, Date.now(),
+    );
     res.sendStatus(204);
   });
 
@@ -156,7 +161,9 @@ export function registerCharacterRoutes(
       return;
     }
 
-    clearSlot(db, player.id, parsed.data.slot, Date.now());
+    applySlotMutation(
+      db, player.id, parsed.data.slot, parsed.data.session, parsed.data.revision, null, Date.now(),
+    );
     res.sendStatus(204);
   });
 }

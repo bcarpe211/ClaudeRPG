@@ -30,6 +30,8 @@
   const slotmap = D.slotmap;
   const channelButtons = Array.from(document.querySelectorAll('.dye-chan:not(:disabled)'));
   let active = channelButtons.length > 0 ? Number(channelButtons[0].dataset.slot) : null;
+  const revisionSession = Number.isSafeInteger(D.revisionSession) ? D.revisionSession : null;
+  let nextRevision = Number.isSafeInteger(D.revisionSeed) ? D.revisionSeed : 1;
   let sourcePixels = null;
 
   function stateFromRule(rule) {
@@ -177,6 +179,7 @@
   const timers = new Map();
   const pendingSets = new Map();
   const queues = new Map();
+  const latestOperations = new Map();
   const failedSlots = new Set();
 
   function setStatus(message, state) {
@@ -201,29 +204,30 @@
     if (!response.ok) throw new Error(`Save failed (${response.status})`);
   }
 
-  function enqueue(slot, endpoint, body) {
+  function enqueue(slot, operation) {
     setStatus('Saving…', 'saving');
     const previous = queues.get(slot);
     const request = previous
-      ? previous.catch(function () {}).then(function () { return postSave(endpoint, body); })
-      : postSave(endpoint, body);
+      ? previous.catch(function () {}).then(function () { return postSave(operation.endpoint, operation.body); })
+      : postSave(operation.endpoint, operation.body);
     queues.set(slot, request);
-    observeRequest(slot, request);
+    observeRequest(slot, request, operation);
   }
 
-  function observeRequest(slot, request) {
+  function observeRequest(slot, request, operation) {
     request.then(
       function () {
-        if (queues.get(slot) !== request) return;
+        if (latestOperations.get(slot)?.revision !== operation.revision) return;
         failedSlots.delete(slot);
-        queues.delete(slot);
+        latestOperations.delete(slot);
+        if (queues.get(slot) === request) queues.delete(slot);
         renderChannels();
         showSettledStatus();
       },
       function () {
-        if (queues.get(slot) !== request) return;
+        if (latestOperations.get(slot)?.revision !== operation.revision) return;
         failedSlots.add(slot);
-        queues.delete(slot);
+        if (queues.get(slot) === request) queues.delete(slot);
         renderChannels();
         showSettledStatus();
       },
@@ -236,15 +240,20 @@
     body.set('recipe', recipe);
     if (recipe === 'wheel') body.set('hue', String(state.hue));
     body.set('tone', String(state.tone));
+    body.set('session', String(revisionSession));
+    body.set('revision', String(nextRevision));
+    const operation = { endpoint: '/character/dye/set', body, revision: nextRevision };
+    nextRevision += 1;
 
     clearTimeout(timers.get(slot));
-    pendingSets.set(slot, body);
+    pendingSets.set(slot, operation);
+    latestOperations.set(slot, operation);
     setStatus('Change queued…', 'saving');
     timers.set(slot, setTimeout(function () {
       timers.delete(slot);
       const pending = pendingSets.get(slot);
       pendingSets.delete(slot);
-      if (pending) enqueue(slot, '/character/dye/set', pending);
+      if (pending) enqueue(slot, pending);
     }, 120));
   }
 
@@ -252,27 +261,28 @@
     clearTimeout(timers.get(slot));
     timers.delete(slot);
     pendingSets.delete(slot);
-    enqueue(
-      slot,
-      '/character/dye/clear',
-      new URLSearchParams({ token: D.token, slot: String(slot) }),
-    );
+    const body = new URLSearchParams({ token: D.token, slot: String(slot) });
+    body.set('session', String(revisionSession));
+    body.set('revision', String(nextRevision));
+    const operation = { endpoint: '/character/dye/clear', body, revision: nextRevision };
+    nextRevision += 1;
+    latestOperations.set(slot, operation);
+    enqueue(slot, operation);
   }
 
-  // During pagehide we cannot wait for an in-flight request: the browser may
-  // tear the document down before the queued follow-up starts. Start the newest
-  // pending keepalive request immediately instead. This preserves request start
-  // order (old request was already started) and last-write intent, while making
-  // no impossible promise about network arrival order after teardown.
+  // During pagehide, re-send every latest operation immediately. The server's
+  // player+slot revision tombstone makes duplicates and packet reordering safe.
   function flushPendingSets() {
-    for (const [slot, body] of pendingSets) {
+    for (const [slot] of pendingSets) {
       clearTimeout(timers.get(slot));
       timers.delete(slot);
-      pendingSets.delete(slot);
+    }
+    pendingSets.clear();
+    for (const [slot, operation] of latestOperations) {
       setStatus('Saving…', 'saving');
-      const request = postSave('/character/dye/set', body);
+      const request = postSave(operation.endpoint, operation.body);
       queues.set(slot, request);
-      observeRequest(slot, request);
+      observeRequest(slot, request, operation);
     }
   }
   window.addEventListener('beforeunload', flushPendingSets);

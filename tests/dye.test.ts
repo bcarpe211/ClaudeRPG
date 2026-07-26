@@ -113,12 +113,18 @@ describe('dyeViewModel', () => {
     expect(locked.groups.map((group) => [group.tier, group.unlocked])).toEqual([[1, false], [2, false], [3, false]]);
     expect(locked.groups[1].channels.map((channel) => channel.label)).toEqual(['Gold trim', 'Belt', 'Boots']);
     expect(locked.nextOffer).toMatchObject({ tier: 1, price: 1_500_000 });
+    expect(locked.revisionSession).toBe(1);
 
     purchase(db, player.id, 'cosmetic_wheel_t1', 100);
     const tier1 = dyeViewModel(db, player);
     expect(tier1.channels.map((channel) => channel.label)).toEqual(['Clothing', 'Cloak', 'Skin']);
     expect(tier1.groups.map((group) => group.unlocked)).toEqual([true, false, false]);
     expect(tier1.nextOffer).toMatchObject({ tier: 2, price: 2_000_000 });
+    expect(Number.isSafeInteger(tier1.revisionSeed)).toBe(true);
+    expect(tier1.revisionSeed).toBeGreaterThan(0);
+    expect(Number.isSafeInteger(tier1.revisionSession)).toBe(true);
+    expect(tier1.revisionSession).toBeGreaterThan(0);
+    expect(tier1.revisionSession).toBeGreaterThan(locked.revisionSession);
   });
 
   it('has no next offer after Tier 3', () => {

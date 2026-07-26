@@ -8,7 +8,7 @@ import {
 } from './cosmetic-entitlements';
 import { getCosmetics, spriteId } from './cosmetics';
 import { nextCosmeticSku, skuPrice } from './shop';
-import { getEntitledSlotConfig } from './slotcosmetics';
+import { beginSlotMutationSession, getEntitledSlotConfig } from './slotcosmetics';
 import {
   loadSlotmap,
   presentSlots,
@@ -77,12 +77,15 @@ export interface DyeViewModel {
   presets: typeof MATERIAL_PRESETS;
   nextOffer: DyeNextOffer | null;
   wheelSat: number;
+  revisionSession: number;
+  revisionSeed: number;
 }
 
 export function dyeViewModel(
   db: Database.Database,
   player: { id: number; class_key: string; gender: string },
   slotmapsDir?: string,
+  now = 0,
 ): DyeViewModel {
   const gender = player.gender as Gender;
   const sprite = spriteId(player.class_key, gender);
@@ -107,6 +110,7 @@ export function dyeViewModel(
     ? { tier: nextSku.grantTier, price: skuPrice(db, nextSku) }
     : null;
   const config = Object.fromEntries(getEntitledSlotConfig(db, player));
+  const mutationSession = beginSlotMutationSession(db, player.id, now);
 
   return {
     available: ids !== null && present.length > 0,
@@ -119,5 +123,7 @@ export function dyeViewModel(
     presets: MATERIAL_PRESETS,
     nextOffer,
     wheelSat: WHEEL_SAT,
+    revisionSession: mutationSession.session,
+    revisionSeed: mutationSession.revisionSeed,
   };
 }

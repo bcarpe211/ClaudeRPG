@@ -198,6 +198,8 @@ function createWardrobeHarness(config: Record<number, Record<string, number | st
       config,
       presets: { steel: { op: 'colorize', hue: 212, sat: 0.13, tone: 0 } },
       wheelSat: 0.6,
+      revisionSession: 900,
+      revisionSeed: 1_000,
     },
   };
   context.window = context;
@@ -239,6 +241,21 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.cloak.classList.contains('active')).toBe(true);
   });
 
+  it('keeps independent slot recipes when switching channels before their saves flush', async () => {
+    const harness = createWardrobeHarness();
+
+    harness.cloak.dispatch('click');
+    pressWheel(harness, 'ArrowRight');
+    harness.clothing.dispatch('click');
+    pressWheel(harness, 'ArrowRight');
+    harness.runTimers();
+    await harness.settle();
+
+    expect(harness.requests.map((request) => request.body.get('slot'))).toEqual(['2', '1']);
+    expect(harness.requests.map((request) => request.body.get('session'))).toEqual(['900', '900']);
+    expect(harness.requests.map((request) => request.body.get('revision'))).toEqual(['1000', '1001']);
+  });
+
   it('coalesces rapid wheel changes into the latest normalized recipe', async () => {
     const harness = createWardrobeHarness();
 
@@ -249,7 +266,7 @@ describe('dye browser Wardrobe behavior', () => {
 
     expect(harness.requests).toHaveLength(1);
     expect(harness.requests[0]).toMatchObject({ endpoint: '/character/dye/set' });
-    expect(harness.requests[0].body.toString()).toBe('token=test-token&slot=1&recipe=wheel&hue=12&tone=0');
+    expect(harness.requests[0].body.toString()).toBe('token=test-token&slot=1&recipe=wheel&hue=12&tone=0&session=900&revision=1001');
   });
 
   it('cancels an unsent set when restoring a slot default', async () => {
@@ -264,7 +281,7 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.requests[0]).toMatchObject({ endpoint: '/character/dye/clear' });
   });
 
-  it('starts the final pagehide save while an earlier slot request is in flight', () => {
+  it('starts the timer-fired newest set during pagehide while an earlier set is in flight', () => {
     const harness = createWardrobeHarness();
     const first = deferred<ResponseLike>();
     harness.responses.push(first);
@@ -272,10 +289,27 @@ describe('dye browser Wardrobe behavior', () => {
     pressWheel(harness, 'ArrowRight');
     harness.runTimers();
     pressWheel(harness, 'ArrowRight');
+    harness.runTimers();
     harness.pagehide();
 
     expect(harness.requests).toHaveLength(2);
-    expect(harness.requests[1].body.toString()).toBe('token=test-token&slot=1&recipe=wheel&hue=12&tone=0');
+    expect(harness.requests[1].body.toString()).toBe('token=test-token&slot=1&recipe=wheel&hue=12&tone=0&session=900&revision=1001');
+    first.resolve({ ok: true });
+  });
+
+  it('starts a queued clear during pagehide while its earlier set is in flight', () => {
+    const harness = createWardrobeHarness();
+    const first = deferred<ResponseLike>();
+    harness.responses.push(first);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.runTimers();
+    harness.defaultButton.dispatch('click');
+    harness.pagehide();
+
+    expect(harness.requests).toHaveLength(2);
+    expect(harness.requests[1]).toMatchObject({ endpoint: '/character/dye/clear' });
+    expect(harness.requests[1].body.toString()).toBe('token=test-token&slot=1&session=900&revision=1001');
     first.resolve({ ok: true });
   });
 

@@ -14,6 +14,9 @@ interface Row {
   hi: number | null;
   tone: number | null;
 }
+interface SessionRow {
+  session: number | null;
+}
 const clean = (r: Row): SlotRule => ({
   op: r.op as SlotRule['op'],
   ...(r.hue != null ? { hue: r.hue } : {}), ...(r.sat != null ? { sat: r.sat } : {}),
@@ -72,17 +75,85 @@ export function clearSlot(
   slot: number,
   now: number,
 ): void {
-  db.transaction(() => {
+  db.transaction(() => clearSlotRows(db, playerId, slot, now))();
+}
+
+function clearSlotRows(
+  db: Database.Database,
+  playerId: number,
+  slot: number,
+  now: number,
+): void {
+  db.prepare(
+    'DELETE FROM player_slot_cosmetics WHERE player_id = ? AND slot = ?',
+  ).run(playerId, slot);
+  if (slot === SLOTS.body) {
     db.prepare(
-      'DELETE FROM player_slot_cosmetics WHERE player_id = ? AND slot = ?',
-    ).run(playerId, slot);
-    if (slot === SLOTS.body) {
-      db.prepare(
-        `UPDATE player_cosmetics
-         SET primary_hue = NULL, updated_at = ?
-         WHERE player_id = ?`,
-      ).run(now, playerId);
-    }
+      `UPDATE player_cosmetics
+       SET primary_hue = NULL, updated_at = ?
+       WHERE player_id = ?`,
+    ).run(now, playerId);
+  }
+}
+
+/**
+ * Issue an opaque, strictly increasing browser-session epoch for this player.
+ * In-session revisions can safely restart at one because the server compares
+ * the pair (session, revision), not a counter in isolation.
+ */
+export function beginSlotMutationSession(
+  db: Database.Database,
+  playerId: number,
+  now: number,
+): { session: number; revisionSeed: number } {
+  return db.transaction(() => {
+    const row = db.prepare(
+      'SELECT session FROM player_cosmetic_mutation_sessions WHERE player_id = ?',
+    ).get(playerId) as SessionRow | undefined;
+    const session = Math.max(1, Math.trunc(now), (row?.session ?? 0) + 1);
+    db.prepare(
+      `INSERT INTO player_cosmetic_mutation_sessions (player_id, session)
+       VALUES (?, ?)
+       ON CONFLICT(player_id) DO UPDATE SET session = excluded.session`,
+    ).run(playerId, session);
+    return { session, revisionSeed: 1 };
+  })();
+}
+
+/**
+ * Atomically accept a browser mutation only when it is newer than the
+ * player+slot tombstone. The server-issued session epoch prevents a reload or
+ * second view from colliding with an old page whose in-session counter began at
+ * the same value. A clear retains its tombstone so delayed sets cannot recreate
+ * a defaulted slot. Direct domain callers keep using setSlotRule/clearSlot.
+ */
+export function applySlotMutation(
+  db: Database.Database,
+  playerId: number,
+  slot: number,
+  session: number,
+  revision: number,
+  rule: SlotRule | null,
+  now: number,
+): boolean {
+  return db.transaction(() => {
+    const activeSession = db.prepare(
+      'SELECT session FROM player_cosmetic_mutation_sessions WHERE player_id = ?',
+    ).get(playerId) as SessionRow | undefined;
+    if (activeSession?.session !== session) return false;
+    const claim = db.prepare(
+      `INSERT INTO player_slot_cosmetic_revisions (player_id, slot, session, revision)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(player_id, slot) DO UPDATE SET
+         session = excluded.session, revision = excluded.revision
+       WHERE excluded.session > player_slot_cosmetic_revisions.session
+          OR (excluded.session = player_slot_cosmetic_revisions.session
+              AND excluded.revision > player_slot_cosmetic_revisions.revision)`,
+    ).run(playerId, slot, session, revision);
+    if (claim.changes === 0) return false;
+    if (rule) setSlotRule(db, playerId, slot, rule, now);
+    else clearSlotRows(db, playerId, slot, now);
+    return true;
   })();
 }
 
