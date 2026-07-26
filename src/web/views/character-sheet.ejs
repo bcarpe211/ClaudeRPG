@@ -29,94 +29,90 @@
     <p>Your sprite’s dye pattern is still being mapped pixel by pixel. The workbench will open here when it is ready — no gold can be spent before then.</p>
   </div>
 </div>
-<% } else if (!dye.unlocked) { %>
-<div class="panel dye-unlock">
-  <div class="dye-unlock-art">
-    <div class="dye-lock-wheel" aria-hidden="true">✦</div>
-    <img class="px" src="<%= avatarUrl %>" width="112" height="112" alt="your character" />
-  </div>
-  <div class="dye-unlock-copy">
-    <p class="dye-kicker">Permanent character upgrade</p>
-    <h2>Unlock Dye Wheel</h2>
-    <p>Open your personal workbench and recolor every mapped part of your character — clothing, trim, weapon, eyes, skin, and more. Change colors whenever you like.</p>
-    <form method="post" action="/character/dye/unlock">
-      <input type="hidden" name="token" value="<%= player.auth_token %>">
-      <button class="btn btn-gold" <%= player.gold < dye.price ? 'disabled' : '' %>>
-        Unlock Dye Wheel <span class="dye-price"><%= dye.price.toLocaleString() %>g</span>
-      </button>
-      <% if (player.gold < dye.price) { %>
-        <p class="err">You need <%= (dye.price - player.gold).toLocaleString() %> more gold.</p>
-      <% } %>
-    </form>
-  </div>
-</div>
 <% } else { %>
 <div class="panel dye-panel">
   <div class="dye-head">
     <div>
       <p class="dye-kicker">Your personal dungeon tailor</p>
       <h2>Dye Workbench</h2>
-      <p>Choose a material, then paint it or apply a forged finish. Every change saves automatically.</p>
+      <p>Wardrobe Tier <%= dye.tier %> · unlocked colors stay free forever.</p>
     </div>
-    <span id="dye-save-status" class="dye-save-status" role="status" aria-live="polite">Ready</span>
+    <% if (dye.nextOffer) { %>
+      <a class="btn btn-gold" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>">Unlock the next tier</a>
+    <% } else { %>
+      <span class="dye-mastery">Dye mastery complete</span>
+    <% } %>
   </div>
 
-  <div class="dye-workbench">
-    <div class="dye-stage">
-      <span class="dye-stage-label">Live fitting</span>
-      <canvas id="dye-preview" width="168" height="168" class="px dye-preview" aria-label="Live character dye preview"></canvas>
-      <span id="dye-active-label" class="dye-active-label"></span>
-    </div>
-
-    <div class="dye-toolbox">
-      <div class="dye-section">
-        <span class="dye-tool-label">1 · Choose a material</span>
-        <div id="dye-channels" class="dye-channels"></div>
-      </div>
-
-      <div class="dye-paint-row">
-        <div class="dye-section dye-wheel-section">
-          <span class="dye-tool-label">2 · Paint a color</span>
-          <div class="dye-wheel-frame">
-            <canvas id="dye-wheel" width="72" height="72" class="dye-wheel"
-              role="slider" tabindex="0" aria-label="Dye hue"
-              aria-valuemin="0" aria-valuemax="359" aria-valuenow="0"></canvas>
-          </div>
-          <span class="dye-wheel-help">Drag, click, or use arrow keys</span>
+  <div class="dye-tier-groups" aria-label="Wardrobe tiers">
+    <% for (const group of dye.groups) { %>
+      <section class="dye-tier-group" data-tier="<%= group.tier %>">
+        <div class="dye-tier-group-head">
+          <span>Tier <%= group.tier %></span>
+          <span class="dye-tier-lock"><%= group.unlocked ? 'Unlocked' : 'Locked' %></span>
         </div>
-
-        <div class="dye-section dye-finish-section">
-          <span class="dye-tool-label">Or choose a finish</span>
-          <div class="dye-finishes">
-            <button type="button" class="dye-fin" data-finish="black">
-              <span class="dye-fin-swatch dye-fin-black"></span><span>Blackened</span>
+        <div class="dye-channels">
+          <% for (const channel of group.channels) { %>
+            <button type="button" class="dye-chan" data-slot="<%= channel.slot %>" data-required-tier="<%= channel.requiredTier %>"<%= group.unlocked ? '' : ' disabled' %> aria-pressed="false">
+              <span class="dye-dot is-default" aria-hidden="true"></span><span><%= channel.label %></span>
             </button>
-            <button type="button" class="dye-fin" data-finish="white">
-              <span class="dye-fin-swatch dye-fin-white"></span><span>Holy white</span>
-            </button>
-            <button type="button" class="dye-fin" data-finish="steel">
-              <span class="dye-fin-swatch dye-fin-steel"></span><span>Forged steel</span>
-            </button>
-            <button type="button" class="dye-fin dye-default" data-finish="none">
-              <span class="dye-fin-swatch dye-fin-default">↺</span><span>Restore default</span>
-            </button>
-          </div>
+          <% } %>
         </div>
-      </div>
-    </div>
+      </section>
+    <% } %>
   </div>
 
-  <% const dyeClient = {
-    token: player.auth_token,
-    base: dye.base,
-    slotmap: dye.slotmap,
-    channels: dye.channels,
-    config: dye.config,
-    finishes: dye.finishes,
-    wheelSat: dye.wheelSat,
-  }; %>
-  <script>window.__DYE__ = <%- JSON.stringify(dyeClient).replace(/</g, '\\u003c') %>;</script>
-  <script src="/static/dye.js"></script>
+  <% if (dye.channels.length > 0) { %>
+    <div class="dye-workbench">
+      <div class="dye-stage">
+        <span class="dye-stage-label">Live fitting</span>
+        <canvas id="dye-preview" width="168" height="168" class="px dye-preview" aria-label="Live character dye preview"></canvas>
+        <span id="dye-active-label" class="dye-active-label"></span>
+      </div>
+
+      <div class="dye-toolbox">
+        <div class="dye-section">
+          <div class="dye-tool-row">
+            <span class="dye-tool-label">Color wheel</span>
+            <span id="dye-save-status" class="dye-save-status" role="status" aria-live="polite">Ready</span>
+          </div>
+          <div class="dye-paint-row">
+            <div class="dye-wheel-section">
+              <div class="dye-wheel-frame">
+                <canvas id="dye-wheel" width="72" height="72" class="dye-wheel"
+                  role="slider" tabindex="0" aria-label="Dye hue"
+                  aria-valuemin="0" aria-valuemax="359" aria-valuenow="0"></canvas>
+              </div>
+              <span class="dye-wheel-help">Drag, click, or use arrow keys</span>
+            </div>
+            <div class="dye-tone-section">
+              <label class="dye-tone-label" for="dye-tone">Tone <output id="dye-tone-value">Natural</output></label>
+              <div class="dye-tone-track"><span>Black</span><input id="dye-tone" type="range" min="-100" max="100" step="1" value="0"><span>White</span></div>
+              <div class="dye-finishes">
+                <button type="button" class="dye-fin" data-recipe="steel"><span class="dye-fin-swatch dye-fin-steel"></span><span>Forged steel</span></button>
+                <button type="button" class="dye-fin" data-recipe="bronze"><span class="dye-fin-swatch dye-fin-bronze"></span><span>Aged bronze</span></button>
+                <button type="button" class="dye-fin" data-recipe="gold"><span class="dye-fin-swatch dye-fin-gold"></span><span>Royal gold</span></button>
+                <button type="button" class="dye-fin dye-default" data-recipe="none"><span class="dye-fin-swatch dye-fin-default">↺</span><span>Restore default</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <% const dyeClient = {
+      token: player.auth_token,
+      base: dye.base,
+      slotmap: dye.slotmap,
+      channels: dye.channels,
+      config: dye.config,
+      presets: dye.presets,
+      wheelSat: dye.wheelSat,
+    }; %>
+    <script>window.__DYE__ = <%- JSON.stringify(dyeClient).replace(/</g, '\\u003c') %>;</script>
+    <script src="/static/dye-color.js"></script>
+    <script src="/static/dye.js"></script>
+  <% } %>
 </div>
 <% } %>
 

@@ -139,26 +139,44 @@ describe('character dye endpoints', () => {
 });
 
 describe('character wardrobe panel', () => {
-  it('offers the next tier on the character page without purchasing it there', async () => {
-    const { app, player } = ctx();
+  it('shows Tier-0 locked previews and sends purchasing to the Bazaar', async () => {
+    const { app, player } = ctx('F');
     const res = await request(app).get('/character').query({ token: player.auth_token });
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('Unlock Dye Wheel');
-    expect(res.text).toContain('1,500,000g');
+    expect(res.text).toContain('Wardrobe Tier 0');
+    expect(res.text).toContain('Tier 1');
+    expect(res.text).toContain('Tier 2');
+    expect(res.text).toContain('Tier 3');
+    expect(res.text).toContain(`/shop?token=${encodeURIComponent(player.auth_token)}`);
+    expect(res.text).not.toContain('/character/dye/unlock');
+    expect(res.text).not.toContain('window.__DYE__');
   });
 
-  it('renders the workbench, authored channels, and client config after Tier 1', async () => {
-    const { db, app, player } = ctx();
-    buy(db, player.id, 1);
+  it('serializes only Tier-1 controls while showing higher tiers locked', async () => {
+    const { db, app, player } = ctx('F');
+    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
     const res = await request(app).get('/character').query({ token: player.auth_token });
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('Dye Workbench');
-    expect(res.text).toContain('data-finish="none"');
-    expect(res.text).toContain('Restore default');
+    expect(res.text).toContain('Wardrobe Tier 1');
     expect(res.text).toContain('window.__DYE__');
-    expect(res.text).toContain('"label":"Clothing"');
-    expect(res.text).not.toContain('"label":"Eyes"');
-    expect(res.text).toContain('/static/dye.js');
+    expect(res.text).toContain('data-slot="1"');
+    expect(res.text).toContain('data-required-tier="3" disabled');
+    expect(res.text).toContain('id="dye-tone"');
+    expect(res.text).toContain('data-recipe="steel"');
+    expect(res.text).toContain('data-recipe="bronze"');
+    expect(res.text).toContain('data-recipe="gold"');
+    expect(res.text).not.toContain('data-finish="black"');
+    expect(res.text).not.toContain('data-finish="white"');
+  });
+
+  it('removes the purchase prompt at Tier 3 while keeping the complete workbench', async () => {
+    const { db, app, player } = ctx();
+    db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 3);
+    const res = await request(app).get('/character').query({ token: player.auth_token });
+    expect(res.text).toContain('Wardrobe Tier 3');
+    expect(res.text).toContain('Dye mastery complete');
+    expect(res.text).not.toContain('Unlock the next tier');
   });
 
   it('persists a rule for an authored female channel after Tier 1', async () => {

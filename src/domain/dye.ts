@@ -70,13 +70,10 @@ export interface DyeViewModel {
   available: boolean;
   tier: number;
   groups: DyeTierGroup[];
-  unlocked: boolean;
-  price: number;
   channels: DyeChannel[];
   slotmap: number[];
   base: string;
   config: Record<number, SlotRule>;
-  finishes: typeof FINISHES;
   presets: typeof MATERIAL_PRESETS;
   nextOffer: DyeNextOffer | null;
   wheelSat: number;
@@ -115,13 +112,10 @@ export function dyeViewModel(
     available: ids !== null && present.length > 0,
     tier: wheelTier,
     groups,
-    unlocked: wheelTier >= 1,
-    price: nextOffer?.price ?? 0,
     channels,
     slotmap: ids ? Array.from(ids) : [],
     base: classSpriteUrl(player.class_key, gender),
     config,
-    finishes: FINISHES,
     presets: MATERIAL_PRESETS,
     nextOffer,
     wheelSat: WHEEL_SAT,

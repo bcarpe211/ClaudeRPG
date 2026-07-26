@@ -135,8 +135,8 @@ describe('dyeViewModel', () => {
     const vm = dyeViewModel(db, player);
 
     expect(vm.available).toBe(true);
-    expect(vm.unlocked).toBe(false);
-    expect(vm.price).toBe(1_500_000);
+    expect(vm.tier).toBe(0);
+    expect(vm.nextOffer).toMatchObject({ tier: 1, price: 1_500_000 });
     expect(vm.channels).toEqual([]);
     expect(vm.groups.flatMap((group) => group.channels).find((channel) => channel.slot === SLOTS.flair)?.label).toBe('Eyes');
     expect(vm.slotmap).toHaveLength(24 * 24);
@@ -148,7 +148,7 @@ describe('dyeViewModel', () => {
     setSlotRule(db, player.id, SLOTS.body, wheelRule(120), 200);
 
     const vm = dyeViewModel(db, player);
-    expect(vm.unlocked).toBe(true);
+    expect(vm.tier).toBe(1);
     expect(vm.config[SLOTS.body]).toEqual(wheelRule(120));
   });
 
@@ -165,7 +165,7 @@ describe('dyeViewModel', () => {
     const vm = dyeViewModel(db, player);
 
     expect(vm.available).toBe(true);
-    expect(vm.unlocked).toBe(false);
+    expect(vm.tier).toBe(0);
     expect(vm.channels).toEqual([]);
     expect(vm.groups.flatMap((group) => group.channels).map((channel) => channel.slot))
       .toEqual(channelsFor('wizard', 'F').map((channel) => channel.slot));

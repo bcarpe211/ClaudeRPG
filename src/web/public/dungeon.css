@@ -130,6 +130,10 @@ th{color:var(--muted);font-weight:600}
 .dye-head{position:relative;z-index:1;display:flex;align-items:flex-start;justify-content:space-between;
   gap:22px;margin-bottom:18px}
 .dye-head h2{margin-bottom:4px}.dye-head p:last-child{margin:0;color:var(--muted);max-width:650px}
+.dye-tier-groups{position:relative;z-index:1;display:grid;gap:9px;margin-bottom:14px}
+.dye-tier-group{padding:10px;border:1px solid var(--line);border-radius:9px;background:#ffffff04}
+.dye-tier-group-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;color:var(--gold2);font-size:11px;font-weight:850;text-transform:uppercase}
+.dye-tier-lock{color:var(--muted)}
 .dye-save-status{flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;margin-top:2px;
   padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:#0c091299;
   color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
@@ -162,8 +166,10 @@ th{color:var(--muted);font-weight:600}
 .dye-toolbox{min-width:0;display:flex;flex-direction:column;gap:12px}
 .dye-section{padding:13px;border:1px solid var(--line);border-radius:11px;
   background:linear-gradient(180deg,#1a1125,#120c1b)}
+.dye-tool-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .dye-tool-label{display:block;margin-bottom:10px;color:var(--muted);font-size:10px;font-weight:850;
   letter-spacing:.13em;text-transform:uppercase}
+.dye-tool-row .dye-tool-label{margin:0}
 .dye-channels{display:flex;flex-wrap:wrap;gap:7px}
 .dye-chan{position:relative;margin:0;padding:7px 10px;border:1px solid var(--line);border-radius:7px;
   background:#ffffff08;color:var(--ink);box-shadow:none;font-size:12px;font-weight:750;gap:7px}
@@ -172,6 +178,8 @@ th{color:var(--muted);font-weight:600}
   box-shadow:inset 0 0 0 1px #e8c96a33}
 .dye-chan.configured::after{content:"";position:absolute;right:4px;top:4px;width:3px;height:3px;
   background:var(--gold);box-shadow:0 0 5px var(--gold)}
+.dye-chan:disabled{cursor:not-allowed;opacity:.42;filter:grayscale(.65)}
+.dye-chan:disabled:hover{border-color:var(--line);color:var(--ink)}
 .dye-dot{display:inline-block;width:12px;height:12px;border:1px solid #0009;border-radius:3px;
   box-shadow:inset 0 1px 0 #fff3}
 .dye-dot.is-default{background:
@@ -181,7 +189,6 @@ th{color:var(--muted);font-weight:600}
 
 .dye-paint-row{display:grid;grid-template-columns:minmax(230px,.9fr) minmax(190px,1.1fr);gap:12px;min-height:255px}
 .dye-wheel-section{display:flex;flex-direction:column;align-items:center}
-.dye-wheel-section .dye-tool-label{align-self:stretch}
 .dye-wheel-frame{display:grid;place-items:center;width:210px;height:210px;border:1px solid #4b395f;
   border-radius:18px;background:
     linear-gradient(45deg,#100a18 25%,transparent 25%,transparent 75%,#100a18 75%),
@@ -193,7 +200,12 @@ th{color:var(--muted);font-weight:600}
 .dye-wheel:focus-visible{outline-color:var(--gold);box-shadow:0 0 0 5px #e8c96a1f}
 .dye-wheel-help{margin-top:8px;color:var(--muted);font-size:10px}
 
-.dye-finish-section{display:flex;flex-direction:column}
+.dye-tone-section{display:flex;flex-direction:column}
+.dye-tone-label{display:flex;justify-content:space-between;margin:0 0 7px;color:var(--ink);font-size:12px;font-weight:800}
+.dye-tone-track{display:grid;grid-template-columns:auto minmax(120px,1fr) auto;align-items:center;gap:9px;color:var(--muted);font-size:10px}
+.dye-tone-track input{width:100%;accent-color:var(--gold);cursor:pointer}
+.dye-tone-track input:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
+.dye-tone-track input::-webkit-slider-thumb{border-radius:2px}
 .dye-finishes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .dye-fin{min-height:70px;margin:0;padding:10px;border:1px solid var(--line);border-radius:8px;
   display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:7px;
@@ -203,23 +215,14 @@ th{color:var(--muted);font-weight:600}
   box-shadow:inset 0 0 0 1px #e8c96a30}
 .dye-fin-swatch{display:grid;place-items:center;width:28px;height:18px;border:1px solid #ffffff24;
   border-radius:3px;box-shadow:inset 0 1px 0 #fff3}
-.dye-fin-black{background:linear-gradient(135deg,#050505,#4a4a4a)}
-.dye-fin-white{background:linear-gradient(135deg,#bbb,#fff)}
 .dye-fin-steel{background:linear-gradient(135deg,#405365,#d9e3ec 48%,#63788b)}
+.dye-fin-bronze{background:linear-gradient(135deg,#432816,#c2814b 52%,#6c3f22)}
+.dye-fin-gold{background:linear-gradient(135deg,#6f4c0e,#f4d35e 52%,#a86f0b)}
 .dye-fin-default{background:#17101f;color:var(--gold2);font-size:15px}
 .dye-default{grid-column:1/-1;min-height:48px;flex-direction:row;align-items:center;justify-content:flex-start}
-
-.dye-unlock{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:26px;align-items:center;
-  overflow:hidden}
-.dye-unlock-art{position:relative;min-height:190px;display:grid;place-items:center;border:1px solid var(--line);
-  border-radius:13px;background:radial-gradient(circle at 50% 52%,#352044,#120c1b 66%)}
-.dye-unlock-art img{position:relative;z-index:2;filter:drop-shadow(0 10px 8px #000a)}
-.dye-lock-wheel{position:absolute;width:158px;height:158px;display:grid;place-items:center;border:10px dotted #6f5a32;
-  border-radius:50%;color:var(--gold);font-size:28px;transform:rotate(-8deg);opacity:.65}
-.dye-unlock-copy h2,.dye-unavailable h2{margin-bottom:7px}
-.dye-unlock-copy>p:last-of-type,.dye-unavailable p:last-child{color:var(--muted)}
-.dye-unlock-copy form button{justify-content:space-between;min-width:270px}
-.dye-price{padding-left:12px;border-left:1px solid #1a120633;font-variant-numeric:tabular-nums}
+.dye-mastery{display:inline-flex;padding:6px 10px;border:1px solid #376645;border-radius:999px;color:var(--live);font-size:11px;font-weight:850;text-transform:uppercase}
+.dye-unavailable h2{margin-bottom:7px}
+.dye-unavailable p:last-child{color:var(--muted)}
 button:disabled{cursor:not-allowed;opacity:.48;filter:saturate(.3)}
 button:disabled:hover{transform:none;box-shadow:none}
 
@@ -231,17 +234,14 @@ button:disabled:hover{transform:none;box-shadow:none}
 
 .dye-chan:focus-visible,.dye-fin:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 
-@media (max-width:820px){
+@media (max-width:760px){
   .dye-workbench{grid-template-columns:1fr}
   .dye-stage{min-height:230px}
-  .dye-paint-row{grid-template-columns:1fr 1fr}
+  .dye-paint-row{grid-template-columns:1fr}
 }
 @media (max-width:620px){
   .dye-head{display:block}.dye-save-status{margin:8px 0 0}
-  .dye-paint-row{grid-template-columns:1fr}
-  .dye-unlock,.dye-unavailable{grid-template-columns:1fr}
-  .dye-unlock-art{min-height:160px}
-  .dye-unlock-copy form button{width:100%;min-width:0}
+  .dye-unavailable{grid-template-columns:1fr}
 }
 
 /* closed bazaar — the mimic has the stall to itself */
