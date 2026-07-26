@@ -129,10 +129,12 @@ interface WardrobeHarness {
   cloak: FakeButton;
   weapon: FakeButton;
   wheel: FakeCanvas;
+  status: FakeElement;
   defaultButton: FakeButton;
   requests: RequestRecord[];
   responses: Array<Deferred<ResponseLike>>;
   runTimers(): void;
+  beforeunload(): void;
   pagehide(): void;
   settle(): Promise<void>;
 }
@@ -207,7 +209,7 @@ function createWardrobeHarness(config: Record<number, Record<string, number | st
   vm.runInNewContext(readFileSync('src/web/public/dye.js', 'utf8'), context);
 
   return {
-    clothing, cloak, weapon, wheel, defaultButton, requests, responses,
+    clothing, cloak, weapon, wheel, status, defaultButton, requests, responses,
     runTimers() {
       for (const [id, callback] of [...timers]) {
         timers.delete(id);
@@ -216,6 +218,9 @@ function createWardrobeHarness(config: Record<number, Record<string, number | st
     },
     pagehide() {
       for (const listener of windowListeners.get('pagehide') ?? []) listener({});
+    },
+    beforeunload() {
+      for (const listener of windowListeners.get('beforeunload') ?? []) listener({});
     },
     async settle() {
       await Promise.resolve();
@@ -311,6 +316,52 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.requests[1]).toMatchObject({ endpoint: '/character/dye/clear' });
     expect(harness.requests[1].body.toString()).toBe('token=test-token&slot=1&session=900&revision=1001');
     first.resolve({ ok: true });
+  });
+
+  it('settles only after the tracked beforeunload duplicate when the original save finishes first', async () => {
+    const harness = createWardrobeHarness();
+    const original = deferred<ResponseLike>();
+    const duplicate = deferred<ResponseLike>();
+    harness.responses.push(original, duplicate);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.runTimers();
+    harness.beforeunload(); // Simulate a canceled navigation that returns to the page.
+    original.resolve({ ok: true });
+    await harness.settle();
+    expect(harness.status.textContent).toBe('Saving…');
+
+    duplicate.resolve({ ok: true });
+    await harness.settle();
+    expect(harness.status.textContent).toBe('All changes saved');
+
+    pressWheel(harness, 'ArrowRight');
+    harness.runTimers();
+    await harness.settle();
+    expect(harness.requests).toHaveLength(3);
+  });
+
+  it('does not let a late original save disturb a settled beforeunload duplicate', async () => {
+    const harness = createWardrobeHarness();
+    const original = deferred<ResponseLike>();
+    const duplicate = deferred<ResponseLike>();
+    harness.responses.push(original, duplicate);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.runTimers();
+    harness.beforeunload(); // The navigation is canceled and the page remains usable.
+    duplicate.resolve({ ok: true });
+    await harness.settle();
+    expect(harness.status.textContent).toBe('All changes saved');
+
+    pressWheel(harness, 'ArrowRight');
+    harness.runTimers();
+    await harness.settle();
+    expect(harness.requests).toHaveLength(3);
+
+    original.resolve({ ok: true });
+    await harness.settle();
+    expect(harness.status.textContent).toBe('All changes saved');
   });
 
   it('marks only the failed channel and clears its marker after a successful retry', async () => {

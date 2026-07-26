@@ -188,7 +188,7 @@
   }
 
   function showSettledStatus() {
-    if (queues.size > 0 || timers.size > 0) return;
+    if (timers.size > 0 || latestOperations.size > 0) return;
     if (failedSlots.size > 0) {
       const noun = failedSlots.size === 1 ? 'change needs' : 'changes need';
       setStatus(`${failedSlots.size} ${noun} saving — try again`, 'error');
@@ -211,27 +211,57 @@
       ? previous.catch(function () {}).then(function () { return postSave(operation.endpoint, operation.body); })
       : postSave(operation.endpoint, operation.body);
     queues.set(slot, request);
-    observeRequest(slot, request, operation);
+    trackRequest(slot, request, operation, true);
   }
 
-  function observeRequest(slot, request, operation) {
+  function trackRequest(slot, request, operation, queued) {
+    operation.pendingRequests = operation.pendingRequests || new Set();
+    operation.pendingRequests.add(request);
+    if (queued) {
+      operation.queuedRequests = operation.queuedRequests || new Set();
+      operation.queuedRequests.add(request);
+    }
+    operation.currentRequest = request;
     request.then(
       function () {
-        if (latestOperations.get(slot)?.revision !== operation.revision) return;
-        failedSlots.delete(slot);
-        latestOperations.delete(slot);
-        if (queues.get(slot) === request) queues.delete(slot);
-        renderChannels();
-        showSettledStatus();
+        completeRequest(slot, request, operation, true);
       },
       function () {
-        if (latestOperations.get(slot)?.revision !== operation.revision) return;
-        failedSlots.add(slot);
-        if (queues.get(slot) === request) queues.delete(slot);
-        renderChannels();
-        showSettledStatus();
+        completeRequest(slot, request, operation, false);
       },
     );
+  }
+
+  function completeRequest(slot, request, operation, succeeded) {
+    operation.pendingRequests.delete(request);
+    if (queues.get(slot) === request) queues.delete(slot);
+    if (latestOperations.get(slot) !== operation) {
+      showSettledStatus();
+      return;
+    }
+    if (succeeded) operation.succeeded = true;
+    if (operation.currentRequest !== request) {
+      showSettledStatus();
+      return;
+    }
+    if (operation.succeeded) {
+      failedSlots.delete(slot);
+      if (operation.queuedRequests?.has(queues.get(slot))) queues.delete(slot);
+      latestOperations.delete(slot);
+      renderChannels();
+      showSettledStatus();
+      return;
+    }
+    const fallback = operation.pendingRequests.values().next().value;
+    if (fallback) {
+      operation.currentRequest = fallback;
+      setStatus('Saving…', 'saving');
+      return;
+    }
+    failedSlots.add(slot);
+    latestOperations.delete(slot);
+    renderChannels();
+    showSettledStatus();
   }
 
   function saveSet(slot, state) {
@@ -281,8 +311,7 @@
     for (const [slot, operation] of latestOperations) {
       setStatus('Saving…', 'saving');
       const request = postSave(operation.endpoint, operation.body);
-      queues.set(slot, request);
-      observeRequest(slot, request, operation);
+      trackRequest(slot, request, operation, false);
     }
   }
   window.addEventListener('beforeunload', flushPendingSets);

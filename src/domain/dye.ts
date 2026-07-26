@@ -85,7 +85,6 @@ export function dyeViewModel(
   db: Database.Database,
   player: { id: number; class_key: string; gender: string },
   slotmapsDir?: string,
-  now = 0,
 ): DyeViewModel {
   const gender = player.gender as Gender;
   const sprite = spriteId(player.class_key, gender);
@@ -110,7 +109,7 @@ export function dyeViewModel(
     ? { tier: nextSku.grantTier, price: skuPrice(db, nextSku) }
     : null;
   const config = Object.fromEntries(getEntitledSlotConfig(db, player));
-  const mutationSession = beginSlotMutationSession(db, player.id, now);
+  const mutationSession = beginSlotMutationSession(db, player.id);
 
   return {
     available: ids !== null && present.length > 0,

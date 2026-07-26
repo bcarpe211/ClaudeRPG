@@ -15,7 +15,7 @@ interface Row {
   tone: number | null;
 }
 interface SessionRow {
-  session: number | null;
+  session: number;
 }
 const clean = (r: Row): SlotRule => ({
   op: r.op as SlotRule['op'],
@@ -97,20 +97,19 @@ function clearSlotRows(
 }
 
 /**
- * Issue an opaque, strictly increasing browser-session epoch for this player.
- * In-session revisions can safely restart at one because the server compares
- * the pair (session, revision), not a counter in isolation.
+ * Issue a contiguous, strictly increasing browser-session epoch for this
+ * player. Contiguity lets the server reject every epoch above the latest one
+ * without accidentally accepting a value skipped by a wall-clock jump.
  */
 export function beginSlotMutationSession(
   db: Database.Database,
   playerId: number,
-  now: number,
 ): { session: number; revisionSeed: number } {
   return db.transaction(() => {
     const row = db.prepare(
       'SELECT session FROM player_cosmetic_mutation_sessions WHERE player_id = ?',
     ).get(playerId) as SessionRow | undefined;
-    const session = Math.max(1, Math.trunc(now), (row?.session ?? 0) + 1);
+    const session = (row?.session ?? 0) + 1;
     db.prepare(
       `INSERT INTO player_cosmetic_mutation_sessions (player_id, session)
        VALUES (?, ?)
@@ -120,12 +119,14 @@ export function beginSlotMutationSession(
   })();
 }
 
+export type SlotMutationResult = 'applied' | 'duplicate' | 'stale';
+
 /**
  * Atomically accept a browser mutation only when it is newer than the
- * player+slot tombstone. The server-issued session epoch prevents a reload or
- * second view from colliding with an old page whose in-session counter began at
- * the same value. A clear retains its tombstone so delayed sets cannot recreate
- * a defaulted slot. Direct domain callers keep using setSlotRule/clearSlot.
+ * player+slot tombstone. A newer issued session does not invalidate an older
+ * page simply by loading; it wins only after it writes this slot. A clear keeps
+ * its tombstone so delayed sets cannot recreate a defaulted slot. Direct domain
+ * callers keep using setSlotRule/clearSlot.
  */
 export function applySlotMutation(
   db: Database.Database,
@@ -135,25 +136,30 @@ export function applySlotMutation(
   revision: number,
   rule: SlotRule | null,
   now: number,
-): boolean {
+): SlotMutationResult {
   return db.transaction(() => {
-    const activeSession = db.prepare(
+    const issued = db.prepare(
       'SELECT session FROM player_cosmetic_mutation_sessions WHERE player_id = ?',
     ).get(playerId) as SessionRow | undefined;
-    if (activeSession?.session !== session) return false;
-    const claim = db.prepare(
+    if (!issued || session > issued.session) return 'stale';
+    const previous = db.prepare(
+      `SELECT session, revision FROM player_slot_cosmetic_revisions
+       WHERE player_id = ? AND slot = ?`,
+    ).get(playerId, slot) as SessionRow & { revision: number } | undefined;
+    if (previous) {
+      if (session < previous.session
+        || (session === previous.session && revision < previous.revision)) return 'stale';
+      if (session === previous.session && revision === previous.revision) return 'duplicate';
+    }
+    db.prepare(
       `INSERT INTO player_slot_cosmetic_revisions (player_id, slot, session, revision)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(player_id, slot) DO UPDATE SET
-         session = excluded.session, revision = excluded.revision
-       WHERE excluded.session > player_slot_cosmetic_revisions.session
-          OR (excluded.session = player_slot_cosmetic_revisions.session
-              AND excluded.revision > player_slot_cosmetic_revisions.revision)`,
+         session = excluded.session, revision = excluded.revision`,
     ).run(playerId, slot, session, revision);
-    if (claim.changes === 0) return false;
     if (rule) setSlotRule(db, playerId, slot, rule, now);
     else clearSlotRows(db, playerId, slot, now);
-    return true;
+    return 'applied';
   })();
 }
 

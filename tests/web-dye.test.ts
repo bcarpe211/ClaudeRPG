@@ -25,7 +25,7 @@ function ctx(gender: 'M' | 'F' = 'M') {
     1,
   );
   db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
-  const browserSession = beginSlotMutationSession(db, player.id, 1);
+  const browserSession = beginSlotMutationSession(db, player.id);
   return { db, app, player, browserSession };
 }
 
@@ -72,19 +72,37 @@ describe('character dye endpoints', () => {
 
     expect((await postSet(2_000, 40)).status).toBe(204);
     expect((await postSet(2_002, 200)).status).toBe(204);
-    expect((await postSet(2_001, 100)).status).toBe(204);
+    expect((await postSet(2_002, 300)).status).toBe(204); // Same mutation revision is idempotent.
+    expect((await postSet(2_001, 100)).status).toBe(409);
     expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({
       op: 'colorize', hue: 200, sat: 0.6, tone: 0,
     });
 
     expect((await postClear(2_004)).status).toBe(204);
-    expect((await postSet(2_003, 80)).status).toBe(204);
+    expect((await postSet(2_003, 80)).status).toBe(409);
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
     expect(db.prepare('SELECT session, revision FROM player_slot_cosmetic_revisions WHERE player_id = ? AND slot = ?')
       .get(player.id, SLOTS.body)).toEqual({ session: 1, revision: 2_004 });
   });
 
-  it('rejects a delayed pre-reload set after a newer session has cleared the slot', async () => {
+  it('keeps a same-tab final set when a reload has issued a newer session but not edited the slot', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    const reloaded = beginSlotMutationSession(db, player.id);
+
+    const res = await request(app).post('/character/dye/set').type('form').send({
+      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 40,
+      session: browserSession.session, revision: 1,
+    });
+
+    expect(res.status).toBe(204);
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({
+      op: 'colorize', hue: 40, sat: 0.6, tone: 0,
+    });
+    expect(reloaded.session).toBeGreaterThan(browserSession.session);
+  });
+
+  it('accepts an older tab until a newer tab mutates the same slot, then rejects it', async () => {
     const { db, app, player, browserSession } = ctx();
     buy(db, player.id, 1);
     const post = (endpoint: 'set' | 'clear', session: number, revision: number, hue?: number) => request(app)
@@ -94,13 +112,30 @@ describe('character dye endpoints', () => {
       });
 
     expect((await post('set', browserSession.session, 1, 40)).status).toBe(204);
-    const reloaded = beginSlotMutationSession(db, player.id, 2);
-    expect((await post('clear', reloaded.session, 1)).status).toBe(204);
-    expect((await post('set', browserSession.session, 2, 200)).status).toBe(204);
+    const newerTab = beginSlotMutationSession(db, player.id);
+    expect((await post('set', newerTab.session, 1, 120)).status).toBe(204);
+    expect((await post('set', browserSession.session, 2, 200)).status).toBe(409);
+    expect((await post('set', newerTab.session + 1, 1, 300)).status).toBe(409);
 
-    expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({
+      op: 'colorize', hue: 120, sat: 0.6, tone: 0,
+    });
     expect(db.prepare('SELECT session, revision FROM player_slot_cosmetic_revisions WHERE player_id = ? AND slot = ?')
-      .get(player.id, SLOTS.body)).toEqual({ session: reloaded.session, revision: 1 });
+      .get(player.id, SLOTS.body)).toEqual({ session: newerTab.session, revision: 1 });
+  });
+
+  it('rejects a session epoch that was never issued inside a former clock-sized gap', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    beginSlotMutationSession(db, player.id);
+
+    const res = await request(app).post('/character/dye/set').type('form').send({
+      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200,
+      session: 500, revision: 1,
+    });
+
+    expect(res.status).toBe(409);
+    expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
   });
 
   it('accepts the exact Bronze recipe and bounded Tone override', async () => {

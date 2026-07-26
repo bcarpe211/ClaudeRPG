@@ -66,7 +66,7 @@ export function registerCharacterRoutes(
         player,
         className: getClass(player.class_key)?.name ?? player.class_key,
         avatarUrl: cosmeticSkinUrlForPlayer(db, player, 'a'),
-        dye: dyeViewModel(db, player, slotmapsDir, Date.now()),
+        dye: dyeViewModel(db, player, slotmapsDir),
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({
           token: player.auth_token,
@@ -133,9 +133,13 @@ export function registerCharacterRoutes(
       return;
     }
 
-    applySlotMutation(
+    const result = applySlotMutation(
       db, player.id, parsed.data.slot, parsed.data.session, parsed.data.revision, rule, Date.now(),
     );
+    if (result === 'stale') {
+      res.status(409).send('Stale cosmetic mutation');
+      return;
+    }
     res.sendStatus(204);
   });
 
@@ -161,9 +165,13 @@ export function registerCharacterRoutes(
       return;
     }
 
-    applySlotMutation(
+    const result = applySlotMutation(
       db, player.id, parsed.data.slot, parsed.data.session, parsed.data.revision, null, Date.now(),
     );
+    if (result === 'stale') {
+      res.status(409).send('Stale cosmetic mutation');
+      return;
+    }
     res.sendStatus(204);
   });
 }
