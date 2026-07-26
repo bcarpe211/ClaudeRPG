@@ -46,6 +46,8 @@
   const context = canvas?.getContext('2d');
   if (!canvas || !context) return;
   context.imageSmoothingEnabled = false;
+  const reducedMotion = typeof root.matchMedia === 'function'
+    && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const frameStates = {};
   for (const frame of ['a', 'b']) {
@@ -66,6 +68,7 @@
       sourceContext.clearRect(0, 0, 24, 24);
       sourceContext.drawImage(image, 0, 0, 24, 24);
       frameStates[frame].sourcePixels = sourceContext.getImageData(0, 0, 24, 24);
+      if (reducedMotion && frame === 'a') render(0);
     };
     image.crossOrigin = 'anonymous';
     image.src = preview.frames[frame].base;
@@ -108,6 +111,8 @@
 
     context.putImageData(output, 0, 0);
   }
+
+  if (reducedMotion) return;
 
   const minimumFrameTime = 1000 / 12;
   let lastPaint = Number.NEGATIVE_INFINITY;

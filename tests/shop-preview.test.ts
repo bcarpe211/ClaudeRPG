@@ -29,6 +29,133 @@ beforeEach(() => {
   api = context.ClaudeRpgShopPreview as ShopPreviewApi;
 });
 
+function runtimeHarness(options: { reducedMotion?: boolean; autoLoad?: boolean } = {}) {
+  const source = readFileSync('src/web/public/shop-preview.js', 'utf8');
+  const appliedRules: SlotRule[] = [];
+  const images: FakeImage[] = [];
+  let fetchCalls = 0;
+  let scheduledFrames = 0;
+  let animationFrame: ((timeMs: number) => void) | null = null;
+
+  class FakeImage {
+    crossOrigin = '';
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    private value = '';
+
+    constructor() { images.push(this); }
+    get src(): string { return this.value; }
+    set src(value: string) {
+      this.value = value;
+      if (options.autoLoad !== false) this.onload?.();
+    }
+    load(): void { this.onload?.(); }
+  }
+
+  class FakeContext {
+    imageSmoothingEnabled = true;
+    sourceSeed = 0;
+    readonly outputs: Uint8ClampedArray[] = [];
+
+    clearRect(): void {}
+    drawImage(image: FakeImage): void {
+      this.sourceSeed = image.src.includes('frame-b') ? 160 : 80;
+    }
+    getImageData(): { data: Uint8ClampedArray } {
+      const data = new Uint8ClampedArray(24 * 24 * 4);
+      for (let pixel = 0; pixel < 24 * 24; pixel += 1) {
+        const offset = pixel * 4;
+        data[offset] = this.sourceSeed;
+        data[offset + 1] = 40;
+        data[offset + 2] = 20;
+        data[offset + 3] = 255;
+      }
+      return { data };
+    }
+    createImageData(): { data: Uint8ClampedArray } {
+      return { data: new Uint8ClampedArray(24 * 24 * 4) };
+    }
+    putImageData(image: { data: Uint8ClampedArray }): void {
+      this.outputs.push(new Uint8ClampedArray(image.data));
+    }
+  }
+
+  class FakeCanvas {
+    width = 24;
+    height = 24;
+    readonly context = new FakeContext();
+    getContext(): FakeContext { return this.context; }
+  }
+
+  const visibleCanvas = new FakeCanvas();
+  const frameA = new Array<number>(24 * 24).fill(0);
+  const frameB = new Array<number>(24 * 24).fill(0);
+  frameA[0] = 1;
+  frameA[1] = 2;
+  frameB[0] = 1;
+  frameB[1] = 3;
+  const context = {
+    __SHOP_PREVIEW__: {
+      frames: {
+        a: { base: '/frame-a.png', slotmap: frameA },
+        b: { base: '/frame-b.png', slotmap: frameB },
+      },
+      config: { 1: { op: 'value', lo: 0, hi: 0.32 } },
+      demoSlots: [2, 3],
+    },
+    ClaudeRpgDyeColor: {
+      applyRule(rule: SlotRule, red: number, green: number, blue: number): number[] {
+        appliedRules.push(rule);
+        return [rule.hue ?? red, green, blue];
+      },
+    },
+    document: {
+      getElementById(id: string): FakeCanvas | null {
+        return id === 'shop-preview' ? visibleCanvas : null;
+      },
+      createElement(tag: string): FakeCanvas {
+        if (tag !== 'canvas') throw new Error(`Unexpected element ${tag}`);
+        return new FakeCanvas();
+      },
+    },
+    Image: FakeImage,
+    requestAnimationFrame(callback: (timeMs: number) => void): number {
+      scheduledFrames += 1;
+      animationFrame = callback;
+      return scheduledFrames;
+    },
+    matchMedia(query: string): { matches: boolean } {
+      if (query !== '(prefers-reduced-motion: reduce)') {
+        throw new Error(`Unexpected media query ${query}`);
+      }
+      return { matches: options.reducedMotion === true };
+    },
+    fetch(): never {
+      fetchCalls += 1;
+      throw new Error('The shop preview must not use fetch');
+    },
+  };
+
+  vm.runInNewContext(source, context);
+  return {
+    appliedRules,
+    visibleCanvas,
+    tick(timeMs: number): void {
+      const callback = animationFrame;
+      expect(callback).not.toBeNull();
+      animationFrame = null;
+      callback?.(timeMs);
+    },
+    load(frame: 'a' | 'b'): void {
+      const image = images.find((candidate) => candidate.src.includes(`frame-${frame}`));
+      if (!image) throw new Error(`Frame ${frame} image was not created`);
+      image.load();
+    },
+    scheduledFrames: () => scheduledFrames,
+    fetchCalls: () => fetchCalls,
+  };
+}
+
 describe('shop next-offer preview helpers', () => {
   it('gives simultaneous demo slots deterministic independent palettes', () => {
     expect(api.hueAt(0, 0)).not.toBe(api.hueAt(0, 1));
@@ -65,129 +192,48 @@ describe('shop next-offer preview helpers', () => {
   });
 
   it('animates locally at no more than 12 FPS while switching source frames every 700ms', () => {
-    const source = readFileSync('src/web/public/shop-preview.js', 'utf8');
-    const appliedRules: SlotRule[] = [];
-    let fetchCalls = 0;
-    let animationFrame: ((timeMs: number) => void) | null = null;
+    const harness = runtimeHarness();
 
-    class FakeImage {
-      crossOrigin = '';
-      onload: (() => void) | null = null;
-      onerror: (() => void) | null = null;
-      private value = '';
+    harness.tick(0);
+    expect(harness.visibleCanvas.context.outputs).toHaveLength(1);
+    expect(harness.appliedRules[0]).toMatchObject({ op: 'value', lo: 0, hi: 0.32 });
+    expect(harness.appliedRules[1]).toMatchObject({ op: 'colorize', hue: 8, sat: 0.6 });
 
-      get src(): string { return this.value; }
-      set src(value: string) {
-        this.value = value;
-        this.onload?.();
-      }
-    }
+    harness.tick(50);
+    expect(harness.visibleCanvas.context.outputs).toHaveLength(1);
+    harness.tick(84);
+    expect(harness.visibleCanvas.context.outputs).toHaveLength(2);
 
-    class FakeContext {
-      imageSmoothingEnabled = true;
-      sourceSeed = 0;
-      readonly outputs: Uint8ClampedArray[] = [];
-
-      clearRect(): void {}
-      drawImage(image: FakeImage): void {
-        this.sourceSeed = image.src.includes('frame-b') ? 160 : 80;
-      }
-      getImageData(): { data: Uint8ClampedArray } {
-        const data = new Uint8ClampedArray(24 * 24 * 4);
-        for (let pixel = 0; pixel < 24 * 24; pixel += 1) {
-          const offset = pixel * 4;
-          data[offset] = this.sourceSeed;
-          data[offset + 1] = 40;
-          data[offset + 2] = 20;
-          data[offset + 3] = 255;
-        }
-        return { data };
-      }
-      createImageData(): { data: Uint8ClampedArray } {
-        return { data: new Uint8ClampedArray(24 * 24 * 4) };
-      }
-      putImageData(image: { data: Uint8ClampedArray }): void {
-        this.outputs.push(new Uint8ClampedArray(image.data));
-      }
-    }
-
-    class FakeCanvas {
-      width = 24;
-      height = 24;
-      readonly context = new FakeContext();
-      getContext(): FakeContext { return this.context; }
-    }
-
-    const visibleCanvas = new FakeCanvas();
-    const frameA = new Array<number>(24 * 24).fill(0);
-    const frameB = new Array<number>(24 * 24).fill(0);
-    frameA[0] = 1;
-    frameA[1] = 2;
-    frameB[0] = 1;
-    frameB[1] = 3;
-    const context = {
-      __SHOP_PREVIEW__: {
-        frames: {
-          a: { base: '/frame-a.png', slotmap: frameA },
-          b: { base: '/frame-b.png', slotmap: frameB },
-        },
-        config: { 1: { op: 'value', lo: 0, hi: 0.32 } },
-        demoSlots: [2, 3],
-      },
-      ClaudeRpgDyeColor: {
-        applyRule(rule: SlotRule, red: number, green: number, blue: number): number[] {
-          appliedRules.push(rule);
-          return [rule.hue ?? red, green, blue];
-        },
-      },
-      document: {
-        getElementById(id: string): FakeCanvas | null {
-          return id === 'shop-preview' ? visibleCanvas : null;
-        },
-        createElement(tag: string): FakeCanvas {
-          if (tag !== 'canvas') throw new Error(`Unexpected element ${tag}`);
-          return new FakeCanvas();
-        },
-      },
-      Image: FakeImage,
-      requestAnimationFrame(callback: (timeMs: number) => void): number {
-        animationFrame = callback;
-        return 1;
-      },
-      fetch(): never {
-        fetchCalls += 1;
-        throw new Error('The shop preview must not use fetch');
-      },
-    };
-
-    vm.runInNewContext(source, context);
-    const tick = (timeMs: number) => {
-      const callback = animationFrame as ((timeMs: number) => void) | null;
-      expect(callback).not.toBeNull();
-      animationFrame = null;
-      callback?.(timeMs);
-    };
-
-    tick(0);
-    expect(visibleCanvas.context.outputs).toHaveLength(1);
-    expect(appliedRules[0]).toMatchObject({ op: 'value', lo: 0, hi: 0.32 });
-    expect(appliedRules[1]).toMatchObject({ op: 'colorize', hue: 8, sat: 0.6 });
-
-    tick(50);
-    expect(visibleCanvas.context.outputs).toHaveLength(1);
-    tick(84);
-    expect(visibleCanvas.context.outputs).toHaveLength(2);
-
-    tick(700);
-    expect(visibleCanvas.context.outputs).toHaveLength(3);
-    expect(visibleCanvas.context.outputs.at(-1)?.[0]).not.toBe(
-      visibleCanvas.context.outputs[0][0],
+    harness.tick(700);
+    expect(harness.visibleCanvas.context.outputs).toHaveLength(3);
+    expect(harness.visibleCanvas.context.outputs.at(-1)?.[0]).not.toBe(
+      harness.visibleCanvas.context.outputs[0][0],
     );
-    expect(appliedRules.at(-1)).toMatchObject({
+    expect(harness.appliedRules.at(-1)).toMatchObject({
       op: 'colorize',
       hue: api.hueAt(700, 1),
       sat: 0.6,
     });
-    expect(fetchCalls).toBe(0);
+    expect(harness.fetchCalls()).toBe(0);
+  });
+
+  it('renders stable frame A at time zero without an animation loop in reduced-motion mode', () => {
+    const harness = runtimeHarness({ reducedMotion: true, autoLoad: false });
+
+    expect(harness.scheduledFrames()).toBe(0);
+    expect(harness.visibleCanvas.context.outputs).toHaveLength(0);
+
+    harness.load('a');
+    expect(harness.visibleCanvas.context.outputs).toHaveLength(1);
+    expect(harness.visibleCanvas.context.outputs[0][0]).toBe(80);
+    expect(harness.appliedRules[0]).toMatchObject({ op: 'value', lo: 0, hi: 0.32 });
+    expect(harness.appliedRules[1]).toMatchObject({
+      op: 'colorize', hue: 8, sat: 0.6, tone: 0,
+    });
+
+    harness.load('b');
+    expect(harness.visibleCanvas.context.outputs).toHaveLength(1);
+    expect(harness.scheduledFrames()).toBe(0);
+    expect(harness.fetchCalls()).toBe(0);
   });
 });
