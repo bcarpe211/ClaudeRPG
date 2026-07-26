@@ -4,7 +4,9 @@ import { seedSettings } from '../src/domain/settings';
 import { createPlayer } from '../src/domain/players';
 import { purchase, setCosmeticHue } from '../src/domain/shop';
 import { SLOTS } from '../src/domain/slots';
-import { getSlotConfig, setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl } from '../src/domain/slotcosmetics';
+import {
+  getSlotConfig, getEntitledSlotConfig, setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl,
+} from '../src/domain/slotcosmetics';
 import { classSpriteUrl } from '../src/domain/classes';
 import { getCosmetics, spriteId } from '../src/domain/cosmetics';
 
@@ -53,6 +55,36 @@ describe('getSlotConfig', () => {
 
     expect(getSlotConfig(db, p.id).has(SLOTS.body)).toBe(false);
     expect(getCosmetics(db, p.id)?.primary_hue).toBeNull();
+  });
+});
+
+describe('getEntitledSlotConfig', () => {
+  it('filters raw rules by class, gender, and cumulative tier without deleting them', () => {
+    const p = player('wizard');
+    db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(p.id);
+    setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 20, sat: 0.6 }, 10);
+    setSlotRule(db, p.id, SLOTS.weapon, { op: 'colorize', hue: 40, sat: 0.6 }, 10);
+
+    expect(getEntitledSlotConfig(db, p).size).toBe(0);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 20);
+    expect([...getEntitledSlotConfig(db, p).keys()]).toEqual([SLOTS.body]);
+    purchase(db, p.id, 'cosmetic_wheel_t2', 30);
+    purchase(db, p.id, 'cosmetic_wheel_t3', 40);
+    expect([...getEntitledSlotConfig(db, p).keys()].sort((a, b) => a - b))
+      .toEqual([SLOTS.body, SLOTS.weapon].sort((a, b) => a - b));
+    expect(getSlotConfig(db, p.id).has(SLOTS.weapon)).toBe(true);
+  });
+
+  it('retains a female-only rule while male and restores it after switching back', () => {
+    const p = player('knight');
+    db.prepare("UPDATE players SET gender = 'F', gold = 7000000 WHERE id = ?").run(p.id);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, p.id, 'cosmetic_wheel_t2', 20);
+    setSlotRule(db, p.id, SLOTS.hair, { op: 'colorize', hue: 20, sat: 0.6 }, 30);
+    expect(getEntitledSlotConfig(db, { ...p, gender: 'F' }).has(SLOTS.hair)).toBe(true);
+    db.prepare("UPDATE players SET gender = 'M' WHERE id = ?").run(p.id);
+    expect(getEntitledSlotConfig(db, { ...p, gender: 'M' }).has(SLOTS.hair)).toBe(false);
+    expect(getSlotConfig(db, p.id).has(SLOTS.hair)).toBe(true);
   });
 });
 

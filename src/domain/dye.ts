@@ -4,7 +4,7 @@ import { channelLabel, channelsFor } from './cosmetic-entitlements';
 import { getCosmetics, spriteId } from './cosmetics';
 import { getSetting } from './settings';
 import { SKUS } from './shop';
-import { getSlotConfig } from './slotcosmetics';
+import { getEntitledSlotConfig } from './slotcosmetics';
 import {
   loadSlotmap,
   presentSlots,
@@ -79,7 +79,7 @@ export function dyeViewModel(
   const present = presentSlots(sprite, slotmapsDir);
   const cosmetics = getCosmetics(db, player.id);
   const config: Record<number, SlotRule> = {};
-  for (const [slot, rule] of getSlotConfig(db, player.id)) {
+  for (const [slot, rule] of getEntitledSlotConfig(db, player)) {
     config[slot] = rule;
   }
 

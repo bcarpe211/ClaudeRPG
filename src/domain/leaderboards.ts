@@ -1,6 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { Gender } from './classes';
-import { cosmeticSkinUrl, getSlotConfig } from './slotcosmetics';
+import { cosmeticSkinUrlForPlayer } from './slotcosmetics';
 import { activityScore, type ActivityCfg } from './activity';
 import { tokenModifier } from './combat';
 
@@ -38,7 +37,7 @@ export function buildLeaderboards(
 
   const rank = (value: (p: PlayerRow) => number): BoardEntry[] =>
     players
-      .map((p) => ({ playerId: p.id, name: p.name, avatarUrl: cosmeticSkinUrl(p.id, p.class_key, p.gender as Gender, getSlotConfig(db, p.id), 'a'), value: value(p) }))
+      .map((p) => ({ playerId: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a'), value: value(p) }))
       .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
 
   // Damage aggregates.

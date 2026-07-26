@@ -11,7 +11,7 @@ import {
 } from '../../domain/cosmetics';
 import { recolorSprite, recolorSpriteSlots } from '../../domain/spritetint';
 import { loadSlotmap, loadSlotmapFresh, SLOTS } from '../../domain/slots';
-import { getSlotConfig, skinRenderHash } from '../../domain/slotcosmetics';
+import { getEntitledSlotConfig, skinRenderHash } from '../../domain/slotcosmetics';
 
 export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: AppDeps): void {
   const cacheDir = path.join(path.dirname(config.dbPath), 'tint-cache');
@@ -63,7 +63,7 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
     const player = getPlayerById(db, playerId);
     if (!player) { res.sendStatus(404); return; }
 
-    const slotConfig = getSlotConfig(db, playerId);
+    const slotConfig = getEntitledSlotConfig(db, player);
     const sprite = spriteId(player.class_key, player.gender as Gender);
     const hash = skinRenderHash(sprite, slotConfig, slotmapsDir);
     if (req.params.hash !== hash) {

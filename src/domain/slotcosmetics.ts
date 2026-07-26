@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { SlotRule } from './spritetint';
 import { SLOTS, slotmapFingerprint } from './slots';
 import { getCosmetics, CLOTHING, spriteId } from './cosmetics';
+import { entitledChannelsFor } from './cosmetic-entitlements';
 
 interface Row {
   slot: number;
@@ -87,6 +88,36 @@ export function clearSlot(
 
 import { classSpriteUrl, type Gender } from './classes';
 
+export interface CosmeticPlayerRef {
+  id: number;
+  class_key: string;
+  gender: string;
+}
+
+/** Return only the saved rules that the player's class, gender, and purchased tier can render. */
+export function filterEntitledSlotConfig(
+  config: Map<number, SlotRule>,
+  classKey: string,
+  gender: Gender,
+  wheelTier: number,
+): Map<number, SlotRule> {
+  const allowed = new Set(
+    entitledChannelsFor(classKey, gender, wheelTier).map((channel) => channel.slot),
+  );
+  return new Map([...config].filter(([slot]) => allowed.has(slot)));
+}
+
+/** Entitlement-filtered render config; raw stored rows remain available through getSlotConfig. */
+export function getEntitledSlotConfig(
+  db: Database.Database,
+  player: CosmeticPlayerRef,
+): Map<number, SlotRule> {
+  const tier = getCosmetics(db, player.id)?.wheel_tier ?? 0;
+  return filterEntitledSlotConfig(
+    getSlotConfig(db, player.id), player.class_key, player.gender as Gender, tier,
+  );
+}
+
 function canonicalSlotConfig(config: Map<number, SlotRule>): string {
   return [...config.entries()]
     .sort((a, b) => a[0] - b[0])
@@ -119,4 +150,19 @@ export function cosmeticSkinUrl(
   if (config.size === 0) return classSpriteUrl(classKey, gender);
   const sprite = spriteId(classKey, gender);
   return `/sprite/skin/${playerId}/${frame}/${skinRenderHash(sprite, config)}.png`;
+}
+
+/** The only player-facing skin URL: derives its hash from the entitlement-filtered render config. */
+export function cosmeticSkinUrlForPlayer(
+  db: Database.Database,
+  player: CosmeticPlayerRef,
+  frame: 'a' | 'b' = 'a',
+): string {
+  return cosmeticSkinUrl(
+    player.id,
+    player.class_key,
+    player.gender as Gender,
+    getEntitledSlotConfig(db, player),
+    frame,
+  );
 }

@@ -127,6 +127,14 @@ describe('dyeViewModel', () => {
     expect(vm.config[SLOTS.body]).toEqual(wheelRule(120));
   });
 
+  it('does not serialize a stored locked channel into the browser config', () => {
+    const player = wizard();
+    purchase(db, player.id, 'cosmetic_wheel_t1', 100);
+    setSlotRule(db, player.id, SLOTS.weapon, wheelRule(120), 200);
+
+    expect(dyeViewModel(db, player).config[SLOTS.weapon]).toBeUndefined();
+  });
+
   it('offers the authored channels and slotmap for a female wizard', () => {
     const player = wizard('F');
     const vm = dyeViewModel(db, player);

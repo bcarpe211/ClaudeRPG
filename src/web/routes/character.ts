@@ -11,8 +11,7 @@ import {
 import { getClass, type Gender } from '../../domain/classes';
 import {
   clearSlot,
-  cosmeticSkinUrl,
-  getSlotConfig,
+  cosmeticSkinUrlForPlayer,
   setSlotRule,
 } from '../../domain/slotcosmetics';
 import { buildSetupSnippet } from '../../domain/snippet';
@@ -62,7 +61,7 @@ export function registerCharacterRoutes(
         title: player.name,
         player,
         className: getClass(player.class_key)?.name ?? player.class_key,
-        avatarUrl: cosmeticSkinUrl(player.id, player.class_key, player.gender as Gender, getSlotConfig(db, player.id), 'a'),
+        avatarUrl: cosmeticSkinUrlForPlayer(db, player, 'a'),
         dye: dyeViewModel(db, player, slotmapsDir),
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({
