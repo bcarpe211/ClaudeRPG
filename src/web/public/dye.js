@@ -5,7 +5,8 @@
 (function () {
   const D = window.__DYE__;
   const colorMath = window.ClaudeRpgDyeColor;
-  if (!D || !colorMath) return;
+  const Draft = window.ClaudeRpgDyeDraft;
+  if (!D || !colorMath || !Draft) return;
 
   const preview = document.getElementById('dye-preview');
   const wheel = document.getElementById('dye-wheel');
@@ -13,8 +14,12 @@
   const activeLabel = document.getElementById('dye-active-label');
   const toneInput = document.getElementById('dye-tone');
   const toneValue = document.getElementById('dye-tone-value');
+  const saveButton = document.getElementById('dye-save');
+  const discardButton = document.getElementById('dye-discard');
+  const reloadButton = document.getElementById('dye-reload');
   const pageAvatar = document.getElementById('character-avatar');
-  if (!preview || !wheel || !status || !activeLabel || !toneInput || !toneValue) return;
+  if (!preview || !wheel || !status || !activeLabel || !toneInput || !toneValue
+    || !saveButton || !discardButton || !reloadButton) return;
 
   const previewContext = preview.getContext('2d');
   const wheelContext = wheel.getContext('2d');
@@ -22,11 +27,15 @@
   previewContext.imageSmoothingEnabled = false;
   wheelContext.imageSmoothingEnabled = false;
 
-  const config = new Map(
+  let config = new Map(
     Object.entries(D.config).map(([slot, rule]) => [Number(slot), rule]),
   );
-  const states = new Map();
+  let states = new Map();
   for (const [slot, rule] of config) states.set(slot, stateFromRule(rule));
+  let savedStates = Draft.cloneStates(states);
+  let savedConfig = cloneConfig(config);
+  let saving = false;
+  let stale = false;
   const slotmap = D.slotmap;
   const channelButtons = Array.from(document.querySelectorAll('.dye-chan:not(:disabled)'));
   let active = channelButtons.length > 0 ? Number(channelButtons[0].dataset.slot) : null;
@@ -52,12 +61,11 @@
   }
 
   function stateFor(slot) {
-    let state = states.get(slot);
-    if (!state) {
-      state = stateFromRule(null);
-      states.set(slot, state);
-    }
-    return state;
+    return states.get(slot) || stateFromRule(null);
+  }
+
+  function cloneConfig(source) {
+    return new Map(Array.from(source, ([slot, rule]) => [slot, { ...rule }]));
   }
 
   function ruleFromState(state) {
@@ -175,147 +183,95 @@
     if (pageAvatar) pageAvatar.src = preview.toDataURL('image/png');
   }
 
-  // --- ordered, per-slot autosave ---
-  const timers = new Map();
-  const pendingSets = new Map();
-  const queues = new Map();
-  const latestOperations = new Map();
-  const failedSlots = new Set();
+  // --- explicit saved/draft persistence ---
 
   function setStatus(message, state) {
     status.textContent = message;
     status.dataset.state = state || '';
   }
 
-  function showSettledStatus() {
-    if (timers.size > 0 || latestOperations.size > 0) return;
-    if (failedSlots.size > 0) {
-      const noun = failedSlots.size === 1 ? 'change needs' : 'changes need';
-      setStatus(`${failedSlots.size} ${noun} saving — try again`, 'error');
+  function operations() {
+    return Draft.dirtyOperations(savedStates, states);
+  }
+
+  function renderSaveState(message) {
+    const dirty = operations().length > 0;
+    if (stale) {
+      saveButton.disabled = true;
+      discardButton.disabled = true;
+      setStatus(message || 'Wardrobe changed elsewhere — refresh required', 'error');
       return;
     }
-    setStatus('All changes saved', 'saved');
+    saveButton.disabled = saving || !dirty;
+    discardButton.disabled = saving || !dirty;
+    setStatus(message || (dirty ? 'Unsaved changes' : 'Saved'), dirty ? 'dirty' : 'saved');
   }
 
-  async function postSave(endpoint, body) {
-    const response = await fetch(endpoint, {
-      method: 'POST', body, credentials: 'same-origin', keepalive: true,
-    });
-    if (!response.ok) throw new Error(`Save failed (${response.status})`);
-  }
+  async function saveDraft() {
+    const changes = operations();
+    if (saving || stale || changes.length === 0) return;
+    saving = true;
+    renderSaveState('Saving');
+    let message = 'Save failed';
+    try {
+      const body = new URLSearchParams({
+        token: D.token,
+        session: String(revisionSession),
+        revision: String(nextRevision),
+        changes: JSON.stringify(changes),
+      });
+      const response = await fetch('/character/dye/save', {
+        method: 'POST', body, credentials: 'same-origin',
+      });
+      if (response.status === 409) {
+        stale = true;
+        reloadButton.hidden = false;
+        message = 'Wardrobe changed elsewhere — refresh required';
+        return;
+      }
+      if (!response.ok) throw new Error(`Save failed (${response.status})`);
 
-  function enqueue(slot, operation) {
-    setStatus('Saving…', 'saving');
-    const previous = queues.get(slot);
-    const request = previous
-      ? previous.catch(function () {}).then(function () { return postSave(operation.endpoint, operation.body); })
-      : postSave(operation.endpoint, operation.body);
-    queues.set(slot, request);
-    trackRequest(slot, request, operation, true);
-  }
-
-  function trackRequest(slot, request, operation, queued) {
-    operation.pendingRequests = operation.pendingRequests || new Set();
-    operation.pendingRequests.add(request);
-    if (queued) {
-      operation.queuedRequests = operation.queuedRequests || new Set();
-      operation.queuedRequests.add(request);
-    }
-    operation.currentRequest = request;
-    request.then(
-      function () {
-        completeRequest(slot, request, operation, true);
-      },
-      function () {
-        completeRequest(slot, request, operation, false);
-      },
-    );
-  }
-
-  function completeRequest(slot, request, operation, succeeded) {
-    operation.pendingRequests.delete(request);
-    if (queues.get(slot) === request) queues.delete(slot);
-    if (latestOperations.get(slot) !== operation) {
-      showSettledStatus();
-      return;
-    }
-    if (succeeded) operation.succeeded = true;
-    if (operation.currentRequest !== request) {
-      showSettledStatus();
-      return;
-    }
-    if (operation.succeeded) {
-      failedSlots.delete(slot);
-      if (operation.queuedRequests?.has(queues.get(slot))) queues.delete(slot);
-      latestOperations.delete(slot);
-      renderChannels();
-      showSettledStatus();
-      return;
-    }
-    const fallback = operation.pendingRequests.values().next().value;
-    if (fallback) {
-      operation.currentRequest = fallback;
-      setStatus('Saving…', 'saving');
-      return;
-    }
-    failedSlots.add(slot);
-    latestOperations.delete(slot);
-    renderChannels();
-    showSettledStatus();
-  }
-
-  function saveSet(slot, state) {
-    const body = new URLSearchParams({ token: D.token, slot: String(slot) });
-    const recipe = state.recipe;
-    body.set('recipe', recipe);
-    if (recipe === 'wheel') body.set('hue', String(state.hue));
-    body.set('tone', String(state.tone));
-    body.set('session', String(revisionSession));
-    body.set('revision', String(nextRevision));
-    const operation = { endpoint: '/character/dye/set', body, revision: nextRevision };
-    nextRevision += 1;
-
-    clearTimeout(timers.get(slot));
-    pendingSets.set(slot, operation);
-    latestOperations.set(slot, operation);
-    setStatus('Change queued…', 'saving');
-    timers.set(slot, setTimeout(function () {
-      timers.delete(slot);
-      const pending = pendingSets.get(slot);
-      pendingSets.delete(slot);
-      if (pending) enqueue(slot, pending);
-    }, 120));
-  }
-
-  function saveClear(slot) {
-    clearTimeout(timers.get(slot));
-    timers.delete(slot);
-    pendingSets.delete(slot);
-    const body = new URLSearchParams({ token: D.token, slot: String(slot) });
-    body.set('session', String(revisionSession));
-    body.set('revision', String(nextRevision));
-    const operation = { endpoint: '/character/dye/clear', body, revision: nextRevision };
-    nextRevision += 1;
-    latestOperations.set(slot, operation);
-    enqueue(slot, operation);
-  }
-
-  // During pagehide, re-send every latest operation immediately. The server's
-  // player+slot revision tombstone makes duplicates and packet reordering safe.
-  function flushPendingSets() {
-    for (const [slot] of pendingSets) {
-      clearTimeout(timers.get(slot));
-      timers.delete(slot);
-    }
-    pendingSets.clear();
-    for (const [slot, operation] of latestOperations) {
-      setStatus('Saving…', 'saving');
-      const request = postSave(operation.endpoint, operation.body);
-      trackRequest(slot, request, operation, false);
+      const canonical = await response.json();
+      const canonicalConfig = new Map(
+        Object.entries(canonical.config).map(([slot, rule]) => [Number(slot), rule]),
+      );
+      const canonicalStates = new Map();
+      for (const [slot, rule] of canonicalConfig) {
+        canonicalStates.set(slot, stateFromRule(rule));
+      }
+      config = canonicalConfig;
+      states = canonicalStates;
+      savedConfig = cloneConfig(canonicalConfig);
+      savedStates = Draft.cloneStates(canonicalStates);
+      nextRevision += 1;
+      renderPreview();
+      renderControls();
+      message = 'Saved';
+    } catch (_error) {
+      // Keep the current draft so the same revision can be retried safely.
+    } finally {
+      saving = false;
+      renderSaveState(message);
     }
   }
-  window.addEventListener('beforeunload', flushPendingSets);
-  window.addEventListener('pagehide', flushPendingSets);
+
+  function discardDraft() {
+    if (saving || stale) return;
+    states = Draft.cloneStates(savedStates);
+    config = cloneConfig(savedConfig);
+    renderPreview();
+    renderControls();
+    renderSaveState('Saved');
+  }
+
+  window.addEventListener('beforeunload', function (event) {
+    if (operations().length === 0) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+  window.addEventListener('pageshow', function (event) {
+    if (event.persisted) location.reload();
+  });
 
   // --- server-rendered channels and material controls ---
   function ruleColor(rule) {
@@ -328,13 +284,9 @@
     for (const button of channelButtons) {
       const slot = Number(button.dataset.slot);
       const rule = config.get(slot);
-      const failed = failedSlots.has(slot);
       button.classList.toggle('active', slot === active);
       button.classList.toggle('configured', !!rule);
-      button.classList.toggle('save-failed', failed);
       button.setAttribute('aria-pressed', String(slot === active));
-      button.setAttribute('aria-invalid', String(failed));
-      button.setAttribute('data-save-state', failed ? 'error' : '');
       const dot = button.querySelector('.dye-dot');
       if (dot) {
         const color = ruleColor(rule);
@@ -370,9 +322,9 @@
     if (active == null) return;
     states.set(active, next);
     config.set(active, ruleFromState(next));
-    saveSet(active, next);
     renderPreview();
     renderControls();
+    renderSaveState();
   }
 
   function selectHue(hue) {
@@ -391,9 +343,9 @@
       if (active == null) return;
       states.delete(active);
       config.delete(active);
-      saveClear(active);
       renderPreview();
       renderControls();
+      renderSaveState();
       return;
     }
     const preset = D.presets[recipe];
@@ -452,8 +404,12 @@
   document.querySelectorAll('.dye-fin').forEach(function (button) {
     button.addEventListener('click', function () { selectRecipe(button.dataset.recipe); });
   });
+  saveButton.addEventListener('click', saveDraft);
+  discardButton.addEventListener('click', discardDraft);
+  reloadButton.addEventListener('click', function () { location.reload(); });
 
   renderControls();
+  renderSaveState();
   // Chromium may discard an off-screen canvas backing store during a responsive
   // viewport reflow. Redraw when the wheel actually enters view; the preview
   // already gets this later paint naturally from its image-load callback.

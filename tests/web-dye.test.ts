@@ -465,6 +465,16 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('data-recipe="gold"');
     expect(res.text).not.toContain('data-finish="black"');
     expect(res.text).not.toContain('data-finish="white"');
+    expect(res.text).toContain('id="dye-save-status" class="dye-save-status" role="status" aria-live="polite">Saved</span>');
+    expect(res.text).toContain('id="dye-reload" type="button" class="btn dye-reload" hidden>Reload Wardrobe</button>');
+    expect(res.text).toContain('id="dye-discard" type="button" class="btn dye-discard" disabled>Discard Changes</button>');
+    expect(res.text).toContain('id="dye-save" type="button" class="btn btn-gold" disabled>Save Changes</button>');
+    const colorScript = res.text.indexOf('<script src="/static/dye-color.js"></script>');
+    const draftScript = res.text.indexOf('<script src="/static/dye-draft.js"></script>');
+    const clientScript = res.text.indexOf('<script src="/static/dye.js"></script>');
+    expect(colorScript).toBeGreaterThan(-1);
+    expect(draftScript).toBeGreaterThan(colorScript);
+    expect(clientScript).toBeGreaterThan(draftScript);
   });
 
   it('serializes exact material presets without locked Tier-3 rules', async () => {

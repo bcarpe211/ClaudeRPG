@@ -72,9 +72,11 @@
 
       <div class="dye-toolbox">
         <div class="dye-section">
-          <div class="dye-tool-row">
-            <span class="dye-tool-label">Color wheel</span>
-            <span id="dye-save-status" class="dye-save-status" role="status" aria-live="polite">Ready</span>
+          <div class="dye-actions">
+            <span id="dye-save-status" class="dye-save-status" role="status" aria-live="polite">Saved</span>
+            <button id="dye-reload" type="button" class="btn dye-reload" hidden>Reload Wardrobe</button>
+            <button id="dye-discard" type="button" class="btn dye-discard" disabled>Discard Changes</button>
+            <button id="dye-save" type="button" class="btn btn-gold" disabled>Save Changes</button>
           </div>
           <div class="dye-paint-row">
             <div class="dye-wheel-section">
@@ -113,6 +115,7 @@
     }; %>
     <script>window.__DYE__ = <%- JSON.stringify(dyeClient).replace(/</g, '\\u003c') %>;</script>
     <script src="/static/dye-color.js"></script>
+    <script src="/static/dye-draft.js"></script>
     <script src="/static/dye.js"></script>
   <% } %>
 </div>

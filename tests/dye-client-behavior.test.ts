@@ -3,7 +3,12 @@ import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 type Listener = (event: Record<string, unknown>) => void;
-type ResponseLike = { ok: boolean };
+type Rule = Record<string, number | string>;
+type ResponseLike = {
+  ok: boolean;
+  status: number;
+  json(): Promise<{ config: Record<number, Rule>; hash: string }>;
+};
 
 class FakeClassList {
   private readonly values = new Set<string>();
@@ -31,7 +36,10 @@ class FakeElement {
   readonly listeners = new Map<string, Listener[]>();
   readonly attributes = new Map<string, string>();
   textContent = '';
+  value = '';
   disabled = false;
+  hidden = false;
+  src = '';
 
   constructor(classes: string[] = []) {
     this.classList = new FakeClassList(...classes);
@@ -96,6 +104,10 @@ class FakeCanvas extends FakeElement {
     return this.context;
   }
 
+  getBoundingClientRect(): { left: number; top: number; width: number; height: number } {
+    return { left: 0, top: 0, width: this.width, height: this.height };
+  }
+
   setPointerCapture(): void {}
   releasePointerCapture(): void {}
   toDataURL(): string { return 'data:image/png;base64,smoke'; }
@@ -111,12 +123,25 @@ class FakeImage {
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
+  reject(error: Error): void;
 }
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+function response(config: Record<number, Rule> = {}): ResponseLike {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ config, hash: '0123456789abcdef' }),
+  };
 }
 
 interface RequestRecord {
@@ -129,17 +154,22 @@ interface WardrobeHarness {
   cloak: FakeButton;
   weapon: FakeButton;
   wheel: FakeCanvas;
+  tone: FakeElement;
   status: FakeElement;
+  steelButton: FakeButton;
   defaultButton: FakeButton;
+  saveButton: FakeButton;
+  discardButton: FakeButton;
+  reloadButton: FakeButton;
   requests: RequestRecord[];
   responses: Array<Deferred<ResponseLike>>;
-  runTimers(): void;
-  beforeunload(): void;
-  pagehide(): void;
+  beforeunload(): { prevented: boolean; returnValue: string | undefined };
+  pageshow(persisted: boolean): void;
+  reloadCount(): number;
   settle(): Promise<void>;
 }
 
-function createWardrobeHarness(config: Record<number, Record<string, number | string>> = {}): WardrobeHarness {
+function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarness {
   const clothing = new FakeButton(['dye-chan']);
   clothing.dataset.slot = '1';
   const cloak = new FakeButton(['dye-chan']);
@@ -151,29 +181,37 @@ function createWardrobeHarness(config: Record<number, Record<string, number | st
   const wheel = new FakeCanvas(72, 72);
   const preview = new FakeCanvas(168, 168);
   const tone = new FakeElement();
-  tone.textContent = '0';
+  tone.value = '0';
   const toneValue = new FakeElement();
   const status = new FakeElement();
   const activeLabel = new FakeElement();
-  const steel = new FakeButton(['dye-fin']);
-  steel.dataset.recipe = 'steel';
+  const steelButton = new FakeButton(['dye-fin']);
+  steelButton.dataset.recipe = 'steel';
   const defaultButton = new FakeButton(['dye-fin']);
   defaultButton.dataset.recipe = 'none';
+  const saveButton = new FakeButton();
+  saveButton.disabled = true;
+  const discardButton = new FakeButton();
+  discardButton.disabled = true;
+  const reloadButton = new FakeButton();
+  reloadButton.hidden = true;
   const elements = new Map<string, FakeElement>([
     ['dye-preview', preview], ['dye-wheel', wheel], ['dye-save-status', status],
     ['dye-active-label', activeLabel], ['dye-tone', tone], ['dye-tone-value', toneValue],
+    ['dye-save', saveButton], ['dye-discard', discardButton], ['dye-reload', reloadButton],
   ]);
-  const timers = new Map<number, () => void>();
-  let nextTimer = 0;
   const windowListeners = new Map<string, Listener[]>();
   const requests: RequestRecord[] = [];
   const responses: Array<Deferred<ResponseLike>> = [];
+  const timers = new Map<number, () => void>();
+  let nextTimer = 0;
+  let reloads = 0;
   const document = {
     getElementById(id: string): FakeElement | null { return elements.get(id) ?? null; },
     createElement(tag: string): FakeElement { return tag === 'canvas' ? new FakeCanvas(24, 24) : new FakeElement(); },
     querySelectorAll(selector: string): FakeButton[] {
       if (selector === '.dye-chan:not(:disabled)') return [clothing, cloak];
-      if (selector === '.dye-fin') return [steel, defaultButton];
+      if (selector === '.dye-fin') return [steelButton, defaultButton];
       return [];
     },
   };
@@ -181,16 +219,25 @@ function createWardrobeHarness(config: Record<number, Record<string, number | st
     document,
     Image: FakeImage,
     URLSearchParams,
-    setTimeout(callback: () => void) { const id = ++nextTimer; timers.set(id, callback); return id; },
+    setTimeout(callback: () => void) {
+      const id = ++nextTimer;
+      timers.set(id, callback);
+      return id;
+    },
     clearTimeout(id: number) { timers.delete(id); },
     fetch(endpoint: string, options: { body: URLSearchParams }) {
       requests.push({ endpoint, body: new URLSearchParams(options.body.toString()) });
       const next = responses.shift();
-      return next ? next.promise : Promise.resolve({ ok: true });
+      return next ? next.promise : Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ config: {}, hash: '0123456789abcdef' }),
+      });
     },
     addEventListener(type: string, listener: Listener) {
       windowListeners.set(type, [...(windowListeners.get(type) ?? []), listener]);
     },
+    location: { reload() { reloads += 1; } },
     __DYE__: {
       token: 'test-token', base: '/sprite.png', slotmap: [],
       channels: [
@@ -206,23 +253,28 @@ function createWardrobeHarness(config: Record<number, Record<string, number | st
   };
   context.window = context;
   vm.runInNewContext(readFileSync('src/web/public/dye-color.js', 'utf8'), context);
+  vm.runInNewContext(readFileSync('src/web/public/dye-draft.js', 'utf8'), context);
   vm.runInNewContext(readFileSync('src/web/public/dye.js', 'utf8'), context);
 
   return {
-    clothing, cloak, weapon, wheel, status, defaultButton, requests, responses,
-    runTimers() {
-      for (const [id, callback] of [...timers]) {
-        timers.delete(id);
-        callback();
-      }
-    },
-    pagehide() {
-      for (const listener of windowListeners.get('pagehide') ?? []) listener({});
-    },
+    clothing, cloak, weapon, wheel, tone, status, steelButton, defaultButton,
+    saveButton, discardButton, reloadButton, requests, responses,
     beforeunload() {
-      for (const listener of windowListeners.get('beforeunload') ?? []) listener({});
+      let prevented = false;
+      const event = {
+        returnValue: undefined as string | undefined,
+        preventDefault() { prevented = true; },
+      };
+      for (const listener of windowListeners.get('beforeunload') ?? []) listener(event);
+      return { prevented, returnValue: event.returnValue };
     },
+    pageshow(persisted: boolean) {
+      for (const listener of windowListeners.get('pageshow') ?? []) listener({ persisted });
+    },
+    reloadCount() { return reloads; },
     async settle() {
+      await Promise.resolve();
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
@@ -235,6 +287,10 @@ function pressWheel(harness: WardrobeHarness, key: string): void {
   harness.wheel.dispatch('keydown', { key, preventDefault() {} });
 }
 
+function changes(request: RequestRecord): unknown {
+  return JSON.parse(request.body.get('changes') ?? 'null');
+}
+
 describe('dye browser Wardrobe behavior', () => {
   it('initializes against the rendered tier groups, switches enabled channels, and leaves locked channels inert', () => {
     const harness = createWardrobeHarness();
@@ -244,146 +300,172 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.cloak.classList.contains('active')).toBe(true);
     harness.weapon.dispatch('click');
     expect(harness.cloak.classList.contains('active')).toBe(true);
+    expect(harness.status.textContent).toBe('Saved');
   });
 
-  it('keeps independent slot recipes when switching channels before their saves flush', async () => {
+  it('keeps hue and Tone dragging local and reports one stable unsaved state', () => {
     const harness = createWardrobeHarness();
 
+    pressWheel(harness, 'ArrowRight');
+    expect(harness.status.textContent).toBe('Unsaved changes');
+    pressWheel(harness, 'ArrowRight');
+    harness.tone.value = '25';
+    harness.tone.dispatch('input');
+
+    expect(harness.requests).toHaveLength(0);
+    expect(harness.status.textContent).toBe('Unsaved changes');
+    expect(harness.saveButton.disabled).toBe(false);
+    expect(harness.discardButton.disabled).toBe(false);
+  });
+
+  it('sends all dirty channels in one batch and disables both actions while saving', async () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+
+    pressWheel(harness, 'ArrowRight');
     harness.cloak.dispatch('click');
+    harness.steelButton.dispatch('click');
+    harness.saveButton.dispatch('click');
+
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.requests[0].endpoint).toBe('/character/dye/save');
+    expect(harness.requests[0].body.get('token')).toBe('test-token');
+    expect(harness.requests[0].body.get('session')).toBe('900');
+    expect(harness.requests[0].body.get('revision')).toBe('1000');
+    expect(changes(harness.requests[0])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 6, tone: 0 },
+      { action: 'set', slot: 2, recipe: 'steel', tone: 0 },
+    ]);
+    expect(harness.saveButton.disabled).toBe(true);
+    expect(harness.discardButton.disabled).toBe(true);
+
+    pending.resolve(response({
+      1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 },
+      2: { op: 'colorize', hue: 212, sat: 0.13, tone: 0 },
+    }));
+    await harness.settle();
+    expect(harness.status.textContent).toBe('Saved');
+    expect(harness.saveButton.disabled).toBe(true);
+    expect(harness.discardButton.disabled).toBe(true);
+  });
+
+  it('uses the successful canonical response as the next saved baseline', async () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+
     pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    pending.resolve(response({
+      1: { op: 'colorize', hue: 120, sat: 0.6, tone: 0.25 },
+    }));
+    await harness.settle();
+
+    expect(harness.status.textContent).toBe('Saved');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('120');
+    expect(harness.tone.value).toBe('25');
+    pressWheel(harness, 'ArrowRight');
+    harness.discardButton.dispatch('click');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('120');
+    expect(harness.tone.value).toBe('25');
+    expect(harness.status.textContent).toBe('Saved');
+  });
+
+  it('discards every edited channel back to its saved rule without a request', () => {
+    const harness = createWardrobeHarness({
+      1: { op: 'colorize', hue: 20, sat: 0.6, tone: 0.1 },
+      2: { op: 'colorize', hue: 212, sat: 0.13, tone: -0.2 },
+    });
+
+    pressWheel(harness, 'ArrowRight');
+    harness.cloak.dispatch('click');
+    harness.tone.value = '40';
+    harness.tone.dispatch('input');
+    harness.discardButton.dispatch('click');
+
+    expect(harness.requests).toHaveLength(0);
+    expect(harness.status.textContent).toBe('Saved');
+    expect(harness.tone.value).toBe('-20');
     harness.clothing.dispatch('click');
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    await harness.settle();
-
-    expect(harness.requests.map((request) => request.body.get('slot'))).toEqual(['2', '1']);
-    expect(harness.requests.map((request) => request.body.get('session'))).toEqual(['900', '900']);
-    expect(harness.requests.map((request) => request.body.get('revision'))).toEqual(['1000', '1001']);
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('20');
+    expect(harness.tone.value).toBe('10');
   });
 
-  it('coalesces rapid wheel changes into the latest normalized recipe', async () => {
-    const harness = createWardrobeHarness();
+  it('stages Restore Default as one clear without saving automatically', () => {
+    const harness = createWardrobeHarness({
+      1: { op: 'colorize', hue: 20, sat: 0.6, tone: 0 },
+    });
 
-    pressWheel(harness, 'ArrowRight');
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    await harness.settle();
-
-    expect(harness.requests).toHaveLength(1);
-    expect(harness.requests[0]).toMatchObject({ endpoint: '/character/dye/set' });
-    expect(harness.requests[0].body.toString()).toBe('token=test-token&slot=1&recipe=wheel&hue=12&tone=0&session=900&revision=1001');
-  });
-
-  it('cancels an unsent set when restoring a slot default', async () => {
-    const harness = createWardrobeHarness();
-
-    pressWheel(harness, 'ArrowRight');
     harness.defaultButton.dispatch('click');
-    harness.runTimers();
-    await harness.settle();
+    expect(harness.requests).toHaveLength(0);
+    expect(harness.status.textContent).toBe('Unsaved changes');
 
+    harness.saveButton.dispatch('click');
     expect(harness.requests).toHaveLength(1);
-    expect(harness.requests[0]).toMatchObject({ endpoint: '/character/dye/clear' });
+    expect(changes(harness.requests[0])).toEqual([{ action: 'clear', slot: 1 }]);
   });
 
-  it('starts the timer-fired newest set during pagehide while an earlier set is in flight', () => {
+  it('preserves the draft and enables retry after an ordinary request failure', async () => {
     const harness = createWardrobeHarness();
-    const first = deferred<ResponseLike>();
-    harness.responses.push(first);
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
 
     pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    harness.pagehide();
+    harness.saveButton.dispatch('click');
+    pending.reject(new Error('offline'));
+    await harness.settle();
 
-    expect(harness.requests).toHaveLength(2);
-    expect(harness.requests[1].body.toString()).toBe('token=test-token&slot=1&recipe=wheel&hue=12&tone=0&session=900&revision=1001');
-    first.resolve({ ok: true });
+    expect(harness.status.textContent).toBe('Save failed');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('6');
+    expect(harness.saveButton.disabled).toBe(false);
+    expect(harness.discardButton.disabled).toBe(false);
+    expect(harness.requests).toHaveLength(1);
   });
 
-  it('starts a queued clear during pagehide while its earlier set is in flight', () => {
+  it('keeps a stale draft visible, blocks further saves, and reveals Reload Wardrobe', async () => {
     const harness = createWardrobeHarness();
-    const first = deferred<ResponseLike>();
-    harness.responses.push(first);
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
 
     pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    harness.defaultButton.dispatch('click');
-    harness.pagehide();
+    harness.saveButton.dispatch('click');
+    pending.resolve({
+      ok: false,
+      status: 409,
+      json: async () => ({ config: {}, hash: '0123456789abcdef' }),
+    });
+    await harness.settle();
 
-    expect(harness.requests).toHaveLength(2);
-    expect(harness.requests[1]).toMatchObject({ endpoint: '/character/dye/clear' });
-    expect(harness.requests[1].body.toString()).toBe('token=test-token&slot=1&session=900&revision=1001');
-    first.resolve({ ok: true });
+    expect(harness.status.textContent).toBe('Wardrobe changed elsewhere — refresh required');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('6');
+    expect(harness.saveButton.disabled).toBe(true);
+    expect(harness.discardButton.disabled).toBe(true);
+    expect(harness.reloadButton.hidden).toBe(false);
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.saveButton.disabled).toBe(true);
+    harness.reloadButton.dispatch('click');
+    expect(harness.reloadCount()).toBe(1);
   });
 
-  it('settles only after the tracked beforeunload duplicate when the original save finishes first', async () => {
+  it('warns before unload only while the draft is dirty', () => {
     const harness = createWardrobeHarness();
-    const original = deferred<ResponseLike>();
-    const duplicate = deferred<ResponseLike>();
-    harness.responses.push(original, duplicate);
 
+    expect(harness.beforeunload()).toEqual({ prevented: false, returnValue: undefined });
     pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    harness.beforeunload(); // Simulate a canceled navigation that returns to the page.
-    original.resolve({ ok: true });
-    await harness.settle();
-    expect(harness.status.textContent).toBe('Saving…');
-
-    duplicate.resolve({ ok: true });
-    await harness.settle();
-    expect(harness.status.textContent).toBe('All changes saved');
-
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    await harness.settle();
-    expect(harness.requests).toHaveLength(3);
+    expect(harness.beforeunload()).toEqual({ prevented: true, returnValue: '' });
+    expect(harness.requests).toHaveLength(0);
   });
 
-  it('does not let a late original save disturb a settled beforeunload duplicate', async () => {
+  it('reloads a restored bfcache page once and ignores normal pageshow', () => {
     const harness = createWardrobeHarness();
-    const original = deferred<ResponseLike>();
-    const duplicate = deferred<ResponseLike>();
-    harness.responses.push(original, duplicate);
 
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    harness.beforeunload(); // The navigation is canceled and the page remains usable.
-    duplicate.resolve({ ok: true });
-    await harness.settle();
-    expect(harness.status.textContent).toBe('All changes saved');
-
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    await harness.settle();
-    expect(harness.requests).toHaveLength(3);
-
-    original.resolve({ ok: true });
-    await harness.settle();
-    expect(harness.status.textContent).toBe('All changes saved');
-  });
-
-  it('marks only the failed channel and clears its marker after a successful retry', async () => {
-    const harness = createWardrobeHarness();
-    const failed = deferred<ResponseLike>();
-    harness.responses.push(failed);
-
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    failed.resolve({ ok: false });
-    await harness.settle();
-
-    expect(harness.clothing.classList.contains('save-failed')).toBe(true);
-    expect(harness.clothing.getAttribute('aria-invalid')).toBe('true');
-    expect(harness.cloak.classList.contains('save-failed')).toBe(false);
-
-    pressWheel(harness, 'ArrowRight');
-    harness.runTimers();
-    await harness.settle();
-
-    expect(harness.clothing.classList.contains('save-failed')).toBe(false);
-    expect(harness.clothing.getAttribute('aria-invalid')).toBe('false');
+    harness.pageshow(false);
+    expect(harness.reloadCount()).toBe(0);
+    harness.pageshow(true);
+    expect(harness.reloadCount()).toBe(1);
   });
 
   it('uses Tone-aware shared color math for channel dots', () => {
