@@ -9,13 +9,12 @@
 
   const preview = document.getElementById('dye-preview');
   const wheel = document.getElementById('dye-wheel');
-  const channelWrap = document.getElementById('dye-channels');
   const status = document.getElementById('dye-save-status');
   const activeLabel = document.getElementById('dye-active-label');
   const toneInput = document.getElementById('dye-tone');
   const toneValue = document.getElementById('dye-tone-value');
   const pageAvatar = document.getElementById('character-avatar');
-  if (!preview || !wheel || !channelWrap || !status || !activeLabel || !toneInput || !toneValue) return;
+  if (!preview || !wheel || !status || !activeLabel || !toneInput || !toneValue) return;
 
   const previewContext = preview.getContext('2d');
   const wheelContext = wheel.getContext('2d');
@@ -209,15 +208,23 @@
       ? previous.catch(function () {}).then(function () { return postSave(endpoint, body); })
       : postSave(endpoint, body);
     queues.set(slot, request);
+    observeRequest(slot, request);
+  }
+
+  function observeRequest(slot, request) {
     request.then(
       function () {
+        if (queues.get(slot) !== request) return;
         failedSlots.delete(slot);
-        if (queues.get(slot) === request) queues.delete(slot);
+        queues.delete(slot);
+        renderChannels();
         showSettledStatus();
       },
       function () {
+        if (queues.get(slot) !== request) return;
         failedSlots.add(slot);
-        if (queues.get(slot) === request) queues.delete(slot);
+        queues.delete(slot);
+        renderChannels();
         showSettledStatus();
       },
     );
@@ -252,15 +259,20 @@
     );
   }
 
-  // A reload/navigation can happen inside the 120ms wheel debounce. Start those
-  // final requests synchronously during pagehide; keepalive lets the browser
-  // finish the small form POST after the document is gone.
+  // During pagehide we cannot wait for an in-flight request: the browser may
+  // tear the document down before the queued follow-up starts. Start the newest
+  // pending keepalive request immediately instead. This preserves request start
+  // order (old request was already started) and last-write intent, while making
+  // no impossible promise about network arrival order after teardown.
   function flushPendingSets() {
     for (const [slot, body] of pendingSets) {
       clearTimeout(timers.get(slot));
       timers.delete(slot);
       pendingSets.delete(slot);
-      enqueue(slot, '/character/dye/set', body);
+      setStatus('Saving…', 'saving');
+      const request = postSave('/character/dye/set', body);
+      queues.set(slot, request);
+      observeRequest(slot, request);
     }
   }
   window.addEventListener('beforeunload', flushPendingSets);
@@ -269,17 +281,7 @@
   // --- server-rendered channels and material controls ---
   function ruleColor(rule) {
     if (!rule) return null;
-    if (rule.op === 'value') {
-      const lo = rule.lo == null ? 0 : rule.lo;
-      const hi = rule.hi == null ? 1 : rule.hi;
-      const value = Math.round(((lo + hi) / 2) * 255);
-      return `rgb(${value} ${value} ${value})`;
-    }
-    const color = colorMath.hsvToRgb(
-      rule.hue == null ? 0 : rule.hue,
-      rule.sat == null ? D.wheelSat : rule.sat,
-      0.9,
-    );
+    const color = colorMath.applyRule(rule, 230, 115, 46);
     return `rgb(${color[0]} ${color[1]} ${color[2]})`;
   }
 
@@ -287,9 +289,13 @@
     for (const button of channelButtons) {
       const slot = Number(button.dataset.slot);
       const rule = config.get(slot);
+      const failed = failedSlots.has(slot);
       button.classList.toggle('active', slot === active);
       button.classList.toggle('configured', !!rule);
+      button.classList.toggle('save-failed', failed);
       button.setAttribute('aria-pressed', String(slot === active));
+      button.setAttribute('aria-invalid', String(failed));
+      button.setAttribute('data-save-state', failed ? 'error' : '');
       const dot = button.querySelector('.dye-dot');
       if (dot) {
         const color = ruleColor(rule);
