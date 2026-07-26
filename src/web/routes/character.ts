@@ -8,17 +8,17 @@ import {
   renamePlayer,
   deletePlayer,
 } from '../../domain/players';
-import { getClass, type Gender } from '../../domain/classes';
+import { getClass } from '../../domain/classes';
 import {
   clearSlot,
   cosmeticSkinUrlForPlayer,
   setSlotRule,
 } from '../../domain/slotcosmetics';
 import { buildSetupSnippet } from '../../domain/snippet';
-import { getCosmetics, spriteId } from '../../domain/cosmetics';
+import { getCosmetics } from '../../domain/cosmetics';
 import { dyeRule, dyeViewModel } from '../../domain/dye';
-import { purchase } from '../../domain/shop';
-import { MAX_RECOLOR_SLOT, presentSlots } from '../../domain/slots';
+import { channelFor } from '../../domain/cosmetic-entitlements';
+import { MAX_RECOLOR_SLOT } from '../../domain/slots';
 
 const RenameInput = z.object({
   token: z.string().min(1),
@@ -28,8 +28,9 @@ const TokenInput = z.object({ token: z.string().min(1) });
 const DyeSetInput = z.object({
   token: z.string().min(1),
   slot: z.coerce.number().int().min(0).max(MAX_RECOLOR_SLOT),
-  finish: z.enum(['wheel', 'black', 'white', 'steel']),
+  recipe: z.enum(['wheel', 'steel', 'bronze', 'gold']),
   hue: z.coerce.number().int().min(0).max(359).optional(),
+  tone: z.coerce.number().finite().min(-1).max(1).optional(),
 });
 const DyeClearInput = z.object({
   token: z.string().min(1),
@@ -102,40 +103,6 @@ export function registerCharacterRoutes(
     res.redirect('/');
   });
 
-  app.post('/character/dye/unlock', (req, res) => {
-    const parsed = TokenInput.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).send('Invalid input');
-      return;
-    }
-    const player = getPlayerByToken(db, parsed.data.token);
-    if (!player) {
-      res.status(404).send('Not found');
-      return;
-    }
-    const sprite = spriteId(player.class_key, player.gender as Gender);
-    if (presentSlots(sprite, slotmapsDir).length === 0) {
-      res.status(409).send('Dyes are not available for this sprite yet');
-      return;
-    }
-
-    const result = purchase(
-      db,
-      player.id,
-      'cosmetic_wheel_t1',
-      Date.now(),
-    );
-    if (!result.ok && result.reason === 'insufficient_gold') {
-      res.status(409).send('Not enough gold');
-      return;
-    }
-    if (!result.ok && result.reason !== 'already_owned') {
-      res.status(400).send('Unable to unlock the dye wheel');
-      return;
-    }
-    res.redirect(`/character?token=${encodeURIComponent(player.auth_token)}`);
-  });
-
   app.post('/character/dye/set', (req, res) => {
     const parsed = DyeSetInput.safeParse(req.body);
     if (!parsed.success) {
@@ -147,17 +114,17 @@ export function registerCharacterRoutes(
       res.sendStatus(404);
       return;
     }
-    const cosmetics = getCosmetics(db, player.id);
-    if (!cosmetics || cosmetics.wheel_tier < 1) {
-      res.sendStatus(403);
-      return;
-    }
-    const sprite = spriteId(player.class_key, player.gender as Gender);
-    if (!presentSlots(sprite, slotmapsDir).includes(parsed.data.slot)) {
+    const definition = channelFor(player.class_key, player.gender, parsed.data.slot);
+    if (!definition) {
       res.sendStatus(400);
       return;
     }
-    const rule = dyeRule(parsed.data.finish, parsed.data.hue ?? null);
+    const tier = getCosmetics(db, player.id)?.wheel_tier ?? 0;
+    if (tier < definition.requiredTier) {
+      res.sendStatus(403);
+      return;
+    }
+    const rule = dyeRule(parsed.data.recipe, parsed.data.hue ?? null, parsed.data.tone);
     if (!rule) {
       res.sendStatus(400);
       return;
@@ -178,14 +145,14 @@ export function registerCharacterRoutes(
       res.sendStatus(404);
       return;
     }
-    const cosmetics = getCosmetics(db, player.id);
-    if (!cosmetics || cosmetics.wheel_tier < 1) {
-      res.sendStatus(403);
+    const definition = channelFor(player.class_key, player.gender, parsed.data.slot);
+    if (!definition) {
+      res.sendStatus(400);
       return;
     }
-    const sprite = spriteId(player.class_key, player.gender as Gender);
-    if (!presentSlots(sprite, slotmapsDir).includes(parsed.data.slot)) {
-      res.sendStatus(400);
+    const tier = getCosmetics(db, player.id)?.wheel_tier ?? 0;
+    if (tier < definition.requiredTier) {
+      res.sendStatus(403);
       return;
     }
 

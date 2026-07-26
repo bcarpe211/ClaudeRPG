@@ -1,245 +1,156 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { loadConfig } from '../src/config';
 import { openDb } from '../src/db/db';
 import { getCosmetics } from '../src/domain/cosmetics';
-import { createPlayer, getPlayerById } from '../src/domain/players';
-import { setCosmeticHue } from '../src/domain/shop';
-import { getSlotConfig } from '../src/domain/slotcosmetics';
-import { presentSlots, SLOTS } from '../src/domain/slots';
+import { createPlayer } from '../src/domain/players';
+import { purchase, setCosmeticHue } from '../src/domain/shop';
+import {
+  getSlotConfig,
+  setSlotRule,
+} from '../src/domain/slotcosmetics';
+import { MATERIAL_PRESETS, wheelRule } from '../src/domain/dye';
+import { SLOTS } from '../src/domain/slots';
 import { seedSettings } from '../src/domain/settings';
 import { createApp } from '../src/web/app';
 
-function ctx(gender: 'M' | 'F' = 'M', slotmapsDir?: string) {
+function ctx(gender: 'M' | 'F' = 'M') {
   const db = openDb(':memory:');
   seedSettings(db);
-  const app = createApp({ db, config: loadConfig({}), slotmapsDir });
+  const app = createApp({ db, config: loadConfig({}) });
   const player = createPlayer(
     db,
     { name: 'A', class_key: 'wizard', gender },
     1,
   );
-  db.prepare('UPDATE players SET gold = 2000000 WHERE id = ?').run(player.id);
+  db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
   return { db, app, player };
 }
 
-function unlock(app: ReturnType<typeof createApp>, token: string) {
-  return request(app)
-    .post('/character/dye/unlock')
-    .type('form')
-    .send({ token });
+function buy(db: ReturnType<typeof openDb>, playerId: number, tier: 1 | 2 | 3) {
+  return purchase(db, playerId, `cosmetic_wheel_t${tier}`, 10);
 }
 
 describe('character dye endpoints', () => {
-  it('unlocks the wheel, deducts gold, and redirects to the character page', async () => {
-    const { db, app, player } = ctx();
-
-    const res = await unlock(app, player.auth_token);
-
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toBe(
-      `/character?token=${encodeURIComponent(player.auth_token)}`,
-    );
-    expect(getPlayerById(db, player.id)?.gold).toBe(500_000);
-    expect(getCosmetics(db, player.id)?.wheel_tier).toBe(1);
-  });
-
-  it('unlocks female dyes and deducts exactly the configured price', async () => {
-    const { db, app, player } = ctx('F');
-
-    const res = await unlock(app, player.auth_token);
-
-    expect(res.status).toBe(302);
-    expect(getPlayerById(db, player.id)?.gold).toBe(500_000);
-    expect(getCosmetics(db, player.id)?.wheel_tier).toBe(1);
-  });
-
-  it('does not charge or offer unlock when the configured slot-map directory is empty', async () => {
-    const slotmapsDir = mkdtempSync(join(tmpdir(), 'clauderpg-empty-slotmaps-'));
-    try {
-      const { db, app, player } = ctx('F', slotmapsDir);
-
-      const unlockRes = await unlock(app, player.auth_token);
-
-      expect(unlockRes.status).toBe(409);
-      expect(getPlayerById(db, player.id)?.gold).toBe(2_000_000);
-      expect(getCosmetics(db, player.id)).toBeUndefined();
-
-      const pageRes = await request(app)
-        .get('/character')
-        .query({ token: player.auth_token });
-
-      expect(pageRes.status).toBe(200);
-      expect(pageRes.text).toContain('Tailoring in progress');
-      expect(pageRes.text).not.toContain('/character/dye/unlock');
-    } finally {
-      rmSync(slotmapsDir, { recursive: true });
-    }
-  });
-
-  it('rejects set and clear until the wheel is unlocked', async () => {
+  it('removes the character-page purchase endpoint', async () => {
     const { app, player } = ctx();
-    const set = await request(app)
-      .post('/character/dye/set')
-      .type('form')
-      .send({
-        token: player.auth_token,
-        slot: String(SLOTS.body),
-        finish: 'wheel',
-        hue: '200',
-      });
-    const clear = await request(app)
-      .post('/character/dye/clear')
-      .type('form')
-      .send({ token: player.auth_token, slot: String(SLOTS.body) });
+    expect((await request(app).post('/character/dye/unlock').type('form').send({ token: player.auth_token })).status).toBe(404);
+  });
 
+  it('returns 404 for an unknown token without mutating anything', async () => {
+    const { app } = ctx();
+    const res = await request(app).post('/character/dye/set').type('form').send({
+      token: 'missing-token', slot: SLOTS.body, recipe: 'wheel', hue: 200,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('allows Tier-1 clothing but rejects Tier-3 weapon at Tier 1', async () => {
+    const { db, app, player } = ctx();
+    expect(buy(db, player.id, 1)).toMatchObject({ ok: true, tier: 1 });
+    const clothing = await request(app).post('/character/dye/set').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, tone: -0.25 });
+    const weapon = await request(app).post('/character/dye/set').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.weapon, recipe: 'gold' });
+    expect(clothing.status).toBe(204);
+    expect(weapon.status).toBe(403);
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({ op: 'colorize', hue: 200, sat: 0.6, tone: -0.25 });
+  });
+
+  it('accepts the exact Bronze recipe and bounded Tone override', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    const res = await request(app).post('/character/dye/set').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'bronze', tone: 0.2 });
+    expect(res.status).toBe(204);
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({ op: 'colorize', hue: 28, sat: 0.58, tone: 0.2 });
+  });
+
+  it('rejects invalid Tone without changing the stored rule', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    setSlotRule(db, player.id, SLOTS.body, wheelRule(100), 20);
+    for (const tone of ['1.01', '-1.01', 'NaN', 'Infinity']) {
+      const res = await request(app).post('/character/dye/set').type('form')
+        .send({ token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200, tone });
+      expect(res.status).toBe(400);
+    }
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual(wheelRule(100));
+  });
+
+  it('rejects malformed recipes and hues without changing the stored rule', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    setSlotRule(db, player.id, SLOTS.body, wheelRule(100), 20);
+    for (const body of [
+      { recipe: 'bogus' },
+      { recipe: 'wheel', hue: 360 },
+      { recipe: 'wheel', hue: -1 },
+      { recipe: 'wheel', hue: 'NaN' },
+    ]) {
+      const res = await request(app).post('/character/dye/set').type('form').send({
+        token: player.auth_token, slot: SLOTS.body, ...body,
+      });
+      expect(res.status).toBe(400);
+    }
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual(wheelRule(100));
+  });
+
+  it('does not clear a retained rule while its tier is locked', async () => {
+    const { db, app, player } = ctx();
+    setSlotRule(db, player.id, SLOTS.weapon, MATERIAL_PRESETS.gold, 10);
+    buy(db, player.id, 1);
+    const res = await request(app).post('/character/dye/clear').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.weapon });
+    expect(res.status).toBe(403);
+    expect(getSlotConfig(db, player.id).has(SLOTS.weapon)).toBe(true);
+  });
+
+  it('rejects an unavailable channel with 400', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    const res = await request(app).post('/character/dye/set').type('form').send({
+      token: player.auth_token, slot: SLOTS.facePaint, recipe: 'steel',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects set and clear until the required tier is owned', async () => {
+    const { app, player } = ctx();
+    const set = await request(app).post('/character/dye/set').type('form').send({
+      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200,
+    });
+    const clear = await request(app).post('/character/dye/clear').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.body });
     expect(set.status).toBe(403);
     expect(clear.status).toBe(403);
   });
 
-  it('stores a wheel color after unlock', async () => {
-    const { db, app, player } = ctx();
-    await unlock(app, player.auth_token);
-
-    const res = await request(app)
-      .post('/character/dye/set')
-      .type('form')
-      .send({
-        token: player.auth_token,
-        slot: String(SLOTS.body),
-        finish: 'wheel',
-        hue: '200',
-      });
-
-    expect(res.status).toBe(204);
-    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({
-      op: 'colorize',
-      hue: 200,
-      sat: 0.6,
-      tone: 0,
-    });
-  });
-
-  it('stores an authored Belt color after unlock', async () => {
-    const { db, app, player } = ctx();
-    await unlock(app, player.auth_token);
-
-    const res = await request(app)
-      .post('/character/dye/set')
-      .type('form')
-      .send({
-        token: player.auth_token,
-        slot: String(SLOTS.belt),
-        finish: 'wheel',
-        hue: '30',
-      });
-
-    expect(res.status).toBe(204);
-    expect(getSlotConfig(db, player.id).get(SLOTS.belt)).toEqual({
-      op: 'colorize',
-      hue: 30,
-      sat: 0.6,
-      tone: 0,
-    });
-  });
-
-  it('stores each named finish using the shared domain rule', async () => {
-    const { db, app, player } = ctx();
-    await unlock(app, player.auth_token);
-
-    const res = await request(app)
-      .post('/character/dye/set')
-      .type('form')
-      .send({
-        token: player.auth_token,
-        slot: String(SLOTS.weapon),
-        finish: 'steel',
-      });
-
-    expect(res.status).toBe(204);
-    expect(getSlotConfig(db, player.id).get(SLOTS.weapon)).toEqual({
-      op: 'colorize',
-      hue: 212,
-      sat: 0.13,
-      tone: 0,
-    });
-  });
-
-  it('rejects absent, outline, and invalid picker inputs', async () => {
-    const { app, player } = ctx();
-    await unlock(app, player.auth_token);
-    const absent = [
-      SLOTS.body,
-      SLOTS.headgear,
-      SLOTS.hair,
-      SLOTS.facePaint,
-      SLOTS.cape,
-      SLOTS.trim,
-      SLOTS.belt,
-      SLOTS.weapon,
-      SLOTS.shield,
-      SLOTS.boots,
-      SLOTS.skin,
-      SLOTS.flair,
-    ].find((slot) => !presentSlots('wizard_M').includes(slot));
-    expect(absent).toBeDefined();
-
-    const requests = [
-      { slot: String(absent), finish: 'steel' },
-      { slot: String(SLOTS.outline), finish: 'steel' },
-      { slot: String(SLOTS.body), finish: 'wheel', hue: '360' },
-      { slot: String(SLOTS.body), finish: 'bogus' },
-    ];
-    for (const body of requests) {
-      const res = await request(app)
-        .post('/character/dye/set')
-        .type('form')
-        .send({ token: player.auth_token, ...body });
-      expect(res.status).toBe(400);
-    }
-  });
-
   it('restores true default even when a legacy body hue existed', async () => {
     const { db, app, player } = ctx();
-    await unlock(app, player.auth_token);
+    buy(db, player.id, 1);
     setCosmeticHue(db, player.id, 'primary', 210, 100);
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(true);
-
-    const res = await request(app)
-      .post('/character/dye/clear')
-      .type('form')
-      .send({ token: player.auth_token, slot: String(SLOTS.body) });
-
+    const res = await request(app).post('/character/dye/clear').type('form')
+      .send({ token: player.auth_token, slot: SLOTS.body });
     expect(res.status).toBe(204);
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
   });
 });
 
 describe('character wardrobe panel', () => {
-  it('offers the unlock on the character page without choosing a default color', async () => {
+  it('offers the next tier on the character page without purchasing it there', async () => {
     const { app, player } = ctx();
-
-    const res = await request(app)
-      .get('/character')
-      .query({ token: player.auth_token });
-
+    const res = await request(app).get('/character').query({ token: player.auth_token });
     expect(res.status).toBe(200);
     expect(res.text).toContain('Unlock Dye Wheel');
     expect(res.text).toContain('1,500,000g');
-    expect(res.text).not.toContain('window.__DYE__');
   });
 
-  it('renders the workbench, authored channels, and client config after unlock', async () => {
-    const { app, player } = ctx();
-    await unlock(app, player.auth_token);
-
-    const res = await request(app)
-      .get('/character')
-      .query({ token: player.auth_token });
-
+  it('renders the workbench, authored channels, and client config after Tier 1', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+    const res = await request(app).get('/character').query({ token: player.auth_token });
     expect(res.status).toBe(200);
     expect(res.text).toContain('Dye Workbench');
     expect(res.text).toContain('data-finish="none"');
@@ -250,35 +161,15 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('/static/dye.js');
   });
 
-  it('offers the unlock and persists a rule for an authored female slot', async () => {
+  it('persists a rule for an authored female channel after Tier 1', async () => {
     const { db, app, player } = ctx('F');
-
-    const res = await request(app)
-      .get('/character')
-      .query({ token: player.auth_token });
-
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('Unlock Dye Wheel');
-    expect(res.text).toContain('/character/dye/unlock');
-    expect(res.text).not.toContain('Tailoring in progress');
-
-    await unlock(app, player.auth_token);
-    const set = await request(app)
-      .post('/character/dye/set')
-      .type('form')
-      .send({
-        token: player.auth_token,
-        slot: String(SLOTS.flair),
-        finish: 'wheel',
-        hue: '200',
-      });
-
+    buy(db, player.id, 1);
+    const set = await request(app).post('/character/dye/set').type('form').send({
+      token: player.auth_token, slot: SLOTS.body, recipe: 'wheel', hue: 200,
+    });
     expect(set.status).toBe(204);
-    expect(getSlotConfig(db, player.id).get(SLOTS.flair)).toEqual({
-      op: 'colorize',
-      hue: 200,
-      sat: 0.6,
-      tone: 0,
+    expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({
+      op: 'colorize', hue: 200, sat: 0.6, tone: 0,
     });
   });
 });
