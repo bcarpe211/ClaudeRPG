@@ -1,32 +1,39 @@
 import type Database from 'better-sqlite3';
 import { getSetting } from './settings';
 
-export interface Sku { id: string; priceSetting: string; priceDefault: number; grantTier: number }
+export interface Sku { id: string; priceSetting: string; priceDefault: number; grantTier: 1 | 2 | 3 }
 export const SKUS: Record<string, Sku> = {
   cosmetic_wheel_t1: { id: 'cosmetic_wheel_t1', priceSetting: 'cosmetic_wheel_t1_price', priceDefault: 1_500_000, grantTier: 1 },
+  cosmetic_wheel_t2: { id: 'cosmetic_wheel_t2', priceSetting: 'cosmetic_wheel_t2_price', priceDefault: 2_000_000, grantTier: 2 },
+  cosmetic_wheel_t3: { id: 'cosmetic_wheel_t3', priceSetting: 'cosmetic_wheel_t3_price', priceDefault: 2_500_000, grantTier: 3 },
 };
 
 export type PurchaseResult =
   | { ok: true; newGold: number; tier: number }
-  | { ok: false; reason: 'unknown_sku' | 'no_player' | 'already_owned' | 'insufficient_gold'; price?: number; gold?: number };
+  | { ok: false; reason: 'unknown_sku' | 'no_player' | 'already_owned' | 'out_of_sequence' | 'insufficient_gold'; price?: number; gold?: number; currentTier?: number };
 
-function priceOf(db: Database.Database, sku: Sku): number {
-  const raw = getSetting(db, sku.priceSetting);
-  const n = raw !== undefined ? Number(raw) : NaN;
-  return Number.isFinite(n) ? n : sku.priceDefault;
+export function skuPrice(db: Database.Database, sku: Sku): number {
+  const configured = Number(getSetting(db, sku.priceSetting));
+  return Number.isFinite(configured) && configured >= 0 ? configured : sku.priceDefault;
+}
+
+export function nextCosmeticSku(wheelTier: number): Sku | undefined {
+  return Object.values(SKUS).find((sku) => sku.grantTier === wheelTier + 1);
 }
 
 export function purchase(db: Database.Database, playerId: number, skuId: string, now: number): PurchaseResult {
   const sku = SKUS[skuId];
   if (!sku) return { ok: false, reason: 'unknown_sku' };
-  const price = priceOf(db, sku);
+  const price = skuPrice(db, sku);
   return db.transaction((): PurchaseResult => {
     const p = db.prepare('SELECT gold FROM players WHERE id = ?').get(playerId) as { gold: number } | undefined;
     if (!p) return { ok: false, reason: 'no_player' };
     const cos = db.prepare('SELECT wheel_tier FROM player_cosmetics WHERE player_id = ?')
       .get(playerId) as { wheel_tier: number } | undefined;
-    if (cos && cos.wheel_tier >= sku.grantTier) return { ok: false, reason: 'already_owned' };
-    if (p.gold < price) return { ok: false, reason: 'insufficient_gold', price, gold: p.gold };
+    const currentTier = cos?.wheel_tier ?? 0;
+    if (sku.grantTier <= currentTier) return { ok: false, reason: 'already_owned', currentTier };
+    if (sku.grantTier !== currentTier + 1) return { ok: false, reason: 'out_of_sequence', currentTier };
+    if (p.gold < price) return { ok: false, reason: 'insufficient_gold', price, gold: p.gold, currentTier };
     db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(price, playerId);
     db.prepare(
       `INSERT INTO player_cosmetics (player_id, wheel_tier, updated_at) VALUES (?, ?, ?)

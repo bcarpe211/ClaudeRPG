@@ -78,6 +78,10 @@ export const SETTINGS_META: Record<string, SettingMeta> = {
   // Shop
   cosmetic_wheel_t1_price: { group: 'Shop', label: 'Dye wheel (T1) price', unit: 'gold', min: 0, step: 10000,
     description: 'Gold to unlock the Tier-1 clothing color wheel. Cosmetic only (no combat effect). Recoloring is free once unlocked.' },
+  cosmetic_wheel_t2_price: { group: 'Shop', label: 'Dye wheel (T2) price', unit: 'gold', min: 0, step: 10000,
+    description: 'Gold to unlock Tier-2 detail channels after Tier 1. Cosmetic only; recoloring remains free.' },
+  cosmetic_wheel_t3_price: { group: 'Shop', label: 'Dye wheel (T3) price', unit: 'gold', min: 0, step: 10000,
+    description: 'Gold to unlock Tier-3 weapon, shield, and equipment channels after Tier 2. Cosmetic only.' },
   // System
   cache_read_weight: { group: 'System', label: 'Cache-read token weight', unit: '0–1', min: 0, max: 1, step: 0.05,
     description: "Fraction of cache-read tokens counted toward effective tokens (XP + damage). 0 = ignore cache reads; 1 = count them fully. Cache reads are cheap, so they're usually discounted." },

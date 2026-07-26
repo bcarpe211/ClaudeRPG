@@ -32,6 +32,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   monster_debuff_factor: '0.85',   // swing-damage multiplier while debuffed
   monster_debuff_seconds: '8',     // debuff duration
   cosmetic_wheel_t1_price: '1500000', // gold to unlock the Tier-1 clothing dye wheel
+  cosmetic_wheel_t2_price: '2000000',
+  cosmetic_wheel_t3_price: '2500000',
 };
 
 export function seedSettings(db: Database.Database): void {
