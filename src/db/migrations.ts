@@ -157,4 +157,8 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '009_player_slot_cosmetic_tone',
+    sql: `ALTER TABLE player_slot_cosmetics ADD COLUMN tone REAL;`,
+  },
 ];

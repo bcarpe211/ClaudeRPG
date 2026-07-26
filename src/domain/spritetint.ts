@@ -89,6 +89,7 @@ export interface SlotRule {
   sat?: number;   // 'colorize'
   lo?: number;    // 'value'
   hi?: number;    // 'value'
+  tone?: number;  // -1 (black) to 1 (white)
 }
 
 /** Recolour a sprite by per-pixel slot ids. `slotIds[p]` labels pixel p; each slot's

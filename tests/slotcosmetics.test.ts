@@ -73,3 +73,25 @@ describe('skinRenderHash + cosmeticSkinUrl', () => {
     expect(cosmeticSkinUrl(5, 'wizard', 'M', cfg, 'a')).toBe(`/sprite/skin/5/a/${skinRenderHash(spriteId('wizard', 'M'), cfg)}.png`);
   });
 });
+
+describe('Tone persistence and hashing', () => {
+  it('round-trips per-slot Tone and treats null as zero', () => {
+    const p = player();
+    setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 20, sat: 0.6, tone: -0.4 }, 100);
+    expect(getSlotConfig(db, p.id).get(SLOTS.body)).toEqual({ op: 'colorize', hue: 20, sat: 0.6, tone: -0.4 });
+  });
+
+  it('rejects non-finite and out-of-range Tone at the storage boundary', () => {
+    const p = player();
+    expect(() => setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 20, tone: 1.01 }, 100)).toThrow(RangeError);
+    expect(() => setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 20, tone: Number.NaN }, 100)).toThrow(RangeError);
+  });
+
+  it('hashes omitted and zero Tone identically but changes for nonzero Tone', () => {
+    const omitted = new Map([[SLOTS.body, { op: 'colorize' as const, hue: 20, sat: 0.6 }]]);
+    const zero = new Map([[SLOTS.body, { op: 'colorize' as const, hue: 20, sat: 0.6, tone: 0 }]]);
+    const dark = new Map([[SLOTS.body, { op: 'colorize' as const, hue: 20, sat: 0.6, tone: -0.4 }]]);
+    expect(skinRenderHash('wizard_M', omitted)).toBe(skinRenderHash('wizard_M', zero));
+    expect(skinRenderHash('wizard_M', omitted)).not.toBe(skinRenderHash('wizard_M', dark));
+  });
+});
