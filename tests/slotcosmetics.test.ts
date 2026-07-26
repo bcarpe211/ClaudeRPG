@@ -5,7 +5,8 @@ import { createPlayer } from '../src/domain/players';
 import { purchase, setCosmeticHue } from '../src/domain/shop';
 import { SLOTS } from '../src/domain/slots';
 import {
-  getSlotConfig, getEntitledSlotConfig, setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl,
+  applySlotMutationBatch, beginSlotMutationSession, getSlotConfig, getEntitledSlotConfig,
+  setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl,
 } from '../src/domain/slotcosmetics';
 import { classSpriteUrl } from '../src/domain/classes';
 import { getCosmetics, spriteId } from '../src/domain/cosmetics';
@@ -125,5 +126,47 @@ describe('Tone persistence and hashing', () => {
     const dark = new Map([[SLOTS.body, { op: 'colorize' as const, hue: 20, sat: 0.6, tone: -0.4 }]]);
     expect(skinRenderHash('wizard_M', omitted)).toBe(skinRenderHash('wizard_M', zero));
     expect(skinRenderHash('wizard_M', omitted)).not.toBe(skinRenderHash('wizard_M', dark));
+  });
+});
+
+describe('applySlotMutationBatch', () => {
+  it('applies a multi-slot set and clear with one shared revision', () => {
+    const created = player();
+    const session = beginSlotMutationSession(db, created.id);
+    setSlotRule(db, created.id, SLOTS.cape, { op: 'colorize', hue: 10, sat: 0.6 }, 1);
+    expect(applySlotMutationBatch(db, created.id, session.session, 1, [
+      { slot: SLOTS.body, rule: { op: 'colorize', hue: 200, sat: 0.6, tone: 0.2 } },
+      { slot: SLOTS.cape, rule: null },
+    ], 100)).toBe('applied');
+    expect(getSlotConfig(db, created.id).get(SLOTS.body)).toEqual({
+      op: 'colorize', hue: 200, sat: 0.6, tone: 0.2,
+    });
+    expect(getSlotConfig(db, created.id).has(SLOTS.cape)).toBe(false);
+  });
+
+  it('treats an exact replay as duplicate and rejects mixed duplicate/new state', () => {
+    const created = player();
+    const session = beginSlotMutationSession(db, created.id);
+    const operations = [
+      { slot: SLOTS.body, rule: { op: 'colorize' as const, hue: 120, sat: 0.6 } },
+      { slot: SLOTS.skin, rule: { op: 'colorize' as const, hue: 24, sat: 0.6 } },
+    ];
+    expect(applySlotMutationBatch(db, created.id, session.session, 7, operations, 100)).toBe('applied');
+    expect(applySlotMutationBatch(db, created.id, session.session, 7, operations, 101)).toBe('duplicate');
+    expect(applySlotMutationBatch(db, created.id, session.session, 7, [
+      operations[0], { slot: SLOTS.cape, rule: null },
+    ], 102)).toBe('stale');
+  });
+
+  it('rolls back rules and tombstones when any write throws', () => {
+    const created = player();
+    const session = beginSlotMutationSession(db, created.id);
+    expect(() => applySlotMutationBatch(db, created.id, session.session, 1, [
+      { slot: SLOTS.body, rule: { op: 'colorize', hue: 10, sat: 0.6 } },
+      { slot: SLOTS.skin, rule: { op: 'colorize', hue: 10, sat: 0.6, tone: 2 } },
+    ], 100)).toThrow(RangeError);
+    expect(getSlotConfig(db, created.id).has(SLOTS.body)).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM player_slot_cosmetic_revisions WHERE player_id = ?')
+      .get(created.id)).toEqual({ n: 0 });
   });
 });

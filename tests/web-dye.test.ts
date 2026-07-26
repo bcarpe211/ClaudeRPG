@@ -33,6 +33,26 @@ function buy(db: ReturnType<typeof openDb>, playerId: number, tier: 1 | 2 | 3) {
   return purchase(db, playerId, `cosmetic_wheel_t${tier}`, 10);
 }
 
+function dyeState(db: ReturnType<typeof openDb>, playerId: number) {
+  return {
+    config: [...getSlotConfig(db, playerId)],
+    revisions: db.prepare(
+      `SELECT slot, session, revision FROM player_slot_cosmetic_revisions
+       WHERE player_id = ? ORDER BY slot`,
+    ).all(playerId),
+  };
+}
+
+function expectDyeState(
+  db: ReturnType<typeof openDb>,
+  playerId: number,
+  expected: ReturnType<typeof dyeState>,
+) {
+  const actual = dyeState(db, playerId);
+  expect(actual.config).toEqual(expected.config);
+  expect(actual.revisions).toEqual(expected.revisions);
+}
+
 describe('character dye endpoints', () => {
   it('removes the character-page purchase endpoint', async () => {
     const { app, player } = ctx();
@@ -216,6 +236,205 @@ describe('character dye endpoints', () => {
       .send({ token: player.auth_token, slot: SLOTS.body, session: 1, revision: 1 });
     expect(res.status).toBe(204);
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
+  });
+});
+
+describe('character dye batch save endpoint', () => {
+  it('applies one canonical multi-slot response and returns it again for an exact replay', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    const save = (changes: unknown, revision = 1) => request(app)
+      .post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision,
+        changes: JSON.stringify(changes),
+      });
+    const changes = [
+      { action: 'set', slot: SLOTS.body, recipe: 'wheel', hue: 210, tone: -0.2 },
+      { action: 'set', slot: SLOTS.headgear, recipe: 'gold', tone: 0.1 },
+    ];
+
+    const applied = await save(changes);
+
+    expect(applied.status).toBe(200);
+    expect(applied.body).toEqual({
+      config: {
+        [SLOTS.body]: { op: 'colorize', hue: 210, sat: 0.6, tone: -0.2 },
+        [SLOTS.headgear]: { op: 'colorize', hue: 46, sat: 0.75, tone: 0.1 },
+      },
+      hash: expect.stringMatching(/^[0-9a-f]{16}$/),
+    });
+    expect(dyeState(db, player.id).revisions).toEqual([
+      { slot: SLOTS.body, session: browserSession.session, revision: 1 },
+      { slot: SLOTS.headgear, session: browserSession.session, revision: 1 },
+    ]);
+    const afterApplied = dyeState(db, player.id);
+
+    const replay = await save(changes);
+
+    expect(replay.status).toBe(200);
+    expect(replay.text).toBe(applied.text);
+    expectDyeState(db, player.id, afterApplied);
+  });
+
+  it('rejects a mixed authorized and locked batch without changing rules or revisions', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    const save = (changes: unknown, revision = 1) => request(app)
+      .post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision,
+        changes: JSON.stringify(changes),
+      });
+    expect((await save([
+      { action: 'set', slot: SLOTS.body, recipe: 'wheel', hue: 80 },
+    ])).status).toBe(200);
+    const before = dyeState(db, player.id);
+
+    expect((await save([
+      { action: 'set', slot: SLOTS.body, recipe: 'wheel', hue: 210 },
+      { action: 'set', slot: SLOTS.weapon, recipe: 'gold' },
+    ], 2)).status).toBe(403);
+    expectDyeState(db, player.id, before);
+  });
+
+  it('rejects unavailable and duplicate slots without changing rules or revisions', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    const save = (changes: unknown, revision = 1) => request(app)
+      .post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision,
+        changes: JSON.stringify(changes),
+      });
+    expect((await save([
+      { action: 'set', slot: SLOTS.body, recipe: 'wheel', hue: 80 },
+    ])).status).toBe(200);
+    const before = dyeState(db, player.id);
+
+    expect((await save([
+      { action: 'clear', slot: SLOTS.facePaint },
+    ], 2)).status).toBe(403);
+    expectDyeState(db, player.id, before);
+
+    expect((await save([
+      { action: 'clear', slot: SLOTS.body },
+      { action: 'clear', slot: SLOTS.body },
+    ], 3)).status).toBe(400);
+    expectDyeState(db, player.id, before);
+  });
+
+  it('rejects malformed JSON and strict-schema violations without changing state', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    setSlotRule(db, player.id, SLOTS.body, wheelRule(80), 10);
+    const before = dyeState(db, player.id);
+    const invalidRequests = [
+      request(app).post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision: 1,
+        changes: '{',
+      }),
+      request(app).post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision: 1,
+        changes: JSON.stringify([]),
+      }),
+      request(app).post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision: 1,
+        changes: JSON.stringify([
+          { action: 'set', slot: SLOTS.body, recipe: 'wheel', hue: 210, extra: true },
+        ]),
+      }),
+      request(app).post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision: 1,
+        changes: JSON.stringify([{ action: 'clear', slot: SLOTS.body }]),
+        extra: true,
+      }),
+    ];
+
+    for (const invalidRequest of invalidRequests) {
+      expect((await invalidRequest).status).toBe(400);
+      expectDyeState(db, player.id, before);
+    }
+  });
+
+  it('rejects 13 changes without changing rules or revisions', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    setSlotRule(db, player.id, SLOTS.body, wheelRule(80), 10);
+    const before = dyeState(db, player.id);
+    const changes = Array.from(
+      { length: 13 },
+      (_, slot) => ({ action: 'clear' as const, slot }),
+    );
+
+    const res = await request(app).post('/character/dye/save').type('form').send({
+      token: player.auth_token,
+      session: browserSession.session,
+      revision: 1,
+      changes: JSON.stringify(changes),
+    });
+
+    expect(res.status).toBe(400);
+    expectDyeState(db, player.id, before);
+  });
+
+  it('returns 404 for an unknown token without changing rules or revisions', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    const seeded = await request(app).post('/character/dye/save').type('form').send({
+      token: player.auth_token,
+      session: browserSession.session,
+      revision: 1,
+      changes: JSON.stringify([
+        { action: 'set', slot: SLOTS.body, recipe: 'wheel', hue: 80 },
+      ]),
+    });
+    expect(seeded.status).toBe(200);
+    const before = dyeState(db, player.id);
+
+    const res = await request(app).post('/character/dye/save').type('form').send({
+      token: 'missing-token',
+      session: browserSession.session,
+      revision: 2,
+      changes: JSON.stringify([{ action: 'clear', slot: SLOTS.body }]),
+    });
+
+    expect(res.status).toBe(404);
+    expectDyeState(db, player.id, before);
+  });
+
+  it('returns 409 for a stale mixed batch without changing rules or revisions', async () => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    const save = (changes: unknown, revision = 1) => request(app)
+      .post('/character/dye/save').type('form').send({
+        token: player.auth_token,
+        session: browserSession.session,
+        revision,
+        changes: JSON.stringify(changes),
+      });
+    expect((await save([
+      { action: 'set', slot: SLOTS.body, recipe: 'wheel', hue: 210 },
+      { action: 'set', slot: SLOTS.headgear, recipe: 'gold' },
+    ], 5)).status).toBe(200);
+    const before = dyeState(db, player.id);
+
+    expect((await save([
+      { action: 'clear', slot: SLOTS.body },
+      { action: 'set', slot: SLOTS.skin, recipe: 'wheel', hue: 24 },
+    ], 4)).status).toBe(409);
+    expectDyeState(db, player.id, before);
   });
 });
 

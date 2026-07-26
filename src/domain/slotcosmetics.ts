@@ -163,6 +163,59 @@ export function applySlotMutation(
   })();
 }
 
+export interface SlotMutationOperation {
+  slot: number;
+  rule: SlotRule | null;
+}
+
+export type SlotMutationBatchResult = 'applied' | 'duplicate' | 'stale';
+
+export function applySlotMutationBatch(
+  db: Database.Database,
+  playerId: number,
+  session: number,
+  revision: number,
+  operations: readonly SlotMutationOperation[],
+  now: number,
+): SlotMutationBatchResult {
+  if (operations.length === 0) {
+    throw new RangeError('Slot mutation batch must not be empty');
+  }
+  return db.transaction(() => {
+    const issued = db.prepare(
+      'SELECT session FROM player_cosmetic_mutation_sessions WHERE player_id = ?',
+    ).get(playerId) as SessionRow | undefined;
+    if (!issued || session > issued.session) return 'stale';
+
+    const states = operations.map(({ slot }) => {
+      const previous = db.prepare(
+        `SELECT session, revision FROM player_slot_cosmetic_revisions
+         WHERE player_id = ? AND slot = ?`,
+      ).get(playerId, slot) as (SessionRow & { revision: number }) | undefined;
+      if (!previous) return 'new' as const;
+      if (session < previous.session
+        || (session === previous.session && revision < previous.revision)) return 'stale' as const;
+      if (session === previous.session && revision === previous.revision) return 'duplicate' as const;
+      return 'new' as const;
+    });
+    if (states.includes('stale')) return 'stale';
+    if (states.every((state) => state === 'duplicate')) return 'duplicate';
+    if (states.some((state) => state === 'duplicate')) return 'stale';
+
+    for (const { slot, rule } of operations) {
+      db.prepare(
+        `INSERT INTO player_slot_cosmetic_revisions (player_id, slot, session, revision)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(player_id, slot) DO UPDATE SET
+           session = excluded.session, revision = excluded.revision`,
+      ).run(playerId, slot, session, revision);
+      if (rule) setSlotRule(db, playerId, slot, rule, now);
+      else clearSlotRows(db, playerId, slot, now);
+    }
+    return 'applied';
+  })();
+}
+
 import { classSpriteUrl, type Gender } from './classes';
 
 export interface CosmeticPlayerRef {

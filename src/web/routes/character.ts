@@ -8,13 +8,16 @@ import {
   renamePlayer,
   deletePlayer,
 } from '../../domain/players';
-import { getClass } from '../../domain/classes';
+import { getClass, type Gender } from '../../domain/classes';
 import {
   applySlotMutation,
+  applySlotMutationBatch,
   cosmeticSkinUrlForPlayer,
+  getEntitledSlotConfig,
+  skinRenderHash,
 } from '../../domain/slotcosmetics';
 import { buildSetupSnippet } from '../../domain/snippet';
-import { getCosmetics } from '../../domain/cosmetics';
+import { getCosmetics, spriteId } from '../../domain/cosmetics';
 import { dyeRule, dyeViewModel } from '../../domain/dye';
 import { channelFor } from '../../domain/cosmetic-entitlements';
 import { MAX_RECOLOR_SLOT } from '../../domain/slots';
@@ -39,6 +42,25 @@ const DyeClearInput = z.object({
   session: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   revision: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 });
+const DyeBatchEnvelope = z.object({
+  token: z.string().min(1),
+  session: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  revision: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  changes: z.string().min(2).max(8192),
+}).strict();
+const DyeBatchChanges = z.array(z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('set'),
+    slot: z.number().int().min(0).max(MAX_RECOLOR_SLOT),
+    recipe: z.enum(['wheel', 'steel', 'bronze', 'gold']),
+    hue: z.number().int().min(0).max(359).optional(),
+    tone: z.number().finite().min(-1).max(1).optional(),
+  }).strict(),
+  z.object({
+    action: z.literal('clear'),
+    slot: z.number().int().min(0).max(MAX_RECOLOR_SLOT),
+  }).strict(),
+])).min(1).max(MAX_RECOLOR_SLOT);
 
 export function registerCharacterRoutes(
   app: Express,
@@ -174,5 +196,79 @@ export function registerCharacterRoutes(
       return;
     }
     res.sendStatus(204);
+  });
+
+  app.post('/character/dye/save', (req, res) => {
+    const envelope = DyeBatchEnvelope.safeParse(req.body);
+    if (!envelope.success) {
+      res.sendStatus(400);
+      return;
+    }
+
+    let changes: z.infer<typeof DyeBatchChanges>;
+    try {
+      changes = DyeBatchChanges.parse(JSON.parse(envelope.data.changes));
+    } catch {
+      res.sendStatus(400);
+      return;
+    }
+
+    const slots = new Set(changes.map(({ slot }) => slot));
+    if (slots.size !== changes.length) {
+      res.sendStatus(400);
+      return;
+    }
+
+    const player = getPlayerByToken(db, envelope.data.token);
+    if (!player) {
+      res.sendStatus(404);
+      return;
+    }
+
+    const tier = getCosmetics(db, player.id)?.wheel_tier ?? 0;
+    for (const change of changes) {
+      const definition = channelFor(player.class_key, player.gender, change.slot);
+      if (!definition || tier < definition.requiredTier) {
+        res.sendStatus(403);
+        return;
+      }
+    }
+
+    const operations = [];
+    for (const change of changes) {
+      if (change.action === 'clear') {
+        operations.push({ slot: change.slot, rule: null });
+        continue;
+      }
+      const rule = dyeRule(change.recipe, change.hue ?? null, change.tone);
+      if (!rule) {
+        res.sendStatus(400);
+        return;
+      }
+      operations.push({ slot: change.slot, rule });
+    }
+
+    const result = applySlotMutationBatch(
+      db,
+      player.id,
+      envelope.data.session,
+      envelope.data.revision,
+      operations,
+      Date.now(),
+    );
+    if (result === 'stale') {
+      res.status(409).send('Stale cosmetic mutation');
+      return;
+    }
+
+    const config = getEntitledSlotConfig(db, player);
+    res.json({
+      config: Object.fromEntries(config),
+      hash: skinRenderHash(
+        spriteId(player.class_key, player.gender as Gender),
+        config,
+        slotmapsDir,
+      ),
+    });
   });
 }
