@@ -14,6 +14,7 @@ import {
   dyeRule,
   dyeViewModel,
   FINISHES,
+  MATERIAL_PRESETS,
   WHEEL_SAT,
   wheelRule,
 } from '../src/domain/dye';
@@ -45,8 +46,9 @@ describe('dye rules', () => {
   });
 
   it('maps picker intent to stored rules and rejects invalid intent', () => {
-    expect(dyeRule('wheel', 200)).toEqual(wheelRule(200));
-    expect(dyeRule('steel', null)).toEqual(FINISHES.steel);
+    expect(dyeRule('wheel', 200, -0.25)).toEqual({ op: 'colorize', hue: 200, sat: 0.6, tone: -0.25 });
+    expect(dyeRule('steel', null, undefined)).toEqual(MATERIAL_PRESETS.steel);
+    expect(dyeRule('steel', null, 0.4)).toEqual({ ...MATERIAL_PRESETS.steel, tone: 0.4 });
     expect(dyeRule('wheel', null)).toBeNull();
     expect(dyeRule('wheel', 360)).toBeNull();
     expect(dyeRule('bogus', 10)).toBeNull();
@@ -57,6 +59,14 @@ describe('dye rules', () => {
       black: { op: 'value', lo: 0, hi: 0.32 },
       white: { op: 'value', lo: 0.74, hi: 1 },
       steel: { op: 'colorize', hue: 212, sat: 0.13 },
+    });
+  });
+
+  it('defines the approved material recipes', () => {
+    expect(MATERIAL_PRESETS).toEqual({
+      steel: { op: 'colorize', hue: 212, sat: 0.13, tone: 0 },
+      bronze: { op: 'colorize', hue: 28, sat: 0.58, tone: -0.12 },
+      gold: { op: 'colorize', hue: 46, sat: 0.75, tone: 0.10 },
     });
   });
 

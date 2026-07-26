@@ -27,14 +27,22 @@ export const FINISHES: Record<'black' | 'white' | 'steel', SlotRule> = {
   steel: { op: 'colorize', hue: 212, sat: 0.13 },
 };
 
+/** Presets available to the Wardrobe after the appropriate tier is unlocked. */
+export const MATERIAL_PRESETS = {
+  steel: { op: 'colorize', hue: 212, sat: 0.13, tone: 0 },
+  bronze: { op: 'colorize', hue: 28, sat: 0.58, tone: -0.12 },
+  gold: { op: 'colorize', hue: 46, sat: 0.75, tone: 0.10 },
+} as const satisfies Record<string, SlotRule>;
+
 /** Translate a picker action into the rule shape persisted by Phase 2B.1. */
-export function dyeRule(finish: string, hue: number | null): SlotRule | null {
-  if (finish === 'wheel') {
+export function dyeRule(recipe: string, hue: number | null, tone?: number): SlotRule | null {
+  if (recipe === 'wheel') {
     return hue != null && Number.isInteger(hue) && hue >= 0 && hue <= 359
-      ? wheelRule(hue)
+      ? { ...wheelRule(hue), tone: tone ?? 0 }
       : null;
   }
-  return (FINISHES as Record<string, SlotRule>)[finish] ?? null;
+  const preset = (MATERIAL_PRESETS as Record<string, SlotRule>)[recipe];
+  return preset ? { ...preset, tone: tone ?? preset.tone ?? 0 } : null;
 }
 
 export interface DyeChannel {

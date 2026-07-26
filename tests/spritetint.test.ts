@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { hueSwap, recolorSprite, colorize, valueRemap, recolorSpriteSlots, type SlotRule } from '../src/domain/spritetint';
+import { hueSwap, recolorSprite, colorize, toneColorize, valueRemap, recolorSpriteSlots, type SlotRule } from '../src/domain/spritetint';
 import { PNG } from 'pngjs';
 
 const PRIEST_M_A = 'assets/oryx_16-bit_fantasy_1.1/Sliced/creatures_24x24/oryx_16bit_fantasy_creatures_05.png';
@@ -30,6 +30,22 @@ describe('colorize (keeps per-pixel brightness, repaints chroma)', () => {
   });
   it('hueSwap still leaves a grey pixel grey (documents the limitation colorize fixes)', () => {
     expect(hueSwap(200, 200, 200, 120)).toEqual([200, 200, 200]);
+  });
+});
+
+describe('toneColorize', () => {
+  it('is byte-identical to colorize at Tone zero', () => {
+    expect(toneColorize(180, 120, 60, 0, 0.6, 0)).toEqual(colorize(180, 120, 60, 0, 0.6));
+  });
+  it('reaches shaded neutral black and white without flattening values', () => {
+    expect(toneColorize(255, 0, 0, 0, 0.6, -1)).toEqual([82, 82, 82]);
+    expect(toneColorize(128, 0, 0, 0, 0.6, -1)).toEqual([41, 41, 41]);
+    expect(toneColorize(255, 0, 0, 0, 0.6, 1)).toEqual([255, 255, 255]);
+    expect(toneColorize(128, 0, 0, 0, 0.6, 1)).toEqual([222, 222, 222]);
+  });
+  it('keeps highlights brighter than shadows at intermediate Tone', () => {
+    expect(toneColorize(230, 20, 20, 10, 0.6, 0.45)[0])
+      .toBeGreaterThan(toneColorize(90, 10, 10, 10, 0.6, 0.45)[0]);
   });
 });
 

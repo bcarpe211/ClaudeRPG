@@ -119,6 +119,7 @@ describe('character dye endpoints', () => {
       op: 'colorize',
       hue: 200,
       sat: 0.6,
+      tone: 0,
     });
   });
 
@@ -141,6 +142,7 @@ describe('character dye endpoints', () => {
       op: 'colorize',
       hue: 30,
       sat: 0.6,
+      tone: 0,
     });
   });
 
@@ -162,6 +164,7 @@ describe('character dye endpoints', () => {
       op: 'colorize',
       hue: 212,
       sat: 0.13,
+      tone: 0,
     });
   });
 
@@ -274,6 +277,7 @@ describe('character wardrobe panel', () => {
       op: 'colorize',
       hue: 200,
       sat: 0.6,
+      tone: 0,
     });
   });
 });
