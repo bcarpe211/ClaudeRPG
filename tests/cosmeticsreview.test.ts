@@ -70,9 +70,9 @@ describe('EXPECTED_CHANNELS', () => {
           SLOTS.flair, SLOTS.skin],
       },
       priest: {
-        M: [SLOTS.body, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
+        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
           SLOTS.skin],
-        F: [SLOTS.body, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
+        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
           SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
       },
       shaman: {
@@ -140,6 +140,8 @@ describe('buildCosmeticsReviewRoster', () => {
       .toContainEqual({ slot: SLOTS.trim, label: 'Trim' });
     expect(roster.find(({ sprite }) => sprite === 'ranger_M')?.channels)
       .toContainEqual({ slot: SLOTS.belt, label: 'Belt' });
+    expect(roster.find(({ sprite }) => sprite === 'priest_M')?.channels)
+      .toContainEqual({ slot: SLOTS.trim, label: 'Trim' });
     expect(roster.find(({ sprite }) => sprite === 'shaman_M')?.channels)
       .toContainEqual({ slot: SLOTS.headgear, label: 'Pelt' });
     expect(roster.find(({ sprite }) => sprite === 'swordsman_F')?.channels)

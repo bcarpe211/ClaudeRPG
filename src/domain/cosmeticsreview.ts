@@ -56,9 +56,9 @@ export const EXPECTED_CHANNELS: Record<
       SLOTS.flair, SLOTS.skin],
   },
   priest: {
-    M: [SLOTS.body, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
+    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
       SLOTS.skin],
-    F: [SLOTS.body, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
+    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
       SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
   },
   shaman: {

@@ -329,11 +329,25 @@ const FIXTURES: readonly CollisionFixture[] = [
     sourceHex: '#b89600',
   },
   {
-    name: 'priest robe edging stays with the robe',
+    name: 'priest red trim across the top of the cap',
     classKey: 'priest',
-    slot: SLOTS.body,
+    slot: SLOTS.trim,
     positions: { a: { x: 10, y: 2 }, b: { x: 10, y: 3 } },
     sourceHex: '#cf3232',
+  },
+  {
+    name: 'priest red trim lines the cap near the right hand',
+    classKey: 'priest',
+    slot: SLOTS.trim,
+    positions: { a: { x: 17, y: 5 }, b: { x: 17, y: 6 } },
+    sourceHex: '#cf3232',
+  },
+  {
+    name: 'priest male left-shoulder trim is female clothing',
+    classKey: 'priest',
+    slot: { M: SLOTS.trim, F: SLOTS.body },
+    positions: { a: { x: 7, y: 12 }, b: { x: 7, y: 13 } },
+    sourceHex: { M: '#cf3232', F: '#693049' },
   },
   {
     name: 'priest belt',
@@ -581,9 +595,16 @@ const FIXTURES: readonly CollisionFixture[] = [
     sourceHex: '#595959',
   },
   {
-    name: 'swordsman sword hilt pixel below the left hand',
+    name: 'swordsman upper trim bridge between the sword and face',
     classKey: 'swordsman',
-    slot: SLOTS.weapon,
+    slot: SLOTS.trim,
+    positions: { a: { x: 6, y: 12 }, b: { x: 6, y: 13 } },
+    sourceHex: '#919191',
+  },
+  {
+    name: 'swordsman lower trim bridge connects to the shirt trim',
+    classKey: 'swordsman',
+    slot: SLOTS.trim,
     positions: { a: { x: 7, y: 13 }, b: { x: 7, y: 14 } },
     sourceHex: '#919191',
   },
@@ -787,6 +808,48 @@ describe('position-specific slot-map collision regressions', () => {
           }
         });
       }
+    }
+  }
+});
+
+describe('priest full-height red trim', () => {
+  const positions = {
+    a: [
+      { x: 14, y: 14 },
+      { x: 15, y: 15 },
+      { x: 16, y: 16 },
+      { x: 16, y: 17 },
+      { x: 17, y: 18 },
+      { x: 17, y: 19 },
+      { x: 18, y: 20 },
+      { x: 18, y: 21 },
+      { x: 19, y: 22 },
+    ],
+    b: [
+      { x: 14, y: 15 },
+      { x: 15, y: 16 },
+      { x: 16, y: 17 },
+      { x: 16, y: 18 },
+      { x: 17, y: 19 },
+      { x: 18, y: 20 },
+      { x: 18, y: 21 },
+      { x: 19, y: 22 },
+    ],
+  } as const;
+
+  for (const gender of ['M', 'F'] as const) {
+    for (const frame of ['a', 'b'] as const) {
+      it(`priest_${gender}_${frame}: maps every red robe-edge pixel as Trim`, () => {
+        const map = loadSlotmapFresh(`priest_${gender}`, frame);
+
+        expect(map, 'slot map must exist').not.toBeNull();
+        for (const position of positions[frame]) {
+          expect(sourceAt('priest', gender, frame, position))
+            .toEqual({ hex: '#cf3232', alpha: 255 });
+          expect(map?.[position.y * 24 + position.x])
+            .toBe(SLOTS.trim);
+        }
+      });
     }
   }
 });

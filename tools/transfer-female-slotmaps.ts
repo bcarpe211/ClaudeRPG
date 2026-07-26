@@ -209,6 +209,7 @@ export const FEMALE_OVERRIDES: Record<string, readonly PixelOverride[]> = {
     { x: 7, y: 20, slot: SLOTS.outline },
   ],
   priest_F_a: [
+    { x: 7, y: 12, slot: SLOTS.body },
     { x: 14, y: 9, slot: SLOTS.hair },
     { x: 15, y: 10, slot: SLOTS.hair },
     { x: 15, y: 11, slot: SLOTS.outline },
@@ -228,6 +229,7 @@ export const FEMALE_OVERRIDES: Record<string, readonly PixelOverride[]> = {
     { x: 20, y: 18, slot: SLOTS.outline },
   ],
   priest_F_b: [
+    { x: 7, y: 13, slot: SLOTS.body },
     { x: 14, y: 10, slot: SLOTS.hair },
     { x: 15, y: 11, slot: SLOTS.hair },
     { x: 15, y: 12, slot: SLOTS.outline },
