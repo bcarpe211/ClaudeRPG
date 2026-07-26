@@ -1,28 +1,50 @@
-<div class="panel bazaar-closed">
-  <div class="bazaar-scene">
-    <div class="bazaar-sign">
-      <span>THE BAZAAR</span>
-      <b>CLOSED</b>
-    </div>
-    <span class="bazaar-spark bazaar-spark-a" aria-hidden="true">✦</span>
-    <span class="bazaar-spark bazaar-spark-b" aria-hidden="true">·</span>
-    <img class="px bazaar-mimic" src="<%= mimicUrl %>" width="168" height="168" alt="a suspicious treasure chest mimic guarding the empty stall" />
-    <span class="bazaar-warning">Definitely not merchandise</span>
-  </div>
-
-  <div class="bazaar-copy">
-    <p class="dye-kicker">A note nailed to the stall</p>
-    <h1>The Bazaar is Closed</h1>
-    <p class="bazaar-lead">The merchant has packed up for now. Come back soon — new wares are being dragged up from the dungeon.</p>
-    <div class="bazaar-note">
-      <span aria-hidden="true">⚠</span>
-      <p>Please do not feed, pet, or attempt to purchase the treasure chest. It has already eaten one inventory ledger.</p>
-    </div>
-    <p class="bazaar-wardrobe">Looking for your Dye Wheel? It now lives in the <b>Wardrobe</b> on your character page.</p>
-    <% if (token) { %>
-      <a class="btn btn-gold" href="/character?token=<%= token %>">← Back to your character</a>
-    <% } else { %>
-      <a class="btn btn-ghost" href="/character">Go to your character</a>
-    <% } %>
-  </div>
+<div class="panel bazaar-open">
+  <% if (!player || !shop) { %>
+    <section class="bazaar-login">
+      <img class="px bazaar-mimic" src="<%= mimicUrl %>" alt="a suspicious treasure chest guarding the Bazaar ledger">
+      <p class="dye-kicker">The merchant needs a name</p>
+      <h1>Choose your character</h1>
+      <% if (error) { %><p class="err"><%= error %></p><% } %>
+      <p>The ledger only opens for a character whose dyes it can keep safe.</p>
+      <a class="btn btn-gold" href="/character">Open character login</a>
+    </section>
+  <% } else if (shop.nextOffer) { const offer = shop.nextOffer; %>
+    <section class="bazaar-offer">
+      <div class="bazaar-avatar sprite-anim" aria-label="animated preview of <%= player.name %>">
+        <img class="px frame-a" src="<%= shop.avatarA %>" alt="">
+        <img class="px frame-b" src="<%= shop.avatarB %>" alt="">
+      </div>
+      <div class="bazaar-ledger">
+        <p class="dye-kicker">Permanent Wardrobe upgrade</p>
+        <span class="bazaar-tier">Tier <%= offer.tier %></span>
+        <h1>Expand <%= player.name %>’s dye kit</h1>
+        <p class="bazaar-balance"><b><%= shop.gold.toLocaleString() %>g</b> on hand</p>
+        <p class="bazaar-ledger-copy">The merchant has opened the next page in your dye ledger.</p>
+        <div class="bazaar-channels" aria-label="new dye channels">
+          <% offer.channels.forEach(function (channel) { %><span class="bazaar-channel"><%= channel.label %></span><% }); %>
+        </div>
+        <% if (purchaseResult === 'success') { %><p class="ok">The new dyes are ready in your Wardrobe.</p><% } %>
+        <% if (purchaseResult === 'insufficient_gold') { %><p class="err">You need <%= offer.missingGold.toLocaleString() %> more gold.</p><% } %>
+        <% if (purchaseResult === 'stale') { %><p class="err">Your Wardrobe already advanced. This is your current offer.</p><% } %>
+        <% if (purchaseResult === 'out_of_sequence' || purchaseResult === 'invalid') { %><p class="err">That ledger entry is not available. No gold was spent.</p><% } %>
+        <form method="post" action="/shop/cosmetics/purchase">
+          <input type="hidden" name="token" value="<%= player.auth_token %>">
+          <input type="hidden" name="sku" value="<%= offer.sku %>">
+          <button class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %> <span><%= offer.price.toLocaleString() %>g</span></button>
+        </form>
+        <a class="bazaar-return" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Return to the Wardrobe</a>
+      </div>
+    </section>
+  <% } else { %>
+    <section class="bazaar-mastery">
+      <img class="px bazaar-mimic" src="<%= mimicUrl %>" alt="the Bazaar mimic presenting a completed dye ledger">
+      <p class="dye-kicker">Every cosmetic tier is yours</p>
+      <h1>Dye Mastery Complete</h1>
+      <p>No more dye upgrades remain to purchase. Every applicable channel is unlocked.</p>
+      <a class="btn btn-gold" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Open the complete Wardrobe</a>
+    </section>
+  <% } %>
 </div>
+<% if (shop && shop.nextOffer) { %>
+<script type="module">import { start } from '/static/anim.js'; start({ periodMs: 700 });</script>
+<% } %>

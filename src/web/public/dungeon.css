@@ -290,3 +290,31 @@ button:disabled:hover{transform:none;box-shadow:none}
   .bazaar-scene{min-height:330px}.bazaar-mimic{width:138px;height:138px}
   .bazaar-copy{padding-right:0}.bazaar-copy h1{font-size:32px}
 }
+
+/* open bazaar — the character is the upgraded artifact, the ledger is the offer */
+.bazaar-open{position:relative;overflow:hidden;min-height:440px;padding:34px;
+  background:
+    linear-gradient(90deg,transparent 48%,#ffffff05 48% 52%,transparent 52%),
+    radial-gradient(circle at 24% 50%,#4d3420 0,transparent 30%),
+    linear-gradient(180deg,#241631,#150e20)}
+.bazaar-open::before{content:"";position:absolute;inset:16px;border:1px solid #ffffff0b;pointer-events:none}
+.bazaar-offer{position:relative;display:grid;grid-template-columns:minmax(220px,.8fr) minmax(0,1.2fr);gap:28px;align-items:center}
+.bazaar-avatar{position:relative;width:216px;height:216px;margin:auto;filter:drop-shadow(0 16px 11px #000c)}
+.bazaar-avatar::before{content:"";position:absolute;inset:12px;border:1px solid #715836;border-radius:50%;
+  background:radial-gradient(ellipse at center,#6e5127 0 11%,#2c1a17 12% 28%,transparent 29%);box-shadow:0 0 0 11px #130d1acc,inset 0 0 25px #000}
+.bazaar-avatar img{position:absolute;z-index:1;inset:0;width:216px;height:216px;image-rendering:pixelated}
+.sprite-anim .frame-b{visibility:hidden}.sprite-anim.show-b .frame-a{visibility:hidden}.sprite-anim.show-b .frame-b{visibility:visible}
+.bazaar-ledger{position:relative;padding:25px 27px 23px;border:1px solid #705338;border-radius:8px;
+  background:linear-gradient(90deg,#20151c,#2b1c21 4%,#39261f 5%,#31211c 95%,#1c1218);box-shadow:inset 0 0 0 2px #c59e5b22,0 18px 30px -20px #000}
+.bazaar-ledger::before{content:"";position:absolute;left:16px;top:13px;bottom:13px;width:2px;background:#b7433838;box-shadow:8px 0 #c79c6230}
+.bazaar-ledger>*{position:relative;margin-left:12px}.bazaar-ledger h1{margin-top:9px;margin-bottom:6px}
+.bazaar-tier{display:inline-flex;padding:6px 10px;border:1px solid var(--gold-dim);color:var(--gold2);font-size:12px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}
+.bazaar-balance{margin:0;color:var(--muted)}.bazaar-balance b{color:var(--gold2);font-variant-numeric:tabular-nums}
+.bazaar-ledger-copy{margin-top:14px;color:#dac8ad;font-size:14px}.bazaar-channels{display:flex;flex-wrap:wrap;gap:7px;margin:18px 0}
+.bazaar-channel{padding:6px 9px;border:1px solid #c99d5c66;border-radius:4px;background:#ffffff08;color:#ead8ad;font-size:12px;font-weight:750}
+.bazaar-open .ok{color:var(--live)}.bazaar-open .err{margin-top:14px;margin-bottom:0}.bazaar-ledger form{margin-top:5px}.bazaar-ledger form button{justify-content:space-between;min-width:255px}.bazaar-return{display:inline-block;margin-top:17px;color:var(--muted);font-size:13px}.bazaar-return:hover{color:var(--gold2)}
+.bazaar-mastery,.bazaar-login{position:relative;text-align:center;max-width:720px;margin:auto}.bazaar-mastery .bazaar-mimic,.bazaar-login .bazaar-mimic{width:168px;height:168px;margin:0 auto 13px}.bazaar-mastery p,.bazaar-login p:not(.dye-kicker){max-width:500px;margin-left:auto;margin-right:auto;color:var(--muted)}.bazaar-mastery .btn,.bazaar-login .btn{margin-top:10px}
+
+@media (max-width:760px){
+  .bazaar-open{padding:20px}.bazaar-offer{grid-template-columns:1fr}.bazaar-avatar{width:168px;height:168px}.bazaar-avatar img{width:168px;height:168px}.bazaar-ledger{padding:21px 17px}.bazaar-ledger>*{margin-left:9px}.bazaar-ledger form button{width:100%;min-width:0}
+}
