@@ -113,7 +113,7 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
       : undefined;
     const player = token ? getPlayerByToken(db, token) : undefined;
     const error = token && !player ? 'No character found for that token.' : undefined;
-    const shop = player ? buildShopViewModel(db, player.id) : null;
+    const shop = player ? buildShopViewModel(db, player.id, slotmapsDir) : null;
     res.status(error ? 404 : 200).send(await renderPage('shop', {
       title: 'The Bazaar',
       frame: 'full',

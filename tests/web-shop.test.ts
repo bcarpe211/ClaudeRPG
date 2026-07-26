@@ -6,7 +6,7 @@ import { getCosmetics } from '../src/domain/cosmetics';
 import { getPlayerById, createPlayer } from '../src/domain/players';
 import { purchase } from '../src/domain/shop';
 import { seedSettings } from '../src/domain/settings';
-import { createApp } from '../src/web/app';
+import { createApp, renderPage } from '../src/web/app';
 
 function ctx(gold = 0) {
   const db = openDb(':memory:');
@@ -45,6 +45,62 @@ describe('Bazaar', () => {
     expect(res.text).toContain('1,500,000g');
     expect(res.text.match(/name="sku"/g)).toHaveLength(1);
     expect(res.text).not.toContain('2,000,000g');
+  });
+
+  it('embeds a token-free next-offer canvas payload before the local preview script', async () => {
+    const { app, player } = ctx(7_000_000);
+    const res = await request(app).get('/shop').query({ token: player.auth_token });
+
+    expect(res.text).toContain('<canvas id="shop-preview"');
+    expect(res.text).toContain('aria-label="Animated preview of A’s next Wardrobe tier"');
+    const bootstrap = res.text.match(/window\.__SHOP_PREVIEW__ = ([\s\S]*?);<\/script>/)?.[1];
+    expect(bootstrap).toBeDefined();
+    expect(bootstrap).not.toContain(player.auth_token);
+    expect(JSON.parse(bootstrap ?? 'null')).toMatchObject({
+      frames: {
+        a: { base: expect.any(String), slotmap: expect.any(Array) },
+        b: { base: expect.any(String), slotmap: expect.any(Array) },
+      },
+      config: {},
+      demoSlots: expect.any(Array),
+    });
+    const colorScript = res.text.indexOf('<script src="/static/dye-color.js"></script>');
+    const bootstrapScript = res.text.indexOf('window.__SHOP_PREVIEW__ =');
+    const previewScript = res.text.indexOf('<script src="/static/shop-preview.js"></script>');
+    expect(colorScript).toBeGreaterThan(-1);
+    expect(bootstrapScript).toBeGreaterThan(colorScript);
+    expect(previewScript).toBeGreaterThan(bootstrapScript);
+  });
+
+  it('escapes less-than signs when serializing the shop preview bootstrap', async () => {
+    const html = await renderPage('shop', {
+      title: 'The Bazaar',
+      frame: 'full',
+      player: { name: 'A', auth_token: 'secret-token' },
+      shop: {
+        currentTier: 0,
+        gold: 7_000_000,
+        avatarA: '/a.png',
+        avatarB: '/b.png',
+        nextOffer: {
+          sku: 'cosmetic_wheel_t1', tier: 1, price: 1_500_000, missingGold: 0, channels: [],
+        },
+        preview: {
+          frames: {
+            a: { base: '</script><script>unsafe()</script>', slotmap: [] },
+            b: { base: '/b.png', slotmap: [] },
+          },
+          config: {},
+          demoSlots: [],
+        },
+        mastered: false,
+      },
+      purchaseResult: undefined,
+      mimicUrl: '/mimic.png',
+    });
+
+    expect(html).toContain('\\u003c/script>\\u003cscript>unsafe()\\u003c/script>');
+    expect(html).not.toContain('</script><script>unsafe()</script>');
   });
 
   it('purchases the exact next tier and redirects back to the Bazaar', async () => {

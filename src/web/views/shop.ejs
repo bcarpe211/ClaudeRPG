@@ -10,9 +10,9 @@
     </section>
   <% } else if (shop.nextOffer) { const offer = shop.nextOffer; %>
     <section class="bazaar-offer">
-      <div class="bazaar-avatar sprite-anim" aria-label="animated preview of <%= player.name %>">
-        <img class="px frame-a" src="<%= shop.avatarA %>" alt="">
-        <img class="px frame-b" src="<%= shop.avatarB %>" alt="">
+      <div class="bazaar-avatar">
+        <canvas id="shop-preview" width="24" height="24" class="px dye-preview"
+          role="img" aria-label="Animated preview of <%= player.name %>’s next Wardrobe tier"></canvas>
       </div>
       <div class="bazaar-ledger">
         <p class="dye-kicker">Permanent Wardrobe upgrade</p>
@@ -45,6 +45,8 @@
     </section>
   <% } %>
 </div>
-<% if (shop && shop.nextOffer) { %>
-<script type="module">import { start } from '/static/anim.js'; start({ periodMs: 700 });</script>
+<% if (shop && shop.nextOffer && shop.preview) { %>
+<script src="/static/dye-color.js"></script>
+<script>window.__SHOP_PREVIEW__ = <%- JSON.stringify(shop.preview).replace(/</g, '\\u003c') %>;</script>
+<script src="/static/shop-preview.js"></script>
 <% } %>
