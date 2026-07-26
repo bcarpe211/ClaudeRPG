@@ -45,6 +45,7 @@ export function registerCharacterRoutes(
   { db, config, slotmapsDir }: AppDeps,
 ): void {
   app.get('/character', asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
     const token = typeof req.query.token === 'string' ? req.query.token : '';
     if (!token) {
       res.send(await renderPage('character-login', { title: 'Character Login' }));

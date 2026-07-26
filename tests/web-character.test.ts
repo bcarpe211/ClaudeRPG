@@ -23,6 +23,7 @@ describe('character sheet', () => {
     const p = createPlayer(db, { name: 'Gandalf', class_key: 'wizard', gender: 'M' }, 1000);
     const res = await request(app).get('/character').query({ token: p.auth_token });
     expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('private, no-store');
     expect(res.text).toContain('Gandalf');
     expect(res.text).toContain('claude_rpg_token=');
   });

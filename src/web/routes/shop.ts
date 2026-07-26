@@ -106,6 +106,7 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
   }));
 
   app.get('/shop', asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
     const token = typeof req.query.token === 'string' ? req.query.token : '';
     const result = typeof req.query.result === 'string' && PURCHASE_RESULTS.has(req.query.result)
       ? req.query.result as PurchaseResultCode

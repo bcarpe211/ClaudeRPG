@@ -40,6 +40,7 @@ describe('Bazaar', () => {
     const { app, player } = ctx(7_000_000);
     const res = await request(app).get('/shop').query({ token: player.auth_token });
     expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('private, no-store');
     expect(res.text).toContain('Tier 1');
     expect(res.text).toContain('1,500,000g');
     expect(res.text.match(/name="sku"/g)).toHaveLength(1);
