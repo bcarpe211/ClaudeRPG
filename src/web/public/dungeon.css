@@ -313,30 +313,116 @@ button:disabled:hover{transform:none;box-shadow:none}
   .bazaar-copy{padding-right:0}.bazaar-copy h1{font-size:32px}
 }
 
-/* open bazaar — the character is the upgraded artifact, the ledger is the offer */
-.bazaar-open{position:relative;overflow:hidden;min-height:440px;padding:34px;
+/* Gilded Mimic marketplace */
+.bazaar-open{position:relative;overflow:clip;min-height:440px;padding:0;
   background:
-    linear-gradient(90deg,transparent 48%,#ffffff05 48% 52%,transparent 52%),
-    radial-gradient(circle at 24% 50%,#4d3420 0,transparent 30%),
-    linear-gradient(180deg,#241631,#150e20)}
-.bazaar-open::before{content:"";position:absolute;inset:16px;border:1px solid #ffffff0b;pointer-events:none}
-.bazaar-offer{position:relative;display:grid;grid-template-columns:minmax(220px,.8fr) minmax(0,1.2fr);gap:28px;align-items:center}
-.bazaar-avatar{position:relative;width:216px;height:216px;margin:auto;filter:drop-shadow(0 16px 11px #000c)}
-.bazaar-avatar::before{content:"";position:absolute;inset:12px;border:1px solid #715836;border-radius:50%;
-  background:radial-gradient(ellipse at center,#6e5127 0 11%,#2c1a17 12% 28%,transparent 29%);box-shadow:0 0 0 11px #130d1acc,inset 0 0 25px #000}
-.bazaar-avatar img{position:absolute;z-index:1;inset:0;width:216px;height:216px;image-rendering:pixelated}
+    radial-gradient(circle at 18% 36%,#4d342030 0,transparent 24%),
+    linear-gradient(180deg,#281837,#150e20)}
+.bazaar-open::before{content:"";position:absolute;z-index:0;inset:12px;border:1px solid #ffffff0b;
+  border-radius:10px;pointer-events:none}
 .sprite-anim .frame-b{visibility:hidden}.sprite-anim.show-b .frame-a{visibility:hidden}.sprite-anim.show-b .frame-b{visibility:visible}
-.bazaar-ledger{position:relative;padding:25px 27px 23px;border:1px solid #705338;border-radius:8px;
-  background:linear-gradient(90deg,#20151c,#2b1c21 4%,#39261f 5%,#31211c 95%,#1c1218);box-shadow:inset 0 0 0 2px #c59e5b22,0 18px 30px -20px #000}
-.bazaar-ledger::before{content:"";position:absolute;left:16px;top:13px;bottom:13px;width:2px;background:#b7433838;box-shadow:8px 0 #c79c6230}
-.bazaar-ledger>*{position:relative;margin-left:12px}.bazaar-ledger h1{margin-top:9px;margin-bottom:6px}
-.bazaar-tier{display:inline-flex;padding:6px 10px;border:1px solid var(--gold-dim);color:var(--gold2);font-size:12px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}
-.bazaar-balance{margin:0;color:var(--muted)}.bazaar-balance b{color:var(--gold2);font-variant-numeric:tabular-nums}
-.bazaar-ledger-copy{margin-top:14px;color:#dac8ad;font-size:14px}.bazaar-channels{display:flex;flex-wrap:wrap;gap:7px;margin:18px 0}
-.bazaar-channel{padding:6px 9px;border:1px solid #c99d5c66;border-radius:4px;background:#ffffff08;color:#ead8ad;font-size:12px;font-weight:750}
-.bazaar-open .ok{color:var(--live)}.bazaar-open .err{margin-top:14px;margin-bottom:0}.bazaar-ledger form{margin-top:5px}.bazaar-ledger form button{justify-content:space-between;min-width:255px}.bazaar-return{display:inline-block;margin-top:17px;color:var(--muted);font-size:13px}.bazaar-return:hover{color:var(--gold2)}
-.bazaar-mastery,.bazaar-login{position:relative;text-align:center;max-width:720px;margin:auto}.bazaar-mastery .bazaar-mimic,.bazaar-login .bazaar-mimic{width:168px;height:168px;margin:0 auto 13px}.bazaar-mastery p,.bazaar-login p:not(.dye-kicker){max-width:500px;margin-left:auto;margin-right:auto;color:var(--muted)}.bazaar-mastery .btn,.bazaar-login .btn{margin-top:10px}
 
+.gilded-mimic-head{position:relative;isolation:isolate;display:flex;align-items:center;gap:20px;
+  min-height:148px;padding:20px clamp(22px,4vw,44px);overflow:hidden;border-bottom:1px solid #584166;
+  background:
+    linear-gradient(90deg,#110b18cc,transparent 35% 70%,#110b18aa),
+    radial-gradient(circle at 22% 45%,#9b6f333d,transparent 24%),
+    linear-gradient(180deg,#342043,#21142f);
+  box-shadow:inset 0 -22px 40px #09060d55}
+.gilded-mimic-head::after{content:"";position:absolute;z-index:0;left:0;right:0;bottom:12px;height:4px;
+  border-block:1px solid #755132;background:#322015;box-shadow:0 5px 0 #100a16}
+.gilded-mimic-stock{position:absolute;z-index:0;inset:0;overflow:hidden;pointer-events:none}
+.gilded-mimic-stock img{position:absolute;width:36px;height:36px;opacity:.72;
+  filter:drop-shadow(0 6px 5px #000b) drop-shadow(0 0 9px #e8c96a18)}
+.mimic-stock-potion{left:3%;top:18%;transform:rotate(-8deg)}
+.mimic-stock-sword{left:12%;bottom:8%;transform:rotate(22deg)}
+.mimic-stock-shield{right:16%;top:13%;transform:rotate(-8deg)}
+.mimic-stock-coins{right:4%;bottom:8%;transform:rotate(7deg)}
+.mimic-stock-gem{right:7%;top:8%;transform:rotate(11deg)}
+.gilded-mimic-merchant{position:relative;z-index:1;flex:0 0 auto;width:108px;height:108px;
+  margin-left:clamp(4px,8vw,84px);filter:drop-shadow(0 12px 8px #000c) drop-shadow(0 0 15px #e8c96a20);
+  animation:bazaar-breathe 2.4s steps(2,end) infinite}
+.gilded-mimic-title{position:relative;z-index:1;min-width:0;text-shadow:0 2px #09060d}
+.gilded-mimic-title h1{margin:0;color:#fff2c4;font-size:clamp(29px,4vw,42px);letter-spacing:.01em}
+.gilded-mimic-title p:last-child{margin:2px 0 0;color:#b9a8ca;font-size:13px}
+
+.bazaar-floor{position:relative;z-index:1;display:grid;
+  grid-template-columns:minmax(190px,.72fr) minmax(0,1.28fr);gap:26px;align-items:center;
+  padding:28px clamp(22px,4vw,44px) 24px}
+.bazaar-player{position:relative;min-width:0;min-height:226px;display:grid;place-items:center;padding:28px 8px 8px}
+.bazaar-player-label{position:absolute;left:50%;top:0;max-width:100%;padding:5px 9px;
+  transform:translateX(-50%);border:1px solid #4d395d;border-radius:5px;background:#100a18cc;
+  color:var(--gold2);font:800 10px/1.2 ui-monospace,monospace;letter-spacing:.05em;
+  text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bazaar-player canvas{width:210px;height:210px;max-width:100%;filter:
+  drop-shadow(0 7px 3px #000e) drop-shadow(0 18px 10px #000c) drop-shadow(0 30px 22px #0008)}
+.bazaar-player>img{width:210px;height:210px;max-width:100%;filter:
+  drop-shadow(0 7px 3px #000e) drop-shadow(0 18px 10px #000c) drop-shadow(0 30px 22px #0008)}
+
+.bazaar-product{position:relative;min-width:0;padding:20px;border:1px solid #6d527b;border-radius:12px;
+  background:linear-gradient(180deg,#2c1b3c,#1b1227);box-shadow:
+  inset 0 1px 0 #ffffff12,inset 0 0 0 3px #ffffff05,0 20px 34px -25px #000}
+.bazaar-product::before{content:"";position:absolute;left:14px;right:14px;top:8px;height:1px;
+  background:linear-gradient(90deg,transparent,#e8c96a55,transparent)}
+.bazaar-product-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px}
+.bazaar-product-category{display:inline-flex;align-items:center;gap:7px;color:var(--gold);
+  font-size:10px;font-weight:850;letter-spacing:.13em;text-transform:uppercase}
+.bazaar-product-category img{width:20px;height:20px}
+.bazaar-tier{display:inline-flex;padding:5px 8px;border:1px solid var(--gold-dim);border-radius:4px;
+  color:var(--gold2);font-size:10px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}
+.bazaar-product h2{margin:0 0 8px;font-size:clamp(21px,3vw,29px);line-height:1.2}
+.bazaar-product-copy,.bazaar-mastery>p{max-width:620px;margin:0;color:#c6b6d6;font-size:14px;line-height:1.6}
+.bazaar-open .ok,.bazaar-open .err,.bazaar-affordability{margin:14px 0 0;padding:8px 10px;
+  border:1px solid #554061;border-radius:6px;background:#120c1b;color:var(--muted);font-size:12px}
+.bazaar-open .ok,.bazaar-affordability.is-ready{border-color:#376645;color:var(--live)}
+.bazaar-open .err{border-color:rgba(224,72,63,.5);color:#ff9b9b}
+.bazaar-buy-row{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-top:17px;
+  padding-top:15px;border-top:1px solid var(--line)}
+.bazaar-price{display:grid;gap:2px;margin:0}.bazaar-price span{color:var(--muted);font-size:10px;
+  font-weight:800;letter-spacing:.09em;text-transform:uppercase}.bazaar-price strong{color:var(--gold2);
+  font-size:22px;font-variant-numeric:tabular-nums}
+.bazaar-buy-row form,.bazaar-buy-row button{margin:0}.bazaar-buy-row button{min-width:150px;justify-content:center}
+.bazaar-mastered .bazaar-product{border-color:#4b6654}.bazaar-mastered .bazaar-player{min-height:206px}
+.bazaar-login{position:relative;z-index:1;max-width:580px;margin:0 auto;padding:42px 24px;text-align:center}
+.bazaar-login p:not(.dye-kicker){color:var(--muted)}.bazaar-login .btn{margin-top:9px}
+
+.adventurer-ledger{position:sticky;z-index:5;bottom:12px;display:grid;
+  grid-template-columns:minmax(0,1fr) auto;align-items:stretch;gap:10px;margin:0 20px 20px;padding:10px;
+  border:1px solid #665073;border-radius:11px;background:#100b18f2;box-shadow:
+  inset 0 1px 0 #ffffff0c,0 18px 38px -18px #000;backdrop-filter:blur(8px)}
+.ledger-stats{min-width:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch}
+.ledger-stat{min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:4px 12px;
+  border-right:1px solid var(--line)}
+.ledger-stat:last-child{border-right:0}.ledger-stat span{color:var(--muted);font-size:9px;font-weight:850;
+  letter-spacing:.09em;text-transform:uppercase}.ledger-stat strong{color:var(--head);font-size:13px;
+  line-height:1.25;overflow-wrap:anywhere}.ledger-gold strong{color:var(--gold2);font-size:16px;
+  font-variant-numeric:tabular-nums}.ledger-future strong{color:#c8afe2;font-size:11px}
+.ledger-return{align-self:stretch;justify-content:center;margin:0;padding-inline:16px;white-space:nowrap}
+
+@media (max-width:900px){
+  .gilded-mimic-merchant{margin-left:20px}
+  .bazaar-floor{grid-template-columns:minmax(160px,.58fr) minmax(0,1.42fr)}
+  .bazaar-player canvas,.bazaar-player>img{width:180px;height:180px}
+}
 @media (max-width:760px){
-  .bazaar-open{padding:20px}.bazaar-offer{grid-template-columns:1fr}.bazaar-avatar{width:168px;height:168px}.bazaar-avatar img{width:168px;height:168px}.bazaar-ledger{padding:21px 17px}.bazaar-ledger>*{margin-left:9px}.bazaar-ledger form button{width:100%;min-width:0}
+  .gilded-mimic-head{min-height:130px;padding:16px 22px;gap:14px}
+  .gilded-mimic-merchant{width:88px;height:88px;margin-left:10px}
+  .bazaar-floor{grid-template-columns:1fr;gap:10px;padding:22px 18px 18px}
+  .bazaar-player{min-height:180px;padding-top:24px}
+  .bazaar-player canvas,.bazaar-player>img{width:164px;height:164px}
+  .adventurer-ledger{grid-template-columns:1fr;margin:0 12px 12px;bottom:8px}
+  .ledger-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ledger-stat{min-height:48px;border-bottom:1px solid var(--line)}
+  .ledger-stat:nth-child(2){border-right:0}.ledger-stat:nth-last-child(-n+2){border-bottom:0}
+  .ledger-return{width:100%}
+}
+@media (max-width:480px){
+  .gilded-mimic-head{min-height:112px;padding:14px 15px}
+  .gilded-mimic-merchant{width:72px;height:72px;margin-left:0}
+  .gilded-mimic-title h1{font-size:27px}.gilded-mimic-title p:last-child{display:none}
+  .mimic-stock-sword,.mimic-stock-shield{display:none}
+  .bazaar-floor{padding-inline:13px}.bazaar-product{padding:16px}
+  .bazaar-product-meta{align-items:flex-start}.bazaar-buy-row{align-items:stretch;flex-direction:column}
+  .bazaar-buy-row form,.bazaar-buy-row button{width:100%}
+  .adventurer-ledger{margin-inline:8px;padding:8px}.ledger-stat{padding:5px 8px}
 }

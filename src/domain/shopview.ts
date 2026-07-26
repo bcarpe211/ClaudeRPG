@@ -15,6 +15,7 @@ export interface ShopOffer {
   price: number;
   missingGold: number;
   channels: CosmeticChannelDefinition[];
+  description: string;
 }
 
 export interface ShopViewModel {
@@ -34,6 +35,16 @@ export interface ShopViewModel {
   mastered: boolean;
 }
 
+function joinChannelLabels(labels: string[]): string {
+  if (labels.length < 2) return labels[0] ?? '';
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, and ${labels.at(-1)}`;
+}
+
+function titleCaseLabel(label: string): string {
+  return label.replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
 /** Build the Bazaar from fresh database state, including the exact next permanent unlock. */
 export function buildShopViewModel(
   db: Database.Database,
@@ -46,13 +57,16 @@ export function buildShopViewModel(
   const sku = nextCosmeticSku(currentTier);
   const nextOffer = sku ? (() => {
     const price = skuPrice(db, sku);
+    const channels = channelsFor(player.class_key, player.gender as Gender)
+      .filter((channel) => channel.requiredTier === sku.grantTier);
+    const channelList = joinChannelLabels(channels.map((channel) => titleCaseLabel(channel.label)));
     return {
       sku: sku.id,
       tier: sku.grantTier,
       price,
       missingGold: Math.max(0, price - player.gold),
-      channels: channelsFor(player.class_key, player.gender as Gender)
-        .filter((channel) => channel.requiredTier === sku.grantTier),
+      channels,
+      description: `The merchant is offering a permanent upgrade to your dye ledger, which unlocks ${channelList} customizations.`,
     };
   })() : null;
   const gender = player.gender as Gender;

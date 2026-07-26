@@ -47,6 +47,33 @@ describe('Bazaar', () => {
     expect(res.text).not.toContain('2,000,000g');
   });
 
+  it('renders the compact Gilded Mimic offer and keeps navigation in the Adventurer Ledger', async () => {
+    const { db, app, player } = ctx(7_000_000);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+
+    const res = await request(app).get('/shop').query({ token: player.auth_token });
+    const product = res.text.match(/<article class="bazaar-product"[\s\S]*?<\/article>/)?.[0] ?? '';
+    const ledger = res.text.match(/<aside class="adventurer-ledger"[\s\S]*?<\/aside>/)?.[0] ?? '';
+
+    expect(res.text).toContain('The Gilded Mimic');
+    expect(res.text).toContain('Permanent Wardrobe Upgrade — Tier 2');
+    expect(res.text.match(/class="bazaar-product"/g)).toHaveLength(1);
+    expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
+    expect(res.text).toContain('5,500,000g');
+    expect(res.text).toContain('Wardrobe Tier 1');
+    expect(ledger).toContain('Inventory');
+    expect(ledger).toContain('Coming Soon');
+    expect(ledger).toContain('Potions');
+    expect(ledger).toContain('Loot Boxes');
+    expect(ledger).toContain('Pets');
+    expect(product).not.toContain('Return to Character');
+    expect(ledger.match(/Return to Character/g)).toHaveLength(1);
+    expect(res.text.match(/Return to Character/g)).toHaveLength(1);
+    for (const asset of ['potion.png', 'sword.png', 'shield.png', 'coins.png', 'gem_purple.png']) {
+      expect(res.text).toContain(`/static/landing/${asset}`);
+    }
+  });
+
   it('embeds a token-free next-offer canvas payload before the local preview script', async () => {
     const { app, player } = ctx(7_000_000);
     const res = await request(app).get('/shop').query({ token: player.auth_token });
@@ -84,6 +111,7 @@ describe('Bazaar', () => {
         avatarB: '/b.png',
         nextOffer: {
           sku: 'cosmetic_wheel_t1', tier: 1, price: 1_500_000, missingGold: 0, channels: [],
+          description: 'The merchant is offering a permanent upgrade to your dye ledger.',
         },
         preview: {
           frames: {
@@ -159,6 +187,12 @@ describe('Bazaar', () => {
     const res = await request(app).get('/shop').query({ token: player.auth_token });
     expect(res.text).toContain('Dye Mastery Complete');
     expect(res.text).not.toContain('name="sku"');
+    expect(res.text).not.toContain('action="/shop/cosmetics/purchase"');
+    expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
+    expect(res.text).toContain('Wardrobe Tier 3');
+    expect(res.text).toContain('Inventory');
+    expect(res.text).toContain('Coming Soon');
+    expect(res.text.match(/Return to Character/g)).toHaveLength(1);
   });
 
   it('keeps retired single-hue picker routes removed', async () => {

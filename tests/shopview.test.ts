@@ -51,6 +51,18 @@ describe('buildShopViewModel', () => {
     expect(tier2.nextOffer?.channels.map((channel) => channel.label)).toEqual(['Trim', 'Belt', 'Hair', 'Boots', 'Lips']);
   });
 
+  it('describes a Tier 2 Wizard offer with title-cased channel labels and an Oxford comma', () => {
+    const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
+    db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+
+    const shop = buildShopViewModel(db, player.id)!;
+
+    expect(shop.nextOffer?.description).toBe(
+      'The merchant is offering a permanent upgrade to your dye ledger, which unlocks Gold Trim, Belt, and Boots customizations.',
+    );
+  });
+
   it('previews only next-offer slots present across the union of both animation frames', () => {
     const player = createPlayer(db, { name: 'A', class_key: 'priest', gender: 'F' }, 1);
     const slotmapsDir = mkdtempSync(join(tmpdir(), 'clauderpg-shop-preview-'));

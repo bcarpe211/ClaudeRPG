@@ -1,48 +1,100 @@
 <div class="panel bazaar-open">
+  <header class="gilded-mimic-head">
+    <div class="gilded-mimic-stock" aria-hidden="true">
+      <img class="px mimic-stock-potion" src="/static/landing/potion.png" alt="">
+      <img class="px mimic-stock-sword" src="/static/landing/sword.png" alt="">
+      <img class="px mimic-stock-shield" src="/static/landing/shield.png" alt="">
+      <img class="px mimic-stock-coins" src="/static/landing/coins.png" alt="">
+      <img class="px mimic-stock-gem" src="/static/landing/gem_purple.png" alt="">
+    </div>
+    <img class="px gilded-mimic-merchant" src="<%= mimicUrl %>" alt="">
+    <div class="gilded-mimic-title">
+      <p class="dye-kicker">Permanent enchantments &amp; curious wares</p>
+      <h1>The Gilded Mimic</h1>
+      <p>Gold changes hands. Style stays in the ledger.</p>
+    </div>
+  </header>
+
   <% if (!player || !shop) { %>
     <section class="bazaar-login">
-      <img class="px bazaar-mimic" src="<%= mimicUrl %>" alt="a suspicious treasure chest guarding the Bazaar ledger">
       <p class="dye-kicker">The merchant needs a name</p>
-      <h1>Choose your character</h1>
+      <h2>Choose your character</h2>
       <% if (error) { %><p class="err"><%= error %></p><% } %>
       <p>The ledger only opens for a character whose dyes it can keep safe.</p>
       <a class="btn btn-gold" href="/character">Open character login</a>
     </section>
   <% } else if (shop.nextOffer) { const offer = shop.nextOffer; %>
-    <section class="bazaar-offer">
-      <div class="bazaar-avatar">
+    <section class="bazaar-floor" aria-label="Current marketplace offer">
+      <div class="bazaar-player">
+        <span class="bazaar-player-label"><%= player.name %> · Tier <%= shop.currentTier %></span>
         <canvas id="shop-preview" width="24" height="24" class="px dye-preview"
           role="img" aria-label="Animated preview of <%= player.name %>’s next Wardrobe tier"></canvas>
       </div>
-      <div class="bazaar-ledger">
-        <p class="dye-kicker">Permanent Wardrobe upgrade</p>
-        <span class="bazaar-tier">Tier <%= offer.tier %></span>
-        <h1>Expand <%= player.name %>’s dye kit</h1>
-        <p class="bazaar-balance"><b><%= shop.gold.toLocaleString() %>g</b> on hand</p>
-        <p class="bazaar-ledger-copy">The merchant has opened the next page in your dye ledger.</p>
-        <div class="bazaar-channels" aria-label="new dye channels">
-          <% offer.channels.forEach(function (channel) { %><span class="bazaar-channel"><%= channel.label %></span><% }); %>
+
+      <article class="bazaar-product">
+        <div class="bazaar-product-meta">
+          <span class="bazaar-product-category"><img class="px" src="/static/landing/gem_purple.png" alt="">Permanent wardrobe</span>
+          <span class="bazaar-tier">Tier <%= offer.tier %></span>
         </div>
+        <h2>Permanent Wardrobe Upgrade — Tier <%= offer.tier %></h2>
+        <p class="bazaar-product-copy"><%= offer.description %></p>
+
         <% if (purchaseResult === 'success') { %><p class="ok">The new dyes are ready in your Wardrobe.</p><% } %>
         <% if (purchaseResult === 'insufficient_gold') { %><p class="err">You need <%= offer.missingGold.toLocaleString() %> more gold.</p><% } %>
         <% if (purchaseResult === 'stale') { %><p class="err">Your Wardrobe already advanced. This is your current offer.</p><% } %>
         <% if (purchaseResult === 'out_of_sequence' || purchaseResult === 'invalid') { %><p class="err">That ledger entry is not available. No gold was spent.</p><% } %>
-        <form method="post" action="/shop/cosmetics/purchase">
-          <input type="hidden" name="token" value="<%= player.auth_token %>">
-          <input type="hidden" name="sku" value="<%= offer.sku %>">
-          <button class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %> <span><%= offer.price.toLocaleString() %>g</span></button>
-        </form>
-        <a class="bazaar-return" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Return to the Wardrobe</a>
-      </div>
+        <% if (!purchaseResult && offer.missingGold > 0) { %><p class="bazaar-affordability">Gather <%= offer.missingGold.toLocaleString() %>g more to unlock this ledger page.</p><% } %>
+        <% if (!purchaseResult && offer.missingGold === 0) { %><p class="bazaar-affordability is-ready">Your purse is ready for this permanent upgrade.</p><% } %>
+
+        <div class="bazaar-buy-row">
+          <p class="bazaar-price"><span>Permanent unlock</span><strong><%= offer.price.toLocaleString() %>g</strong></p>
+          <form method="post" action="/shop/cosmetics/purchase">
+            <input type="hidden" name="token" value="<%= player.auth_token %>">
+            <input type="hidden" name="sku" value="<%= offer.sku %>">
+            <button class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %></button>
+          </form>
+        </div>
+      </article>
     </section>
   <% } else { %>
-    <section class="bazaar-mastery">
-      <img class="px bazaar-mimic" src="<%= mimicUrl %>" alt="the Bazaar mimic presenting a completed dye ledger">
-      <p class="dye-kicker">Every cosmetic tier is yours</p>
-      <h1>Dye Mastery Complete</h1>
-      <p>No more dye upgrades remain to purchase. Every applicable channel is unlocked.</p>
-      <a class="btn btn-gold" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Open the complete Wardrobe</a>
+    <section class="bazaar-floor bazaar-mastered" aria-label="Wardrobe mastery">
+      <div class="bazaar-player bazaar-player-mastered">
+        <span class="bazaar-player-label"><%= player.name %> · Tier <%= shop.currentTier %></span>
+        <img class="px" src="<%= shop.avatarA %>" alt="<%= player.name %> in their completed Wardrobe">
+      </div>
+      <article class="bazaar-product bazaar-mastery">
+        <div class="bazaar-product-meta">
+          <span class="bazaar-product-category"><img class="px" src="/static/landing/gem_purple.png" alt="">Permanent wardrobe</span>
+          <span class="dye-mastery">Mastered</span>
+        </div>
+        <h2>Dye Mastery Complete</h2>
+        <p>Every applicable cosmetic channel is unlocked. The Gilded Mimic has no more dye-ledger pages to sell you.</p>
+      </article>
     </section>
+  <% } %>
+
+  <% if (player && shop) { %>
+    <aside class="adventurer-ledger" aria-label="Adventurer Ledger">
+      <div class="ledger-stats">
+        <div class="ledger-stat ledger-gold">
+          <span>Current gold</span>
+          <strong><%= shop.gold.toLocaleString() %>g</strong>
+        </div>
+        <div class="ledger-stat">
+          <span>Wardrobe Tier <%= shop.currentTier %></span>
+          <strong><%= shop.mastered ? 'Mastered' : 'Unlocked' %></strong>
+        </div>
+        <div class="ledger-stat">
+          <span>Inventory</span>
+          <strong>Coming Soon</strong>
+        </div>
+        <div class="ledger-stat ledger-future">
+          <span>Future products · Coming Soon</span>
+          <strong>Potions · Loot Boxes · Pets</strong>
+        </div>
+      </div>
+      <a class="btn btn-ghost ledger-return" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Return to Character</a>
+    </aside>
   <% } %>
 </div>
 <% if (shop && shop.nextOffer && shop.preview) { %>
