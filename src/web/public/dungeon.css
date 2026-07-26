@@ -120,6 +120,9 @@ th{color:var(--muted);font-weight:600}
 .stat-card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:13px;padding:16px}
 .stat-k{display:block;font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .stat-v{display:block;margin-top:6px;font-size:26px;font-weight:800;color:var(--head)}
+.character-avatar{position:relative;display:grid;place-items:center}
+.character-avatar img{position:absolute;width:88px;height:88px;filter:
+  drop-shadow(0 7px 4px #000c) drop-shadow(0 16px 11px #0009)}
 
 /* character wardrobe — a dungeon tailor's pixel workbench */
 .dye-kicker{margin:0 0 5px;color:var(--gold);font-size:11px;font-weight:850;
@@ -153,15 +156,22 @@ th{color:var(--muted);font-weight:600}
   background:
     linear-gradient(90deg,transparent 49.5%,#ffffff05 50%,transparent 50.5%),
     linear-gradient(180deg,#21142f,#120c1b 72%)}
-.dye-stage::after{content:"";position:absolute;left:50%;bottom:41px;width:132px;height:24px;
-  transform:translateX(-50%);border:1px solid #604c29;border-radius:50%;
-  background:radial-gradient(ellipse,#6f592d 0 24%,#332619 26% 54%,#120c1b 57%);
-  box-shadow:0 10px 24px #000}
+.dye-stage::after{
+  content:"";
+  position:absolute;
+  left:50%;
+  bottom:54px;
+  width:116px;
+  height:18px;
+  transform:translateX(-50%);
+  border-radius:50%;
+  background:radial-gradient(ellipse,#000c 0 36%,#0007 48%,transparent 72%);
+  filter:blur(2px);
+}
 .dye-stage-label{position:absolute;left:12px;top:10px;color:var(--muted);font:800 10px/1 ui-monospace,monospace;
   letter-spacing:.13em;text-transform:uppercase}
-.dye-preview{position:relative;z-index:1;width:168px;height:168px;filter:drop-shadow(0 12px 8px #0009)}
-.dye-active-label{position:relative;z-index:2;margin-top:10px;padding:5px 9px;border:1px solid var(--line);
-  border-radius:6px;background:#100a18;color:var(--gold2);font-size:11px;font-weight:800}
+.dye-preview{position:relative;z-index:1;width:168px;height:168px;filter:
+  drop-shadow(0 8px 4px #000c) drop-shadow(0 20px 13px #0009)}
 
 .dye-toolbox{min-width:0;display:flex;flex-direction:column;gap:12px}
 .dye-section{padding:13px;border:1px solid var(--line);border-radius:11px;
@@ -208,23 +218,30 @@ th{color:var(--muted);font-weight:600}
 .dye-tone-section{display:flex;flex-direction:column}
 .dye-tone-label{display:flex;justify-content:space-between;margin:0 0 7px;color:var(--ink);font-size:12px;font-weight:800}
 .dye-tone-track{display:grid;grid-template-columns:auto minmax(120px,1fr) auto;align-items:center;gap:9px;color:var(--muted);font-size:10px}
-.dye-tone-track input{width:100%;accent-color:var(--gold);cursor:pointer}
+.dye-tone-track input{appearance:none;-webkit-appearance:none;width:100%;height:22px;margin:0;
+  padding:0;background:transparent;cursor:pointer}
 .dye-tone-track input:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
-.dye-tone-track input::-webkit-slider-thumb{border-radius:2px}
-.dye-finishes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.dye-fin{min-height:70px;margin:0;padding:10px;border:1px solid var(--line);border-radius:8px;
-  display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:7px;
+.dye-tone-track input::-webkit-slider-runnable-track{height:6px;border:1px solid #6a5c77;border-radius:2px;
+  background:linear-gradient(90deg,#050407,#7e7788 50%,#fff 100%)}
+.dye-tone-track input::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:18px;margin-top:-7px;
+  border:2px solid #0c0912;border-radius:2px;background:var(--gold);box-shadow:0 0 0 1px #f4dd93}
+.dye-tone-track input::-moz-range-track{height:4px;border:1px solid #6a5c77;border-radius:2px;
+  background:linear-gradient(90deg,#050407,#7e7788 50%,#fff 100%)}
+.dye-tone-track input::-moz-range-thumb{width:10px;height:14px;border:2px solid #0c0912;
+  border-radius:2px;background:var(--gold);box-shadow:0 0 0 1px #f4dd93}
+.dye-finishes{display:grid;grid-template-columns:1fr;gap:6px;margin-top:10px}
+.dye-fin{height:44px;margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+  display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:9px;
   background:#ffffff07;color:var(--ink);box-shadow:none;font-size:11px;text-align:left}
 .dye-fin:hover{transform:none;border-color:var(--gold-dim);color:var(--head);box-shadow:none}
 .dye-fin.active{border-color:var(--gold);background:#e8c96a11;color:var(--gold2);
   box-shadow:inset 0 0 0 1px #e8c96a30}
-.dye-fin-swatch{display:grid;place-items:center;width:28px;height:18px;border:1px solid #ffffff24;
+.dye-fin-swatch{display:grid;place-items:center;width:22px;height:22px;flex:0 0 22px;border:1px solid #ffffff24;
   border-radius:3px;box-shadow:inset 0 1px 0 #fff3}
 .dye-fin-steel{background:linear-gradient(135deg,#405365,#d9e3ec 48%,#63788b)}
 .dye-fin-bronze{background:linear-gradient(135deg,#432816,#c2814b 52%,#6c3f22)}
 .dye-fin-gold{background:linear-gradient(135deg,#6f4c0e,#f4d35e 52%,#a86f0b)}
-.dye-fin-default{background:#17101f;color:var(--gold2);font-size:15px}
-.dye-default{grid-column:1/-1;min-height:48px;flex-direction:row;align-items:center;justify-content:flex-start}
+.dye-fin-default{background:#17101f;color:var(--gold2)}
 .dye-mastery{display:inline-flex;padding:6px 10px;border:1px solid #376645;border-radius:999px;color:var(--live);font-size:11px;font-weight:850;text-transform:uppercase}
 .dye-unavailable h2{margin-bottom:7px}
 .dye-unavailable p:last-child{color:var(--muted)}

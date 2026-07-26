@@ -11,14 +11,16 @@
   const preview = document.getElementById('dye-preview');
   const wheel = document.getElementById('dye-wheel');
   const status = document.getElementById('dye-save-status');
-  const activeLabel = document.getElementById('dye-active-label');
   const toneInput = document.getElementById('dye-tone');
   const toneValue = document.getElementById('dye-tone-value');
   const saveButton = document.getElementById('dye-save');
   const discardButton = document.getElementById('dye-discard');
   const reloadButton = document.getElementById('dye-reload');
-  const pageAvatar = document.getElementById('character-avatar');
-  if (!preview || !wheel || !status || !activeLabel || !toneInput || !toneValue
+  const pageAvatars = {
+    a: document.getElementById('character-avatar-a'),
+    b: document.getElementById('character-avatar-b'),
+  };
+  if (!preview || !wheel || !status || !toneInput || !toneValue
     || !saveButton || !discardButton || !reloadButton) return;
 
   const previewContext = preview.getContext('2d');
@@ -36,12 +38,10 @@
   let savedConfig = cloneConfig(config);
   let saving = false;
   let stale = false;
-  const slotmap = D.slotmap;
   const channelButtons = Array.from(document.querySelectorAll('.dye-chan:not(:disabled)'));
   let active = channelButtons.length > 0 ? Number(channelButtons[0].dataset.slot) : null;
   const revisionSession = Number.isSafeInteger(D.revisionSession) ? D.revisionSession : null;
   let nextRevision = Number.isSafeInteger(D.revisionSeed) ? D.revisionSeed : 1;
-  let sourcePixels = null;
 
   function stateFromRule(rule) {
     if (!rule) return { recipe: 'wheel', hue: 0, sat: D.wheelSat, tone: 0 };
@@ -129,32 +129,46 @@
   }
 
   // --- base sprite and per-slot preview ---
-  const spriteCanvas = document.createElement('canvas');
-  spriteCanvas.width = 24;
-  spriteCanvas.height = 24;
-  const spriteContext = spriteCanvas.getContext('2d');
-  if (!spriteContext) return;
-  spriteContext.imageSmoothingEnabled = false;
+  const frameStates = {};
+  for (const frame of ['a', 'b']) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 24;
+    canvas.height = 24;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.imageSmoothingEnabled = false;
+    const base = new Image();
+    base.crossOrigin = 'anonymous';
+    frameStates[frame] = {
+      canvas,
+      context,
+      base,
+      slotmap: D.frames[frame].slotmap,
+      sourcePixels: null,
+      rendered: false,
+      dataUrl: '',
+    };
+    base.onload = function () {
+      context.clearRect(0, 0, 24, 24);
+      context.drawImage(base, 0, 0, 24, 24);
+      frameStates[frame].sourcePixels = context.getImageData(0, 0, 24, 24);
+      renderPreview();
+    };
+    base.onerror = function () {
+      setStatus('Preview could not load', 'error');
+    };
+    base.src = D.frames[frame].base;
+  }
 
-  const base = new Image();
-  base.crossOrigin = 'anonymous';
-  base.onload = function () {
-    spriteContext.clearRect(0, 0, 24, 24);
-    spriteContext.drawImage(base, 0, 0, 24, 24);
-    sourcePixels = spriteContext.getImageData(0, 0, 24, 24);
-    renderPreview();
-  };
-  base.onerror = function () {
-    setStatus('Preview could not load', 'error');
-  };
-  base.src = D.base;
+  let visibleFrame = 'a';
 
-  function renderPreview() {
-    if (!sourcePixels) return;
-    const output = spriteContext.createImageData(24, 24);
-    const source = sourcePixels.data;
+  function renderFrame(frame) {
+    const state = frameStates[frame];
+    if (!state.sourcePixels) return;
+    const output = state.context.createImageData(24, 24);
+    const source = state.sourcePixels.data;
     const pixels = output.data;
-    const pixelCount = Math.min(slotmap.length, 24 * 24);
+    const pixelCount = Math.min(state.slotmap.length, 24 * 24);
 
     for (let pixel = 0; pixel < 24 * 24; pixel += 1) {
       const index = pixel * 4;
@@ -164,7 +178,7 @@
       pixels[index + 3] = source[index + 3];
       if (pixel >= pixelCount || source[index + 3] === 0) continue;
 
-      const rule = config.get(slotmap[pixel]);
+      const rule = config.get(state.slotmap[pixel]);
       if (!rule) continue;
       const color = colorMath.applyRule(
         rule,
@@ -177,10 +191,32 @@
       pixels[index + 2] = color[2];
     }
 
-    spriteContext.putImageData(output, 0, 0);
+    state.context.putImageData(output, 0, 0);
+    state.rendered = true;
+    state.dataUrl = state.canvas.toDataURL('image/png');
+    if (pageAvatars[frame]) pageAvatars[frame].src = state.dataUrl;
+  }
+
+  function drawVisibleFrame() {
+    const state = frameStates[visibleFrame];
+    if (!state.rendered) return;
     previewContext.clearRect(0, 0, preview.width, preview.height);
-    previewContext.drawImage(spriteCanvas, 0, 0, preview.width, preview.height);
-    if (pageAvatar) pageAvatar.src = preview.toDataURL('image/png');
+    previewContext.drawImage(state.canvas, 0, 0, preview.width, preview.height);
+  }
+
+  function renderPreview() {
+    renderFrame('a');
+    renderFrame('b');
+    drawVisibleFrame();
+  }
+
+  const reducedMotion = typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reducedMotion) {
+    setInterval(function () {
+      visibleFrame = visibleFrame === 'a' ? 'b' : 'a';
+      drawVisibleFrame();
+    }, 700);
   }
 
   // --- explicit saved/draft persistence ---
@@ -313,12 +349,10 @@
   }
 
   function renderControls() {
-    const channel = D.channels.find((item) => item.slot === active);
     const state = active == null ? null : stateFor(active);
     const recipe = state ? state.recipe : 'none';
     const tone = state ? state.tone : 0;
 
-    activeLabel.textContent = channel ? `${channel.label} selected` : 'Choose a material';
     wheel.classList.toggle('active', recipe === 'wheel');
     wheel.setAttribute('aria-valuenow', String(currentHue()));
     wheel.setAttribute('aria-valuetext', `${currentHue()} degrees`);

@@ -11,7 +11,6 @@ import { nextCosmeticSku, skuPrice } from './shop';
 import { beginSlotMutationSession, getEntitledSlotConfig } from './slotcosmetics';
 import {
   loadSlotmap,
-  presentSlots,
 } from './slots';
 import type { SlotRule } from './spritetint';
 
@@ -71,8 +70,10 @@ export interface DyeViewModel {
   tier: number;
   groups: DyeTierGroup[];
   channels: DyeChannel[];
-  slotmap: number[];
-  base: string;
+  frames: {
+    a: { base: string; slotmap: number[] };
+    b: { base: string; slotmap: number[] };
+  };
   config: Record<number, SlotRule>;
   presets: typeof MATERIAL_PRESETS;
   nextOffer: DyeNextOffer | null;
@@ -88,10 +89,16 @@ export function dyeViewModel(
 ): DyeViewModel {
   const gender = player.gender as Gender;
   const sprite = spriteId(player.class_key, gender);
-  const ids = loadSlotmap(sprite, 'a', slotmapsDir);
-  const present = presentSlots(sprite, slotmapsDir);
+  const frameAIds = loadSlotmap(sprite, 'a', slotmapsDir);
+  const frameBIds = loadSlotmap(sprite, 'b', slotmapsDir);
+  const presentSet = new Set<number>();
+  for (const ids of [frameAIds, frameBIds]) {
+    if (!ids) continue;
+    for (const slot of ids) {
+      if (slot !== 0) presentSet.add(slot);
+    }
+  }
   const wheelTier = getCosmetics(db, player.id)?.wheel_tier ?? 0;
-  const presentSet = new Set(present);
   const definitions = channelsFor(player.class_key, gender)
     .filter((channel) => presentSet.has(channel.slot));
   const groups: DyeTierGroup[] = ([1, 2, 3] as const).map((tier) => ({
@@ -112,12 +119,20 @@ export function dyeViewModel(
   const mutationSession = beginSlotMutationSession(db, player.id);
 
   return {
-    available: ids !== null && present.length > 0,
+    available: frameAIds !== null && frameBIds !== null && presentSet.size > 0,
     tier: wheelTier,
     groups,
     channels,
-    slotmap: ids ? Array.from(ids) : [],
-    base: classSpriteUrl(player.class_key, gender),
+    frames: {
+      a: {
+        base: classSpriteUrl(player.class_key, gender, 'a'),
+        slotmap: frameAIds ? Array.from(frameAIds) : [],
+      },
+      b: {
+        base: classSpriteUrl(player.class_key, gender, 'b'),
+        slotmap: frameBIds ? Array.from(frameBIds) : [],
+      },
+    },
     config,
     presets: MATERIAL_PRESETS,
     nextOffer,

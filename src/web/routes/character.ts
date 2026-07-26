@@ -88,7 +88,8 @@ export function registerCharacterRoutes(
         title: player.name,
         player,
         className: getClass(player.class_key)?.name ?? player.class_key,
-        avatarUrl: cosmeticSkinUrlForPlayer(db, player, 'a'),
+        avatarA: cosmeticSkinUrlForPlayer(db, player, 'a'),
+        avatarB: cosmeticSkinUrlForPlayer(db, player, 'b'),
         dye: dyeViewModel(db, player, slotmapsDir),
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({

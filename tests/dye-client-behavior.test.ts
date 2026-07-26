@@ -77,22 +77,38 @@ class FakeButton extends FakeElement {
 class FakeContext {
   imageSmoothingEnabled = false;
   fillStyle = '';
+  sourceSeed = 0;
+  readonly drawnCanvases: FakeCanvas[] = [];
+  readonly outputs: Uint8ClampedArray[] = [];
   clearRect(): void {}
   fillRect(): void {}
-  drawImage(): void {}
-  putImageData(): void {}
+  drawImage(source: FakeCanvas | FakeImage): void {
+    if (source instanceof FakeCanvas) this.drawnCanvases.push(source);
+    else this.sourceSeed = source.src.includes('frame-b') ? 180 : 80;
+  }
+  putImageData(image: { data: Uint8ClampedArray }): void {
+    this.outputs.push(new Uint8ClampedArray(image.data));
+  }
   createImageData(width: number, height: number): { data: Uint8ClampedArray } {
     return { data: new Uint8ClampedArray(width * height * 4) };
   }
-  getImageData(width: number, height: number): { data: Uint8ClampedArray } {
-    return { data: new Uint8ClampedArray(width * height * 4) };
+  getImageData(_x: number, _y: number, width: number, height: number): { data: Uint8ClampedArray } {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let pixel = 0; pixel < width * height; pixel += 1) {
+      const index = pixel * 4;
+      data[index] = this.sourceSeed;
+      data[index + 1] = 40;
+      data[index + 2] = 20;
+      data[index + 3] = 255;
+    }
+    return { data };
   }
 }
 
 class FakeCanvas extends FakeElement {
   width: number;
   height: number;
-  private readonly context = new FakeContext();
+  readonly context = new FakeContext();
 
   constructor(width: number, height: number) {
     super();
@@ -110,14 +126,19 @@ class FakeCanvas extends FakeElement {
 
   setPointerCapture(): void {}
   releasePointerCapture(): void {}
-  toDataURL(): string { return 'data:image/png;base64,smoke'; }
+  toDataURL(): string {
+    const data = this.context.outputs.at(-1);
+    return data ? `data:image/png;base64,${Array.from(data.slice(0, 8)).join('-')}` : 'data:image/png;base64,empty';
+  }
 }
 
 class FakeImage {
   crossOrigin = '';
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  set src(_value: string) {}
+  src = '';
+
+  load(): void { this.onload?.(); }
 }
 
 interface Deferred<T> {
@@ -157,7 +178,11 @@ interface WardrobeHarness {
   tone: FakeElement;
   status: FakeElement;
   steelButton: FakeButton;
+  bronzeButton: FakeButton;
+  goldButton: FakeButton;
   defaultButton: FakeButton;
+  profileA: FakeElement;
+  profileB: FakeElement;
   saveButton: FakeButton;
   discardButton: FakeButton;
   reloadButton: FakeButton;
@@ -166,6 +191,13 @@ interface WardrobeHarness {
   beforeunload(): { prevented: boolean; returnValue: string | undefined };
   pageshow(persisted: boolean): void;
   reloadCount(): number;
+  loadedSources(): string[];
+  loadFrames(): void;
+  advanceAnimation(): void;
+  previewFrames(): FakeCanvas[];
+  frameOutputs(): Uint8ClampedArray[][];
+  canvasCount(): number;
+  selectedBubble(): FakeElement | null;
   settle(): Promise<void>;
 }
 
@@ -184,11 +216,16 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
   tone.value = '0';
   const toneValue = new FakeElement();
   const status = new FakeElement();
-  const activeLabel = new FakeElement();
   const steelButton = new FakeButton(['dye-fin']);
   steelButton.dataset.recipe = 'steel';
+  const bronzeButton = new FakeButton(['dye-fin']);
+  bronzeButton.dataset.recipe = 'bronze';
+  const goldButton = new FakeButton(['dye-fin']);
+  goldButton.dataset.recipe = 'gold';
   const defaultButton = new FakeButton(['dye-fin']);
   defaultButton.dataset.recipe = 'none';
+  const profileA = new FakeElement(['px', 'frame-a']);
+  const profileB = new FakeElement(['px', 'frame-b']);
   const saveButton = new FakeButton();
   saveButton.disabled = true;
   const discardButton = new FakeButton();
@@ -197,27 +234,46 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
   reloadButton.hidden = true;
   const elements = new Map<string, FakeElement>([
     ['dye-preview', preview], ['dye-wheel', wheel], ['dye-save-status', status],
-    ['dye-active-label', activeLabel], ['dye-tone', tone], ['dye-tone-value', toneValue],
+    ['dye-tone', tone], ['dye-tone-value', toneValue],
     ['dye-save', saveButton], ['dye-discard', discardButton], ['dye-reload', reloadButton],
+    ['character-avatar-a', profileA], ['character-avatar-b', profileB],
   ]);
   const windowListeners = new Map<string, Listener[]>();
   const requests: RequestRecord[] = [];
   const responses: Array<Deferred<ResponseLike>> = [];
   const timers = new Map<number, () => void>();
+  const intervals = new Map<number, () => void>();
+  const images: FakeImage[] = [];
+  const createdCanvases: FakeCanvas[] = [];
   let nextTimer = 0;
   let reloads = 0;
   const document = {
     getElementById(id: string): FakeElement | null { return elements.get(id) ?? null; },
-    createElement(tag: string): FakeElement { return tag === 'canvas' ? new FakeCanvas(24, 24) : new FakeElement(); },
+    createElement(tag: string): FakeElement {
+      if (tag !== 'canvas') return new FakeElement();
+      const canvas = new FakeCanvas(24, 24);
+      createdCanvases.push(canvas);
+      return canvas;
+    },
     querySelectorAll(selector: string): FakeButton[] {
       if (selector === '.dye-chan:not(:disabled)') return [clothing, cloak];
-      if (selector === '.dye-fin') return [steelButton, defaultButton];
+      if (selector === '.dye-fin') return [steelButton, bronzeButton, goldButton, defaultButton];
       return [];
     },
   };
+  class HarnessImage extends FakeImage {
+    constructor() {
+      super();
+      images.push(this);
+    }
+  }
+  const frameASlotmap = Array<number>(24 * 24).fill(0);
+  const frameBSlotmap = Array<number>(24 * 24).fill(0);
+  frameASlotmap[0] = 1;
+  frameBSlotmap[1] = 1;
   const context: Record<string, unknown> = {
     document,
-    Image: FakeImage,
+    Image: HarnessImage,
     URLSearchParams,
     setTimeout(callback: () => void) {
       const id = ++nextTimer;
@@ -225,6 +281,12 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
       return id;
     },
     clearTimeout(id: number) { timers.delete(id); },
+    setInterval(callback: () => void) {
+      const id = ++nextTimer;
+      intervals.set(id, callback);
+      return id;
+    },
+    clearInterval(id: number) { intervals.delete(id); },
     fetch(endpoint: string, options: { body: URLSearchParams }) {
       requests.push({ endpoint, body: new URLSearchParams(options.body.toString()) });
       const next = responses.shift();
@@ -239,7 +301,11 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
     },
     location: { reload() { reloads += 1; } },
     __DYE__: {
-      token: 'test-token', base: '/sprite.png', slotmap: [],
+      token: 'test-token',
+      frames: {
+        a: { base: '/frame-a.png', slotmap: frameASlotmap },
+        b: { base: '/frame-b.png', slotmap: frameBSlotmap },
+      },
       channels: [
         { slot: 1, label: 'Clothing', requiredTier: 1 },
         { slot: 2, label: 'Cloak', requiredTier: 1 },
@@ -257,7 +323,8 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
   vm.runInNewContext(readFileSync('src/web/public/dye.js', 'utf8'), context);
 
   return {
-    clothing, cloak, weapon, wheel, tone, status, steelButton, defaultButton,
+    clothing, cloak, weapon, wheel, tone, status, steelButton, bronzeButton, goldButton, defaultButton,
+    profileA, profileB,
     saveButton, discardButton, reloadButton, requests, responses,
     beforeunload() {
       let prevented = false;
@@ -272,6 +339,13 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
       for (const listener of windowListeners.get('pageshow') ?? []) listener({ persisted });
     },
     reloadCount() { return reloads; },
+    loadedSources() { return images.map((image) => image.src); },
+    loadFrames() { for (const image of images) image.load(); },
+    advanceAnimation() { for (const callback of intervals.values()) callback(); },
+    previewFrames() { return [...preview.context.drawnCanvases]; },
+    frameOutputs() { return createdCanvases.map((canvas) => [...canvas.context.outputs]); },
+    canvasCount() { return createdCanvases.length; },
+    selectedBubble() { return document.getElementById('dye-active-label'); },
     async settle() {
       await Promise.resolve();
       await Promise.resolve();
@@ -292,6 +366,36 @@ function changes(request: RequestRecord): unknown {
 }
 
 describe('dye browser Wardrobe behavior', () => {
+  it('loads, renders, and alternates both frame sources without timer allocations', () => {
+    const harness = createWardrobeHarness();
+
+    expect(harness.loadedSources()).toEqual(['/frame-a.png', '/frame-b.png']);
+    expect(harness.selectedBubble()).toBeNull();
+    harness.loadFrames();
+    expect(harness.previewFrames().at(-1)).toBe(harness.previewFrames()[0]);
+    const canvasesBeforeTick = harness.canvasCount();
+
+    harness.advanceAnimation();
+
+    expect(harness.previewFrames().at(-1)).not.toBe(harness.previewFrames()[0]);
+    expect(harness.canvasCount()).toBe(canvasesBeforeTick);
+  });
+
+  it('applies one draft through each frame source and its frame-specific slot map', () => {
+    const harness = createWardrobeHarness();
+    harness.loadFrames();
+    const before = harness.frameOutputs().map((outputs) => outputs.at(-1)!);
+
+    pressWheel(harness, 'ArrowRight');
+
+    const after = harness.frameOutputs().map((outputs) => outputs.at(-1)!);
+    expect(Array.from(after[0].slice(0, 4))).not.toEqual(Array.from(before[0].slice(0, 4)));
+    expect(Array.from(after[0].slice(4, 8))).toEqual(Array.from(before[0].slice(4, 8)));
+    expect(Array.from(after[1].slice(0, 4))).toEqual(Array.from(before[1].slice(0, 4)));
+    expect(Array.from(after[1].slice(4, 8))).not.toEqual(Array.from(before[1].slice(4, 8)));
+    expect(harness.profileA.src).not.toBe(harness.profileB.src);
+  });
+
   it('initializes against the rendered tier groups, switches enabled channels, and leaves locked channels inert', () => {
     const harness = createWardrobeHarness();
 

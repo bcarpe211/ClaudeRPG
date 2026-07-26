@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { createPlayer } from '../src/domain/players';
+import { classSpriteUrl } from '../src/domain/classes';
 import { seedSettings } from '../src/domain/settings';
 import { purchase } from '../src/domain/shop';
 import { setSlotRule } from '../src/domain/slotcosmetics';
@@ -136,7 +137,7 @@ describe('dyeViewModel', () => {
     expect(dyeViewModel(db, player).nextOffer).toBeNull();
   });
 
-  it('reports locked, available channels and a full slotmap for a fresh male wizard', () => {
+  it('reports locked, available channels and both full sprite frames for a fresh male wizard', () => {
     const player = wizard();
     const vm = dyeViewModel(db, player);
 
@@ -145,7 +146,10 @@ describe('dyeViewModel', () => {
     expect(vm.nextOffer).toMatchObject({ tier: 1, price: 1_500_000 });
     expect(vm.channels).toEqual([]);
     expect(vm.groups.flatMap((group) => group.channels).find((channel) => channel.slot === SLOTS.flair)?.label).toBe('Eyes');
-    expect(vm.slotmap).toHaveLength(24 * 24);
+    expect(vm.frames.a.base).toBe(classSpriteUrl('wizard', 'M', 'a'));
+    expect(vm.frames.b.base).toBe(classSpriteUrl('wizard', 'M', 'b'));
+    expect(vm.frames.a.slotmap).not.toEqual([]);
+    expect(vm.frames.b.slotmap).not.toEqual([]);
   });
 
   it('reflects an unlock and saved slot rule in the serializable config', () => {
@@ -166,7 +170,7 @@ describe('dyeViewModel', () => {
     expect(dyeViewModel(db, player).config[SLOTS.weapon]).toBeUndefined();
   });
 
-  it('offers the authored channels and slotmap for a female wizard', () => {
+  it('offers the authored channels and frame-specific slotmaps for a female wizard', () => {
     const player = wizard('F');
     const vm = dyeViewModel(db, player);
 
@@ -175,7 +179,8 @@ describe('dyeViewModel', () => {
     expect(vm.channels).toEqual([]);
     expect(vm.groups.flatMap((group) => group.channels).map((channel) => channel.slot))
       .toEqual(channelsFor('wizard', 'F').map((channel) => channel.slot));
-    expect(vm.slotmap).toHaveLength(24 * 24);
+    expect(vm.frames.a.slotmap).toHaveLength(24 * 24);
+    expect(vm.frames.b.slotmap).toHaveLength(24 * 24);
   });
 
   it('labels the Knight flair channel as Plume in the player picker', () => {
@@ -202,7 +207,8 @@ describe('dyeViewModel', () => {
 
       expect(vm.available).toBe(false);
       expect(vm.channels).toEqual([]);
-      expect(vm.slotmap).toEqual([]);
+      expect(vm.frames.a.slotmap).toEqual([]);
+      expect(vm.frames.b.slotmap).toEqual([]);
     } finally {
       rmSync(slotmapsDir, { recursive: true });
     }
