@@ -29,7 +29,9 @@ export function frameAt(nowMs, periodMs) {
  */
 export function start(opts) {
   const periodMs = (opts && opts.periodMs) || 1000;
-  let paused = false;
+  const reducedMotion = typeof globalThis.matchMedia === 'function'
+    && globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let paused = reducedMotion;
   let stopped = false;
   let timer = null;
   const tick = () => {
@@ -43,8 +45,10 @@ export function start(opts) {
     clearInterval(timer);
     timer = null;
   };
-  tick();
-  timer = setInterval(tick, periodMs);
+  if (!reducedMotion) {
+    tick();
+    timer = setInterval(tick, periodMs);
+  }
   return {
     pause() {
       if (paused || stopped) return;
@@ -52,7 +56,7 @@ export function start(opts) {
       clearTimer();
     },
     resume() {
-      if (!paused || stopped) return;
+      if (!paused || stopped || reducedMotion) return;
       paused = false;
       timer = setInterval(tick, periodMs);
     },

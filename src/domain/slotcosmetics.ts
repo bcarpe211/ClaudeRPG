@@ -147,7 +147,7 @@ export function skinRenderHash(
 export function cosmeticSkinUrl(
   playerId: number, classKey: string, gender: Gender, config: Map<number, SlotRule>, frame: 'a' | 'b' = 'a',
 ): string {
-  if (config.size === 0) return classSpriteUrl(classKey, gender);
+  if (config.size === 0) return classSpriteUrl(classKey, gender, frame);
   const sprite = spriteId(classKey, gender);
   return `/sprite/skin/${playerId}/${frame}/${skinRenderHash(sprite, config)}.png`;
 }

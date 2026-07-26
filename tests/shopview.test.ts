@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
+import { classSpriteUrl } from '../src/domain/classes';
 import { createPlayer } from '../src/domain/players';
 import { seedSettings } from '../src/domain/settings';
 import { purchase } from '../src/domain/shop';
@@ -9,6 +10,15 @@ let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
 
 describe('buildShopViewModel', () => {
+  it('keeps a fresh player on the plain A sprite while supplying a distinct plain B frame', () => {
+    const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
+    const shop = buildShopViewModel(db, player.id)!;
+
+    expect(shop.avatarA).toBe(classSpriteUrl('wizard', 'M'));
+    expect(shop.avatarB).toBe(classSpriteUrl('wizard', 'M', 'b'));
+    expect(shop.avatarB).not.toBe(shop.avatarA);
+  });
+
   it('offers exactly the next tier and current-variant additions', () => {
     const player = createPlayer(db, { name: 'A', class_key: 'priest', gender: 'F' }, 1);
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);

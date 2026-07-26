@@ -26,6 +26,16 @@ describe('Bazaar', () => {
     expect(res.text).not.toContain('name="sku"');
   });
 
+  it('shows the login scene with a 404 for an unknown token', async () => {
+    const { app } = ctx();
+    const res = await request(app).get('/shop').query({ token: 'not-a-character' });
+
+    expect(res.status).toBe(404);
+    expect(res.text).toContain('Choose your character');
+    expect(res.text).toContain('No character found for that token.');
+    expect(res.text).not.toContain('name="sku"');
+  });
+
   it('shows exactly Tier 1 for a fresh player', async () => {
     const { app, player } = ctx(7_000_000);
     const res = await request(app).get('/shop').query({ token: player.auth_token });
@@ -65,6 +75,23 @@ describe('Bazaar', () => {
     expect(post.headers.location).toContain('result=out_of_sequence');
     expect(getPlayerById(db, player.id)?.gold).toBe(7_000_000);
     expect(getCosmetics(db, player.id)).toBeUndefined();
+  });
+
+  it('redirects malformed or missing purchase input to the safe invalid result', async () => {
+    const { app } = ctx();
+    const post = await request(app).post('/shop/cosmetics/purchase').type('form').send({});
+
+    expect(post.status).toBe(302);
+    expect(post.headers.location).toBe('/shop?result=invalid');
+  });
+
+  it('ignores non-allow-listed purchase result values', async () => {
+    const { app, player } = ctx(7_000_000);
+    const res = await request(app).get('/shop').query({ token: player.auth_token, result: 'untrusted-copy' });
+
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('untrusted-copy');
+    expect(res.text).not.toContain('That ledger entry is not available');
   });
 
   it('renders mastery with no purchase card after Tier 3', async () => {

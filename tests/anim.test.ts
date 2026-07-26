@@ -93,6 +93,19 @@ describe('start controller', () => {
     controller.stop();
   });
 
+  it('does not start or flip sprites when reduced motion is preferred', () => {
+    const [sprite] = installSpriteFixture(1);
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+
+    const controller = start({ periodMs: 1000 });
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(sprite.classes.has('show-b')).toBe(false);
+    expect(controller.isPaused()).toBe(true);
+    vi.advanceTimersByTime(3000);
+    expect(sprite.classes.has('show-b')).toBe(false);
+  });
+
   it('pauses on the current frame and resumes one shared timer', () => {
     const [sprite] = installSpriteFixture(1);
     const controller = start({ periodMs: 1000 });

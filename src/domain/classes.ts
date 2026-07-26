@@ -35,9 +35,9 @@ export function creatureSpriteFile(index: number): string {
   return `oryx_16bit_fantasy_creatures_${padded}.png`;
 }
 
-/** Relative URL under the /sprites static mount. */
-export function classSpriteUrl(key: string, gender: Gender): string {
+/** Relative URL under the /sprites static mount. Frame A preserves the legacy plain URL. */
+export function classSpriteUrl(key: string, gender: Gender, frame: 'a' | 'b' = 'a'): string {
   return `/sprites/creatures_24x24/${creatureSpriteFile(
-    spriteIndexFor(key, gender),
+    spriteIndexFor(key, gender) + (frame === 'b' ? 18 : 0),
   )}`;
 }
