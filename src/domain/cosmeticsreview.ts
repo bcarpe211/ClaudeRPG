@@ -1,7 +1,8 @@
 import { PNG } from 'pngjs';
 import { CLASSES, type Gender } from './classes';
+import { channelLabel, channelsFor } from './cosmetic-entitlements';
 import { spriteId } from './cosmetics';
-import { channelLabel, FINISHES, wheelRule } from './dye';
+import { FINISHES, wheelRule } from './dye';
 import {
   LEGEND,
   loadSlotmapFresh,
@@ -23,74 +24,18 @@ export interface ReviewVariant {
   warnings: string[];
 }
 
-export const EXPECTED_CHANNELS: Record<
-  string,
-  { M: readonly number[]; F: readonly number[] }
-> = {
-  knight: {
-    M: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
-      SLOTS.skin],
-  },
-  thief: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
-      SLOTS.skin],
-  },
-  ranger: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-  },
-  wizard: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon,
-      SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon,
-      SLOTS.flair, SLOTS.skin],
-  },
-  priest: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
-      SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-      SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-  },
-  shaman: {
-    M: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-      SLOTS.facePaint, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-      SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-  },
-  berserker: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-      SLOTS.weapon, SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-  },
-  swordsman: {
-    M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-      SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-  },
-  paladin: {
-    M: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-      SLOTS.shield,
-      SLOTS.flair, SLOTS.skin],
-    F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-      SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-  },
-};
+export const EXPECTED_CHANNELS: Record<string, { M: readonly number[]; F: readonly number[] }> =
+  Object.fromEntries(CLASSES.map(({ key }) => {
+    const expectedFor = (gender: Gender) => {
+      const expected = new Set(channelsFor(key, gender).map((channel) => channel.slot));
+      return PICKER_ORDER.filter((slot) => expected.has(slot));
+    };
+    return [key, { M: expectedFor('M'), F: expectedFor('F') }];
+  }));
 
 const LEGEND_RGB = new Map<number, [number, number, number]>(LEGEND);
 
-function channelsFor(ids: Uint8Array | null): number[] {
+function slotChannelsFor(ids: Uint8Array | null): number[] {
   if (!ids) return [];
   const present = new Set(ids);
   return PICKER_ORDER.filter((slot) => present.has(slot));
@@ -118,8 +63,8 @@ export function buildCosmeticsReviewRoster(slotmapsDir?: string): ReviewVariant[
       const sprite = spriteId(classKey, gender);
       const frameAIds = loadSlotmapFresh(sprite, 'a', slotmapsDir);
       const frameBIds = loadSlotmapFresh(sprite, 'b', slotmapsDir);
-      const frameA = channelsFor(frameAIds);
-      const frameB = channelsFor(frameBIds);
+      const frameA = slotChannelsFor(frameAIds);
+      const frameB = slotChannelsFor(frameBIds);
       const expected = EXPECTED_CHANNELS[classKey][gender];
       const warnings: string[] = [];
 
@@ -135,8 +80,9 @@ export function buildCosmeticsReviewRoster(slotmapsDir?: string): ReviewVariant[
         classKey,
         className,
         gender,
-        channels: PICKER_ORDER.filter((slot) => available.has(slot))
-          .map((slot) => ({ slot, label: channelLabel(classKey, slot, gender) })),
+        channels: channelsFor(classKey, gender)
+          .filter((channel) => available.has(channel.slot))
+          .map(({ slot, label }) => ({ slot, label })),
         warnings,
       };
     })

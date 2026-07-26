@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { classSpriteUrl, type Gender } from './classes';
+import { channelLabel, channelsFor } from './cosmetic-entitlements';
 import { getCosmetics, spriteId } from './cosmetics';
 import { getSetting } from './settings';
 import { SKUS } from './shop';
@@ -7,10 +8,10 @@ import { getSlotConfig } from './slotcosmetics';
 import {
   loadSlotmap,
   presentSlots,
-  SLOT_LABELS,
-  SLOTS,
 } from './slots';
 import type { SlotRule } from './spritetint';
+
+export { channelLabel } from './cosmetic-entitlements';
 
 /** Fixed saturation used by the hue wheel's shadow-preserving colorize operation. */
 export const WHEEL_SAT = 0.6;
@@ -53,69 +54,6 @@ export interface DyeViewModel {
   wheelSat: number;
 }
 
-const CLASS_SLOT_LABELS: Record<string, Partial<Record<number, string>>> = {
-  knight: {
-    [SLOTS.flair]: 'Plume',
-  },
-  thief: {
-    [SLOTS.shield]: 'Accessory',
-    [SLOTS.flair]: 'Feather',
-  },
-  ranger: {
-    [SLOTS.cape]: 'Cloak',
-    [SLOTS.shield]: 'Quiver',
-    [SLOTS.flair]: 'Feather',
-  },
-  wizard: {
-    [SLOTS.trim]: 'Gold trim',
-    [SLOTS.headgear]: 'Cloak',
-    [SLOTS.flair]: 'Eyes',
-  },
-  priest: {
-    [SLOTS.flair]: 'Holy symbol',
-  },
-  shaman: {
-    [SLOTS.headgear]: 'Pelt',
-  },
-  berserker: {
-    [SLOTS.trim]: 'Helmet trim',
-    [SLOTS.flair]: 'Horns',
-  },
-  swordsman: {
-    [SLOTS.body]: 'Shirt',
-    [SLOTS.headgear]: 'Clothing',
-    [SLOTS.flair]: 'Details',
-  },
-  paladin: {
-    [SLOTS.flair]: 'Plume',
-  },
-};
-
-const FEMALE_SLOT_LABELS: Record<string, Partial<Record<number, string>>> = {
-  knight: { [SLOTS.facePaint]: 'Lips' },
-  thief: { [SLOTS.facePaint]: 'Lips' },
-  ranger: { [SLOTS.facePaint]: 'Lips' },
-  priest: { [SLOTS.facePaint]: 'Lips' },
-  shaman: { [SLOTS.flair]: 'Lips' },
-  berserker: { [SLOTS.facePaint]: 'Lips' },
-  swordsman: { [SLOTS.facePaint]: 'Lips' },
-  paladin: { [SLOTS.facePaint]: 'Lips' },
-};
-
-export function channelLabel(
-  classKey: string,
-  slot: number,
-  gender?: Gender,
-): string {
-  if (gender === 'F') {
-    const femaleLabel = FEMALE_SLOT_LABELS[classKey]?.[slot];
-    if (femaleLabel) return femaleLabel;
-  }
-  return CLASS_SLOT_LABELS[classKey]?.[slot]
-    ?? SLOT_LABELS[slot]
-    ?? `Slot ${slot}`;
-}
-
 function wheelPrice(db: Database.Database): number {
   const sku = SKUS.cosmetic_wheel_t1;
   const configured = Number(getSetting(db, sku.priceSetting));
@@ -141,10 +79,9 @@ export function dyeViewModel(
     available: ids !== null && present.length > 0,
     unlocked: !!cosmetics && cosmetics.wheel_tier >= 1,
     price: wheelPrice(db),
-    channels: present.map((slot) => ({
-      slot,
-      label: channelLabel(player.class_key, slot, gender),
-    })),
+    channels: channelsFor(player.class_key, gender)
+      .filter((channel) => present.includes(channel.slot))
+      .map(({ slot, label }) => ({ slot, label })),
     slotmap: ids ? Array.from(ids) : [],
     base: classSpriteUrl(player.class_key, gender),
     config,

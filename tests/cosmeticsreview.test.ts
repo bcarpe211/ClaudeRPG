@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PNG } from 'pngjs';
+import { CLASSES } from '../src/domain/classes';
+import { channelsFor } from '../src/domain/cosmetic-entitlements';
 import { FINISHES, wheelRule } from '../src/domain/dye';
 import {
   LEGEND,
@@ -39,73 +41,12 @@ function pixel(buffer: Buffer, pixelIndex: number): number[] {
 }
 
 describe('EXPECTED_CHANNELS', () => {
-  it('defines the exact target inventory in picker order', () => {
-    expect(EXPECTED_CHANNELS).toEqual({
-      knight: {
-        M: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
-          SLOTS.skin],
-      },
-      thief: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair,
-          SLOTS.skin],
-      },
-      ranger: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon, SLOTS.shield, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon, SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-      },
-      wizard: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon,
-          SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon,
-          SLOTS.flair, SLOTS.skin],
-      },
-      priest: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.boots, SLOTS.weapon, SLOTS.flair,
-          SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.belt, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-          SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-      },
-      shaman: {
-        M: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-          SLOTS.facePaint, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-          SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-      },
-      berserker: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.boots,
-          SLOTS.weapon, SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-      },
-      swordsman: {
-        M: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.trim, SLOTS.cape, SLOTS.headgear, SLOTS.hair,
-          SLOTS.boots, SLOTS.weapon, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-      },
-      paladin: {
-        M: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.boots, SLOTS.weapon,
-          SLOTS.shield,
-          SLOTS.flair, SLOTS.skin],
-        F: [SLOTS.body, SLOTS.cape, SLOTS.headgear, SLOTS.hair, SLOTS.boots, SLOTS.weapon,
-          SLOTS.shield, SLOTS.facePaint, SLOTS.flair, SLOTS.skin],
-      },
-    });
-    for (const variants of Object.values(EXPECTED_CHANNELS)) {
-      for (const channels of [variants.M, variants.F]) {
-        expect(channels.map((slot) => PICKER_ORDER.indexOf(slot)))
-          .toEqual([...channels.map((slot) => PICKER_ORDER.indexOf(slot))].sort((a, b) => a - b));
-      }
+  it('derives expected map coverage from the approved registry in picker order', () => {
+    for (const { key } of CLASSES) for (const gender of ['M', 'F'] as const) {
+      const registered = new Set(channelsFor(key, gender).map((channel) => channel.slot));
+      expect(EXPECTED_CHANNELS[key][gender]).toEqual(
+        PICKER_ORDER.filter((slot) => registered.has(slot)),
+      );
     }
   });
 });

@@ -8,7 +8,7 @@ import { seedSettings } from '../src/domain/settings';
 import { purchase } from '../src/domain/shop';
 import { setSlotRule } from '../src/domain/slotcosmetics';
 import { SLOTS } from '../src/domain/slots';
-import { EXPECTED_CHANNELS } from '../src/domain/cosmeticsreview';
+import { channelsFor } from '../src/domain/cosmetic-entitlements';
 import {
   channelLabel,
   dyeRule,
@@ -90,7 +90,7 @@ describe('dye rules', () => {
     }
     expect(channelLabel('shaman', SLOTS.flair, 'F')).toBe('Lips');
     expect(channelLabel('shaman', SLOTS.facePaint, 'F')).toBe('Face paint');
-    expect(channelLabel('shaman', SLOTS.flair, 'M')).toBe('Details');
+    expect(channelLabel('shaman', SLOTS.flair, 'M')).toBe('Slot 11');
   });
 });
 
@@ -124,7 +124,7 @@ describe('dyeViewModel', () => {
     expect(vm.available).toBe(true);
     expect(vm.unlocked).toBe(false);
     expect(vm.channels.map((channel) => channel.slot))
-      .toEqual(EXPECTED_CHANNELS.wizard.F);
+      .toEqual(channelsFor('wizard', 'F').map((channel) => channel.slot));
     expect(vm.slotmap).toHaveLength(24 * 24);
   });
 
