@@ -245,7 +245,8 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('data-finish="none"');
     expect(res.text).toContain('Restore default');
     expect(res.text).toContain('window.__DYE__');
-    expect(res.text).toContain('"label":"Eyes"');
+    expect(res.text).toContain('"label":"Clothing"');
+    expect(res.text).not.toContain('"label":"Eyes"');
     expect(res.text).toContain('/static/dye.js');
   });
 

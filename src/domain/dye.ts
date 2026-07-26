@@ -1,9 +1,13 @@
 import type Database from 'better-sqlite3';
 import { classSpriteUrl, type Gender } from './classes';
-import { channelLabel, channelsFor } from './cosmetic-entitlements';
+import {
+  channelLabel,
+  channelsFor,
+  entitledChannelsFor,
+  type CosmeticTier,
+} from './cosmetic-entitlements';
 import { getCosmetics, spriteId } from './cosmetics';
-import { getSetting } from './settings';
-import { SKUS } from './shop';
+import { nextCosmeticSku, skuPrice } from './shop';
 import { getEntitledSlotConfig } from './slotcosmetics';
 import {
   loadSlotmap,
@@ -48,10 +52,24 @@ export function dyeRule(recipe: string, hue: number | null, tone?: number): Slot
 export interface DyeChannel {
   slot: number;
   label: string;
+  requiredTier: CosmeticTier;
+}
+
+export interface DyeTierGroup {
+  tier: CosmeticTier;
+  unlocked: boolean;
+  channels: DyeChannel[];
+}
+
+export interface DyeNextOffer {
+  tier: CosmeticTier;
+  price: number;
 }
 
 export interface DyeViewModel {
   available: boolean;
+  tier: number;
+  groups: DyeTierGroup[];
   unlocked: boolean;
   price: number;
   channels: DyeChannel[];
@@ -59,13 +77,9 @@ export interface DyeViewModel {
   base: string;
   config: Record<number, SlotRule>;
   finishes: typeof FINISHES;
+  presets: typeof MATERIAL_PRESETS;
+  nextOffer: DyeNextOffer | null;
   wheelSat: number;
-}
-
-function wheelPrice(db: Database.Database): number {
-  const sku = SKUS.cosmetic_wheel_t1;
-  const configured = Number(getSetting(db, sku.priceSetting));
-  return Number.isFinite(configured) ? configured : sku.priceDefault;
 }
 
 export function dyeViewModel(
@@ -77,23 +91,39 @@ export function dyeViewModel(
   const sprite = spriteId(player.class_key, gender);
   const ids = loadSlotmap(sprite, 'a', slotmapsDir);
   const present = presentSlots(sprite, slotmapsDir);
-  const cosmetics = getCosmetics(db, player.id);
-  const config: Record<number, SlotRule> = {};
-  for (const [slot, rule] of getEntitledSlotConfig(db, player)) {
-    config[slot] = rule;
-  }
+  const wheelTier = getCosmetics(db, player.id)?.wheel_tier ?? 0;
+  const presentSet = new Set(present);
+  const definitions = channelsFor(player.class_key, gender)
+    .filter((channel) => presentSet.has(channel.slot));
+  const groups: DyeTierGroup[] = ([1, 2, 3] as const).map((tier) => ({
+    tier,
+    unlocked: wheelTier >= tier,
+    channels: definitions
+      .filter((channel) => channel.requiredTier === tier)
+      .map(({ slot, label, requiredTier }) => ({ slot, label, requiredTier })),
+  }));
+  const channels = entitledChannelsFor(player.class_key, gender, wheelTier)
+    .filter((channel) => presentSet.has(channel.slot))
+    .map(({ slot, label, requiredTier }) => ({ slot, label, requiredTier }));
+  const nextSku = nextCosmeticSku(wheelTier);
+  const nextOffer = nextSku
+    ? { tier: nextSku.grantTier, price: skuPrice(db, nextSku) }
+    : null;
+  const config = Object.fromEntries(getEntitledSlotConfig(db, player));
 
   return {
     available: ids !== null && present.length > 0,
-    unlocked: !!cosmetics && cosmetics.wheel_tier >= 1,
-    price: wheelPrice(db),
-    channels: channelsFor(player.class_key, gender)
-      .filter((channel) => present.includes(channel.slot))
-      .map(({ slot, label }) => ({ slot, label })),
+    tier: wheelTier,
+    groups,
+    unlocked: wheelTier >= 1,
+    price: nextOffer?.price ?? 0,
+    channels,
     slotmap: ids ? Array.from(ids) : [],
     base: classSpriteUrl(player.class_key, gender),
     config,
     finishes: FINISHES,
+    presets: MATERIAL_PRESETS,
+    nextOffer,
     wheelSat: WHEEL_SAT,
   };
 }

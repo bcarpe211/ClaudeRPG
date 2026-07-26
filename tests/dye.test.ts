@@ -105,6 +105,31 @@ describe('dye rules', () => {
 });
 
 describe('dyeViewModel', () => {
+  it('shows applicable groups while exposing only entitled rules and controls', () => {
+    const player = wizard('F');
+    const locked = dyeViewModel(db, player);
+    expect(locked.tier).toBe(0);
+    expect(locked.channels).toEqual([]);
+    expect(locked.groups.map((group) => [group.tier, group.unlocked])).toEqual([[1, false], [2, false], [3, false]]);
+    expect(locked.groups[1].channels.map((channel) => channel.label)).toEqual(['Gold trim', 'Belt', 'Boots']);
+    expect(locked.nextOffer).toMatchObject({ tier: 1, price: 1_500_000 });
+
+    purchase(db, player.id, 'cosmetic_wheel_t1', 100);
+    const tier1 = dyeViewModel(db, player);
+    expect(tier1.channels.map((channel) => channel.label)).toEqual(['Clothing', 'Cloak', 'Skin']);
+    expect(tier1.groups.map((group) => group.unlocked)).toEqual([true, false, false]);
+    expect(tier1.nextOffer).toMatchObject({ tier: 2, price: 2_000_000 });
+  });
+
+  it('has no next offer after Tier 3', () => {
+    const player = wizard();
+    db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 20);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 30);
+    expect(dyeViewModel(db, player).nextOffer).toBeNull();
+  });
+
   it('reports locked, available channels and a full slotmap for a fresh male wizard', () => {
     const player = wizard();
     const vm = dyeViewModel(db, player);
@@ -112,8 +137,8 @@ describe('dyeViewModel', () => {
     expect(vm.available).toBe(true);
     expect(vm.unlocked).toBe(false);
     expect(vm.price).toBe(1_500_000);
-    expect(vm.channels.some((channel) => channel.slot === SLOTS.body)).toBe(true);
-    expect(vm.channels.find((channel) => channel.slot === SLOTS.flair)?.label).toBe('Eyes');
+    expect(vm.channels).toEqual([]);
+    expect(vm.groups.flatMap((group) => group.channels).find((channel) => channel.slot === SLOTS.flair)?.label).toBe('Eyes');
     expect(vm.slotmap).toHaveLength(24 * 24);
   });
 
@@ -141,7 +166,8 @@ describe('dyeViewModel', () => {
 
     expect(vm.available).toBe(true);
     expect(vm.unlocked).toBe(false);
-    expect(vm.channels.map((channel) => channel.slot))
+    expect(vm.channels).toEqual([]);
+    expect(vm.groups.flatMap((group) => group.channels).map((channel) => channel.slot))
       .toEqual(channelsFor('wizard', 'F').map((channel) => channel.slot));
     expect(vm.slotmap).toHaveLength(24 * 24);
   });
@@ -152,6 +178,9 @@ describe('dyeViewModel', () => {
       { name: 'Knight', class_key: 'knight', gender: 'M' },
       1,
     );
+    db.prepare('UPDATE players SET gold = 4000000 WHERE id = ?').run(player.id);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 20);
 
     const vm = dyeViewModel(db, player);
 
