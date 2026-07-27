@@ -409,6 +409,10 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     },
   };
 }
@@ -907,6 +911,109 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.navMessage.textContent).not.toContain('leave it behind');
     harness.navLeaveButton.dispatch('click');
     expect(harness.navigations).toEqual([]);
+  });
+
+  it('saves one atomic draft and continues only after acknowledgement', async () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+    pressWheel(harness, 'ArrowRight');
+    harness.cloak.dispatch('click');
+    harness.steelButton.dispatch('click');
+    harness.clickGuarded(harness.storeLink);
+
+    harness.navSaveButton.dispatch('click');
+    expect(harness.requests).toHaveLength(1);
+    expect(changes(harness.requests[0])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 6, tone: 0 },
+      { action: 'set', slot: 2, recipe: 'steel', tone: 0 },
+    ]);
+    expect(harness.navigations).toEqual([]);
+
+    pending.resolve(response({
+      1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 },
+      2: { op: 'colorize', hue: 212, sat: 0.13, tone: 0 },
+    }));
+    await harness.settle();
+    expect(harness.navigations).toEqual(['/shop?token=test-token']);
+  });
+
+  it('waits on an existing save instead of issuing a second request', async () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+
+    expect(harness.clickGuarded(harness.storeLink)).toBe(true);
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.navMessage.textContent).toContain('finishing your dye work');
+
+    pending.resolve(response({ 1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 } }));
+    await harness.settle();
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.navigations).toEqual(['/shop?token=test-token']);
+  });
+
+  it('stays on the fitting when newer edits appear during Save & Continue', async () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+    pressWheel(harness, 'ArrowRight');
+    harness.clickGuarded(harness.storeLink);
+    harness.navSaveButton.dispatch('click');
+    pressWheel(harness, 'ArrowRight');
+
+    pending.resolve(response({ 1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 } }));
+    await harness.settle();
+
+    expect(harness.navigations).toEqual([]);
+    expect(harness.navToast.hidden).toBe(false);
+    expect(harness.navMessage.textContent).toContain('another loose thread');
+    expect(harness.navLeaveButton.hidden).toBe(false);
+    expect(harness.status.textContent).toBe('Unsaved changes');
+  });
+
+  it('offers retry without destructive leave after an ambiguous save', async () => {
+    const harness = createWardrobeHarness();
+    const failed = deferred<ResponseLike>();
+    const retry = deferred<ResponseLike>();
+    harness.responses.push(failed, retry);
+    pressWheel(harness, 'ArrowRight');
+    harness.clickGuarded(harness.unlockLink);
+    harness.navSaveButton.dispatch('click');
+    failed.reject(new Error('offline'));
+    await harness.settle();
+
+    expect(harness.navigations).toEqual([]);
+    expect(harness.navSaveLabel.textContent).toBe('Retry Save');
+    expect(harness.navLeaveButton.hidden).toBe(true);
+
+    harness.navSaveButton.dispatch('click');
+    expect(harness.requests).toHaveLength(2);
+    expect(harness.requests[1].body.get('revision')).toBe('1000');
+    expect(changes(harness.requests[1])).toEqual(changes(harness.requests[0]));
+    retry.resolve(response({ 1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 } }));
+    await harness.settle();
+    expect(harness.navigations).toEqual(['/shop?token=test-token&tier=next']);
+  });
+
+  it('never continues through a stale save conflict', async () => {
+    const harness = createWardrobeHarness();
+    const stale = deferred<ResponseLike>();
+    harness.responses.push(stale);
+    pressWheel(harness, 'ArrowRight');
+    harness.clickGuarded(harness.storeLink);
+    harness.navSaveButton.dispatch('click');
+    stale.resolve(failedResponse(409));
+    await harness.settle();
+
+    expect(harness.navigations).toEqual([]);
+    expect(harness.reloadButton.hidden).toBe(false);
+    expect(harness.navSaveButton.hidden).toBe(true);
+    expect(harness.navLeaveButton.hidden).toBe(true);
+    expect(harness.navMessage.textContent).toContain('ledger must be reloaded');
+    expect(harness.beforeunload()).toEqual({ prevented: true, returnValue: '' });
   });
 
   it('reapplies canonical controls after normal pageshow form restoration', () => {

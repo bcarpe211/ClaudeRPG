@@ -51,6 +51,7 @@
   let refreshMessage = 'Wardrobe changed elsewhere — refresh required';
   let saveError = false;
   let pendingAttempt = null;
+  let savePromise = null;
   const channelButtons = Array.from(document.querySelectorAll('.dye-chan:not(:disabled)'));
   let active = channelButtons.length > 0 ? Number(channelButtons[0].dataset.slot) : null;
   const revisionSession = Number.isSafeInteger(D.revisionSession) ? D.revisionSession : null;
@@ -247,11 +248,11 @@
   let pendingNavigationTrigger = null;
 
   function hasPendingChanges() {
-    return operations().length > 0 || pendingAttempt !== null || saving || refreshRequired;
+    return operations().length > 0 || pendingAttempt !== null || saving || savePromise !== null || refreshRequired;
   }
 
   function showDirtyNavigationToast(link) {
-    const canLeave = !saving && pendingAttempt === null && !refreshRequired;
+    const canLeave = !saving && !savePromise && pendingAttempt === null && !refreshRequired;
     pendingDestination = link.getAttribute('href');
     pendingNavigationTrigger = link;
     navTitle.textContent = 'The tailor catches your sleeve!';
@@ -281,7 +282,7 @@
   }
 
   function leaveWithoutSaving() {
-    if (saving || pendingAttempt !== null || refreshRequired) return;
+    if (saving || savePromise || pendingAttempt !== null || refreshRequired) return;
     discardDraft();
     navigatePending();
   }
@@ -308,11 +309,11 @@
     );
   }
 
-  async function saveDraft() {
-    if (saving || refreshRequired) return;
+  async function performSave() {
+    if (refreshRequired) return 'refresh-required';
     if (!pendingAttempt) {
       const changes = operations();
-      if (changes.length === 0) return;
+      if (changes.length === 0) return 'clean';
       pendingAttempt = {
         changes,
         revision: nextRevision,
@@ -324,6 +325,7 @@
     saveError = false;
     renderSaveState('Saving');
     let message = 'Save failed';
+    let result = 'retryable-error';
     try {
       const body = new URLSearchParams({
         token: D.token,
@@ -339,7 +341,8 @@
         refreshMessage = 'Wardrobe changed elsewhere — refresh required';
         reloadButton.hidden = false;
         message = refreshMessage;
-        return;
+        result = 'refresh-required';
+        return result;
       }
       if (response.status === 400 || response.status === 403 || response.status === 404) {
         pendingAttempt = null;
@@ -351,7 +354,8 @@
             : 'Character session expired — reload required';
         reloadButton.hidden = false;
         message = refreshMessage;
-        return;
+        result = 'refresh-required';
+        return result;
       }
       if (!response.ok) throw new Error(`Save failed (${response.status})`);
 
@@ -386,14 +390,23 @@
       nextRevision = Math.max(nextRevision, attempt.revision + 1);
       renderPreview();
       renderControls();
-      message = operations().length > 0 ? 'Unsaved changes' : 'Saved';
+      result = operations().length > 0 ? 'dirty' : 'saved';
+      message = result === 'dirty' ? 'Unsaved changes' : 'Saved';
     } catch (_error) {
       // Keep the current draft so the same revision can be retried safely.
       saveError = true;
+      result = 'retryable-error';
     } finally {
       saving = false;
       renderSaveState(message);
     }
+    return result;
+  }
+
+  function saveDraft() {
+    if (savePromise) return savePromise;
+    savePromise = performSave().finally(function () { savePromise = null; });
+    return savePromise;
   }
 
   function discardDraft() {
@@ -403,6 +416,68 @@
     renderPreview();
     renderControls();
     renderSaveState(pendingAttempt ? 'Save failed' : 'Saved');
+  }
+
+  function showWaitingNavigationToast() {
+    navTitle.textContent = 'The tailor is tying the last knot!';
+    navMessage.textContent = 'The tailor is finishing your dye work before opening the next door.';
+    navSaveButton.hidden = false;
+    navSaveButton.disabled = true;
+    navLeaveButton.hidden = true;
+    navToast.hidden = false;
+  }
+
+  function showRetryNavigationToast() {
+    navTitle.textContent = 'The ledger ink is still wet!';
+    navMessage.textContent = 'The fitting could not be confirmed. Retry the same save before leaving.';
+    navSaveLabel.textContent = 'Retry Save';
+    navSaveButton.hidden = false;
+    navSaveButton.disabled = false;
+    navLeaveButton.hidden = true;
+    navToast.hidden = false;
+    navSaveButton.focus();
+  }
+
+  function showRefreshNavigationToast() {
+    navTitle.textContent = 'The ledger has changed!';
+    navMessage.textContent = 'The tailor’s ledger must be reloaded before this fitting can leave the workbench.';
+    navSaveButton.hidden = true;
+    navLeaveButton.hidden = true;
+    navToast.hidden = false;
+  }
+
+  let navigationSaveWait = null;
+
+  function handleNavigationSaveResult(result) {
+    if (!pendingDestination) return;
+    if (result === 'saved' || result === 'clean') {
+      navigatePending();
+      return;
+    }
+    if (result === 'dirty') {
+      navTitle.textContent = 'The tailor found another loose thread!';
+      navMessage.textContent = 'The tailor found another loose thread! New dye work appeared while the ledger was saving. Save again before heading out, or leave it behind.';
+      navSaveLabel.textContent = 'Save & Continue';
+      navSaveButton.hidden = false;
+      navSaveButton.disabled = false;
+      navLeaveButton.hidden = false;
+      navToast.hidden = false;
+      navSaveButton.focus();
+      return;
+    }
+    if (result === 'retryable-error') {
+      showRetryNavigationToast();
+      return;
+    }
+    showRefreshNavigationToast();
+  }
+
+  function saveAndContinue() {
+    if (!pendingDestination || navigationSaveWait) return;
+    showWaitingNavigationToast();
+    navigationSaveWait = saveDraft()
+      .then(handleNavigationSaveResult)
+      .finally(function () { navigationSaveWait = null; });
   }
 
   window.addEventListener('beforeunload', function (event) {
@@ -555,9 +630,21 @@
     link.addEventListener('click', function (event) {
       if (!hasPendingChanges()) return;
       event.preventDefault();
+      pendingDestination = link.getAttribute('href');
+      pendingNavigationTrigger = link;
+      if (saving || savePromise) {
+        showWaitingNavigationToast();
+        saveAndContinue();
+        return;
+      }
+      if (saveError && pendingAttempt !== null) {
+        showRetryNavigationToast();
+        return;
+      }
       showDirtyNavigationToast(link);
     });
   }
+  navSaveButton.addEventListener('click', saveAndContinue);
   navLeaveButton.addEventListener('click', leaveWithoutSaving);
   navCloseButton.addEventListener('click', function () { closeNavigationToast(true); });
   window.addEventListener('keydown', function (event) {
