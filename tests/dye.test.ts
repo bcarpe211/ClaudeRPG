@@ -116,7 +116,7 @@ describe('dyeViewModel', () => {
     expect(locked.nextOffer).toMatchObject({ tier: 1, price: 1_500_000 });
     expect(locked.revisionSession).toBe(1);
 
-    purchase(db, player.id, 'cosmetic_wheel_t1', 100);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 100);
     const tier1 = dyeViewModel(db, player);
     expect(tier1.channels.map((channel) => channel.label)).toEqual(['Clothing', 'Cloak', 'Skin']);
     expect(tier1.groups.map((group) => group.unlocked)).toEqual([true, false, false]);
@@ -131,9 +131,9 @@ describe('dyeViewModel', () => {
   it('has no next offer after Tier 3', () => {
     const player = wizard();
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
-    purchase(db, player.id, 'cosmetic_wheel_t2', 20);
-    purchase(db, player.id, 'cosmetic_wheel_t3', 30);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 20);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 2_500_000, 30);
     expect(dyeViewModel(db, player).nextOffer).toBeNull();
   });
 
@@ -154,7 +154,7 @@ describe('dyeViewModel', () => {
 
   it('reflects an unlock and saved slot rule in the serializable config', () => {
     const player = wizard();
-    purchase(db, player.id, 'cosmetic_wheel_t1', 100);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 100);
     setSlotRule(db, player.id, SLOTS.body, wheelRule(120), 200);
 
     const vm = dyeViewModel(db, player);
@@ -164,7 +164,7 @@ describe('dyeViewModel', () => {
 
   it('does not serialize a stored locked channel into the browser config', () => {
     const player = wizard();
-    purchase(db, player.id, 'cosmetic_wheel_t1', 100);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 100);
     setSlotRule(db, player.id, SLOTS.weapon, wheelRule(120), 200);
 
     expect(dyeViewModel(db, player).config[SLOTS.weapon]).toBeUndefined();
@@ -190,8 +190,8 @@ describe('dyeViewModel', () => {
       1,
     );
     db.prepare('UPDATE players SET gold = 4000000 WHERE id = ?').run(player.id);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
-    purchase(db, player.id, 'cosmetic_wheel_t2', 20);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 20);
 
     const vm = dyeViewModel(db, player);
 

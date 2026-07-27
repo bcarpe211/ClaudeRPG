@@ -19,13 +19,17 @@ import { getEntitledSlotConfig, skinRenderHash } from '../../domain/slotcosmetic
 const ShopPurchaseInput = z.object({
   token: z.string().min(1),
   sku: z.string().min(1),
+  expected_price: z.string()
+    .regex(/^(0|[1-9]\d*)$/)
+    .transform(Number)
+    .refine(Number.isSafeInteger),
 });
 
 const PURCHASE_RESULTS = new Set([
-  'success', 'insufficient_gold', 'stale', 'out_of_sequence', 'invalid',
+  'success', 'insufficient_gold', 'price_changed', 'stale', 'out_of_sequence', 'invalid',
 ]);
 
-type PurchaseResultCode = 'success' | 'insufficient_gold' | 'stale' | 'out_of_sequence' | 'invalid';
+type PurchaseResultCode = 'success' | 'insufficient_gold' | 'price_changed' | 'stale' | 'out_of_sequence' | 'invalid';
 
 function shopLocation(token: string, result: PurchaseResultCode): string {
   const query = new URLSearchParams({ token, result });
@@ -136,11 +140,13 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
       res.redirect('/shop?result=invalid');
       return;
     }
-    const result = purchase(db, player.id, parsed.data.sku, Date.now());
+    const result = purchase(db, player.id, parsed.data.sku, parsed.data.expected_price, Date.now());
     const resultCode: PurchaseResultCode = result.ok
       ? 'success'
       : result.reason === 'insufficient_gold'
         ? 'insufficient_gold'
+        : result.reason === 'price_changed'
+          ? 'price_changed'
         : result.reason === 'already_owned'
           ? 'stale'
           : result.reason === 'out_of_sequence'

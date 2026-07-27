@@ -10,7 +10,8 @@ export const SKUS: Record<string, Sku> = {
 
 export type PurchaseResult =
   | { ok: true; newGold: number; tier: number }
-  | { ok: false; reason: 'unknown_sku' | 'no_player' | 'already_owned' | 'out_of_sequence' | 'insufficient_gold'; price?: number; gold?: number; currentTier?: number };
+  | { ok: false; reason: 'unknown_sku' | 'no_player' | 'already_owned' | 'out_of_sequence' | 'insufficient_gold' | 'invalid_price'; price?: number; gold?: number; currentTier?: number }
+  | { ok: false; reason: 'price_changed'; expectedPrice: number; currentPrice: number };
 
 export function skuPrice(db: Database.Database, sku: Sku): number {
   const configured = Number(getSetting(db, sku.priceSetting));
@@ -21,11 +22,23 @@ export function nextCosmeticSku(wheelTier: number): Sku | undefined {
   return Object.values(SKUS).find((sku) => sku.grantTier === wheelTier + 1);
 }
 
-export function purchase(db: Database.Database, playerId: number, skuId: string, now: number): PurchaseResult {
+export function purchase(
+  db: Database.Database,
+  playerId: number,
+  skuId: string,
+  expectedPrice: number,
+  now: number,
+): PurchaseResult {
   const sku = SKUS[skuId];
   if (!sku) return { ok: false, reason: 'unknown_sku' };
-  const price = skuPrice(db, sku);
+  if (!Number.isSafeInteger(expectedPrice) || expectedPrice < 0) {
+    return { ok: false, reason: 'invalid_price' };
+  }
   return db.transaction((): PurchaseResult => {
+    const price = skuPrice(db, sku);
+    if (price !== expectedPrice) {
+      return { ok: false, reason: 'price_changed', expectedPrice, currentPrice: price };
+    }
     const p = db.prepare('SELECT gold FROM players WHERE id = ?').get(playerId) as { gold: number } | undefined;
     if (!p) return { ok: false, reason: 'no_player' };
     const cos = db.prepare('SELECT wheel_tier FROM player_cosmetics WHERE player_id = ?')

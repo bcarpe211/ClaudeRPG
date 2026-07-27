@@ -15,7 +15,7 @@ describe('tv hero avatar honors cosmetics', () => {
     const db = openDb(':memory:'); seedSettings(db);
     const p = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
     db.prepare('UPDATE players SET gold = 2000000, effective_tokens = 5 WHERE id = ?').run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 100);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 100);
     setCosmeticHue(db, p.id, 'primary', 210, 200);
     const hero = buildTvState(db, 100000).players.find((x) => x.id === p.id)!;
     expect(hero.avatarUrl).toBe(`/sprite/skin/${p.id}/a/${skinRenderHash(spriteId(p.class_key, p.gender), getSlotConfig(db, p.id))}.png`);
@@ -24,7 +24,7 @@ describe('tv hero avatar honors cosmetics', () => {
     const db = openDb(':memory:'); seedSettings(db);
     const p = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
     db.prepare('UPDATE players SET effective_tokens = 5, gold = 7000000 WHERE id = ?').run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 99);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 99);
     setSlotRule(db, p.id, SLOTS.body, { op: 'hue', hue: 200 }, 100);
     const hero = buildTvState(db, 100000).players.find((x) => x.id === p.id)!;
     expect(hero.avatarUrl).toBe(`/sprite/skin/${p.id}/a/${skinRenderHash(spriteId(p.class_key, p.gender), getEntitledSlotConfig(db, p))}.png`);

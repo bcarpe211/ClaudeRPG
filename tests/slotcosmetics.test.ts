@@ -25,14 +25,14 @@ describe('getSlotConfig', () => {
   });
   it('falls back to the legacy body hue from player_cosmetics', () => {
     const p = player('wizard'); // wizard op = hue
-    purchase(db, p.id, 'cosmetic_wheel_t1', 100);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 100);
     setCosmeticHue(db, p.id, 'primary', 210, 200);
     const cfg = getSlotConfig(db, p.id);
     expect(cfg.get(SLOTS.body)).toEqual({ op: 'hue', hue: 210 });
   });
   it('per-slot rows win over the legacy body hue, and add other slots', () => {
     const p = player();
-    purchase(db, p.id, 'cosmetic_wheel_t1', 100);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 100);
     setCosmeticHue(db, p.id, 'primary', 210, 200);
     setSlotRule(db, p.id, SLOTS.body, { op: 'hue', hue: 40 }, 300);
     setSlotRule(db, p.id, SLOTS.weapon, { op: 'value', lo: 0, hi: 0.3 }, 300);
@@ -48,7 +48,7 @@ describe('getSlotConfig', () => {
   });
   it('clearSlot body also clears the legacy hue fallback', () => {
     const p = player();
-    purchase(db, p.id, 'cosmetic_wheel_t1', 100);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 100);
     setCosmeticHue(db, p.id, 'primary', 210, 200);
     expect(getSlotConfig(db, p.id).has(SLOTS.body)).toBe(true);
 
@@ -67,10 +67,10 @@ describe('getEntitledSlotConfig', () => {
     setSlotRule(db, p.id, SLOTS.weapon, { op: 'colorize', hue: 40, sat: 0.6 }, 10);
 
     expect(getEntitledSlotConfig(db, p).size).toBe(0);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 20);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 20);
     expect([...getEntitledSlotConfig(db, p).keys()]).toEqual([SLOTS.body]);
-    purchase(db, p.id, 'cosmetic_wheel_t2', 30);
-    purchase(db, p.id, 'cosmetic_wheel_t3', 40);
+    purchase(db, p.id, 'cosmetic_wheel_t2', 2_000_000, 30);
+    purchase(db, p.id, 'cosmetic_wheel_t3', 2_500_000, 40);
     expect([...getEntitledSlotConfig(db, p).keys()].sort((a, b) => a - b))
       .toEqual([SLOTS.body, SLOTS.weapon].sort((a, b) => a - b));
     expect(getSlotConfig(db, p.id).has(SLOTS.weapon)).toBe(true);
@@ -79,8 +79,8 @@ describe('getEntitledSlotConfig', () => {
   it('retains a female-only rule while male and restores it after switching back', () => {
     const p = player('knight');
     db.prepare("UPDATE players SET gender = 'F', gold = 7000000 WHERE id = ?").run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 10);
-    purchase(db, p.id, 'cosmetic_wheel_t2', 20);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 10);
+    purchase(db, p.id, 'cosmetic_wheel_t2', 2_000_000, 20);
     setSlotRule(db, p.id, SLOTS.hair, { op: 'colorize', hue: 20, sat: 0.6 }, 30);
     expect(getEntitledSlotConfig(db, { ...p, gender: 'F' }).has(SLOTS.hair)).toBe(true);
     db.prepare("UPDATE players SET gender = 'M' WHERE id = ?").run(p.id);

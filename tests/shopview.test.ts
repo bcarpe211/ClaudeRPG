@@ -45,7 +45,7 @@ describe('buildShopViewModel', () => {
     const tier1 = buildShopViewModel(db, player.id)!;
     expect(tier1.nextOffer).toMatchObject({ sku: 'cosmetic_wheel_t1', tier: 1, price: 1_500_000 });
     expect(tier1.nextOffer?.channels.map((channel) => channel.label)).toEqual(['Clothing', 'Skin']);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
     const tier2 = buildShopViewModel(db, player.id)!;
     expect(tier2.nextOffer).toMatchObject({ sku: 'cosmetic_wheel_t2', tier: 2, price: 2_000_000 });
     expect(tier2.nextOffer?.channels.map((channel) => channel.label)).toEqual(['Trim', 'Belt', 'Hair', 'Boots', 'Lips']);
@@ -54,7 +54,7 @@ describe('buildShopViewModel', () => {
   it('describes a Tier 2 Wizard offer with title-cased channel labels and an Oxford comma', () => {
     const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
 
     const shop = buildShopViewModel(db, player.id)!;
 
@@ -85,7 +85,7 @@ describe('buildShopViewModel', () => {
   it('keeps persisted owned rules while previewing only the next tier', () => {
     const player = createPlayer(db, { name: 'A', class_key: 'priest', gender: 'F' }, 1);
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
     setSlotRule(db, player.id, SLOTS.body, { op: 'colorize', hue: 214, sat: 0.6 }, 11);
 
     const shop = buildShopViewModel(db, player.id)!;
@@ -103,9 +103,9 @@ describe('buildShopViewModel', () => {
   it('has mastery and no offer after Tier 3', () => {
     const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
-    purchase(db, player.id, 'cosmetic_wheel_t2', 20);
-    purchase(db, player.id, 'cosmetic_wheel_t3', 30);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 20);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 2_500_000, 30);
     expect(buildShopViewModel(db, player.id)).toMatchObject({
       currentTier: 3,
       mastered: true,

@@ -41,6 +41,7 @@
 
         <% if (purchaseResult === 'success') { %><p class="ok">The new dyes are ready in your Wardrobe.</p><% } %>
         <% if (purchaseResult === 'insufficient_gold') { %><p class="err">You need <%= offer.missingGold.toLocaleString() %> more gold.</p><% } %>
+        <% if (purchaseResult === 'price_changed') { %><p class="err">This offer was repriced. Review the current offer; no gold was spent.</p><% } %>
         <% if (purchaseResult === 'stale') { %><p class="err">Your Wardrobe already advanced. This is your current offer.</p><% } %>
         <% if (purchaseResult === 'out_of_sequence' || purchaseResult === 'invalid') { %><p class="err">That ledger entry is not available. No gold was spent.</p><% } %>
         <% if (!purchaseResult && offer.missingGold > 0) { %><p class="bazaar-affordability">Gather <%= offer.missingGold.toLocaleString() %>g more to unlock this ledger page.</p><% } %>
@@ -51,6 +52,7 @@
           <form method="post" action="/shop/cosmetics/purchase"<%= offer.missingGold === 0 ? ' data-purchase-effect' : '' %>>
             <input type="hidden" name="token" value="<%= player.auth_token %>">
             <input type="hidden" name="sku" value="<%= offer.sku %>">
+            <input type="hidden" name="expected_price" value="<%= offer.price %>">
             <button type="submit" class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %></button>
           </form>
         </div>

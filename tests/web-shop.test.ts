@@ -55,6 +55,7 @@ describe('Bazaar', () => {
     expect(readyForm).toContain('data-purchase-effect');
     expect(readyForm).toContain(`name="token" value="${ready.player.auth_token}"`);
     expect(readyForm).toContain('name="sku" value="cosmetic_wheel_t1"');
+    expect(readyForm).toContain('name="expected_price" value="1500000"');
     expect(readyPage.text).toContain('<script src="/static/shop.js" defer></script>');
 
     const poor = ctx(0);
@@ -69,7 +70,7 @@ describe('Bazaar', () => {
 
   it('renders the compact Gilded Mimic offer and keeps navigation in the Adventurer Ledger', async () => {
     const { db, app, player } = ctx(7_000_000);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
 
     const res = await request(app).get('/shop').query({ token: player.auth_token });
     const product = res.text.match(/<article class="bazaar-product"[\s\S]*?<\/article>/)?.[0] ?? '';
@@ -154,17 +155,43 @@ describe('Bazaar', () => {
   it('purchases the exact next tier and redirects back to the Bazaar', async () => {
     const { db, app, player } = ctx(7_000_000);
     const res = await request(app).post('/shop/cosmetics/purchase').type('form')
-      .send({ token: player.auth_token, sku: 'cosmetic_wheel_t1' });
+      .send({ token: player.auth_token, sku: 'cosmetic_wheel_t1', expected_price: '1500000' });
     expect(res.status).toBe(302);
     expect(res.headers.location).toContain('/shop?token=');
     expect(getPlayerById(db, player.id)?.gold).toBe(5_500_000);
     expect(getCosmetics(db, player.id)?.wheel_tier).toBe(1);
   });
 
+  it.each([
+    ['increase', '1600000'],
+    ['decrease', '1400000'],
+  ])('rejects a price %s after display without charging or granting', async (_direction, currentPrice) => {
+    const { db, app, player } = ctx(7_000_000);
+    const page = await request(app).get('/shop').query({ token: player.auth_token });
+    const displayedPrice = page.text.match(/name="expected_price" value="(\d+)"/)?.[1];
+    expect(displayedPrice).toBe('1500000');
+    db.prepare('UPDATE settings SET value = ? WHERE key = ?')
+      .run(currentPrice, 'cosmetic_wheel_t1_price');
+
+    const post = await request(app).post('/shop/cosmetics/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'cosmetic_wheel_t1',
+      expected_price: displayedPrice,
+    });
+
+    expect(post.status).toBe(302);
+    expect(post.headers.location).toContain('result=price_changed');
+    expect(getPlayerById(db, player.id)?.gold).toBe(7_000_000);
+    expect(getCosmetics(db, player.id)).toBeUndefined();
+    const refreshed = await request(app).get(post.headers.location);
+    expect(refreshed.text).toContain('This offer was repriced. Review the current offer; no gold was spent.');
+    expect(refreshed.text).not.toContain('Your Wardrobe already advanced');
+  });
+
   it('reports missing gold and never charges an insufficient purchase', async () => {
     const { db, app, player } = ctx(1_000_000);
     const post = await request(app).post('/shop/cosmetics/purchase').type('form')
-      .send({ token: player.auth_token, sku: 'cosmetic_wheel_t1' });
+      .send({ token: player.auth_token, sku: 'cosmetic_wheel_t1', expected_price: '1500000' });
     expect(post.status).toBe(302);
     expect(post.headers.location).toContain('result=insufficient_gold');
     expect(getPlayerById(db, player.id)?.gold).toBe(1_000_000);
@@ -175,7 +202,7 @@ describe('Bazaar', () => {
   it('rejects an out-of-sequence forged SKU without charging', async () => {
     const { db, app, player } = ctx(7_000_000);
     const post = await request(app).post('/shop/cosmetics/purchase').type('form')
-      .send({ token: player.auth_token, sku: 'cosmetic_wheel_t3' });
+      .send({ token: player.auth_token, sku: 'cosmetic_wheel_t3', expected_price: '2500000' });
     expect(post.status).toBe(302);
     expect(post.headers.location).toContain('result=out_of_sequence');
     expect(getPlayerById(db, player.id)?.gold).toBe(7_000_000);
@@ -185,6 +212,18 @@ describe('Bazaar', () => {
   it('redirects malformed or missing purchase input to the safe invalid result', async () => {
     const { app } = ctx();
     const post = await request(app).post('/shop/cosmetics/purchase').type('form').send({});
+
+    expect(post.status).toBe(302);
+    expect(post.headers.location).toBe('/shop?result=invalid');
+  });
+
+  it.each(['', '-1', '1.5', 'not-a-price'])('rejects invalid submitted prices: %j', async (expectedPrice) => {
+    const { app, player } = ctx(7_000_000);
+    const post = await request(app).post('/shop/cosmetics/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'cosmetic_wheel_t1',
+      expected_price: expectedPrice,
+    });
 
     expect(post.status).toBe(302);
     expect(post.headers.location).toBe('/shop?result=invalid');
@@ -201,9 +240,9 @@ describe('Bazaar', () => {
 
   it('renders one-time mastery immediately after the final successful purchase', async () => {
     const { db, app, player } = ctx(7_000_000);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 1);
-    purchase(db, player.id, 'cosmetic_wheel_t2', 2);
-    purchase(db, player.id, 'cosmetic_wheel_t3', 3);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 1);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 2);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 2_500_000, 3);
 
     const res = await request(app).get('/shop').query({
       token: player.auth_token,
@@ -221,9 +260,9 @@ describe('Bazaar', () => {
 
   it('shows the closed mimic scene on later mastered visits while retaining the ledger', async () => {
     const { db, app, player } = ctx(7_000_000);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 1);
-    purchase(db, player.id, 'cosmetic_wheel_t2', 2);
-    purchase(db, player.id, 'cosmetic_wheel_t3', 3);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 1);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 2);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 2_500_000, 3);
 
     const res = await request(app).get('/shop').query({ token: player.auth_token });
 

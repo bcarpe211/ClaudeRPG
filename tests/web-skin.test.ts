@@ -35,7 +35,7 @@ describe('GET /sprite/skin', () => {
     const { db, app, p } = ctx();
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(p.id);
     setSlotRule(db, p.id, SLOTS.weapon, { op: 'colorize', hue: 120, sat: 0.6 }, 5);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 10);
 
     const sprite = spriteId(p.class_key, p.gender);
     const source = PNG.sync.read(readFileSync(
@@ -51,8 +51,8 @@ describe('GET /sprite/skin', () => {
     expect(Array.from(PNG.sync.read(tier1.body).data.slice(weaponPixel * 4, weaponPixel * 4 + 3)))
       .toEqual(Array.from(source.data.slice(weaponPixel * 4, weaponPixel * 4 + 3)));
 
-    purchase(db, p.id, 'cosmetic_wheel_t2', 20);
-    purchase(db, p.id, 'cosmetic_wheel_t3', 30);
+    purchase(db, p.id, 'cosmetic_wheel_t2', 2_000_000, 20);
+    purchase(db, p.id, 'cosmetic_wheel_t3', 2_500_000, 30);
     const tier3Config = getEntitledSlotConfig(db, p);
     expect(tier3Config.has(SLOTS.weapon)).toBe(true);
     const tier3 = await request(app).get(`/sprite/skin/${p.id}/a/${skinRenderHash(sprite, tier3Config)}.png`);
@@ -62,7 +62,7 @@ describe('GET /sprite/skin', () => {
   it('renders the player per-slot config: body recolors, weapon/eye slots stay', async () => {
     const { db, app, p } = ctx();
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 99);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 99);
     setSlotRule(db, p.id, SLOTS.body, { op: 'hue', hue: 120 }, 100); // green robe
     const hash = skinRenderHash(spriteId(p.class_key, p.gender), getSlotConfig(db, p.id));
     const res = await request(app).get(`/sprite/skin/${p.id}/a/${hash}.png`);
@@ -85,7 +85,7 @@ describe('GET /sprite/skin', () => {
   it('renders a female body rule without changing a mapped flair eye pixel', async () => {
     const { db, app, p } = ctx({}, undefined, 'F');
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 99);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 99);
     const sprite = 'wizard_F';
     const slotmap = loadSlotmap(sprite, 'a')!;
     const source = PNG.sync.read(readFileSync(
@@ -123,7 +123,7 @@ describe('GET /sprite/skin', () => {
   it('redirects a stale hash to the current immutable skin URL', async () => {
     const { db, app, p } = ctx();
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 99);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 99);
     setSlotRule(db, p.id, SLOTS.body, { op: 'colorize', hue: 210, sat: 0.6 }, 100);
     const currentHash = skinRenderHash(spriteId(p.class_key, p.gender), getSlotConfig(db, p.id));
 
@@ -141,7 +141,7 @@ describe('GET /sprite/skin', () => {
     mkdirSync(slotmapsDir);
     const { db, app, p } = ctx({ DB_PATH: join(fixtureDir, 'test.db') }, slotmapsDir);
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 99);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 99);
     const sprite = spriteId(p.class_key, p.gender);
     const file = join(slotmapsDir, `${sprite}_a.png`);
     copyFileSync(slotmapFile(sprite, 'a'), file);

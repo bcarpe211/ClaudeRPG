@@ -25,7 +25,7 @@ describe('character sheet', () => {
   it('GET /character?token=... shows the sheet with stats and snippet', async () => {
     const p = createPlayer(db, { name: 'Gandalf', class_key: 'wizard', gender: 'M' }, 1000);
     db.prepare('UPDATE players SET gold = 2000000 WHERE id = ?').run(p.id);
-    purchase(db, p.id, 'cosmetic_wheel_t1', 1001);
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 1001);
     const res = await request(app).get('/character').query({ token: p.auth_token });
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('private, no-store');

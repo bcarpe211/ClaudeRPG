@@ -30,7 +30,8 @@ function ctx(gender: 'M' | 'F' = 'M') {
 }
 
 function buy(db: ReturnType<typeof openDb>, playerId: number, tier: 1 | 2 | 3) {
-  return purchase(db, playerId, `cosmetic_wheel_t${tier}`, 10);
+  const expectedPrice = [0, 1_500_000, 2_000_000, 2_500_000][tier];
+  return purchase(db, playerId, `cosmetic_wheel_t${tier}`, expectedPrice, 10);
 }
 
 function dyeState(db: ReturnType<typeof openDb>, playerId: number) {
@@ -455,7 +456,7 @@ describe('character wardrobe panel', () => {
 
   it('serializes only Tier-1 controls while showing higher tiers locked', async () => {
     const { db, app, player } = ctx('F');
-    purchase(db, player.id, 'cosmetic_wheel_t1', 10);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
     const res = await request(app).get('/character').query({ token: player.auth_token });
     expect(res.text).toContain('Wardrobe Tier 1');
     expect(res.text).toContain('window.__DYE__');
@@ -521,9 +522,9 @@ describe('character wardrobe panel', () => {
   it('removes the purchase prompt at Tier 3 while keeping the complete workbench', async () => {
     const { db, app, player } = ctx();
     db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(player.id);
-    purchase(db, player.id, 'cosmetic_wheel_t1', 1);
-    purchase(db, player.id, 'cosmetic_wheel_t2', 2);
-    purchase(db, player.id, 'cosmetic_wheel_t3', 3);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 1);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 2);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 2_500_000, 3);
     const res = await request(app).get('/character').query({ token: player.auth_token });
     expect(res.text).toContain('Wardrobe Tier 3');
     expect(res.text).toContain('Dye mastery complete');
