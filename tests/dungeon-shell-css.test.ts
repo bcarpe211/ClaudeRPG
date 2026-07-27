@@ -18,4 +18,22 @@ describe('responsive dungeon shell safe area', () => {
     expect(css).toMatch(/@media \(max-width:480px\)\{[\s\S]*?:root\{--wall:36px;--shell-gap:8px/);
     expect(css).toMatch(/\.sconce\{[^}]*width:min\(48px,var\(--wall\)\)[^}]*height:min\(48px,var\(--wall\)\)/);
   });
+
+  it('keeps the intentional lite frame width beyond both walls', () => {
+    expect(css).toMatch(/body\.frame-lite main\{max-width:1180px;padding-inline:max\(var\(--shell-inline\),calc\(var\(--wall\) \+ var\(--shell-gap\)\)\)\}/);
+
+    const wall = 66;
+    const gap = 12;
+    const standardWidth = 1120;
+    const liteWidth = 1180;
+    const standardInline = (viewport: number) => Math.max(34, Math.min(wall + gap, wall + gap + 560 - viewport / 2));
+    const standardEdge = (viewport: number) => (viewport - standardWidth) / 2 + standardInline(viewport);
+    const liteInline = (viewport: number) => Math.max(standardInline(viewport), wall + gap);
+    const liteEdge = (viewport: number) => Math.max(0, (viewport - liteWidth) / 2) + liteInline(viewport);
+
+    expect(standardInline(1180)).toBe(48);
+    expect(standardEdge(1180)).toBe(78);
+    expect(liteInline(1180)).toBe(78);
+    expect(liteEdge(1180)).toBe(78);
+  });
 });
