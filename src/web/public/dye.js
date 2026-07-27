@@ -247,18 +247,21 @@
   let pendingNavigationTrigger = null;
 
   function hasPendingChanges() {
-    return operations().length > 0 || pendingAttempt !== null || saving;
+    return operations().length > 0 || pendingAttempt !== null || saving || refreshRequired;
   }
 
   function showDirtyNavigationToast(link) {
+    const canLeave = !saving && pendingAttempt === null && !refreshRequired;
     pendingDestination = link.getAttribute('href');
     pendingNavigationTrigger = link;
     navTitle.textContent = 'The tailor catches your sleeve!';
-    navMessage.textContent = 'You still have unfinished dye work on the fitting table. Save it before heading out, or leave it behind.';
+    navMessage.textContent = canLeave
+      ? 'You still have unfinished dye work on the fitting table. Save it before heading out, or leave it behind.'
+      : 'Your dye work is still being reconciled on the fitting table. Finish saving or reload before heading out.';
     navSaveLabel.textContent = 'Save & Continue';
     navSaveButton.hidden = false;
     navSaveButton.disabled = false;
-    navLeaveButton.hidden = false;
+    navLeaveButton.hidden = !canLeave;
     navToast.hidden = false;
     navSaveButton.focus();
   }

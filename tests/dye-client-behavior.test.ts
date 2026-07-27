@@ -852,6 +852,63 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.navToast.hidden).toBe(true);
   });
 
+  it('blocks guarded links after a definitive save rejection even when the visible draft matches the saved baseline', async () => {
+    const harness = createWardrobeHarness({
+      1: { op: 'colorize', hue: 20, sat: 0.6, tone: 0 },
+    });
+    const rejected = deferred<ResponseLike>();
+    harness.responses.push(rejected);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    pressWheel(harness, 'ArrowLeft');
+    rejected.resolve(failedResponse(400));
+    await harness.settle();
+
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('20');
+    expect(harness.status.textContent).toBe('Wardrobe save was rejected — refresh required');
+    expect(harness.clickGuarded(harness.storeLink)).toBe(true);
+    expect(harness.navToast.hidden).toBe(false);
+    expect(harness.navLeaveButton.hidden).toBe(true);
+    expect(harness.navMessage.textContent).not.toContain('leave it behind');
+    expect(harness.navigations).toEqual([]);
+  });
+
+  it('blocks guarded links during an in-flight save without offering to leave the draft behind', () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+
+    expect(harness.clickGuarded(harness.unlockLink)).toBe(true);
+    expect(harness.navToast.hidden).toBe(false);
+    expect(harness.navLeaveButton.hidden).toBe(true);
+    expect(harness.navMessage.textContent).not.toContain('leave it behind');
+    harness.navLeaveButton.dispatch('click');
+    expect(harness.navigations).toEqual([]);
+  });
+
+  it('blocks guarded links after an ambiguous failed attempt without offering to leave the draft behind', async () => {
+    const harness = createWardrobeHarness();
+    const lostResponse = deferred<ResponseLike>();
+    harness.responses.push(lostResponse);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    lostResponse.reject(new Error('response lost after commit'));
+    await harness.settle();
+
+    expect(harness.status.textContent).toBe('Save failed');
+    expect(harness.clickGuarded(harness.storeLink)).toBe(true);
+    expect(harness.navToast.hidden).toBe(false);
+    expect(harness.navLeaveButton.hidden).toBe(true);
+    expect(harness.navMessage.textContent).not.toContain('leave it behind');
+    harness.navLeaveButton.dispatch('click');
+    expect(harness.navigations).toEqual([]);
+  });
+
   it('reapplies canonical controls after normal pageshow form restoration', () => {
     const harness = createWardrobeHarness();
 
