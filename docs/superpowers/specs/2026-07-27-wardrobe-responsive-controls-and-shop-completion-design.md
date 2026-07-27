@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-27
 
-**Status:** Approved visual direction; awaiting spec review
+**Status:** Approved for implementation
 
 **Branch:** `feat/player-shop-cosmetics`
 
@@ -123,11 +123,11 @@ earlier.
 
 The responsive shell follows these rules:
 
-- Above the existing loot cutoff, the current centered 1120-pixel shell and
-  loot rails remain unchanged.
-- At and below the loot cutoff, loot rails are hidden and the header, main
-  content, and footer receive inline padding that clears each moss wall plus a
-  small visual gap.
+- Above the wall-plus-shell threshold, the current centered 1120-pixel shell
+  and loot rails remain unchanged.
+- At and below that threshold, loot rails are hidden. As the viewport narrows,
+  the header, main content, and footer receive a smoothly increasing inline
+  inset that clears each moss wall plus a small visual gap.
 - At tablet and phone breakpoints, `--wall` narrows in steps and the shell gap
   follows it. This preserves usable card width while keeping every panel fully
   between the walls.
@@ -149,7 +149,8 @@ The Bazaar has three relevant authenticated states:
 2. **Final tier just purchased** — render `Dye Mastery Complete` once as the
    immediate success/celebration state.
 3. **No products available** — render the existing closed-stall scene with its
-   mimic, CLOSED sign, merchant note, and Wardrobe link.
+   mimic, CLOSED sign, merchant note, and Wardrobe guidance. The Adventurer
+   Ledger remains the scene's only Return to Character button.
 
 The final purchase redirect already carries `result=success`. When the resulting
 view is both successful and mastered, that signal selects the one-time mastery
