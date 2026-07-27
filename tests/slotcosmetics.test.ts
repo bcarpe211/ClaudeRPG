@@ -199,6 +199,9 @@ describe('applySlotMutationBatch', () => {
     expect(applySlotMutationBatch(db, created.id, session.session, 10, [
       { slot: SLOTS.body, rule },
     ], 101)).toBe('stale');
+    expect(applySlotMutationBatch(db, created.id, session.session, 10, [
+      { slot: SLOTS.cape, rule: null },
+    ], 102)).toBe('stale');
   });
 
   it('rolls back rules and tombstones when any write throws', () => {

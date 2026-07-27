@@ -207,6 +207,16 @@ export function applySlotMutationBatch(
     ).get(playerId, session, revision) as BatchReceiptRow | undefined;
     if (receipt) return receipt.digest === digest ? 'duplicate' : 'stale';
 
+    // Migration 011 cannot reconstruct payloads for an existing per-slot
+    // tombstone. Treat the entire mutation key as occupied, even when the new
+    // payload names different slots; only a receipt can prove an exact replay.
+    const unreceiptedTombstone = db.prepare(
+      `SELECT 1 FROM player_slot_cosmetic_revisions
+       WHERE player_id = ? AND session = ? AND revision = ?
+       LIMIT 1`,
+    ).get(playerId, session, revision);
+    if (unreceiptedTombstone) return 'stale';
+
     const states = operations.map(({ slot }) => {
       const previous = db.prepare(
         `SELECT session, revision FROM player_slot_cosmetic_revisions
