@@ -16,12 +16,22 @@
   const saveButton = document.getElementById('dye-save');
   const discardButton = document.getElementById('dye-discard');
   const reloadButton = document.getElementById('dye-reload');
+  const navToast = document.getElementById('dye-nav-toast');
+  const navTitle = document.getElementById('dye-nav-title');
+  const navMessage = document.getElementById('dye-nav-message');
+  const navSaveButton = document.getElementById('dye-nav-save');
+  const navSaveLabel = document.getElementById('dye-nav-save-label');
+  const navLeaveButton = document.getElementById('dye-nav-leave');
+  const navCloseButton = document.getElementById('dye-nav-close');
+  const guardedLinks = Array.from(document.querySelectorAll('[data-dye-guarded-nav]'));
   const pageAvatars = {
     a: document.getElementById('character-avatar-a'),
     b: document.getElementById('character-avatar-b'),
   };
   if (!preview || !wheel || !status || !toneInput || !toneValue
-    || !saveButton || !discardButton || !reloadButton) return;
+    || !saveButton || !discardButton || !reloadButton
+    || !navToast || !navTitle || !navMessage || !navSaveButton || !navSaveLabel
+    || !navLeaveButton || !navCloseButton) return;
 
   const previewContext = preview.getContext('2d');
   const wheelContext = wheel.getContext('2d');
@@ -231,6 +241,46 @@
 
   function operations() {
     return Draft.dirtyOperations(savedStates, states);
+  }
+
+  let pendingDestination = null;
+  let pendingNavigationTrigger = null;
+
+  function hasPendingChanges() {
+    return operations().length > 0 || pendingAttempt !== null || saving;
+  }
+
+  function showDirtyNavigationToast(link) {
+    pendingDestination = link.getAttribute('href');
+    pendingNavigationTrigger = link;
+    navTitle.textContent = 'The tailor catches your sleeve!';
+    navMessage.textContent = 'You still have unfinished dye work on the fitting table. Save it before heading out, or leave it behind.';
+    navSaveLabel.textContent = 'Save & Continue';
+    navSaveButton.hidden = false;
+    navSaveButton.disabled = false;
+    navLeaveButton.hidden = false;
+    navToast.hidden = false;
+    navSaveButton.focus();
+  }
+
+  function closeNavigationToast(restoreFocus) {
+    const trigger = pendingNavigationTrigger;
+    navToast.hidden = true;
+    pendingDestination = null;
+    pendingNavigationTrigger = null;
+    if (restoreFocus && trigger) trigger.focus();
+  }
+
+  function navigatePending() {
+    const destination = pendingDestination;
+    closeNavigationToast(false);
+    if (destination) location.assign(destination);
+  }
+
+  function leaveWithoutSaving() {
+    if (saving || pendingAttempt !== null || refreshRequired) return;
+    discardDraft();
+    navigatePending();
   }
 
   function renderSaveState(message) {
@@ -498,6 +548,18 @@
   saveButton.addEventListener('click', saveDraft);
   discardButton.addEventListener('click', discardDraft);
   reloadButton.addEventListener('click', function () { location.reload(); });
+  for (const link of guardedLinks) {
+    link.addEventListener('click', function (event) {
+      if (!hasPendingChanges()) return;
+      event.preventDefault();
+      showDirtyNavigationToast(link);
+    });
+  }
+  navLeaveButton.addEventListener('click', leaveWithoutSaving);
+  navCloseButton.addEventListener('click', function () { closeNavigationToast(true); });
+  window.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !navToast.hidden) closeNavigationToast(true);
+  });
 
   renderControls();
   renderSaveState();

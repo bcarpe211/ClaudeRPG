@@ -39,6 +39,7 @@ class FakeElement {
   value = '';
   disabled = false;
   hidden = false;
+  focusCount = 0;
   src = '';
 
   constructor(classes: string[] = []) {
@@ -59,6 +60,10 @@ class FakeElement {
 
   getAttribute(name: string): string | null {
     return this.attributes.get(name) ?? null;
+  }
+
+  focus(): void {
+    this.focusCount += 1;
   }
 
   querySelector(_selector: string): FakeElement | null {
@@ -194,8 +199,20 @@ interface WardrobeHarness {
   saveButton: FakeButton;
   discardButton: FakeButton;
   reloadButton: FakeButton;
+  storeLink: FakeElement;
+  unlockLink: FakeElement;
+  navToast: FakeElement;
+  navTitle: FakeElement;
+  navMessage: FakeElement;
+  navSaveButton: FakeButton;
+  navSaveLabel: FakeElement;
+  navLeaveButton: FakeButton;
+  navCloseButton: FakeButton;
   requests: RequestRecord[];
   responses: Array<Deferred<ResponseLike>>;
+  navigations: string[];
+  clickGuarded(link: FakeElement): boolean;
+  keydown(key: string): void;
   beforeunload(): { prevented: boolean; returnValue: string | undefined };
   pageshow(persisted: boolean): void;
   reloadCount(): number;
@@ -240,15 +257,31 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
   discardButton.disabled = true;
   const reloadButton = new FakeButton();
   reloadButton.hidden = true;
+  const storeLink = new FakeElement();
+  storeLink.setAttribute('href', '/shop?token=test-token');
+  const unlockLink = new FakeElement();
+  unlockLink.setAttribute('href', '/shop?token=test-token&tier=next');
+  const navToast = new FakeElement();
+  navToast.hidden = true;
+  const navTitle = new FakeElement();
+  const navMessage = new FakeElement();
+  const navSaveButton = new FakeButton();
+  const navSaveLabel = new FakeElement();
+  const navLeaveButton = new FakeButton();
+  const navCloseButton = new FakeButton();
   const elements = new Map<string, FakeElement>([
     ['dye-preview', preview], ['dye-wheel', wheel], ['dye-save-status', status],
     ['dye-tone', tone], ['dye-tone-value', toneValue],
     ['dye-save', saveButton], ['dye-discard', discardButton], ['dye-reload', reloadButton],
+    ['dye-nav-toast', navToast], ['dye-nav-title', navTitle], ['dye-nav-message', navMessage],
+    ['dye-nav-save', navSaveButton], ['dye-nav-save-label', navSaveLabel],
+    ['dye-nav-leave', navLeaveButton], ['dye-nav-close', navCloseButton],
     ['character-avatar-a', profileA], ['character-avatar-b', profileB],
   ]);
   const windowListeners = new Map<string, Listener[]>();
   const requests: RequestRecord[] = [];
   const responses: Array<Deferred<ResponseLike>> = [];
+  const navigations: string[] = [];
   const timers = new Map<number, () => void>();
   const intervals = new Map<number, () => void>();
   const images: FakeImage[] = [];
@@ -263,9 +296,10 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
       createdCanvases.push(canvas);
       return canvas;
     },
-    querySelectorAll(selector: string): FakeButton[] {
+    querySelectorAll(selector: string): FakeElement[] {
       if (selector === '.dye-chan:not(:disabled)') return [clothing, cloak];
       if (selector === '.dye-fin') return [steelButton, bronzeButton, goldButton, defaultButton];
+      if (selector === '[data-dye-guarded-nav]') return [storeLink, unlockLink];
       return [];
     },
   };
@@ -307,7 +341,10 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
     addEventListener(type: string, listener: Listener) {
       windowListeners.set(type, [...(windowListeners.get(type) ?? []), listener]);
     },
-    location: { reload() { reloads += 1; } },
+    location: {
+      assign(destination: string) { navigations.push(destination); },
+      reload() { reloads += 1; },
+    },
     __DYE__: {
       token: 'test-token',
       frames: {
@@ -333,7 +370,18 @@ function createWardrobeHarness(config: Record<number, Rule> = {}): WardrobeHarne
   return {
     clothing, cloak, weapon, wheel, tone, status, steelButton, bronzeButton, goldButton, defaultButton,
     profileA, profileB,
-    saveButton, discardButton, reloadButton, requests, responses,
+    saveButton, discardButton, reloadButton,
+    storeLink, unlockLink, navToast, navTitle, navMessage, navSaveButton, navSaveLabel,
+    navLeaveButton, navCloseButton,
+    requests, responses, navigations,
+    clickGuarded(link: FakeElement) {
+      let prevented = false;
+      link.dispatch('click', { preventDefault() { prevented = true; } });
+      return prevented;
+    },
+    keydown(key: string) {
+      for (const listener of windowListeners.get('keydown') ?? []) listener({ key });
+    },
     beforeunload() {
       let prevented = false;
       const event = {
@@ -744,6 +792,64 @@ describe('dye browser Wardrobe behavior', () => {
     pressWheel(harness, 'ArrowRight');
     expect(harness.beforeunload()).toEqual({ prevented: true, returnValue: '' });
     expect(harness.requests).toHaveLength(0);
+  });
+
+  it('lets guarded links navigate normally when the draft is clean', () => {
+    const harness = createWardrobeHarness();
+
+    expect(harness.clickGuarded(harness.storeLink)).toBe(false);
+    expect(harness.navToast.hidden).toBe(true);
+    expect(harness.navigations).toEqual([]);
+  });
+
+  it('blocks a guarded link with a dirty draft and opens one thematic toast', () => {
+    const harness = createWardrobeHarness();
+    pressWheel(harness, 'ArrowRight');
+
+    expect(harness.clickGuarded(harness.storeLink)).toBe(true);
+    expect(harness.navToast.hidden).toBe(false);
+    expect(harness.navTitle.textContent).toBe('The tailor catches your sleeve!');
+    expect(harness.navMessage.textContent).toContain('unfinished dye work');
+    expect(harness.navSaveLabel.textContent).toBe('Save & Continue');
+    expect(harness.navSaveButton.focusCount).toBe(1);
+    expect(harness.navigations).toEqual([]);
+
+    expect(harness.clickGuarded(harness.unlockLink)).toBe(true);
+    expect(harness.navToast.hidden).toBe(false);
+    harness.navLeaveButton.dispatch('click');
+    expect(harness.navigations).toEqual(['/shop?token=test-token&tier=next']);
+  });
+
+  it('closes the navigation toast without changing or navigating the draft', () => {
+    const harness = createWardrobeHarness();
+    pressWheel(harness, 'ArrowRight');
+    harness.clickGuarded(harness.storeLink);
+
+    harness.navCloseButton.dispatch('click');
+    expect(harness.navToast.hidden).toBe(true);
+    expect(harness.storeLink.focusCount).toBe(1);
+    expect(harness.status.textContent).toBe('Unsaved changes');
+    expect(harness.navigations).toEqual([]);
+
+    harness.clickGuarded(harness.unlockLink);
+    harness.keydown('Escape');
+    expect(harness.navToast.hidden).toBe(true);
+    expect(harness.unlockLink.focusCount).toBe(1);
+  });
+
+  it('leaves without saving only from an ordinary draft', () => {
+    const harness = createWardrobeHarness({
+      1: { op: 'colorize', hue: 20, sat: 0.6, tone: 0 },
+    });
+    pressWheel(harness, 'ArrowRight');
+    harness.clickGuarded(harness.unlockLink);
+
+    harness.navLeaveButton.dispatch('click');
+
+    expect(harness.requests).toHaveLength(0);
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('20');
+    expect(harness.navigations).toEqual(['/shop?token=test-token&tier=next']);
+    expect(harness.navToast.hidden).toBe(true);
   });
 
   it('reapplies canonical controls after normal pageshow form restoration', () => {
