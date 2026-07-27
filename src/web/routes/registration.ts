@@ -26,11 +26,14 @@ const classCards = () =>
 
 export function registerRegistrationRoutes(
   app: Express,
-  { db, config }: AppDeps,
+  { db, config, slotmapsDir }: AppDeps,
 ): void {
   // Landing page — the public front door with a live snapshot of the current battle.
   app.get('/', asyncHandler(async (_req, res) => {
-    const state = buildTvState(db, Date.now());
+    const state = buildTvState(db, Date.now(), {
+      spritesDir: config.spritesDir,
+      slotmapsDir,
+    });
     const classes = CLASSES.map((c) => ({ key: c.key, name: c.name, sprite: classSpriteUrl(c.key, 'M') }));
     let boss = null;
     if (state.encounter && !state.paused) {

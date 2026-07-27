@@ -115,4 +115,23 @@ describe('buildLeaderboards', () => {
     ]);
     expect(bs.every((b) => b.entries.every((e) => e.avatarUrl.startsWith('/sprites/creatures_24x24/')))).toBe(true);
   });
+
+  it('resolves each player avatar exactly once for all 14 boards', () => {
+    const a = mkPlayer('A');
+    const b = mkPlayer('B');
+    const calls: number[] = [];
+
+    const bs = buildLeaderboards(db, 1_000, cfg, {
+      avatarUrl(player) {
+        calls.push(player.id);
+        return `/resolved-avatar/${player.id}.png`;
+      },
+    });
+
+    expect(calls).toEqual([a, b]);
+    expect(bs).toHaveLength(14);
+    expect(bs.every((entry) => entry.entries.every(
+      (player) => player.avatarUrl === `/resolved-avatar/${player.playerId}.png`,
+    ))).toBe(true);
+  });
 });

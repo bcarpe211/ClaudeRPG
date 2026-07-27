@@ -88,8 +88,12 @@ export function registerCharacterRoutes(
         title: player.name,
         player,
         className: getClass(player.class_key)?.name ?? player.class_key,
-        avatarA: cosmeticSkinUrlForPlayer(db, player, 'a'),
-        avatarB: cosmeticSkinUrlForPlayer(db, player, 'b'),
+        avatarA: cosmeticSkinUrlForPlayer(
+          db, player, 'a', { spritesDir: config.spritesDir, slotmapsDir },
+        ),
+        avatarB: cosmeticSkinUrlForPlayer(
+          db, player, 'b', { spritesDir: config.spritesDir, slotmapsDir },
+        ),
         dye: dyeViewModel(db, player, slotmapsDir),
         connected: player.last_token_at != null,
         snippet: buildSetupSnippet({
@@ -262,13 +266,14 @@ export function registerCharacterRoutes(
       return;
     }
 
-    const config = getEntitledSlotConfig(db, player);
+    const renderConfig = getEntitledSlotConfig(db, player);
     res.json({
-      config: Object.fromEntries(config),
+      config: Object.fromEntries(renderConfig),
       hash: skinRenderHash(
         spriteId(player.class_key, player.gender as Gender),
-        config,
+        renderConfig,
         slotmapsDir,
+        config.spritesDir,
       ),
     });
   });

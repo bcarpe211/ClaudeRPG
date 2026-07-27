@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { cosmeticSkinUrlForPlayer } from './slotcosmetics';
+import { cosmeticSkinUrlForPlayer, type SkinAssetContext } from './slotcosmetics';
 import { activityScore, type ActivityCfg } from './activity';
 import { tokenModifier } from './combat';
 
@@ -8,6 +8,16 @@ export interface BoardEntry { playerId: number; name: string; avatarUrl: string;
 export interface Leaderboard { key: string; title: string; format: BoardFormat; entries: BoardEntry[]; }
 export type Leaderboards = Leaderboard[];
 export interface LeaderboardCfg extends ActivityCfg { tokenModifierK: number; modifierCap: number; }
+export interface LeaderboardAvatarPlayer {
+  id: number;
+  name: string;
+  class_key: string;
+  gender: string;
+}
+export interface LeaderboardBuildOptions {
+  assets?: SkinAssetContext;
+  avatarUrl?: (player: LeaderboardAvatarPlayer) => string;
+}
 
 interface PlayerRow {
   id: number; name: string; class_key: string; gender: string;
@@ -29,15 +39,28 @@ function dayKey(ts: number): string {
 }
 
 export function buildLeaderboards(
-  db: Database.Database, now: number, cfg: LeaderboardCfg,
+  db: Database.Database,
+  now: number,
+  cfg: LeaderboardCfg,
+  options: LeaderboardBuildOptions = {},
 ): Leaderboards {
   const players = db.prepare(
     'SELECT id, name, class_key, gender, level, effective_tokens, gold, peak_modifier FROM players WHERE disabled = 0',
   ).all() as PlayerRow[];
+  const resolveAvatar = options.avatarUrl
+    ?? ((player: LeaderboardAvatarPlayer) => cosmeticSkinUrlForPlayer(
+      db, player, 'a', options.assets,
+    ));
+  const avatars = new Map(players.map((player) => [player.id, resolveAvatar(player)]));
 
   const rank = (value: (p: PlayerRow) => number): BoardEntry[] =>
     players
-      .map((p) => ({ playerId: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a'), value: value(p) }))
+      .map((p) => ({
+        playerId: p.id,
+        name: p.name,
+        avatarUrl: avatars.get(p.id)!,
+        value: value(p),
+      }))
       .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
 
   // Damage aggregates.

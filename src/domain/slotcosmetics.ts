@@ -1,9 +1,12 @@
 import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { SlotRule } from './spritetint';
-import { SLOTS, slotmapFingerprint } from './slots';
-import { getCosmetics, CLOTHING, spriteId } from './cosmetics';
+import { SLOTS, resetSlotmapFingerprintCache, slotmapFingerprint } from './slots';
+import { getCosmetics, CLOTHING, spriteFileIndex, spriteId } from './cosmetics';
 import { entitledChannelsFor } from './cosmetic-entitlements';
+import { classSpriteUrl, creatureSpriteFile, type Gender } from './classes';
 
 interface Row {
   slot: number;
@@ -251,12 +254,15 @@ export function applySlotMutationBatch(
   })();
 }
 
-import { classSpriteUrl, type Gender } from './classes';
-
 export interface CosmeticPlayerRef {
   id: number;
   class_key: string;
   gender: string;
+}
+
+export interface SkinAssetContext {
+  spritesDir?: string;
+  slotmapsDir?: string;
 }
 
 /** Return only the saved rules that the player's class, gender, and purchased tier can render. */
@@ -291,15 +297,51 @@ function canonicalSlotConfig(config: Map<number, SlotRule>): string {
     .join('|');
 }
 
-/** Stable content hash of a skin's sprite identity, slot maps, and ordered rules. */
+const DEFAULT_SPRITES_DIR = path.resolve('assets/oryx_16-bit_fantasy_1.1/Sliced');
+const sourceFingerprintCache = new Map<string, string>();
+
+function sourceSpriteFingerprint(sprite: string, spritesDir?: string): string {
+  const match = /^(.+)_([MF])$/.exec(sprite);
+  if (!match) throw new Error(`Invalid sprite identity: ${sprite}`);
+  const [, classKey, gender] = match;
+  const root = path.resolve(spritesDir ?? DEFAULT_SPRITES_DIR);
+  const key = `${root}:${sprite}`;
+  const cached = sourceFingerprintCache.get(key);
+  if (cached) return cached;
+  const hash = createHash('sha256');
+  for (const frame of ['a', 'b'] as const) {
+    const file = path.join(
+      root,
+      'creatures_24x24',
+      creatureSpriteFile(spriteFileIndex(classKey, gender as Gender, frame)),
+    );
+    hash.update(`frame:${frame}:`);
+    hash.update(fs.readFileSync(file));
+    hash.update('\0');
+  }
+  const fingerprint = hash.digest('hex').slice(0, 16);
+  sourceFingerprintCache.set(key, fingerprint);
+  return fingerprint;
+}
+
+/** Explicit development/test invalidation; deployed processes naturally reset on restart. */
+export function resetSkinAssetFingerprintCache(): void {
+  sourceFingerprintCache.clear();
+  resetSlotmapFingerprintCache();
+}
+
+/** Stable content hash of a skin's sprite identity, source frames, slot maps, and ordered rules. */
 export function skinRenderHash(
   sprite: string,
   config: Map<number, SlotRule>,
   slotmapsDir?: string,
+  spritesDir?: string,
 ): string {
   return createHash('sha256')
-    .update('clauderpg:skin:v3\0')
+    .update('clauderpg:skin:v4\0')
     .update(sprite)
+    .update('\0')
+    .update(sourceSpriteFingerprint(sprite, spritesDir))
     .update('\0')
     .update(slotmapFingerprint(sprite, slotmapsDir))
     .update('\0')
@@ -311,10 +353,13 @@ export function skinRenderHash(
 /** Sprite URL for a character: the hashed skin URL when they have any cosmetics, else the plain sprite. */
 export function cosmeticSkinUrl(
   playerId: number, classKey: string, gender: Gender, config: Map<number, SlotRule>, frame: 'a' | 'b' = 'a',
+  assets: SkinAssetContext = {},
 ): string {
   if (config.size === 0) return classSpriteUrl(classKey, gender, frame);
   const sprite = spriteId(classKey, gender);
-  return `/sprite/skin/${playerId}/${frame}/${skinRenderHash(sprite, config)}.png`;
+  return `/sprite/skin/${playerId}/${frame}/${skinRenderHash(
+    sprite, config, assets.slotmapsDir, assets.spritesDir,
+  )}.png`;
 }
 
 /** The only player-facing skin URL: derives its hash from the entitlement-filtered render config. */
@@ -322,6 +367,7 @@ export function cosmeticSkinUrlForPlayer(
   db: Database.Database,
   player: CosmeticPlayerRef,
   frame: 'a' | 'b' = 'a',
+  assets: SkinAssetContext = {},
 ): string {
   return cosmeticSkinUrl(
     player.id,
@@ -329,5 +375,6 @@ export function cosmeticSkinUrlForPlayer(
     player.gender as Gender,
     getEntitledSlotConfig(db, player),
     frame,
+    assets,
   );
 }

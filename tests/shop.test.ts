@@ -105,4 +105,9 @@ describe('setCosmeticHue', () => {
     expect(cosmeticSpriteUrl('wizard', 'M', getCosmetics(db, p.id), 'a'))
       .toBe('/sprite/tint/wizard_M/a/210.png');
   });
+
+  it('uses the requested frame B for an untinted cosmetic sprite', () => {
+    expect(cosmeticSpriteUrl('wizard', 'M', undefined, 'b'))
+      .toBe('/sprites/creatures_24x24/oryx_16bit_fantasy_creatures_22.png');
+  });
 });

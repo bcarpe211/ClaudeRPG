@@ -24,7 +24,7 @@ import { activityScore } from '../domain/activity';
 import { tokenModifier } from '../domain/combat';
 import { debuffFactor } from '../domain/retaliation';
 import { creatureSpriteFile } from '../domain/classes';
-import { cosmeticSkinUrlForPlayer } from '../domain/slotcosmetics';
+import { cosmeticSkinUrlForPlayer, type SkinAssetContext } from '../domain/slotcosmetics';
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
 import { monsterByIndex, monsterName } from '../domain/bestiary';
 import { monsterTitle, pluralizeCreature } from '../domain/monstername';
@@ -59,7 +59,11 @@ export interface TvState {
   monsterAttack: TvMonsterAttack | null;
 }
 
-export function buildTvState(db: Database.Database, now: number): TvState {
+export function buildTvState(
+  db: Database.Database,
+  now: number,
+  assets: SkinAssetContext = {},
+): TvState {
   const cfg = loadEngineConfig(db);
   const gs = getGameState(db);
 
@@ -94,7 +98,7 @@ export function buildTvState(db: Database.Database, now: number): TvState {
     'SELECT * FROM players ORDER BY effective_tokens DESC, id ASC',
   ).all() as any[];
   const players: TvHero[] = rows.map((p) => ({
-    id: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a'),
+    id: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a', assets),
     level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,
     gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK, cfg.modifierCap),
     disabled: !!p.disabled, connected: p.last_token_at != null,

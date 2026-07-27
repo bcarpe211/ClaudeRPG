@@ -44,5 +44,5 @@ export function cosmeticSpriteUrl(
 ): string {
   if (cos && cos.primary_hue != null)
     return `/sprite/tint/${spriteId(classKey, gender)}/${frame}/${cos.primary_hue}.png`;
-  return classSpriteUrl(classKey, gender);
+  return classSpriteUrl(classKey, gender, frame);
 }

@@ -42,6 +42,7 @@ export function readSlotmap(pngBuffer: Buffer): Uint8Array {
 
 const SLOTMAP_DIR = path.resolve('slotmaps');
 const cache = new Map<string, Uint8Array | null>();
+const fingerprintCache = new Map<string, string>();
 const MISSING_MAP = Buffer.from('clauderpg:missing-slotmap:v1');
 
 export function slotmapFile(sprite: string, frame: SpriteFrame, slotmapsDir?: string): string {
@@ -73,11 +74,22 @@ export function slotmapFingerprintFromBuffers(
 
 /** Stable fingerprint of a sprite's raw slot-map frames. */
 export function slotmapFingerprint(sprite: string, slotmapsDir?: string): string {
+  const root = path.resolve(slotmapsDir ?? SLOTMAP_DIR);
+  const key = `${root}:${sprite}`;
+  const cached = fingerprintCache.get(key);
+  if (cached) return cached;
   const read = (frame: SpriteFrame): Buffer | null => {
-    const file = slotmapFile(sprite, frame, slotmapsDir);
+    const file = slotmapFile(sprite, frame, root);
     return fs.existsSync(file) ? fs.readFileSync(file) : null;
   };
-  return slotmapFingerprintFromBuffers(read('a'), read('b'));
+  const fingerprint = slotmapFingerprintFromBuffers(read('a'), read('b'));
+  fingerprintCache.set(key, fingerprint);
+  return fingerprint;
+}
+
+/** Explicit development/test invalidation; deployed processes naturally reset on restart. */
+export function resetSlotmapFingerprintCache(): void {
+  fingerprintCache.clear();
 }
 
 /** Load `slotmaps/<sprite>_<frame>.png` → slot ids, cached. null when the file is absent. */

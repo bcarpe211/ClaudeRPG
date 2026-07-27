@@ -41,6 +41,7 @@ export async function renderPage(
 
 export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
   const app = express();
+  const skinAssets = { spritesDir: config.spritesDir, slotmapsDir };
   app.set('view engine', 'ejs');
   app.set('views', VIEWS);
   app.use(express.urlencoded({ extended: false }));
@@ -59,13 +60,13 @@ export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
-  registerRegistrationRoutes(app, { db, config });
+  registerRegistrationRoutes(app, { db, config, slotmapsDir });
   registerCharacterRoutes(app, { db, config, slotmapsDir });
   registerShopRoutes(app, { db, config, slotmapsDir });
   registerAdminRoutes(app, { db, config });
   registerMetricsRoutes(app, { db, config });
 
-  const tvHub = new TvHub(db);
+  const tvHub = new TvHub(db, skinAssets);
   registerTvRoutes(app, { db, config }, tvHub);
   (app as unknown as { tvHub: TvHub }).tvHub = tvHub;
 

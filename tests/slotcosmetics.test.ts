@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb } from '../src/db/db';
 import { seedSettings } from '../src/domain/settings';
@@ -6,10 +9,11 @@ import { purchase, setCosmeticHue } from '../src/domain/shop';
 import { SLOTS } from '../src/domain/slots';
 import {
   applySlotMutation, applySlotMutationBatch, beginSlotMutationSession, getSlotConfig, getEntitledSlotConfig,
-  setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl,
+  setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl, cosmeticSkinUrlForPlayer,
+  resetSkinAssetFingerprintCache,
 } from '../src/domain/slotcosmetics';
-import { classSpriteUrl } from '../src/domain/classes';
-import { getCosmetics, spriteId } from '../src/domain/cosmetics';
+import { classSpriteUrl, creatureSpriteFile } from '../src/domain/classes';
+import { getCosmetics, spriteFileIndex, spriteId } from '../src/domain/cosmetics';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -104,6 +108,65 @@ describe('skinRenderHash + cosmeticSkinUrl', () => {
     expect(cosmeticSkinUrl(5, 'wizard', 'M', empty)).toBe(classSpriteUrl('wizard', 'M'));
     const cfg = new Map([[1, { op: 'hue' as const, hue: 210 }]]);
     expect(cosmeticSkinUrl(5, 'wizard', 'M', cfg, 'a')).toBe(`/sprite/skin/5/a/${skinRenderHash(spriteId('wizard', 'M'), cfg)}.png`);
+  });
+
+  it('fingerprints both source frames once and exposes an explicit cache reset', () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-skin-hash-'));
+    const spritesDir = join(fixtureDir, 'sprites');
+    const slotmapsDir = join(fixtureDir, 'slotmaps');
+    mkdirSync(join(spritesDir, 'creatures_24x24'), { recursive: true });
+    mkdirSync(slotmapsDir);
+    const frameA = join(
+      spritesDir, 'creatures_24x24', creatureSpriteFile(spriteFileIndex('wizard', 'M', 'a')),
+    );
+    const frameB = join(
+      spritesDir, 'creatures_24x24', creatureSpriteFile(spriteFileIndex('wizard', 'M', 'b')),
+    );
+    const config = new Map([[SLOTS.body, { op: 'hue' as const, hue: 120 }]]);
+    try {
+      writeFileSync(frameA, 'source-frame-a-v1');
+      writeFileSync(frameB, 'source-frame-b-v1');
+      resetSkinAssetFingerprintCache();
+      const original = skinRenderHash('wizard_M', config, slotmapsDir, spritesDir);
+
+      writeFileSync(frameA, 'source-frame-a-v2');
+      expect(skinRenderHash('wizard_M', config, slotmapsDir, spritesDir)).toBe(original);
+
+      resetSkinAssetFingerprintCache();
+      expect(skinRenderHash('wizard_M', config, slotmapsDir, spritesDir)).not.toBe(original);
+    } finally {
+      resetSkinAssetFingerprintCache();
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses configured source and slot-map roots in the canonical player URL', () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-skin-context-'));
+    const spritesDir = join(fixtureDir, 'sprites');
+    const slotmapsDir = join(fixtureDir, 'slotmaps');
+    mkdirSync(join(spritesDir, 'creatures_24x24'), { recursive: true });
+    mkdirSync(slotmapsDir);
+    for (const frame of ['a', 'b'] as const) {
+      writeFileSync(join(
+        spritesDir,
+        'creatures_24x24',
+        creatureSpriteFile(spriteFileIndex('wizard', 'M', frame)),
+      ), `configured-${frame}`);
+    }
+    const p = player();
+    purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 100);
+    setSlotRule(db, p.id, SLOTS.body, { op: 'hue', hue: 120 }, 101);
+    const config = getEntitledSlotConfig(db, p);
+    try {
+      resetSkinAssetFingerprintCache();
+      const hash = skinRenderHash('wizard_M', config, slotmapsDir, spritesDir);
+      expect(cosmeticSkinUrlForPlayer(
+        db, p, 'a', { spritesDir, slotmapsDir },
+      )).toBe(`/sprite/skin/${p.id}/a/${hash}.png`);
+    } finally {
+      resetSkinAssetFingerprintCache();
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
   });
 });
 

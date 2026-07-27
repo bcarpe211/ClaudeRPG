@@ -50,6 +50,7 @@ export function buildShopViewModel(
   db: Database.Database,
   playerId: number,
   slotmapsDir?: string,
+  spritesDir?: string,
 ): ShopViewModel | null {
   const player = getPlayerById(db, playerId);
   if (!player) return null;
@@ -100,8 +101,8 @@ export function buildShopViewModel(
   return {
     currentTier,
     gold: player.gold,
-    avatarA: cosmeticSkinUrlForPlayer(db, player, 'a'),
-    avatarB: cosmeticSkinUrlForPlayer(db, player, 'b'),
+    avatarA: cosmeticSkinUrlForPlayer(db, player, 'a', { spritesDir, slotmapsDir }),
+    avatarB: cosmeticSkinUrlForPlayer(db, player, 'b', { spritesDir, slotmapsDir }),
     nextOffer,
     preview,
     mastered: currentTier >= 3,

@@ -3,6 +3,7 @@ import { buildTvLayout, buildTvState } from './tvview';
 import { buildLeaderboards } from '../domain/leaderboards';
 import { loadEngineConfig } from '../domain/encounters';
 import { SERVER_VERSION } from '../version';
+import type { SkinAssetContext } from '../domain/slotcosmetics';
 
 export interface SseClient {
   write(chunk: string): void;
@@ -16,7 +17,10 @@ export class TvHub {
   private clients = new Set<SseClient>();
   private lastDungeonId: number | null = null;
 
-  constructor(private db: Database.Database) {}
+  constructor(
+    private db: Database.Database,
+    private assets: SkinAssetContext = {},
+  ) {}
 
   addClient(client: SseClient, now: number): void {
     this.clients.add(client);
@@ -28,8 +32,10 @@ export class TvHub {
       client.write(frame('layout', layout));
       this.lastDungeonId = layout.dungeonId;
     }
-    client.write(frame('state', buildTvState(this.db, now)));
-    client.write(frame('leaderboards', buildLeaderboards(this.db, now, loadEngineConfig(this.db))));
+    client.write(frame('state', buildTvState(this.db, now, this.assets)));
+    client.write(frame('leaderboards', buildLeaderboards(
+      this.db, now, loadEngineConfig(this.db), { assets: this.assets },
+    )));
   }
 
   removeClient(client: SseClient): void {
@@ -39,7 +45,7 @@ export class TvHub {
   /** Push state to all clients; prepend a layout whenever the dungeon changed. */
   broadcast(now: number): void {
     if (this.clients.size === 0) return;
-    const state = buildTvState(this.db, now);
+    const state = buildTvState(this.db, now, this.assets);
     if (state.dungeonId !== this.lastDungeonId) {
       const layout = buildTvLayout(this.db);
       if (layout) {
@@ -55,7 +61,9 @@ export class TvHub {
   /** Push the full leaderboard set to all clients (slow cadence; decoupled from state). */
   broadcastLeaderboards(now: number): void {
     if (this.clients.size === 0) return;
-    const f = frame('leaderboards', buildLeaderboards(this.db, now, loadEngineConfig(this.db)));
+    const f = frame('leaderboards', buildLeaderboards(
+      this.db, now, loadEngineConfig(this.db), { assets: this.assets },
+    ));
     for (const c of this.clients) this.safeWrite(c, f);
   }
 

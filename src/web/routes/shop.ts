@@ -58,7 +58,7 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
     );
     const c = CLOTHING[classKey];
     const src = fs.readFileSync(srcFile);
-    const slotIds = loadSlotmap(`${classKey}_${gender}`, frame);
+    const slotIds = loadSlotmap(`${classKey}_${gender}`, frame, slotmapsDir);
     let out: Buffer;
     if (slotIds) {
       // slot-map render: color only the body slot (collisions isolated by the map)
@@ -88,7 +88,7 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
 
     const slotConfig = getEntitledSlotConfig(db, player);
     const sprite = spriteId(player.class_key, player.gender as Gender);
-    const hash = skinRenderHash(sprite, slotConfig, slotmapsDir);
+    const hash = skinRenderHash(sprite, slotConfig, slotmapsDir, config.spritesDir);
     if (req.params.hash !== hash) {
       res.redirect(302, `/sprite/skin/${playerId}/${frame}/${hash}.png`);
       return;
@@ -117,7 +117,9 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
       : undefined;
     const player = token ? getPlayerByToken(db, token) : undefined;
     const error = token && !player ? 'No character found for that token.' : undefined;
-    const shop = player ? buildShopViewModel(db, player.id, slotmapsDir) : null;
+    const shop = player
+      ? buildShopViewModel(db, player.id, slotmapsDir, config.spritesDir)
+      : null;
     res.status(error ? 404 : 200).send(await renderPage('shop', {
       title: 'The Bazaar',
       frame: 'full',
