@@ -446,7 +446,9 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('Tier 1');
     expect(res.text).toContain('Tier 2');
     expect(res.text).toContain('Tier 3');
-    expect(res.text).toContain(`/shop?token=${encodeURIComponent(player.auth_token)}`);
+    expect(res.text).toContain(
+      `class="btn btn-gold character-store" href="/shop?token=${encodeURIComponent(player.auth_token)}"`,
+    );
     expect(res.text).not.toContain('/character/dye/unlock');
     expect(res.text).not.toContain('window.__DYE__');
   });
@@ -465,16 +467,42 @@ describe('character wardrobe panel', () => {
     expect(res.text).toContain('data-recipe="gold"');
     expect(res.text).not.toContain('data-finish="black"');
     expect(res.text).not.toContain('data-finish="white"');
-    expect(res.text).toContain('id="dye-save-status" class="dye-save-status" role="status" aria-live="polite">Saved</span>');
-    expect(res.text).toContain('id="dye-reload" type="button" class="btn dye-reload" hidden>Reload Wardrobe</button>');
-    expect(res.text).toContain('id="dye-discard" type="button" class="btn dye-discard" disabled>Discard Changes</button>');
-    expect(res.text).toContain('id="dye-save" type="button" class="btn btn-gold" disabled>Save Changes</button>');
+    expect(res.text).toContain('id="dye-save-status" class="dye-save-status" data-state="saved" role="status" aria-live="polite">Saved</span>');
+    expect(res.text).toContain('id="dye-reload" type="button" class="btn btn-ghost dye-action dye-reload" hidden');
+    expect(res.text).toContain('<span>Reload</span>');
+    expect(res.text).toContain('<span>Discard</span>');
+    expect(res.text).toContain('<span>Save</span>');
     const colorScript = res.text.indexOf('<script src="/static/dye-color.js"></script>');
     const draftScript = res.text.indexOf('<script src="/static/dye-draft.js"></script>');
     const clientScript = res.text.indexOf('<script src="/static/dye.js"></script>');
     expect(colorScript).toBeGreaterThan(-1);
     expect(draftScript).toBeGreaterThan(colorScript);
     expect(clientScript).toBeGreaterThan(draftScript);
+  });
+
+  it('places status on the fitting stage and closes the Tone flow with compact draft actions', async () => {
+    const { db, app, player } = ctx();
+    buy(db, player.id, 1);
+
+    const res = await request(app).get('/character').query({ token: player.auth_token });
+    const stage = res.text.match(/<div class="dye-stage">([\s\S]*?)<\/div>/)?.[1] ?? '';
+    const tone = res.text.indexOf('class="dye-tone-label"');
+    const finishes = res.text.indexOf('class="dye-finishes"');
+    const restore = res.text.indexOf('data-recipe="none"');
+    const actionLabel = res.text.indexOf('class="dye-action-label"');
+    const actions = res.text.indexOf('class="dye-action-strip"');
+
+    expect(stage).toContain('id="dye-save-status"');
+    expect(stage).toContain('role="status" aria-live="polite"');
+    expect(tone).toBeGreaterThan(-1);
+    expect(finishes).toBeGreaterThan(tone);
+    expect(restore).toBeGreaterThan(finishes);
+    expect(actionLabel).toBeGreaterThan(restore);
+    expect(actions).toBeGreaterThan(actionLabel);
+    expect(res.text).toContain('id="dye-reload" type="button" class="btn btn-ghost dye-action dye-reload" hidden');
+    expect(res.text).toContain('<span>Reload</span>');
+    expect(res.text).toContain('<span>Discard</span>');
+    expect(res.text).toContain('<span>Save</span>');
   });
 
   it('serializes exact material presets without locked Tier-3 rules', async () => {
