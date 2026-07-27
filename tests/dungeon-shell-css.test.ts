@@ -20,20 +20,28 @@ describe('responsive dungeon shell safe area', () => {
   });
 
   it('keeps the intentional lite frame width beyond both walls', () => {
-    expect(css).toMatch(/body\.frame-lite main\{max-width:1180px;padding-inline:max\(var\(--shell-inline\),calc\(var\(--wall\) \+ var\(--shell-gap\)\)\)\}/);
+    expect(css).toMatch(/body\.frame-lite main\{max-width:1180px\}/);
+    expect(css).toMatch(/@media \(max-width:1268px\)\{[\s\S]*?body\.frame-lite main\{padding-inline:clamp\(/);
+    expect(css).toContain('calc(34px + (1268px - 100vw)/2)');
+    expect(css).toContain('calc(var(--wall) + var(--shell-gap))');
 
     const wall = 66;
     const gap = 12;
+    const liteInline = (viewport: number, wall: number, gap: number) => Math.max(34, Math.min(wall + gap, 34 + (1268 - viewport) / 2));
     const standardWidth = 1120;
     const liteWidth = 1180;
     const standardInline = (viewport: number) => Math.max(34, Math.min(wall + gap, wall + gap + 560 - viewport / 2));
     const standardEdge = (viewport: number) => (viewport - standardWidth) / 2 + standardInline(viewport);
-    const liteInline = (viewport: number) => Math.max(standardInline(viewport), wall + gap);
-    const liteEdge = (viewport: number) => Math.max(0, (viewport - liteWidth) / 2) + liteInline(viewport);
+    const liteEdge = (viewport: number, wall: number, gap: number) => Math.max(0, (viewport - liteWidth) / 2) + liteInline(viewport, wall, gap);
 
     expect(standardInline(1180)).toBe(48);
     expect(standardEdge(1180)).toBe(78);
-    expect(liteInline(1180)).toBe(78);
-    expect(liteEdge(1180)).toBe(78);
+    expect(liteEdge(1600, 66, 12)).toBe(244);
+    expect(liteInline(1268, 66, 12)).toBe(34);
+    expect(liteEdge(1268, 66, 12)).toBe(78);
+    expect(liteInline(1180, 66, 12)).toBe(78);
+    expect(liteEdge(1180, 66, 12)).toBe(78);
+    expect(liteInline(760, 48, 12)).toBe(60);
+    expect(liteInline(480, 36, 8)).toBe(44);
   });
 });

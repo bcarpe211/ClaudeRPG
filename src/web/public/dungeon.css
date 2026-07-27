@@ -74,7 +74,10 @@ body.frame-lite .loot-rail{display:none}
 .bar nav{display:flex;gap:20px;font-size:14px;color:var(--muted);align-items:center;flex-wrap:wrap}
 .bar nav a:hover{color:var(--gold)}
 main{max-width:1120px;margin:0 auto;padding:8px var(--shell-inline) 40px}
-body.frame-lite main{max-width:1180px;padding-inline:max(var(--shell-inline),calc(var(--wall) + var(--shell-gap)))}
+body.frame-lite main{max-width:1180px}
+@media (max-width:1268px){
+  body.frame-lite main{padding-inline:clamp(34px,calc(34px + (1268px - 100vw)/2),calc(var(--wall) + var(--shell-gap)))}
+}
 .foot{max-width:1120px;margin:20px auto 34px;padding:20px var(--shell-inline) 0;border-top:1px solid var(--line);
   display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:12.5px;color:var(--muted)}
 .foot .si{width:15px;height:15px;display:inline-block;vertical-align:-3px;margin-right:5px}
