@@ -105,15 +105,25 @@ interface ShopHarness {
   form: FakeHTMLFormElement;
   body: FakeElement;
   timers: Array<{ callback: () => void; delay: number }>;
+  replacedUrls: string[];
 }
 
-function createShopHarness(options: { reducedMotion?: boolean; enhanced?: boolean } = {}): ShopHarness {
+function createShopHarness(options: {
+  reducedMotion?: boolean;
+  enhanced?: boolean;
+  consumeResult?: boolean;
+  locationHref?: string;
+} = {}): ShopHarness {
   const form = new FakeHTMLFormElement();
   const body = new FakeElement();
   const timers: Array<{ callback: () => void; delay: number }> = [];
+  const replacedUrls: string[] = [];
   const document = {
     body,
     querySelector(selector: string): FakeHTMLFormElement | null {
+      if (selector === '[data-consume-shop-result]') {
+        return options.consumeResult === true ? form : null;
+      }
       if (selector !== 'form[data-purchase-effect]' || options.enhanced === false) return null;
       return form;
     },
@@ -132,11 +142,22 @@ function createShopHarness(options: { reducedMotion?: boolean; enhanced?: boolea
       timers.push({ callback, delay });
       return timers.length;
     },
+    URL,
+    location: {
+      href: options.locationHref
+        ?? 'https://example.test/shop?token=player-token',
+    },
+    history: {
+      state: { page: 'shop' },
+      replaceState(_state: unknown, _title: string, url: string) {
+        replacedUrls.push(url);
+      },
+    },
   };
   context.window = context;
   context.globalThis = context;
   vm.runInNewContext(readFileSync('src/web/public/shop.js', 'utf8'), context);
-  return { form, body, timers };
+  return { form, body, timers, replacedUrls };
 }
 
 function burstImages(harness: ShopHarness): FakeElement[] {
@@ -144,6 +165,18 @@ function burstImages(harness: ShopHarness): FakeElement[] {
 }
 
 describe('Bazaar purchase celebration', () => {
+  it('consumes only the one-time result query while preserving token, other query, and hash', () => {
+    const harness = createShopHarness({
+      enhanced: false,
+      consumeResult: true,
+      locationHref: 'https://example.test/shop?token=player-token&result=success&from=wardrobe#ledger',
+    });
+
+    expect(harness.replacedUrls).toEqual([
+      '/shop?token=player-token&from=wardrobe#ledger',
+    ]);
+  });
+
   it('locks the first submit and invokes the native form submission once after 1200ms', () => {
     const harness = createShopHarness();
 

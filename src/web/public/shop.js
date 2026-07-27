@@ -2,6 +2,17 @@
 
 (function enhanceWardrobePurchase(root) {
   const documentRef = root.document;
+  const consumeResult = documentRef?.querySelector('[data-consume-shop-result]');
+  if (consumeResult && root.location?.href && root.history?.replaceState && root.URL) {
+    const url = new root.URL(root.location.href);
+    url.searchParams.delete('result');
+    root.history.replaceState(
+      root.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }
+
   const form = documentRef?.querySelector('form[data-purchase-effect]');
   const button = form?.querySelector('button');
   if (!form || !button) return;
