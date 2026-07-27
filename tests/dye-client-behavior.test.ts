@@ -165,6 +165,14 @@ function response(config: Record<number, Rule> = {}): ResponseLike {
   };
 }
 
+function failedResponse(status: number): ResponseLike {
+  return {
+    ok: false,
+    status,
+    json: async () => ({ config: {}, hash: '0123456789abcdef' }),
+  };
+}
+
 interface RequestRecord {
   endpoint: string;
   body: URLSearchParams;
@@ -570,6 +578,57 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.saveButton.disabled).toBe(false);
     expect(harness.discardButton.disabled).toBe(false);
     expect(harness.requests).toHaveLength(1);
+  });
+
+  it('preserves the exact pending attempt for retry after a 5xx response', async () => {
+    const harness = createWardrobeHarness();
+    const failed = deferred<ResponseLike>();
+    const retry = deferred<ResponseLike>();
+    harness.responses.push(failed, retry);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    failed.resolve(failedResponse(503));
+    await harness.settle();
+
+    expect(harness.status.textContent).toBe('Save failed');
+    expect(harness.saveButton.disabled).toBe(false);
+    harness.saveButton.dispatch('click');
+    expect(harness.requests[1].body.get('revision')).toBe('1000');
+    expect(changes(harness.requests[1])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 6, tone: 0 },
+    ]);
+
+    retry.resolve(response({
+      1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 },
+    }));
+    await harness.settle();
+    expect(harness.status.textContent).toBe('Saved');
+  });
+
+  it.each([
+    [400, 'Wardrobe save was rejected — refresh required'],
+    [403, 'Wardrobe access changed — refresh required'],
+    [404, 'Character session expired — reload required'],
+  ])('treats HTTP %i as definitive and requires reload without retrying', async (statusCode, message) => {
+    const harness = createWardrobeHarness();
+    const failed = deferred<ResponseLike>();
+    harness.responses.push(failed);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    failed.resolve(failedResponse(statusCode));
+    await harness.settle();
+
+    expect(harness.status.textContent).toBe(message);
+    expect(harness.status.dataset.state).toBe('error');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('6');
+    expect(harness.saveButton.disabled).toBe(true);
+    expect(harness.discardButton.disabled).toBe(true);
+    expect(harness.reloadButton.hidden).toBe(false);
+    harness.saveButton.dispatch('click');
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.beforeunload()).toEqual({ prevented: true, returnValue: '' });
   });
 
   it('retries an ambiguous failed attempt unchanged and rebases newer same-slot edits', async () => {

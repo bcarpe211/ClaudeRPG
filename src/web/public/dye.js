@@ -37,7 +37,8 @@
   let savedStates = Draft.cloneStates(states);
   let savedConfig = cloneConfig(config);
   let saving = false;
-  let stale = false;
+  let refreshRequired = false;
+  let refreshMessage = 'Wardrobe changed elsewhere — refresh required';
   let saveError = false;
   let pendingAttempt = null;
   const channelButtons = Array.from(document.querySelectorAll('.dye-chan:not(:disabled)'));
@@ -234,10 +235,10 @@
 
   function renderSaveState(message) {
     const dirty = operations().length > 0 || pendingAttempt !== null;
-    if (stale) {
+    if (refreshRequired) {
       saveButton.disabled = true;
       discardButton.disabled = true;
-      setStatus(message || 'Wardrobe changed elsewhere — refresh required', 'error');
+      setStatus(message || refreshMessage, 'error');
       return;
     }
     if (saving) {
@@ -255,7 +256,7 @@
   }
 
   async function saveDraft() {
-    if (saving || stale) return;
+    if (saving || refreshRequired) return;
     if (!pendingAttempt) {
       const changes = operations();
       if (changes.length === 0) return;
@@ -281,9 +282,22 @@
         method: 'POST', body, credentials: 'same-origin',
       });
       if (response.status === 409) {
-        stale = true;
+        refreshRequired = true;
+        refreshMessage = 'Wardrobe changed elsewhere — refresh required';
         reloadButton.hidden = false;
-        message = 'Wardrobe changed elsewhere — refresh required';
+        message = refreshMessage;
+        return;
+      }
+      if (response.status === 400 || response.status === 403 || response.status === 404) {
+        pendingAttempt = null;
+        refreshRequired = true;
+        refreshMessage = response.status === 400
+          ? 'Wardrobe save was rejected — refresh required'
+          : response.status === 403
+            ? 'Wardrobe access changed — refresh required'
+            : 'Character session expired — reload required';
+        reloadButton.hidden = false;
+        message = refreshMessage;
         return;
       }
       if (!response.ok) throw new Error(`Save failed (${response.status})`);
@@ -330,7 +344,7 @@
   }
 
   function discardDraft() {
-    if (saving || stale) return;
+    if (saving || refreshRequired) return;
     states = Draft.cloneStates(savedStates);
     config = cloneConfig(savedConfig);
     renderPreview();

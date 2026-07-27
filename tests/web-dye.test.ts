@@ -93,7 +93,7 @@ describe('character dye endpoints', () => {
 
     expect((await postSet(2_000, 40)).status).toBe(204);
     expect((await postSet(2_002, 200)).status).toBe(204);
-    expect((await postSet(2_002, 300)).status).toBe(204); // Same mutation revision is idempotent.
+    expect((await postSet(2_002, 300)).status).toBe(409);
     expect((await postSet(2_001, 100)).status).toBe(409);
     expect(getSlotConfig(db, player.id).get(SLOTS.body)).toEqual({
       op: 'colorize', hue: 200, sat: 0.6, tone: 0,
@@ -104,6 +104,33 @@ describe('character dye endpoints', () => {
     expect(getSlotConfig(db, player.id).has(SLOTS.body)).toBe(false);
     expect(db.prepare('SELECT session, revision FROM player_slot_cosmetic_revisions WHERE player_id = ? AND slot = ?')
       .get(player.id, SLOTS.body)).toEqual({ session: 1, revision: 2_004 });
+  });
+
+  it.each([
+    { label: 'exact set replay', first: 'set', firstHue: 40, replay: 'set', replayHue: 40, seeded: false, expectedHue: 40 },
+    { label: 'set to different set', first: 'set', firstHue: 40, replay: 'set', replayHue: 120, seeded: false, expectedHue: 40 },
+    { label: 'set to clear', first: 'set', firstHue: 40, replay: 'clear', seeded: false, expectedHue: 40 },
+    { label: 'clear to set', first: 'clear', replay: 'set', replayHue: 120, seeded: true, expectedHue: null },
+  ])('returns 409 for equal-revision legacy $label and preserves the first mutation', async (scenario) => {
+    const { db, app, player, browserSession } = ctx();
+    buy(db, player.id, 1);
+    if (scenario.seeded) setSlotRule(db, player.id, SLOTS.body, wheelRule(20), 5);
+    const post = (action: 'set' | 'clear', hue?: number) => request(app)
+      .post(`/character/dye/${action}`).type('form').send({
+        token: player.auth_token,
+        slot: SLOTS.body,
+        session: browserSession.session,
+        revision: 1,
+        ...(action === 'set' ? { recipe: 'wheel', hue } : {}),
+      });
+
+    expect((await post(scenario.first as 'set' | 'clear', scenario.firstHue)).status).toBe(204);
+    expect((await post(scenario.replay as 'set' | 'clear', scenario.replayHue)).status).toBe(409);
+    const stored = getSlotConfig(db, player.id).get(SLOTS.body);
+    if (scenario.expectedHue === null) expect(stored).toBeUndefined();
+    else expect(stored).toEqual({
+      op: 'colorize', hue: scenario.expectedHue, sat: 0.6, tone: 0,
+    });
   });
 
   it('keeps a same-tab final set when a reload has issued a newer session but not edited the slot', async () => {

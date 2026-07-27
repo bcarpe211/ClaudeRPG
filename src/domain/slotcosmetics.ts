@@ -122,7 +122,7 @@ export function beginSlotMutationSession(
   })();
 }
 
-export type SlotMutationResult = 'applied' | 'duplicate' | 'stale';
+export type SlotMutationResult = 'applied' | 'stale';
 
 /**
  * Atomically accept a browser mutation only when it is newer than the
@@ -152,7 +152,7 @@ export function applySlotMutation(
     if (previous) {
       if (session < previous.session
         || (session === previous.session && revision < previous.revision)) return 'stale';
-      if (session === previous.session && revision === previous.revision) return 'duplicate';
+      if (session === previous.session && revision === previous.revision) return 'stale';
     }
     db.prepare(
       `INSERT INTO player_slot_cosmetic_revisions (player_id, slot, session, revision)
