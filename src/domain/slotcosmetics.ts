@@ -17,6 +17,9 @@ interface Row {
 interface SessionRow {
   session: number;
 }
+interface BatchReceiptRow {
+  digest: string;
+}
 const clean = (r: Row): SlotRule => ({
   op: r.op as SlotRule['op'],
   ...(r.hue != null ? { hue: r.hue } : {}), ...(r.sat != null ? { sat: r.sat } : {}),
@@ -170,6 +173,16 @@ export interface SlotMutationOperation {
 
 export type SlotMutationBatchResult = 'applied' | 'duplicate' | 'stale';
 
+function slotMutationBatchDigest(operations: readonly SlotMutationOperation[]): string {
+  const canonical = [...operations]
+    .sort((a, b) => a.slot - b.slot)
+    .map(({ slot, rule }) => rule
+      ? `${slot}:${rule.op}:${rule.hue ?? ''}:${rule.sat ?? ''}:${rule.lo ?? ''}:${rule.hi ?? ''}:${normalizeTone(rule.tone)}`
+      : `${slot}:clear`)
+    .join('|');
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
 export function applySlotMutationBatch(
   db: Database.Database,
   playerId: number,
@@ -181,11 +194,18 @@ export function applySlotMutationBatch(
   if (operations.length === 0) {
     throw new RangeError('Slot mutation batch must not be empty');
   }
+  const digest = slotMutationBatchDigest(operations);
   return db.transaction(() => {
     const issued = db.prepare(
       'SELECT session FROM player_cosmetic_mutation_sessions WHERE player_id = ?',
     ).get(playerId) as SessionRow | undefined;
     if (!issued || session > issued.session) return 'stale';
+
+    const receipt = db.prepare(
+      `SELECT digest FROM player_slot_cosmetic_batches
+       WHERE player_id = ? AND session = ? AND revision = ?`,
+    ).get(playerId, session, revision) as BatchReceiptRow | undefined;
+    if (receipt) return receipt.digest === digest ? 'duplicate' : 'stale';
 
     const states = operations.map(({ slot }) => {
       const previous = db.prepare(
@@ -212,6 +232,10 @@ export function applySlotMutationBatch(
       if (rule) setSlotRule(db, playerId, slot, rule, now);
       else clearSlotRows(db, playerId, slot, now);
     }
+    db.prepare(
+      `INSERT INTO player_slot_cosmetic_batches (player_id, session, revision, digest)
+       VALUES (?, ?, ?, ?)`,
+    ).run(playerId, session, revision, digest);
     return 'applied';
   })();
 }

@@ -158,6 +158,36 @@ describe('applySlotMutationBatch', () => {
     ], 102)).toBe('stale');
   });
 
+  it('rejects the same batch revision when its rules change', () => {
+    const created = player();
+    const session = beginSlotMutationSession(db, created.id);
+    expect(applySlotMutationBatch(db, created.id, session.session, 8, [
+      { slot: SLOTS.body, rule: { op: 'colorize', hue: 120, sat: 0.6 } },
+    ], 100)).toBe('applied');
+
+    expect(applySlotMutationBatch(db, created.id, session.session, 8, [
+      { slot: SLOTS.body, rule: { op: 'colorize', hue: 240, sat: 0.6 } },
+    ], 101)).toBe('stale');
+    expect(getSlotConfig(db, created.id).get(SLOTS.body)).toEqual({
+      op: 'colorize', hue: 120, sat: 0.6,
+    });
+  });
+
+  it('rejects subset and disjoint payloads at an already-used batch revision', () => {
+    const created = player();
+    const session = beginSlotMutationSession(db, created.id);
+    const operations = [
+      { slot: SLOTS.body, rule: { op: 'colorize' as const, hue: 120, sat: 0.6 } },
+      { slot: SLOTS.skin, rule: { op: 'colorize' as const, hue: 24, sat: 0.6 } },
+    ];
+    expect(applySlotMutationBatch(db, created.id, session.session, 9, operations, 100)).toBe('applied');
+
+    expect(applySlotMutationBatch(db, created.id, session.session, 9, [operations[0]], 101)).toBe('stale');
+    expect(applySlotMutationBatch(db, created.id, session.session, 9, [
+      { slot: SLOTS.cape, rule: null },
+    ], 102)).toBe('stale');
+  });
+
   it('rolls back rules and tombstones when any write throws', () => {
     const created = player();
     const session = beginSlotMutationSession(db, created.id);
@@ -167,6 +197,8 @@ describe('applySlotMutationBatch', () => {
     ], 100)).toThrow(RangeError);
     expect(getSlotConfig(db, created.id).has(SLOTS.body)).toBe(false);
     expect(db.prepare('SELECT COUNT(*) AS n FROM player_slot_cosmetic_revisions WHERE player_id = ?')
+      .get(created.id)).toEqual({ n: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM player_slot_cosmetic_batches WHERE player_id = ?')
       .get(created.id)).toEqual({ n: 0 });
   });
 });

@@ -177,4 +177,16 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '011_player_slot_cosmetic_batches',
+    sql: `
+      CREATE TABLE player_slot_cosmetic_batches (
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        session   INTEGER NOT NULL,
+        revision  INTEGER NOT NULL,
+        digest    TEXT NOT NULL,
+        PRIMARY KEY (player_id, session, revision)
+      );
+    `,
+  },
 ];
