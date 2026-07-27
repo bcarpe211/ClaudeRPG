@@ -49,18 +49,33 @@ it('lays all four material finishes out as equal compact rows', () => {
   expect(css).not.toContain('.dye-default{grid-column:1/-1');
 });
 
-it('integrates the Store, stage status, and final joined actions without oversized buttons', () => {
+it('aligns a compact stage header and removes the center guide', () => {
+  const css = readFileSync('src/web/public/dungeon.css', 'utf8');
+  const header = css.match(/\.dye-stage-head\{([^}]*)\}/)?.[1] ?? '';
+  const status = css.match(/\.dye-save-status\{([^}]*)\}/)?.[1] ?? '';
+  const stage = css.match(/\.dye-stage\{([^}]*)\}/)?.[1] ?? '';
+
+  expect(header).toContain('position:absolute');
+  expect(header).toContain('display:flex');
+  expect(header).toContain('align-items:center');
+  expect(header).toContain('left:12px');
+  expect(header).toContain('right:10px');
+  expect(status).toContain('position:static');
+  expect(status).toContain('padding:4px 7px');
+  expect(status).toContain('font-size:9px');
+  expect(css).toMatch(/\.dye-save-status::before\{[^}]*width:5px[^}]*height:5px/);
+  expect(stage).toContain('background:linear-gradient(180deg,#21142f,#120c1b 72%)');
+  expect(stage).not.toContain('linear-gradient(90deg');
+});
+
+it('integrates the Store and final joined actions without oversized buttons', () => {
   const css = readFileSync('src/web/public/dungeon.css', 'utf8');
   const profile = css.match(/\.character-profile-head\{([^}]*)\}/)?.[1] ?? '';
-  const status = css.match(/\.dye-save-status\{([^}]*)\}/)?.[1] ?? '';
   const strip = css.match(/\.dye-action-strip\{([^}]*)\}/)?.[1] ?? '';
   const action = css.match(/\.dye-action\{([^}]*)\}/)?.[1] ?? '';
 
   expect(profile).toContain('grid-template-columns:auto minmax(0,1fr) auto');
   expect(css).toContain('.character-store{justify-self:end');
-  expect(status).toContain('position:absolute');
-  expect(status).toContain('right:10px');
-  expect(status).toContain('top:10px');
   expect(strip).toContain('display:flex');
   expect(strip).toContain('overflow:hidden');
   expect(action).toContain('flex:1');

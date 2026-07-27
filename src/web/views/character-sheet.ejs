@@ -69,8 +69,10 @@
   <% if (dye.channels.length > 0) { %>
     <div class="dye-workbench">
       <div class="dye-stage">
-        <span class="dye-stage-label">Live fitting</span>
-        <span id="dye-save-status" class="dye-save-status" data-state="saved" role="status" aria-live="polite">Saved</span>
+        <div class="dye-stage-head">
+          <span class="dye-stage-label">Live fitting</span>
+          <span id="dye-save-status" class="dye-save-status" data-state="saved" role="status" aria-live="polite">Saved</span>
+        </div>
         <canvas id="dye-preview" width="168" height="168" class="px dye-preview" aria-label="Live character dye preview"></canvas>
       </div>
 

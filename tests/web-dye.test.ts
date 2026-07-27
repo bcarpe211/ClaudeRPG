@@ -508,20 +508,23 @@ describe('character wardrobe panel', () => {
     expect(clientScript).toBeGreaterThan(draftScript);
   });
 
-  it('places status on the fitting stage and closes the Tone flow with compact draft actions', async () => {
+  it('places status inside a compact fitting-stage header and closes the Tone flow with compact draft actions', async () => {
     const { db, app, player } = ctx();
     buy(db, player.id, 1);
 
     const res = await request(app).get('/character').query({ token: player.auth_token });
-    const stage = res.text.match(/<div class="dye-stage">([\s\S]*?)<\/div>/)?.[1] ?? '';
+    const stage = res.text.match(/<div class="dye-stage">([\s\S]*?)<canvas id="dye-preview"/)?.[1] ?? '';
     const tone = res.text.indexOf('class="dye-tone-label"');
     const finishes = res.text.indexOf('class="dye-finishes"');
     const restore = res.text.indexOf('data-recipe="none"');
     const actionLabel = res.text.indexOf('class="dye-action-label"');
     const actions = res.text.indexOf('class="dye-action-strip"');
 
+    expect(stage).toContain('<div class="dye-stage-head">');
+    expect(stage).toContain('<span class="dye-stage-label">Live fitting</span>');
     expect(stage).toContain('id="dye-save-status"');
     expect(stage).toContain('role="status" aria-live="polite"');
+    expect(stage.indexOf('dye-stage-label')).toBeLessThan(stage.indexOf('dye-save-status'));
     expect(tone).toBeGreaterThan(-1);
     expect(finishes).toBeGreaterThan(tone);
     expect(restore).toBeGreaterThan(finishes);
