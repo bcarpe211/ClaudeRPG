@@ -263,7 +263,6 @@
         changes,
         revision: nextRevision,
         submittedStates: Draft.cloneStates(states),
-        submittedConfig: cloneConfig(config),
       };
     }
     const attempt = pendingAttempt;
@@ -332,8 +331,8 @@
 
   function discardDraft() {
     if (saving || stale) return;
-    states = Draft.cloneStates(pendingAttempt ? pendingAttempt.submittedStates : savedStates);
-    config = cloneConfig(pendingAttempt ? pendingAttempt.submittedConfig : savedConfig);
+    states = Draft.cloneStates(savedStates);
+    config = cloneConfig(savedConfig);
     renderPreview();
     renderControls();
     renderSaveState(pendingAttempt ? 'Save failed' : 'Saved');

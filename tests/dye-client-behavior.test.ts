@@ -617,6 +617,40 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.status.dataset.state).toBe('saved');
   });
 
+  it('discards to the acknowledged look while retaining an ambiguous attempt for retry', async () => {
+    const harness = createWardrobeHarness();
+    const lostResponse = deferred<ResponseLike>();
+    const retry = deferred<ResponseLike>();
+    harness.responses.push(lostResponse, retry);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    lostResponse.reject(new Error('response lost after commit'));
+    await harness.settle();
+
+    harness.discardButton.dispatch('click');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('0');
+    expect(harness.status.textContent).toBe('Save failed');
+    expect(harness.saveButton.disabled).toBe(false);
+
+    harness.saveButton.dispatch('click');
+    expect(harness.requests[1].body.get('revision')).toBe('1000');
+    expect(changes(harness.requests[1])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 6, tone: 0 },
+    ]);
+    retry.resolve(response({
+      1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 },
+    }));
+    await harness.settle();
+
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('0');
+    expect(harness.status.textContent).toBe('Unsaved changes');
+    expect(harness.status.dataset.state).toBe('dirty');
+    harness.saveButton.dispatch('click');
+    expect(harness.requests[2].body.get('revision')).toBe('1001');
+    expect(changes(harness.requests[2])).toEqual([{ action: 'clear', slot: 1 }]);
+  });
+
   it('keeps a stale draft visible, blocks further saves, and reveals Reload Wardrobe', async () => {
     const harness = createWardrobeHarness();
     const pending = deferred<ResponseLike>();
