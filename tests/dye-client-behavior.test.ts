@@ -856,7 +856,7 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.navToast.hidden).toBe(true);
   });
 
-  it('blocks guarded links after a definitive save rejection even when the visible draft matches the saved baseline', async () => {
+  it('shows only the refresh navigation action after a definitive save rejection', async () => {
     const harness = createWardrobeHarness({
       1: { op: 'colorize', hue: 20, sat: 0.6, tone: 0 },
     });
@@ -873,8 +873,18 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.status.textContent).toBe('Wardrobe save was rejected — refresh required');
     expect(harness.clickGuarded(harness.storeLink)).toBe(true);
     expect(harness.navToast.hidden).toBe(false);
+    expect(harness.navTitle.textContent).toBe('The ledger has changed!');
+    expect(harness.navMessage.textContent).toContain('ledger must be reloaded');
+    expect(harness.navSaveButton.hidden).toBe(true);
     expect(harness.navLeaveButton.hidden).toBe(true);
-    expect(harness.navMessage.textContent).not.toContain('leave it behind');
+    expect(harness.navCloseButton.focusCount).toBe(1);
+    expect(harness.navigations).toEqual([]);
+
+    harness.navCloseButton.dispatch('click');
+    expect(harness.clickGuarded(harness.unlockLink)).toBe(true);
+    expect(harness.navSaveButton.hidden).toBe(true);
+    expect(harness.navLeaveButton.hidden).toBe(true);
+    expect(harness.navCloseButton.focusCount).toBe(2);
     expect(harness.navigations).toEqual([]);
   });
 
@@ -938,6 +948,31 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.navigations).toEqual(['/shop?token=test-token']);
   });
 
+  it('cancels navigation but keeps the acknowledged save when the toast closes during Save & Continue', async () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+    pressWheel(harness, 'ArrowRight');
+    harness.clickGuarded(harness.storeLink);
+    harness.navSaveButton.dispatch('click');
+
+    expect(harness.requests).toHaveLength(1);
+    harness.navCloseButton.dispatch('click');
+    expect(harness.navToast.hidden).toBe(true);
+    expect(harness.storeLink.focusCount).toBe(1);
+
+    pending.resolve(response({ 1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 } }));
+    await harness.settle();
+
+    expect(harness.navigations).toEqual([]);
+    expect(harness.status.textContent).toBe('Saved');
+    expect(harness.beforeunload()).toEqual({ prevented: false, returnValue: undefined });
+    pressWheel(harness, 'ArrowRight');
+    harness.discardButton.dispatch('click');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('6');
+    expect(harness.status.textContent).toBe('Saved');
+  });
+
   it('waits on an existing save instead of issuing a second request', async () => {
     const harness = createWardrobeHarness();
     const pending = deferred<ResponseLike>();
@@ -953,6 +988,25 @@ describe('dye browser Wardrobe behavior', () => {
     await harness.settle();
     expect(harness.requests).toHaveLength(1);
     expect(harness.navigations).toEqual(['/shop?token=test-token']);
+  });
+
+  it('retargets Save & Continue to the latest guarded link without another request', async () => {
+    const harness = createWardrobeHarness();
+    const pending = deferred<ResponseLike>();
+    harness.responses.push(pending);
+    pressWheel(harness, 'ArrowRight');
+    harness.clickGuarded(harness.storeLink);
+    harness.navSaveButton.dispatch('click');
+
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.clickGuarded(harness.unlockLink)).toBe(true);
+    expect(harness.requests).toHaveLength(1);
+
+    pending.resolve(response({ 1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 } }));
+    await harness.settle();
+
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.navigations).toEqual(['/shop?token=test-token&tier=next']);
   });
 
   it('stays on the fitting when newer edits appear during Save & Continue', async () => {

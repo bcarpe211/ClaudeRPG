@@ -444,6 +444,7 @@
     navSaveButton.hidden = true;
     navLeaveButton.hidden = true;
     navToast.hidden = false;
+    navCloseButton.focus();
   }
 
   let navigationSaveWait = null;
@@ -632,6 +633,10 @@
       event.preventDefault();
       pendingDestination = link.getAttribute('href');
       pendingNavigationTrigger = link;
+      if (refreshRequired) {
+        showRefreshNavigationToast();
+        return;
+      }
       if (saving || savePromise) {
         showWaitingNavigationToast();
         saveAndContinue();

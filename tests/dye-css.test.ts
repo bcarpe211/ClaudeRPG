@@ -68,11 +68,14 @@ it('aligns a compact stage header and removes the center guide', () => {
   expect(stage).not.toContain('linear-gradient(90deg');
 });
 
-it('keeps the unsaved stage status on one line at phone widths', () => {
+it('keeps short stage statuses on one line while allowing phone-width errors to wrap', () => {
   const css = readFileSync('src/web/public/dungeon.css', 'utf8');
 
   expect(css).toMatch(
-    /@media \(max-width:480px\)\{[\s\S]*?\.dye-save-status\{[^}]*white-space:nowrap/,
+    /@media \(max-width:480px\)\{[\s\S]*?\.dye-save-status\{[^}]*white-space:nowrap[^}]*overflow-wrap:normal/,
+  );
+  expect(css).toMatch(
+    /@media \(max-width:480px\)\{[\s\S]*?\.dye-save-status\[data-state="error"\]\{[^}]*white-space:normal[^}]*overflow-wrap:anywhere/,
   );
 });
 
