@@ -272,6 +272,7 @@ th{color:var(--muted);font-weight:600}
   overflow:hidden;background:#17101f}
 .dye-action{position:relative;flex:1;min-width:0;height:40px;margin:0;padding:7px 8px;
   justify-content:center;border:0;border-radius:0;box-shadow:none;font-size:11px;gap:6px}
+.dye-reload[hidden]{display:none!important}
 .dye-action:not(:last-child){border-right:1px solid #554061}
 .dye-action:hover{transform:none;box-shadow:none}.dye-action-icon{font-size:14px;line-height:1}
 .dye-action:focus-visible{z-index:1;outline:2px solid var(--gold);outline-offset:-3px}

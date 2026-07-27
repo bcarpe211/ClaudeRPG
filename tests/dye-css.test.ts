@@ -8,6 +8,14 @@ it('gives failed Wardrobe channels a visible non-color error indicator', () => {
   expect(css).toContain('content:"!"');
 });
 
+it('keeps Reload hidden until stale recovery removes the hidden attribute', () => {
+  const css = readFileSync('src/web/public/dungeon.css', 'utf8');
+  const hiddenReload = css.match(/\.dye-reload\[hidden\]\{([^}]*)\}/)?.[1] ?? '';
+
+  expect(hiddenReload).toContain('display:none!important');
+  expect(css).not.toMatch(/\.dye-reload\{[^}]*display:none/);
+});
+
 it('uses the approved black stage shadow and layered character shadows', () => {
   const css = readFileSync('src/web/public/dungeon.css', 'utf8');
   const stageShadow = css.match(/\.dye-stage::after\{([^}]*)\}/)?.[1] ?? '';
