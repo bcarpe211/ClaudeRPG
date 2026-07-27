@@ -1,4 +1,4 @@
-<div class="panel bazaar-open">
+<div class="panel bazaar-open"<%= shop?.mastered && purchaseResult === 'success' ? ' data-consume-shop-result' : '' %>>
   <header class="gilded-mimic-head">
     <div class="gilded-mimic-stock" aria-hidden="true">
       <img class="px mimic-stock-potion" src="/static/landing/potion.png" alt="">
@@ -56,7 +56,7 @@
         </div>
       </article>
     </section>
-  <% } else { %>
+  <% } else if (shop.mastered && purchaseResult === 'success') { %>
     <section class="bazaar-floor bazaar-mastered" aria-label="Wardrobe mastery">
       <div class="bazaar-player bazaar-player-mastered">
         <span class="bazaar-player-label"><%= player.name %> · Tier <%= shop.currentTier %></span>
@@ -70,6 +70,29 @@
         <h2>Dye Mastery Complete</h2>
         <p>Every applicable cosmetic channel is unlocked. The Gilded Mimic has no more dye-ledger pages to sell you.</p>
       </article>
+    </section>
+  <% } else { %>
+    <section class="bazaar-closed" aria-label="Closed marketplace">
+      <div class="bazaar-scene">
+        <div class="bazaar-sign">
+          <span>THE BAZAAR</span>
+          <b>CLOSED</b>
+        </div>
+        <span class="bazaar-spark bazaar-spark-a" aria-hidden="true">✦</span>
+        <span class="bazaar-spark bazaar-spark-b" aria-hidden="true">·</span>
+        <img class="px bazaar-mimic" src="<%= mimicUrl %>" width="168" height="168" alt="a suspicious treasure chest mimic guarding the empty stall">
+        <span class="bazaar-warning">Definitely not merchandise</span>
+      </div>
+      <div class="bazaar-copy">
+        <p class="dye-kicker">A note nailed to the stall</p>
+        <h1>The Bazaar is Closed</h1>
+        <p class="bazaar-lead">The merchant has packed up for now. Come back soon — new wares are being dragged up from the dungeon.</p>
+        <div class="bazaar-note">
+          <span aria-hidden="true">⚠</span>
+          <p>Please do not feed, pet, or attempt to purchase the treasure chest. It has already eaten one inventory ledger.</p>
+        </div>
+        <p class="bazaar-wardrobe">Your completed Dye Wheel still lives in the <b>Wardrobe</b> on your character page.</p>
+      </div>
     </section>
   <% } %>
 

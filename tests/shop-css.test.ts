@@ -75,4 +75,8 @@ describe('Gilded Mimic marketplace CSS', () => {
       /@media \(prefers-reduced-motion:reduce\)\{[\s\S]*?\.purchase-forging-button[\s\S]*?purchase-button-glow/,
     );
   });
+
+  it('layers the closed stall inside the Gilded Mimic marketplace shell', () => {
+    expect(marketplace).toMatch(/\.bazaar-open \.bazaar-closed\{[^}]*position:relative[^}]*z-index:1/);
+  });
 });

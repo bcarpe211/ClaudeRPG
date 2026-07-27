@@ -199,20 +199,43 @@ describe('Bazaar', () => {
     expect(res.text).not.toContain('That ledger entry is not available');
   });
 
-  it('renders mastery with no purchase card after Tier 3', async () => {
+  it('renders one-time mastery immediately after the final successful purchase', async () => {
     const { db, app, player } = ctx(7_000_000);
     purchase(db, player.id, 'cosmetic_wheel_t1', 1);
     purchase(db, player.id, 'cosmetic_wheel_t2', 2);
     purchase(db, player.id, 'cosmetic_wheel_t3', 3);
-    const res = await request(app).get('/shop').query({ token: player.auth_token });
+
+    const res = await request(app).get('/shop').query({
+      token: player.auth_token,
+      result: 'success',
+    });
+
+    expect(res.text).toContain('data-consume-shop-result');
     expect(res.text).toContain('Dye Mastery Complete');
+    expect(res.text).not.toContain('The Bazaar is Closed');
     expect(res.text).not.toContain('name="sku"');
-    expect(res.text).not.toContain('action="/shop/cosmetics/purchase"');
-    expect(res.text).not.toContain('data-purchase-effect');
     expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
     expect(res.text).toContain('Wardrobe Tier 3');
-    expect(res.text).toContain('Inventory');
-    expect(res.text).toContain('Coming Soon');
+    expect(res.text).toContain('Mastered');
+  });
+
+  it('shows the closed mimic scene on later mastered visits while retaining the ledger', async () => {
+    const { db, app, player } = ctx(7_000_000);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 3);
+
+    const res = await request(app).get('/shop').query({ token: player.auth_token });
+
+    expect(res.text).toContain('class="bazaar-closed"');
+    expect(res.text).toContain('The Bazaar is Closed');
+    expect(res.text).toContain('Definitely not merchandise');
+    expect(res.text).not.toContain('Dye Mastery Complete');
+    expect(res.text).not.toContain('data-consume-shop-result');
+    expect(res.text).not.toContain('action="/shop/cosmetics/purchase"');
+    expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
+    expect(res.text).toContain('Wardrobe Tier 3');
+    expect(res.text).toContain('Mastered');
     expect(res.text.match(/Return to Character/g)).toHaveLength(1);
   });
 

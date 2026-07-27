@@ -355,6 +355,7 @@ button:disabled:hover{transform:none;box-shadow:none}
     linear-gradient(180deg,#281837,#150e20)}
 .bazaar-open::before{content:"";position:absolute;z-index:0;inset:12px;border:1px solid #ffffff0b;
   border-radius:10px;pointer-events:none}
+.bazaar-open .bazaar-closed{position:relative;z-index:1}
 .sprite-anim .frame-b{visibility:hidden}.sprite-anim.show-b .frame-a{visibility:hidden}.sprite-anim.show-b .frame-b{visibility:visible}
 
 .gilded-mimic-head{position:relative;isolation:isolate;display:flex;align-items:center;gap:20px;
