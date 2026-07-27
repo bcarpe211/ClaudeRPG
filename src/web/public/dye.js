@@ -322,7 +322,12 @@
     event.returnValue = '';
   });
   window.addEventListener('pageshow', function (event) {
-    if (event.persisted) location.reload();
+    if (event.persisted) {
+      location.reload();
+      return;
+    }
+    renderControls();
+    renderSaveState();
   });
 
   // --- server-rendered channels and material controls ---

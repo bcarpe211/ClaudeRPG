@@ -605,11 +605,18 @@ describe('dye browser Wardrobe behavior', () => {
     expect(harness.requests).toHaveLength(0);
   });
 
-  it('reloads a restored bfcache page once and ignores normal pageshow', () => {
+  it('reapplies canonical controls after normal pageshow form restoration', () => {
     const harness = createWardrobeHarness();
 
+    harness.tone.value = '90';
     harness.pageshow(false);
+    expect(harness.tone.value).toBe('0');
     expect(harness.reloadCount()).toBe(0);
+  });
+
+  it('reloads a restored bfcache page once', () => {
+    const harness = createWardrobeHarness();
+
     harness.pageshow(true);
     expect(harness.reloadCount()).toBe(1);
   });
