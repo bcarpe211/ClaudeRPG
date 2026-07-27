@@ -443,6 +443,8 @@ describe('dye browser Wardrobe behavior', () => {
     ]);
     expect(harness.saveButton.disabled).toBe(true);
     expect(harness.discardButton.disabled).toBe(true);
+    expect(harness.status.textContent).toBe('Saving');
+    expect(harness.status.dataset.state).toBe('saving');
 
     pending.resolve(response({
       1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 },
@@ -563,10 +565,56 @@ describe('dye browser Wardrobe behavior', () => {
     await harness.settle();
 
     expect(harness.status.textContent).toBe('Save failed');
+    expect(harness.status.dataset.state).toBe('error');
     expect(harness.wheel.getAttribute('aria-valuenow')).toBe('6');
     expect(harness.saveButton.disabled).toBe(false);
     expect(harness.discardButton.disabled).toBe(false);
     expect(harness.requests).toHaveLength(1);
+  });
+
+  it('retries an ambiguous failed attempt unchanged and rebases newer same-slot edits', async () => {
+    const harness = createWardrobeHarness();
+    const lostResponse = deferred<ResponseLike>();
+    const retry = deferred<ResponseLike>();
+    const finalSave = deferred<ResponseLike>();
+    harness.responses.push(lostResponse, retry, finalSave);
+
+    pressWheel(harness, 'ArrowRight');
+    harness.saveButton.dispatch('click');
+    expect(changes(harness.requests[0])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 6, tone: 0 },
+    ]);
+    lostResponse.reject(new Error('response lost after commit'));
+    await harness.settle();
+
+    pressWheel(harness, 'ArrowRight');
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('12');
+    harness.saveButton.dispatch('click');
+
+    expect(harness.requests[1].body.get('revision')).toBe('1000');
+    expect(changes(harness.requests[1])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 6, tone: 0 },
+    ]);
+    retry.resolve(response({
+      1: { op: 'colorize', hue: 6, sat: 0.6, tone: 0 },
+    }));
+    await harness.settle();
+
+    expect(harness.wheel.getAttribute('aria-valuenow')).toBe('12');
+    expect(harness.status.textContent).toBe('Unsaved changes');
+    expect(harness.status.dataset.state).toBe('dirty');
+
+    harness.saveButton.dispatch('click');
+    expect(harness.requests[2].body.get('revision')).toBe('1001');
+    expect(changes(harness.requests[2])).toEqual([
+      { action: 'set', slot: 1, recipe: 'wheel', hue: 12, tone: 0 },
+    ]);
+    finalSave.resolve(response({
+      1: { op: 'colorize', hue: 12, sat: 0.6, tone: 0 },
+    }));
+    await harness.settle();
+    expect(harness.status.textContent).toBe('Saved');
+    expect(harness.status.dataset.state).toBe('saved');
   });
 
   it('keeps a stale draft visible, blocks further saves, and reveals Reload Wardrobe', async () => {

@@ -38,6 +38,8 @@
   let savedConfig = cloneConfig(config);
   let saving = false;
   let stale = false;
+  let saveError = false;
+  let pendingAttempt = null;
   const channelButtons = Array.from(document.querySelectorAll('.dye-chan:not(:disabled)'));
   let active = channelButtons.length > 0 ? Number(channelButtons[0].dataset.slot) : null;
   const revisionSession = Number.isSafeInteger(D.revisionSession) ? D.revisionSession : null;
@@ -231,31 +233,50 @@
   }
 
   function renderSaveState(message) {
-    const dirty = operations().length > 0;
+    const dirty = operations().length > 0 || pendingAttempt !== null;
     if (stale) {
       saveButton.disabled = true;
       discardButton.disabled = true;
       setStatus(message || 'Wardrobe changed elsewhere — refresh required', 'error');
       return;
     }
+    if (saving) {
+      saveButton.disabled = true;
+      discardButton.disabled = true;
+      setStatus(message || 'Saving', 'saving');
+      return;
+    }
     saveButton.disabled = saving || !dirty;
     discardButton.disabled = saving || !dirty;
-    setStatus(message || (dirty ? 'Unsaved changes' : 'Saved'), dirty ? 'dirty' : 'saved');
+    setStatus(
+      message || (saveError ? 'Save failed' : (dirty ? 'Unsaved changes' : 'Saved')),
+      saveError ? 'error' : (dirty ? 'dirty' : 'saved'),
+    );
   }
 
   async function saveDraft() {
-    const changes = operations();
-    if (saving || stale || changes.length === 0) return;
-    const submittedStates = Draft.cloneStates(states);
+    if (saving || stale) return;
+    if (!pendingAttempt) {
+      const changes = operations();
+      if (changes.length === 0) return;
+      pendingAttempt = {
+        changes,
+        revision: nextRevision,
+        submittedStates: Draft.cloneStates(states),
+        submittedConfig: cloneConfig(config),
+      };
+    }
+    const attempt = pendingAttempt;
     saving = true;
+    saveError = false;
     renderSaveState('Saving');
     let message = 'Save failed';
     try {
       const body = new URLSearchParams({
         token: D.token,
         session: String(revisionSession),
-        revision: String(nextRevision),
-        changes: JSON.stringify(changes),
+        revision: String(attempt.revision),
+        changes: JSON.stringify(attempt.changes),
       });
       const response = await fetch('/character/dye/save', {
         method: 'POST', body, credentials: 'same-origin',
@@ -278,10 +299,10 @@
       }
       const rebasedConfig = cloneConfig(canonicalConfig);
       const rebasedStates = Draft.cloneStates(canonicalStates);
-      const touchedWhileSaving = new Set([...submittedStates.keys(), ...states.keys()]);
+      const touchedWhileSaving = new Set([...attempt.submittedStates.keys(), ...states.keys()]);
       for (const slot of touchedWhileSaving) {
         const currentState = states.get(slot);
-        if (Draft.equalState(submittedStates.get(slot), currentState)) continue;
+        if (Draft.equalState(attempt.submittedStates.get(slot), currentState)) continue;
         if (!currentState) {
           rebasedConfig.delete(slot);
           rebasedStates.delete(slot);
@@ -295,12 +316,14 @@
       savedStates = Draft.cloneStates(canonicalStates);
       config = rebasedConfig;
       states = rebasedStates;
-      nextRevision += 1;
+      pendingAttempt = null;
+      nextRevision = Math.max(nextRevision, attempt.revision + 1);
       renderPreview();
       renderControls();
       message = operations().length > 0 ? 'Unsaved changes' : 'Saved';
     } catch (_error) {
       // Keep the current draft so the same revision can be retried safely.
+      saveError = true;
     } finally {
       saving = false;
       renderSaveState(message);
@@ -309,15 +332,15 @@
 
   function discardDraft() {
     if (saving || stale) return;
-    states = Draft.cloneStates(savedStates);
-    config = cloneConfig(savedConfig);
+    states = Draft.cloneStates(pendingAttempt ? pendingAttempt.submittedStates : savedStates);
+    config = cloneConfig(pendingAttempt ? pendingAttempt.submittedConfig : savedConfig);
     renderPreview();
     renderControls();
-    renderSaveState('Saved');
+    renderSaveState(pendingAttempt ? 'Save failed' : 'Saved');
   }
 
   window.addEventListener('beforeunload', function (event) {
-    if (operations().length === 0) return;
+    if (operations().length === 0 && pendingAttempt === null) return;
     event.preventDefault();
     event.returnValue = '';
   });
