@@ -83,3 +83,17 @@ it('integrates the Store and final joined actions without oversized buttons', ()
   expect(action).toContain('border-radius:0');
   expect(css).toMatch(/@media \(max-width:620px\)\{[\s\S]*?\.character-store\{[^}]*grid-column:2/);
 });
+
+it('keeps the Wardrobe action toast inside the moss walls', () => {
+  const css = readFileSync('src/web/public/dungeon.css', 'utf8');
+  const toast = css.match(/\.dye-nav-toast\{([^}]*)\}/)?.[1] ?? '';
+
+  expect(css).toContain('.dye-nav-toast[hidden]{display:none!important}');
+  expect(toast).toContain('position:fixed');
+  expect(toast).toContain('left:calc(var(--wall) + var(--shell-gap))');
+  expect(toast).toContain('right:calc(var(--wall) + var(--shell-gap))');
+  expect(toast).toContain('max-width:460px');
+  expect(toast).toContain('z-index:20');
+  expect(css).toMatch(/\.dye-nav-actions\{[^}]*display:flex/);
+  expect(css).toMatch(/@media \(max-width:620px\)\{[\s\S]*?\.dye-nav-actions\{[^}]*flex-direction:column/);
+});

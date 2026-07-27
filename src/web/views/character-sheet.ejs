@@ -8,7 +8,7 @@
       <h1><%= player.name %></h1>
       <p><span><%= className %></span> · <%= player.gender === 'M' ? 'Male' : 'Female' %> · <%= connected ? 'Connected' : 'Not seen yet' %></p>
     </div>
-    <a class="btn btn-gold character-store" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>">
+    <a class="btn btn-gold character-store" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>" data-dye-guarded-nav>
       <span aria-hidden="true">✦</span><span>Store</span>
     </a>
   </div>
@@ -42,7 +42,7 @@
       <p>Wardrobe Tier <%= dye.tier %> · unlocked colors stay free forever.</p>
     </div>
     <% if (dye.nextOffer) { %>
-      <a class="btn btn-gold" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>">Unlock the next tier</a>
+      <a class="btn btn-gold" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>" data-dye-guarded-nav>Unlock the next tier</a>
     <% } else { %>
       <span class="dye-mastery">Dye mastery complete</span>
     <% } %>
@@ -113,6 +113,20 @@
         </div>
       </div>
     </div>
+
+    <aside id="dye-nav-toast" class="dye-nav-toast" hidden role="alert"
+      aria-labelledby="dye-nav-title" aria-describedby="dye-nav-message">
+      <button id="dye-nav-close" type="button" class="dye-nav-close" aria-label="Keep editing and close this notice">×</button>
+      <span class="dye-nav-kicker">Unfinished fitting</span>
+      <h3 id="dye-nav-title">The tailor catches your sleeve!</h3>
+      <p id="dye-nav-message">You still have unfinished dye work on the fitting table. Save it before heading out, or leave it behind.</p>
+      <div class="dye-nav-actions">
+        <button id="dye-nav-save" type="button" class="btn btn-gold">
+          <span aria-hidden="true">✦</span><span id="dye-nav-save-label">Save &amp; Continue</span>
+        </button>
+        <button id="dye-nav-leave" type="button" class="btn btn-ghost">Leave Without Saving</button>
+      </div>
+    </aside>
 
     <% const dyeClient = {
       token: player.auth_token,

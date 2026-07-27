@@ -276,6 +276,22 @@ th{color:var(--muted);font-weight:600}
 .dye-action:not(:last-child){border-right:1px solid #554061}
 .dye-action:hover{transform:none;box-shadow:none}.dye-action-icon{font-size:14px;line-height:1}
 .dye-action:focus-visible{z-index:1;outline:2px solid var(--gold);outline-offset:-3px}
+.dye-nav-toast[hidden]{display:none!important}
+.dye-nav-toast{position:fixed;z-index:20;left:calc(var(--wall) + var(--shell-gap));
+  right:calc(var(--wall) + var(--shell-gap));bottom:24px;max-width:460px;margin-inline:auto;
+  padding:16px 46px 16px 16px;border:1px solid var(--gold-dim);border-radius:11px;
+  background:linear-gradient(180deg,#2b1c38,#160f20);box-shadow:0 24px 60px #000c,inset 0 1px #fff2;
+  animation:dye-toast-in .16s steps(2,end)}
+.dye-nav-kicker{display:block;margin-bottom:3px;color:var(--gold);font:850 9px/1 ui-monospace,monospace;
+  letter-spacing:.15em;text-transform:uppercase}
+.dye-nav-toast h3{margin:0 0 4px;font-size:16px}.dye-nav-toast p{margin:0;color:var(--ink);font-size:12px}
+.dye-nav-close{position:absolute;right:9px;top:9px;width:28px;height:28px;margin:0;padding:0;
+  justify-content:center;border:1px solid var(--line);border-radius:6px;background:#ffffff08;
+  color:var(--muted);box-shadow:none;font-size:17px}
+.dye-nav-actions{display:flex;gap:7px;margin-top:12px}.dye-nav-actions .btn{min-height:38px;padding:8px 12px;font-size:11px}
+.dye-nav-actions button:hover,.dye-nav-close:hover{transform:none}
+.dye-nav-actions button:focus-visible,.dye-nav-close:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+@keyframes dye-toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .dye-mastery{display:inline-flex;padding:6px 10px;border:1px solid #376645;border-radius:999px;color:var(--live);font-size:11px;font-weight:850;text-transform:uppercase}
 .dye-unavailable h2{margin-bottom:7px}
 .dye-unavailable p:last-child{color:var(--muted)}
@@ -299,6 +315,8 @@ button:disabled:hover{transform:none;box-shadow:none}
   .character-profile-head{grid-template-columns:auto minmax(0,1fr);align-items:start}
   .character-store{grid-column:2;justify-self:start;padding:9px 12px}
   .dye-head{display:block}
+  .dye-nav-toast{bottom:12px;padding:14px 40px 14px 14px}
+  .dye-nav-actions{flex-direction:column}.dye-nav-actions .btn{width:100%;justify-content:center}
   .dye-unavailable{grid-template-columns:1fr}
 }
 

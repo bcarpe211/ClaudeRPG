@@ -487,6 +487,17 @@ describe('character wardrobe panel', () => {
     const res = await request(app).get('/character').query({ token: player.auth_token });
     expect(res.text).toContain('Wardrobe Tier 1');
     expect(res.text).toContain('window.__DYE__');
+    expect(res.text).toContain('class="btn btn-gold character-store"');
+    expect(res.text).toContain('data-dye-guarded-nav>');
+    expect(res.text).toContain('id="dye-nav-toast" class="dye-nav-toast" hidden role="alert"');
+    expect(res.text).toContain('id="dye-nav-title">The tailor catches your sleeve!</h3>');
+    expect(res.text).toContain('You still have unfinished dye work on the fitting table.');
+    expect(res.text).toContain('id="dye-nav-save"');
+    expect(res.text).toContain('id="dye-nav-save-label">Save &amp; Continue</span>');
+    expect(res.text).toContain('id="dye-nav-leave"');
+    expect(res.text).toContain('Leave Without Saving');
+    expect(res.text).toContain('id="dye-nav-close"');
+    expect(res.text.match(/data-dye-guarded-nav/g)).toHaveLength(2);
     expect(res.text).toContain('data-slot="1"');
     expect(res.text).toContain('data-required-tier="3" disabled');
     expect(res.text).toContain('id="dye-tone"');
