@@ -41,4 +41,38 @@ describe('Gilded Mimic marketplace CSS', () => {
     expect(stock).toContain('inset:0');
     expect(stock).toContain('pointer-events:none');
   });
+
+  it('contains the purchase burst in a fixed non-interactive layer', () => {
+    const burst = declarations('.purchase-burst');
+    expect(burst).toContain('position:fixed');
+    expect(burst).toContain('inset:0');
+    expect(burst).toContain('overflow:hidden');
+    expect(burst).toContain('pointer-events:none');
+  });
+
+  it('uses bounded transform-and-opacity motion without collapsing sprites to zero', () => {
+    const sprite = declarations('.purchase-burst-sprite');
+    expect(sprite).toContain('scale(.65)');
+    expect(sprite).toContain('animation:');
+    expect(marketplace).toContain('scale(1.35)');
+    expect(marketplace).not.toContain('scale(0)');
+    expect(marketplace).toMatch(
+      /@keyframes purchase-card-jolt\{[\s\S]*?transform:[^;}]+[\s\S]*?\}/,
+    );
+    expect(marketplace).toMatch(
+      /@keyframes purchase-burst-flight\{[\s\S]*?transform:[^;}]+[\s\S]*?opacity:/,
+    );
+  });
+
+  it('removes moving purchase effects under reduced motion and retains only a button glow', () => {
+    expect(marketplace).toMatch(
+      /@media \(prefers-reduced-motion:reduce\)\{[\s\S]*?\.purchase-forging-card[\s\S]*?animation:none/,
+    );
+    expect(marketplace).toMatch(
+      /@media \(prefers-reduced-motion:reduce\)\{[\s\S]*?\.purchase-burst[\s\S]*?display:none/,
+    );
+    expect(marketplace).toMatch(
+      /@media \(prefers-reduced-motion:reduce\)\{[\s\S]*?\.purchase-forging-button[\s\S]*?purchase-button-glow/,
+    );
+  });
 });

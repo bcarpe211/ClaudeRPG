@@ -47,6 +47,26 @@ describe('Bazaar', () => {
     expect(res.text).not.toContain('2,000,000g');
   });
 
+  it('enhances only an enabled next-offer purchase form', async () => {
+    const ready = ctx(7_000_000);
+    const readyPage = await request(ready.app).get('/shop').query({ token: ready.player.auth_token });
+    const readyForm = readyPage.text.match(/<form[^>]*action="\/shop\/cosmetics\/purchase"[\s\S]*?<\/form>/)?.[0] ?? '';
+
+    expect(readyForm).toContain('data-purchase-effect');
+    expect(readyForm).toContain(`name="token" value="${ready.player.auth_token}"`);
+    expect(readyForm).toContain('name="sku" value="cosmetic_wheel_t1"');
+    expect(readyPage.text).toContain('<script src="/static/shop.js" defer></script>');
+
+    const poor = ctx(0);
+    const poorPage = await request(poor.app).get('/shop').query({ token: poor.player.auth_token });
+    const poorForm = poorPage.text.match(/<form[^>]*action="\/shop\/cosmetics\/purchase"[\s\S]*?<\/form>/)?.[0] ?? '';
+    expect(poorForm).not.toContain('data-purchase-effect');
+    expect(poorForm).toContain('disabled');
+
+    const loginPage = await request(poor.app).get('/shop');
+    expect(loginPage.text).not.toContain('data-purchase-effect');
+  });
+
   it('renders the compact Gilded Mimic offer and keeps navigation in the Adventurer Ledger', async () => {
     const { db, app, player } = ctx(7_000_000);
     purchase(db, player.id, 'cosmetic_wheel_t1', 10);
@@ -188,6 +208,7 @@ describe('Bazaar', () => {
     expect(res.text).toContain('Dye Mastery Complete');
     expect(res.text).not.toContain('name="sku"');
     expect(res.text).not.toContain('action="/shop/cosmetics/purchase"');
+    expect(res.text).not.toContain('data-purchase-effect');
     expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
     expect(res.text).toContain('Wardrobe Tier 3');
     expect(res.text).toContain('Inventory');

@@ -48,10 +48,10 @@
 
         <div class="bazaar-buy-row">
           <p class="bazaar-price"><span>Permanent unlock</span><strong><%= offer.price.toLocaleString() %>g</strong></p>
-          <form method="post" action="/shop/cosmetics/purchase">
+          <form method="post" action="/shop/cosmetics/purchase"<%= offer.missingGold === 0 ? ' data-purchase-effect' : '' %>>
             <input type="hidden" name="token" value="<%= player.auth_token %>">
             <input type="hidden" name="sku" value="<%= offer.sku %>">
-            <button class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %></button>
+            <button type="submit" class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %></button>
           </form>
         </div>
       </article>
@@ -102,3 +102,4 @@
 <script>window.__SHOP_PREVIEW__ = <%- JSON.stringify(shop.preview).replace(/</g, '\\u003c') %>;</script>
 <script src="/static/shop-preview.js"></script>
 <% } %>
+<script src="/static/shop.js" defer></script>

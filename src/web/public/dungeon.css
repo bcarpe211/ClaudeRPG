@@ -399,6 +399,35 @@ button:disabled:hover{transform:none;box-shadow:none}
   font-variant-numeric:tabular-nums}.ledger-future strong{color:#c8afe2;font-size:11px}
 .ledger-return{align-self:stretch;justify-content:center;margin:0;padding-inline:16px;white-space:nowrap}
 
+.purchase-forging-card{animation:purchase-card-jolt 300ms cubic-bezier(.77,0,.175,1)}
+.purchase-forging-button{position:relative;isolation:isolate}
+.purchase-forging-button::after{content:"";position:absolute;z-index:-1;inset:-7px;border-radius:8px;
+  box-shadow:0 0 18px 5px rgba(255,215,123,.72);opacity:0;pointer-events:none;
+  animation:purchase-button-glow 520ms cubic-bezier(.23,1,.32,1) 2 alternate}
+.purchase-burst{position:fixed;z-index:1000;inset:0;overflow:hidden;pointer-events:none;contain:strict}
+.purchase-burst-sprite{position:absolute;left:var(--burst-left);top:var(--burst-top);width:36px;height:36px;
+  margin:-18px 0 0 -18px;opacity:0;transform:translate3d(0,8px,0) rotate(0deg) scale(.65);
+  transform-origin:center;will-change:transform,opacity;
+  animation:purchase-burst-flight 900ms var(--burst-delay) cubic-bezier(.23,1,.32,1) both}
+@keyframes purchase-card-jolt{
+  0%,100%{transform:translate3d(0,0,0) rotate(0deg)}
+  24%{transform:translate3d(-2px,1px,0) rotate(-.2deg)}
+  52%{transform:translate3d(2px,-1px,0) rotate(.18deg)}
+  76%{transform:translate3d(-1px,0,0) rotate(-.08deg)}
+}
+@keyframes purchase-burst-flight{
+  0%{opacity:0;transform:translate3d(0,8px,0) rotate(0deg) scale(.65)}
+  14%{opacity:1}
+  100%{opacity:0;transform:translate3d(var(--burst-x),var(--burst-y),0) rotate(var(--burst-r)) scale(1.35)}
+}
+@keyframes purchase-button-glow{0%{opacity:0}100%{opacity:1}}
+
+@media (prefers-reduced-motion:reduce){
+  .purchase-forging-card{animation:none!important}
+  .purchase-burst{display:none}
+  .purchase-forging-button::after{animation:purchase-button-glow 180ms cubic-bezier(.23,1,.32,1) both!important}
+}
+
 @media (max-width:900px){
   .gilded-mimic-merchant{margin-left:20px}
   .bazaar-floor{grid-template-columns:minmax(160px,.58fr) minmax(0,1.42fr)}
