@@ -5,7 +5,7 @@ import { createPlayer } from '../src/domain/players';
 import { purchase, setCosmeticHue } from '../src/domain/shop';
 import { SLOTS } from '../src/domain/slots';
 import {
-  applySlotMutationBatch, beginSlotMutationSession, getSlotConfig, getEntitledSlotConfig,
+  applySlotMutation, applySlotMutationBatch, beginSlotMutationSession, getSlotConfig, getEntitledSlotConfig,
   setSlotRule, clearSlot, skinRenderHash, cosmeticSkinUrl,
 } from '../src/domain/slotcosmetics';
 import { classSpriteUrl } from '../src/domain/classes';
@@ -186,6 +186,19 @@ describe('applySlotMutationBatch', () => {
     expect(applySlotMutationBatch(db, created.id, session.session, 9, [
       { slot: SLOTS.cape, rule: null },
     ], 102)).toBe('stale');
+  });
+
+  it('does not infer a batch duplicate from a legacy per-slot tombstone', () => {
+    const created = player();
+    const session = beginSlotMutationSession(db, created.id);
+    const rule = { op: 'colorize' as const, hue: 120, sat: 0.6 };
+    expect(applySlotMutation(
+      db, created.id, SLOTS.body, session.session, 10, rule, 100,
+    )).toBe('applied');
+
+    expect(applySlotMutationBatch(db, created.id, session.session, 10, [
+      { slot: SLOTS.body, rule },
+    ], 101)).toBe('stale');
   });
 
   it('rolls back rules and tombstones when any write throws', () => {

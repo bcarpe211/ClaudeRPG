@@ -219,8 +219,9 @@ export function applySlotMutationBatch(
       return 'new' as const;
     });
     if (states.includes('stale')) return 'stale';
-    if (states.every((state) => state === 'duplicate')) return 'duplicate';
-    if (states.some((state) => state === 'duplicate')) return 'stale';
+    // Without an exact batch receipt, a matching per-slot tombstone could have
+    // come from the legacy single-slot endpoint and cannot prove payload identity.
+    if (states.includes('duplicate')) return 'stale';
 
     for (const { slot, rule } of operations) {
       db.prepare(
