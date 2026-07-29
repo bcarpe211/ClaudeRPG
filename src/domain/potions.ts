@@ -1,0 +1,417 @@
+import type Database from 'better-sqlite3';
+import { z } from 'zod';
+import { combatActiveMs, isCombatAcceptingWork } from './gameclock';
+import { inventoryQuantity } from './inventory';
+import { officeDayKey } from './office-time';
+import { consumableProduct, type PotionType } from './shop-products';
+import { getSetting } from './settings';
+
+const DEFAULT_DAILY_USES = 3;
+const DEFAULT_PAUSE_AFTER_MINUTES = 15;
+
+export interface GoldPotionSnapshot {
+  kind: 'gold';
+  durationMs: number;
+  tokenUnit: 1_000;
+  goldPerUnit: number;
+  baseCap: number;
+  stretchTokens: number;
+  stretchBonus: number;
+}
+
+export interface DamagePotionSnapshot {
+  kind: 'damage';
+  durationMs: number;
+  baseHitMultiplier: number;
+}
+
+export type PotionEffectSnapshot = GoldPotionSnapshot | DamagePotionSnapshot;
+
+export interface ActivePotionEffect {
+  activationId: number;
+  sku: string;
+  potionType: PotionType;
+  tier: number;
+  state: 'armed' | 'active' | 'paused';
+  remainingGameMs: number;
+  snapshot: PotionEffectSnapshot;
+  eligibleTokens: number;
+  baseGold: number;
+  stretchGold: number;
+}
+
+export type ActivatePotionResult =
+  | {
+      ok: true;
+      activationId: number;
+      duplicate: boolean;
+      potionType: PotionType;
+      inventoryRemaining: number;
+      usesRemaining: number;
+      state: 'armed' | 'active';
+    }
+  | {
+      ok: false;
+      reason:
+        | 'unknown_sku'
+        | 'no_player'
+        | 'no_inventory'
+        | 'daily_limit'
+        | 'type_active'
+        | 'invalid_config'
+        | 'request_conflict';
+    };
+
+const safeNonNegativeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const positiveDuration = safeNonNegativeInteger.refine((value) => value > 0);
+
+const goldPotionSnapshotSchema = z.object({
+  kind: z.literal('gold'),
+  durationMs: positiveDuration,
+  tokenUnit: z.literal(1_000),
+  goldPerUnit: safeNonNegativeInteger,
+  baseCap: safeNonNegativeInteger,
+  stretchTokens: safeNonNegativeInteger,
+  stretchBonus: safeNonNegativeInteger,
+}).strict();
+
+const damagePotionSnapshotSchema = z.object({
+  kind: z.literal('damage'),
+  durationMs: positiveDuration,
+  baseHitMultiplier: z.number().finite().positive(),
+}).strict();
+
+const potionEffectSnapshotSchema = z.discriminatedUnion('kind', [
+  goldPotionSnapshotSchema,
+  damagePotionSnapshotSchema,
+]);
+
+type ActivationRow = {
+  id: number;
+  sku: string;
+  potion_type: PotionType;
+  activation_day: string;
+  start_game_ms: number;
+  expires_game_ms: number;
+};
+
+type ActiveRow = ActivationRow & {
+  tier: number;
+  effect_snapshot: string;
+  eligible_tokens: number;
+  base_gold: number;
+  stretch_gold: number;
+};
+
+type InventoryLot = {
+  id: number;
+  purchase_id: number;
+  unit_price: number;
+};
+
+function jsonNumberSetting(db: Database.Database, key: string): number | undefined {
+  const raw = getSetting(db, key);
+  if (raw === undefined) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function configuredDailyUses(db: Database.Database): number {
+  const value = jsonNumberSetting(db, 'potion_daily_uses_per_type');
+  return value !== undefined && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : DEFAULT_DAILY_USES;
+}
+
+function configuredPauseAfterMinutes(db: Database.Database): number {
+  const value = jsonNumberSetting(db, 'pause_after_minutes');
+  return value !== undefined && value >= 0
+    ? value
+    : DEFAULT_PAUSE_AFTER_MINUTES;
+}
+
+function buildEffectSnapshot(
+  db: Database.Database,
+  potionType: PotionType,
+  durationMs: number,
+): PotionEffectSnapshot | undefined {
+  if (potionType === 'gold') {
+    const parsed = goldPotionSnapshotSchema.safeParse({
+      kind: 'gold',
+      durationMs,
+      tokenUnit: 1_000,
+      goldPerUnit: jsonNumberSetting(db, 'potion_gold_t1_gold_per_1000'),
+      baseCap: jsonNumberSetting(db, 'potion_gold_t1_base_cap'),
+      stretchTokens: jsonNumberSetting(db, 'potion_gold_t1_stretch_tokens'),
+      stretchBonus: jsonNumberSetting(db, 'potion_gold_t1_stretch_bonus'),
+    });
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  const baseHitPercent = jsonNumberSetting(db, 'potion_damage_t1_base_hit_pct');
+  const parsed = damagePotionSnapshotSchema.safeParse({
+    kind: 'damage',
+    durationMs,
+    baseHitMultiplier: baseHitPercent === undefined || baseHitPercent < 0
+      ? undefined
+      : 1 + baseHitPercent / 100,
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
+function activationState(
+  db: Database.Database,
+  now: number,
+): 'armed' | 'active' {
+  return isCombatAcceptingWork(db, now, configuredPauseAfterMinutes(db))
+    ? 'active'
+    : 'armed';
+}
+
+function duplicateResult(
+  db: Database.Database,
+  input: { playerId: number; now: number },
+  activation: ActivationRow,
+): ActivatePotionResult {
+  const dailyLimit = configuredDailyUses(db);
+  return {
+    ok: true,
+    activationId: activation.id,
+    duplicate: true,
+    potionType: activation.potion_type,
+    inventoryRemaining: inventoryQuantity(db, input.playerId, activation.sku),
+    usesRemaining: remainingDailyUses(
+      db,
+      input.playerId,
+      activation.potion_type,
+      activation.activation_day,
+      dailyLimit,
+    ),
+    state: activationState(db, input.now),
+  };
+}
+
+export function remainingDailyUses(
+  db: Database.Database,
+  playerId: number,
+  potionType: PotionType,
+  dayKey: string,
+  dailyLimit: number,
+): number {
+  if (!Number.isSafeInteger(dailyLimit) || dailyLimit < 0) {
+    throw new RangeError('daily limit must be a non-negative safe integer');
+  }
+  const row = db.prepare(
+    `SELECT COUNT(*) AS used
+     FROM potion_activations
+     WHERE player_id = ? AND potion_type = ? AND activation_day = ?`,
+  ).get(playerId, potionType, dayKey) as { used: number };
+  return Math.max(0, dailyLimit - row.used);
+}
+
+export function completeExpiredPotions(
+  db: Database.Database,
+  now: number,
+): number {
+  const result = db.prepare(
+    `UPDATE potion_activations
+     SET status = 'completed', completed_at = ?
+     WHERE status = 'active' AND expires_game_ms <= ?`,
+  ).run(now, combatActiveMs(db));
+  return result.changes;
+}
+
+export function activatePotion(
+  db: Database.Database,
+  input: {
+    playerId: number;
+    skuId: string;
+    requestId: string;
+    now: number;
+    timeZone: string;
+  },
+): ActivatePotionResult {
+  try {
+    const execute = db.transaction((): ActivatePotionResult => {
+      completeExpiredPotions(db, input.now);
+
+      const prior = db.prepare(
+        `SELECT id, sku, potion_type, activation_day, start_game_ms, expires_game_ms
+         FROM potion_activations
+         WHERE player_id = ? AND request_id = ?`,
+      ).get(input.playerId, input.requestId) as ActivationRow | undefined;
+      if (prior) {
+        if (prior.sku !== input.skuId) {
+          return { ok: false, reason: 'request_conflict' };
+        }
+        return duplicateResult(db, input, prior);
+      }
+
+      let product;
+      try {
+        product = consumableProduct(db, input.skuId);
+      } catch (error) {
+        if (error instanceof RangeError) {
+          return { ok: false, reason: 'invalid_config' };
+        }
+        throw error;
+      }
+      if (!product) return { ok: false, reason: 'unknown_sku' };
+
+      const player = db.prepare(
+        'SELECT id FROM players WHERE id = ?',
+      ).get(input.playerId) as { id: number } | undefined;
+      if (!player) return { ok: false, reason: 'no_player' };
+
+      const snapshot = buildEffectSnapshot(db, product.potionType, product.durationMs);
+      if (!snapshot) return { ok: false, reason: 'invalid_config' };
+
+      const activationDay = officeDayKey(input.now, input.timeZone);
+      const dailyLimit = configuredDailyUses(db);
+      const usesRemaining = remainingDailyUses(
+        db,
+        input.playerId,
+        product.potionType,
+        activationDay,
+        dailyLimit,
+      );
+      if (usesRemaining === 0) return { ok: false, reason: 'daily_limit' };
+
+      const sameTypeActive = db.prepare(
+        `SELECT id FROM potion_activations
+         WHERE player_id = ? AND potion_type = ? AND status = 'active'`,
+      ).get(input.playerId, product.potionType);
+      if (sameTypeActive) return { ok: false, reason: 'type_active' };
+
+      const lot = db.prepare(
+        `SELECT id, purchase_id, unit_price
+         FROM player_inventory_lots
+         WHERE player_id = ? AND sku = ? AND remaining_quantity > 0
+         ORDER BY purchased_at, id
+         LIMIT 1`,
+      ).get(input.playerId, product.id) as InventoryLot | undefined;
+      const stackQuantity = inventoryQuantity(db, input.playerId, product.id);
+      if (!lot || stackQuantity <= 0) {
+        return { ok: false, reason: 'no_inventory' };
+      }
+
+      const lotUpdate = db.prepare(
+        `UPDATE player_inventory_lots
+         SET remaining_quantity = remaining_quantity - 1
+         WHERE id = ? AND remaining_quantity > 0`,
+      ).run(lot.id);
+      const stackUpdate = db.prepare(
+        `UPDATE player_inventory
+         SET quantity = quantity - 1, updated_at = ?
+         WHERE player_id = ? AND sku = ? AND quantity > 0`,
+      ).run(input.now, input.playerId, product.id);
+      if (lotUpdate.changes !== 1 || stackUpdate.changes !== 1) {
+        throw new InventoryChangedDuringActivation();
+      }
+
+      const startGameMs = combatActiveMs(db);
+      const inserted = db.prepare(
+        `INSERT INTO potion_activations
+          (player_id, sku, potion_type, tier, purchase_id, purchase_unit_price,
+           request_id, activation_day, activated_at, start_game_ms, expires_game_ms,
+           status, effect_snapshot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+      ).run(
+        input.playerId,
+        product.id,
+        product.potionType,
+        product.tier,
+        lot.purchase_id,
+        lot.unit_price,
+        input.requestId,
+        activationDay,
+        input.now,
+        startGameMs,
+        startGameMs + snapshot.durationMs,
+        JSON.stringify(snapshot),
+      );
+
+      return {
+        ok: true,
+        activationId: Number(inserted.lastInsertRowid),
+        duplicate: false,
+        potionType: product.potionType,
+        inventoryRemaining: stackQuantity - 1,
+        usesRemaining: usesRemaining - 1,
+        state: activationState(db, input.now),
+      };
+    });
+    return execute();
+  } catch (error) {
+    if (error instanceof InventoryChangedDuringActivation) {
+      return { ok: false, reason: 'no_inventory' };
+    }
+    if (
+      error instanceof Error
+      && error.message.includes(
+        'UNIQUE constraint failed: potion_activations.player_id, potion_activations.potion_type',
+      )
+    ) {
+      return { ok: false, reason: 'type_active' };
+    }
+    throw error;
+  }
+}
+
+export function activePotionEffects(
+  db: Database.Database,
+  playerId: number,
+  now: number,
+): ActivePotionEffect[] {
+  completeExpiredPotions(db, now);
+  const currentGameMs = combatActiveMs(db);
+  const acceptingWork = isCombatAcceptingWork(
+    db,
+    now,
+    configuredPauseAfterMinutes(db),
+  );
+  const rows = db.prepare(
+    `SELECT id, sku, potion_type, tier, activation_day, start_game_ms,
+            expires_game_ms, effect_snapshot, eligible_tokens, base_gold,
+            stretch_gold
+     FROM potion_activations
+     WHERE player_id = ? AND status = 'active'
+     ORDER BY id`,
+  ).all(playerId) as ActiveRow[];
+
+  const effects: ActivePotionEffect[] = [];
+  for (const row of rows) {
+    let storedSnapshot: unknown;
+    try {
+      storedSnapshot = JSON.parse(row.effect_snapshot);
+    } catch {
+      continue;
+    }
+    const parsed = potionEffectSnapshotSchema.safeParse(storedSnapshot);
+    if (!parsed.success || parsed.data.kind !== row.potion_type) continue;
+
+    effects.push({
+      activationId: row.id,
+      sku: row.sku,
+      potionType: row.potion_type,
+      tier: row.tier,
+      state: currentGameMs <= row.start_game_ms
+        ? 'armed'
+        : acceptingWork
+          ? 'active'
+          : 'paused',
+      remainingGameMs: Math.max(0, row.expires_game_ms - currentGameMs),
+      snapshot: parsed.data,
+      eligibleTokens: row.eligible_tokens,
+      baseGold: row.base_gold,
+      stretchGold: row.stretch_gold,
+    });
+  }
+  return effects;
+}
+
+class InventoryChangedDuringActivation extends Error {}
