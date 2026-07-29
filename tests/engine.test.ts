@@ -221,3 +221,36 @@ describe('engine combat-active clock', () => {
     expect(combatActiveMs(db)).toBe(1_100);
   });
 });
+
+describe('engine hit transactions', () => {
+  it('rolls back encounter damage when the daily combat audit cannot be written', () => {
+    setSetting(db, 'attack_interval_ms', '1000');
+    setSetting(db, 'attack_jitter_ms', '0');
+    setSetting(db, 'monster_attacks_enabled', '0');
+    wakeOffice(100_000);
+    const engine = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+    engine.tick(100_000);
+    const encounter = db.prepare(
+      "SELECT id, current_hp FROM encounters WHERE status = 'active'",
+    ).get() as { id: number; current_hp: number };
+    db.exec(`
+      CREATE TRIGGER fail_daily_combat_insert
+      BEFORE INSERT ON player_daily_combat
+      BEGIN
+        SELECT RAISE(ABORT, 'daily audit failure');
+      END;
+    `);
+
+    expect(() => engine.tick(101_000)).toThrow('daily audit failure');
+
+    expect(db.prepare(
+      'SELECT current_hp FROM encounters WHERE id = ?',
+    ).get(encounter.id)).toEqual({ current_hp: encounter.current_hp });
+    expect(db.prepare(
+      'SELECT COUNT(*) AS count FROM encounter_damage WHERE encounter_id = ?',
+    ).get(encounter.id)).toEqual({ count: 0 });
+  });
+});

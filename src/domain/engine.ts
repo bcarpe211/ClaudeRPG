@@ -9,6 +9,8 @@ import { getAllSettings } from './settings';
 import { pickTarget, rollConsequence, goldSteal, debuffFactor } from './retaliation';
 import { applyGoldMutation } from './goldledger';
 import { advanceCombatClock, isCombatAcceptingWork } from './gameclock';
+import { officeDayKey } from './office-time';
+import { completeExpiredPotions, damagePotionMultiplier } from './potions';
 
 export interface DefeatParticipant {
   playerId: number;
@@ -167,18 +169,54 @@ export class GameEngine {
     }
   }
 
-  private applyHit(encId: number, playerId: number, dmg: number): void {
+  private applyHit(
+    encId: number,
+    playerId: number,
+    damage: number,
+    potionBonus: number,
+    activationId: number | null,
+    now: number,
+  ): void {
     this.db.transaction(() => {
       this.db.prepare('UPDATE encounters SET current_hp = MAX(0, current_hp - ?) WHERE id=?')
-        .run(dmg, encId);
+        .run(damage, encId);
       this.db.prepare(
-        `INSERT INTO encounter_damage (encounter_id, player_id, damage_total, hits, max_hit)
-         VALUES (?, ?, ?, 1, ?)
+        `INSERT INTO encounter_damage
+          (encounter_id, player_id, damage_total, hits, max_hit, potion_bonus_damage)
+         VALUES (?, ?, ?, 1, ?, ?)
          ON CONFLICT(encounter_id, player_id) DO UPDATE SET
            damage_total = damage_total + excluded.damage_total,
            hits = hits + 1,
-           max_hit = MAX(max_hit, excluded.max_hit)`,
-      ).run(encId, playerId, dmg, dmg);
+           max_hit = MAX(max_hit, excluded.max_hit),
+           potion_bonus_damage = potion_bonus_damage + excluded.potion_bonus_damage`,
+      ).run(encId, playerId, damage, damage, potionBonus);
+      if (activationId !== null) {
+        this.db.prepare(
+          `UPDATE potion_activations
+           SET potion_bonus_damage = potion_bonus_damage + ?
+           WHERE id = ?`,
+        ).run(potionBonus, activationId);
+        this.db.prepare(
+          `INSERT INTO potion_activation_encounters
+            (activation_id, encounter_id, bonus_damage)
+           VALUES (?, ?, ?)
+           ON CONFLICT(activation_id, encounter_id) DO UPDATE SET
+             bonus_damage = bonus_damage + excluded.bonus_damage`,
+        ).run(activationId, encId, potionBonus);
+      }
+      this.db.prepare(
+        `INSERT INTO player_daily_combat
+          (player_id, office_day, damage, potion_bonus_damage)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(player_id, office_day) DO UPDATE SET
+           damage = damage + excluded.damage,
+           potion_bonus_damage = potion_bonus_damage + excluded.potion_bonus_damage`,
+      ).run(
+        playerId,
+        officeDayKey(now, this.officeTimeZone),
+        damage,
+        potionBonus,
+      );
     })();
   }
 
@@ -303,6 +341,7 @@ export class GameEngine {
         );
       }
       this.previousTickAt = now;
+      completeExpiredPotions(this.db, now);
 
       const idle = isIdle(this.db, now, cfg.pauseAfterMinutes);
 
@@ -341,8 +380,28 @@ export class GameEngine {
           const score = activityScore(this.db, p.id, now, cfg);
           const am = tokenModifier(score, cfg.tokenModifierK, cfg.modifierCap); // player's own activity modifier (capped)
           const mod = am * debuffFactor(this.db, p.id, now, cfg);
-          const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelCurveSlope, mod);
-          this.applyHit(encId, p.id, dmg);
+          const damagePotion = damagePotionMultiplier(this.db, p.id);
+          const baseline = attackDamage(
+            cfg.baseHit,
+            p.level,
+            cfg.levelCurveSlope,
+            mod,
+          );
+          const damage = attackDamage(
+            cfg.baseHit * (damagePotion?.multiplier ?? 1),
+            p.level,
+            cfg.levelCurveSlope,
+            mod,
+          );
+          const potionBonus = Math.max(0, damage - baseline);
+          this.applyHit(
+            encId,
+            p.id,
+            damage,
+            potionBonus,
+            damagePotion?.activationId ?? null,
+            now,
+          );
           this.db.prepare('UPDATE players SET peak_modifier=? WHERE id=? AND peak_modifier < ?').run(am, p.id, am);
           this.nextAttackAt.set(p.id, this.scheduleNext(now, cfg));
         } else {

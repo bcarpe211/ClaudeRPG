@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { GameEngine } from '../src/domain/engine';
+import { applyGoldMutation } from '../src/domain/goldledger';
 import { ingestTokenUsage } from '../src/domain/ingest';
+import { purchaseConsumable } from '../src/domain/inventory';
 import { createPlayer, getPlayerById } from '../src/domain/players';
+import { activatePotion } from '../src/domain/potions';
 import { seedSettings, setSetting } from '../src/domain/settings';
 
 let db: ReturnType<typeof openDb>;
@@ -31,6 +34,63 @@ function killOnNextAttack(engine: GameEngine, encounterId: number, now: number):
 }
 
 describe('versioned encounter reward awards', () => {
+  it('stores the killed encounter Damage counterfactual without changing the gold pool', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Damage Award', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    db.prepare('UPDATE players SET last_token_at = ? WHERE id = ?').run(100_000, player.id);
+    applyGoldMutation(db, {
+      playerId: player.id,
+      amount: 150_000,
+      reason: 'opening_balance',
+      sourceTable: 'test_players',
+      sourceId: `${player.id}`,
+      now: 99_000,
+    });
+    expect(purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: 'potion_damage_t1',
+      quantity: 1,
+      expectedUnitPrice: 150_000,
+      requestId: 'buy-damage-award',
+      now: 99_000,
+      timeZone: 'America/New_York',
+    })).toMatchObject({ ok: true });
+    const engine = new GameEngine(db, { rng: () => 0.5 });
+    engine.tick(100_000);
+    const active = db.prepare(
+      "SELECT * FROM encounters WHERE status = 'active'",
+    ).get() as any;
+    expect(activatePotion(db, {
+      playerId: player.id,
+      skuId: 'potion_damage_t1',
+      requestId: 'drink-damage-award',
+      now: 100_000,
+      timeZone: 'America/New_York',
+    })).toMatchObject({ ok: true, potionType: 'damage' });
+
+    killOnNextAttack(engine, active.id, 100_000);
+
+    const damage = db.prepare(
+      `SELECT damage_total, potion_bonus_damage
+       FROM encounter_damage WHERE encounter_id = ? AND player_id = ?`,
+    ).get(active.id, player.id) as { damage_total: number; potion_bonus_damage: number };
+    const award = db.prepare(
+      `SELECT damage_total, potion_bonus_damage, total_gold
+       FROM encounter_reward_awards WHERE encounter_id = ? AND player_id = ?`,
+    ).get(active.id, player.id) as {
+      damage_total: number;
+      potion_bonus_damage: number;
+      total_gold: number;
+    };
+    expect(damage).toEqual({ damage_total: 125, potion_bonus_damage: 25 });
+    expect(award.damage_total).toBe(damage.damage_total);
+    expect(award.potion_bonus_damage).toBe(damage.potion_bonus_damage);
+    expect(award.total_gold).toBe(Math.round(active.max_hp * 101));
+  });
+
   it('snapshots hybrid-v1 settings and stores exact component awards through the ledger', () => {
     const first = createPlayer(db, { name: 'First', class_key: 'knight', gender: 'M' }, 1);
     const second = createPlayer(db, { name: 'Second', class_key: 'wizard', gender: 'F' }, 1);

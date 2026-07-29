@@ -259,6 +259,33 @@ export function completeExpiredPotions(
   return result.changes;
 }
 
+export function damagePotionMultiplier(
+  db: Database.Database,
+  playerId: number,
+): { activationId: number; multiplier: number } | null {
+  const activation = db.prepare(
+    `SELECT id, effect_snapshot
+     FROM potion_activations
+     WHERE player_id = ?
+       AND potion_type = 'damage'
+       AND status = 'active'
+       AND expires_game_ms > ?
+     ORDER BY id
+     LIMIT 1`,
+  ).get(playerId, combatActiveMs(db)) as {
+    id: number;
+    effect_snapshot: string;
+  } | undefined;
+  if (!activation) return null;
+
+  const snapshot = parseStoredSnapshot(activation.effect_snapshot, 'damage');
+  if (!snapshot || snapshot.kind !== 'damage') return null;
+  return {
+    activationId: activation.id,
+    multiplier: snapshot.baseHitMultiplier,
+  };
+}
+
 function retireInvalidActivePotions(
   db: Database.Database,
   playerId: number,
