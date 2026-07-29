@@ -55,7 +55,9 @@ Keep `DB_PATH` set to the configured production database path for this command; 
 - Verify each potion starts with three personal daily stock, purchased quantity lowers stock, and a purchase adds exactly that many bottles to Inventory.
 - Complete one real purchase and verify the button animation, updated gold, updated inventory, and one matching `shop_purchase` ledger debit with the exact quantity total.
 - Verify buying past remaining stock is blocked and midnight office-time restock copy is clear.
+- With one potion sold out, verify both cards remain visible while the sibling potion can still be purchased.
 - Confirm the Wardrobe upgrade card/empty-state behavior remains unchanged.
+- After Wardrobe mastery and both potion stocks are exhausted, refresh and verify the closed-mimic scene replaces the potion shelf while the Adventurer Ledger remains.
 
 ## Activation and player hub
 
@@ -67,12 +69,15 @@ Keep `DB_PATH` set to the configured production database path for this command; 
 - Begin an unsaved Wardrobe edit, change tabs, wait through the five-second hub refresh, and return. The draft must remain intact.
 - Hover, keyboard-focus, click, and tap the character to open Active Effects. Verify each potion icon, remaining active time, short effect copy, Gold progress, and monster debuff appear together without overflowing the card.
 - Verify click-away and Escape close the popover and return focus to the trigger.
+- Confirm Inventory is a moss-walled dungeon room with deterministic floor, cracks, moss, one door, title-free item tiles, and gold upper-right quantities.
+- Confirm the compact dungeon uses the full panel width and Fight Leaders / Today split evenly beneath it.
 
 ## Animated male/female effect review
 
 Review every printed character URL, full `/tv`, and the compact Live Dungeon view. Let at least two complete A/B sprite cycles and several mote cycles play before judging a state.
 
 - Confirm both male and female sprites animate with the approved slot maps and no effect canvas blocks either frame.
+- Confirm the seeded Elder Demon alternates only between its matching A/B frames.
 - Gold-only: solid gold square motes rise from the feet, step with restrained horizontal jitter, and stop only a few pixels above the character.
 - Damage-only: solid red square motes use the same motion vocabulary and remain distinguishable over red clothing.
 - Dual-potion: six motes alternate Gold and Damage, remain capped, and do not merge into an oversized ring or glow.
@@ -80,6 +85,7 @@ Review every printed character URL, full `/tv`, and the compact Live Dungeon vie
 - Potion-plus-debuff: front-layer potion motes and the debuff indicator coexist without obscuring the face, weapon, name, or damage feedback.
 - Across all potion states, confirm mixed square sizes, crisp pixel edges, front-layer placement, dark offset shadow, restrained bloom, and short travel height.
 - Check a crowded fight for readable player silhouettes and make sure hit effects still render above potion motes.
+- Confirm full-TV potion squares are slightly smaller than the character-card motes while retaining the same colors, jitter, density, and rise.
 
 ## Responsive, input, and motion review
 
