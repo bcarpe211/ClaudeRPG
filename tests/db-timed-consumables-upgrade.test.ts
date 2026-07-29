@@ -181,17 +181,84 @@ function prepareResolvableHybridDatabase(dbPath: string, encounterId: number): v
 function create015UnsafeRewardPoolDatabase(dbPath: string): {
   activeHybridId: number;
   defeatedHybridId: number;
+  missingHybridId: number;
   legacyId: number;
 } {
   const fixture = create014RewardPoolDatabase(dbPath, '1e999');
   const legacy = new Database(dbPath);
-  const migration = migrations[14];
-  legacy.exec(migration.sql);
+  legacy.exec(`
+    ALTER TABLE encounters
+      ADD COLUMN reward_gold_pool INTEGER
+      CHECK (
+        reward_gold_pool IS NULL
+        OR (
+          typeof(reward_gold_pool) = 'integer'
+          AND reward_gold_pool >= 0
+        )
+      );
+
+    UPDATE encounters
+    SET reward_gold_pool = COALESCE(
+      (
+        SELECT SUM(award.total_gold)
+        FROM encounter_reward_awards AS award
+        WHERE award.encounter_id = encounters.id
+      ),
+      CAST(ROUND(
+        encounters.max_hp
+        * (
+            SELECT dungeon.level
+            FROM dungeons AS dungeon
+            WHERE dungeon.id = encounters.dungeon_id
+          )
+        * CASE
+            WHEN json_valid(TRIM(COALESCE(
+              (SELECT value FROM settings WHERE key = 'gold_factor'),
+              ''
+            ))) = 1
+            AND json_type(TRIM((
+              SELECT value FROM settings WHERE key = 'gold_factor'
+            ))) IN ('integer', 'real')
+            AND json_extract(TRIM((
+              SELECT value FROM settings WHERE key = 'gold_factor'
+            )), '$') >= 0
+            THEN json_extract(TRIM((
+              SELECT value FROM settings WHERE key = 'gold_factor'
+            )), '$')
+            ELSE 0.01
+          END
+      ) AS INTEGER)
+    )
+    WHERE reward_model_version = 'hybrid-v1';
+  `);
   legacy.prepare('INSERT INTO _migrations (id, applied_at) VALUES (?, ?)')
-    .run(migration.id, 2_000);
+    .run('015_encounter_reward_gold_pool', 2_000);
+  const dungeon = legacy.prepare(
+    'SELECT dungeon_id FROM encounters WHERE id=?',
+  ).get(fixture.activeHybridId) as { dungeon_id: number };
+  const missingHybridId = Number(legacy.prepare(
+    `INSERT INTO encounters
+      (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
+       pack_count, max_hp, current_hp, status, started_at,
+       reward_model_version, reward_work_pct, reward_damage_pct,
+       reward_podium_first_pct, reward_podium_second_pct,
+       reward_podium_third_pct)
+     VALUES (?, 3, 'single', 1, 1, 1, 101, 101, 'active', 2000,
+             'hybrid-v1', 80, 10, 5, 3, 2)`,
+  ).run(dungeon.dungeon_id).lastInsertRowid);
+  const historicalActive = legacy.prepare(
+    'SELECT reward_gold_pool FROM encounters WHERE id=?',
+  ).get(fixture.activeHybridId) as { reward_gold_pool: number | null };
+  expect(
+    historicalActive.reward_gold_pool === null
+      || historicalActive.reward_gold_pool > Number.MAX_SAFE_INTEGER,
+  ).toBe(true);
+  expect(legacy.prepare(
+    'SELECT reward_gold_pool FROM encounters WHERE id=?',
+  ).get(missingHybridId)).toEqual({ reward_gold_pool: null });
   legacy.close();
   prepareResolvableHybridDatabase(dbPath, fixture.activeHybridId);
-  return fixture;
+  return { ...fixture, missingHybridId };
 }
 
 describe('timed-consumables database upgrades', () => {
@@ -369,7 +436,7 @@ describe('timed-consumables database upgrades', () => {
     }
   });
 
-  it('repairs and enforces safe pools for databases that already recorded migration 015', () => {
+  it('repairs genuine historical-015 unsafe and missing pools and resolves safely', () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-upgrade-'));
     const dbPath = join(fixtureDir, 'timed-consumables-infinite-factor-015.db');
     let upgraded: Database.Database | undefined;
@@ -383,6 +450,9 @@ describe('timed-consumables database upgrades', () => {
       ).get(fixture.activeHybridId)).toEqual({ reward_gold_pool: 3 });
       expect(upgraded.prepare(
         'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.missingHybridId)).toEqual({ reward_gold_pool: 3 });
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
       ).get(fixture.defeatedHybridId)).toEqual({ reward_gold_pool: 77 });
       expect(upgraded.prepare(
         'SELECT reward_gold_pool FROM encounters WHERE id=?',
@@ -392,6 +462,19 @@ describe('timed-consumables database upgrades', () => {
       ).get('016_safe_encounter_reward_gold_pool')).toEqual({
         id: '016_safe_encounter_reward_gold_pool',
       });
+
+      const engine = new GameEngine(upgraded, { rng: () => 0.5 });
+      engine.tick(2_000);
+
+      expect(upgraded.prepare(
+        'SELECT status, reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.activeHybridId)).toEqual({
+        status: 'defeated',
+        reward_gold_pool: 3,
+      });
+      expect(upgraded.prepare(
+        'SELECT SUM(total_gold) AS total FROM encounter_reward_awards WHERE encounter_id=?',
+      ).get(fixture.activeHybridId)).toEqual({ total: 3 });
       expect(() => upgraded!.exec(
         `UPDATE encounters SET reward_gold_pool=9007199254740992
          WHERE id=${fixture.activeHybridId}`,

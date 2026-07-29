@@ -395,6 +395,44 @@ describe('mounted player hub tabs', () => {
 });
 
 describe('player hub inventory, effects, and refresh behavior', () => {
+  it('cancels an unsubmitted confirmation when polling makes its SKU unavailable', async () => {
+    const h = interactionHarness({ responses: [] });
+    const grid = h.document.getElementById('hub-inventory-grid')!;
+    const damage = grid.querySelectorAll('[data-sku]')
+      .find((button) => button.dataset.sku === 'potion_damage_t1')!;
+    grid.dispatch('click', new FakeEvent('', damage));
+    h.document.getElementById('hub-potion-drink')!.dispatch('click');
+    const dialog = h.document.getElementById('potion-confirm')!;
+    expect(dialog.open).toBe(true);
+
+    const unavailable: HubState = {
+      ...h.initialState,
+      inventory: h.initialState.inventory.map((item) => item.sku === 'potion_damage_t1'
+        ? {
+            ...item,
+            available: false,
+            durationMs: null,
+            effectCopy: 'Potion tuning is temporarily unavailable.',
+            usesRemaining: null,
+          }
+        : item),
+    };
+    h.responses.push({ ok: true, json: async () => unavailable });
+    h.intervals[0].callback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(dialog.open).toBe(false);
+    expect(dialog.hidden).toBe(true);
+    expect(h.document.getElementById('hub-item-detail-effect')!.textContent)
+      .toBe('Potion tuning is temporarily unavailable.');
+    expect(h.document.getElementById('hub-item-detail-duration')!.textContent)
+      .toBe('Unavailable until tuning is repaired');
+
+    await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
+    expect(h.fetchCalls).toHaveLength(1);
+    expect(h.fetchCalls[0].url).toContain('/character/state');
+  });
+
   it('renders owned inventory as unavailable and cannot submit an activation request', async () => {
     const h = interactionHarness({ invalidTuning: true, responses: [] });
     const grid = h.document.getElementById('hub-inventory-grid')!;

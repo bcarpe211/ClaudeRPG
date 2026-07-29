@@ -273,6 +273,16 @@
   }
 
   function renderState(nextState) {
+    const nextPendingItem = pendingActivation
+      ? nextState.inventory.find((item) => item.sku === pendingActivation.sku)
+      : null;
+    if (
+      pendingActivation
+      && !pendingActivation.attempted
+      && (!nextPendingItem || !nextPendingItem.available)
+    ) {
+      closeDialog();
+    }
     state = nextState;
     renderInventory();
     renderEffects();
@@ -382,6 +392,7 @@
       requestId: root.crypto.randomUUID(),
       sku: item.sku,
       item: { ...item },
+      attempted: false,
     };
     const timing = state.activationTiming === 'starts_now'
       ? 'Starts now.'
@@ -457,6 +468,7 @@
   async function activateSelected() {
     const pending = pendingActivation;
     if (!pending) return;
+    pending.attempted = true;
     const item = pending.item;
     confirmDrink.disabled = true;
     confirmDrink.textContent = 'Uncorking…';
