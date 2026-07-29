@@ -5,7 +5,9 @@
 // below the panel; the monster HP bar sits in the strip above it.
 
 const TILE = 24;            // source tile size
-const SIDEBAR_FRAC = 0.30;  // leaderboard width fraction
+const TV_MODE = document.body.dataset.tvMode === 'compact' ? 'compact' : 'full';
+const IS_COMPACT = TV_MODE === 'compact';
+const SIDEBAR_FRAC = IS_COMPACT ? 0 : 0.30; // leaderboard width fraction
 const SHADOW = { col: 30, row: 37 }; // wall-shadow tile (mirrors WALL_SHADOW in tilesheet.ts)
 const MSHADOW = { S: { col: 37, row: 37 }, M: { col: 38, row: 37 }, L: { col: 39, row: 37 } }; // mirrors MONSTER_SHADOWS in tilesheet.ts
 const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
@@ -261,7 +263,7 @@ function render(t) {
     drawHeroes(t);
     drawHpBar();
     drawFloaters(t);
-    drawLeaderboard(t);
+    if (!IS_COMPACT) drawLeaderboard(t);
     if (state.paused) drawOverlay('The dungeon rests… awaiting adventurers');
     if (state.defeat) drawDefeat();
   }

@@ -6,12 +6,29 @@ import {
   it,
   vi,
 } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   isFrameA,
   framePartner,
   frameAt,
   start,
 } from '../src/web/public/anim.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+describe('TV renderer bootstrap', () => {
+  it('shares one stream and renderer while compact mode suppresses only the leaderboard', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'), 'utf8');
+
+    expect(source).toContain('document.body.dataset.tvMode');
+    expect(source).toContain('const SIDEBAR_FRAC = IS_COMPACT ? 0 : 0.30;');
+    expect(source).toContain("new EventSource('/tv/stream')");
+    expect(source.match(/new EventSource\(/g)).toHaveLength(1);
+    expect(source).toContain('if (!IS_COMPACT) drawLeaderboard(t);');
+  });
+});
 
 describe('isFrameA', () => {
   it('odd sheet rows (frame A) vs even rows (frame B)', () => {

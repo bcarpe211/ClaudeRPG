@@ -11,6 +11,10 @@ export function registerTvRoutes(app: Express, _deps: AppDeps, hub: TvHub): void
     res.sendFile(path.join(__dirname, '..', 'public', 'tv', 'index.html'));
   });
 
+  app.get('/tv/embed', (_req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'public', 'tv', 'embed.html'));
+  });
+
   app.get('/tv/stream', (req, res) => {
     res.set({
       'Content-Type': 'text/event-stream',
