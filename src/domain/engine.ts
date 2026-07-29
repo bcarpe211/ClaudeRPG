@@ -4,7 +4,7 @@ import { isIdle, setPaused, getGameState } from './gamestate';
 import { levelForXp } from './leveling';
 import { tokenModifier, attackDamage } from './combat';
 import { activityScore } from './activity';
-import { splitGold } from './rewards';
+import { allocateEncounterGold, splitGold, type RewardAllocation } from './rewards';
 import { getAllSettings } from './settings';
 import { pickTarget, rollConsequence, goldSteal, debuffFactor } from './retaliation';
 import { applyGoldMutation } from './goldledger';
@@ -37,14 +37,7 @@ export function buildDefeatSummary(
   db: Database.Database,
   encounterId: number,
 ): DefeatSummary {
-  const settings = getAllSettings(db);
-  const goldFactor = settings['gold_factor'] !== undefined ? Number(settings['gold_factor']) : 0.01;
-  const goldDamageWeight = settings['gold_damage_weight'] !== undefined ? Number(settings['gold_damage_weight']) : 0;
-
   const enc = db.prepare('SELECT * FROM encounters WHERE id=?').get(encounterId) as any;
-  const dungeon = db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
-  const goldPool = Math.round(enc.max_hp * dungeon.level * goldFactor);
-
   const dmgRows = db.prepare(
     'SELECT * FROM encounter_damage WHERE encounter_id=? ORDER BY damage_total DESC',
   ).all(encounterId) as any[];
@@ -52,6 +45,12 @@ export function buildDefeatSummary(
 
   const start = enc.started_at;
   const end = enc.ended_at ?? start;
+  const storedAwards = enc.reward_model_version === 'legacy-v0'
+    ? []
+    : db.prepare(
+      'SELECT player_id, effective_tokens, total_gold FROM encounter_reward_awards WHERE encounter_id=?',
+    ).all(encounterId) as { player_id: number; effective_tokens: number; total_gold: number }[];
+  const storedByPlayer = new Map(storedAwards.map((award) => [award.player_id, award]));
 
   const tokensByPlayer = new Map<number, number>();
   const rowMeta = dmgRows.map((r) => {
@@ -62,14 +61,31 @@ export function buildDefeatSummary(
     const lvl = db.prepare(
       'SELECT MAX(new_level) AS m FROM level_ups WHERE player_id=? AND ts>=? AND ts<=?',
     ).get(r.player_id, start, end) as any;
-    tokensByPlayer.set(r.player_id, tok.s);
-    return { r, player, tokens: tok.s, leveledTo: lvl.m ?? null };
+    const tokens = storedByPlayer.get(r.player_id)?.effective_tokens ?? tok.s;
+    tokensByPlayer.set(r.player_id, tokens);
+    return { r, player, tokens, leveledTo: lvl.m ?? null };
   });
-  const goldByPlayer = splitGold(
-    dmgRows.map((r) => ({ playerId: r.player_id, damage: r.damage_total, tokens: tokensByPlayer.get(r.player_id) ?? 0 })),
-    goldPool,
-    goldDamageWeight,
-  );
+  let goldByPlayer: Map<number, number>;
+  if (enc.reward_model_version === 'legacy-v0') {
+    const settings = getAllSettings(db);
+    const goldFactor = settings['gold_factor'] !== undefined ? Number(settings['gold_factor']) : 0.01;
+    const goldDamageWeight = settings['gold_damage_weight'] !== undefined
+      ? Number(settings['gold_damage_weight'])
+      : 0;
+    const dungeon = db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
+    const goldPool = Math.round(enc.max_hp * dungeon.level * goldFactor);
+    goldByPlayer = splitGold(
+      dmgRows.map((r) => ({
+        playerId: r.player_id,
+        damage: r.damage_total,
+        tokens: tokensByPlayer.get(r.player_id) ?? 0,
+      })),
+      goldPool,
+      goldDamageWeight,
+    );
+  } else {
+    goldByPlayer = new Map(storedAwards.map((award) => [award.player_id, award.total_gold]));
+  }
 
   const participants: DefeatParticipant[] = rowMeta.map(({ r, player, tokens, leveledTo }) => ({
     playerId: r.player_id,
@@ -167,8 +183,13 @@ export class GameEngine {
     const dungeon = this.db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
     const goldPool = Math.round(enc.max_hp * dungeon.level * cfg.goldFactor);
     const rows = this.db.prepare(
-      'SELECT player_id, damage_total FROM encounter_damage WHERE encounter_id=?',
-    ).all(encId) as { player_id: number; damage_total: number }[];
+      `SELECT player_id, damage_total, potion_bonus_damage
+       FROM encounter_damage WHERE encounter_id=?`,
+    ).all(encId) as {
+      player_id: number;
+      damage_total: number;
+      potion_bonus_damage: number;
+    }[];
     const tokQ = this.db.prepare(
       'SELECT COALESCE(SUM(effective_delta),0) AS s FROM token_events WHERE player_id=? AND ts>=? AND ts<=?',
     );
@@ -176,21 +197,72 @@ export class GameEngine {
       playerId: r.player_id,
       damage: r.damage_total,
       tokens: (tokQ.get(r.player_id, enc.started_at, now) as { s: number }).s,
+      potionBonusDamage: r.potion_bonus_damage,
     }));
-    const goldByPlayer = splitGold(participants, goldPool, cfg.goldDamageWeight);
+    const isLegacy = enc.reward_model_version === 'legacy-v0';
+    let hybridAwards: RewardAllocation[] = [];
+    let legacyGold = new Map<number, number>();
+    if (isLegacy) {
+      legacyGold = splitGold(participants, goldPool, cfg.goldDamageWeight);
+    } else if (enc.reward_model_version === 'hybrid-v1') {
+      hybridAwards = allocateEncounterGold(participants, goldPool, {
+        workPct: enc.reward_work_pct,
+        damagePct: enc.reward_damage_pct,
+        podiumPct: [
+          enc.reward_podium_first_pct,
+          enc.reward_podium_second_pct,
+          enc.reward_podium_third_pct,
+        ],
+      });
+    } else {
+      throw new Error(`unsupported encounter reward model: ${enc.reward_model_version}`);
+    }
     const tx = this.db.transaction(() => {
       this.db.prepare("UPDATE encounters SET status='defeated', ended_at=? WHERE id=?")
         .run(now, encId);
-      for (const [playerId, gold] of goldByPlayer) {
-        if (gold <= 0) continue;
-        applyGoldMutation(this.db, {
-          playerId,
-          amount: gold,
-          reason: 'encounter_reward',
-          sourceTable: 'encounters',
-          sourceId: String(encId),
-          now,
-        });
+      if (isLegacy) {
+        for (const [playerId, gold] of legacyGold) {
+          if (gold <= 0) continue;
+          applyGoldMutation(this.db, {
+            playerId,
+            amount: gold,
+            reason: 'encounter_reward',
+            sourceTable: 'encounters',
+            sourceId: String(encId),
+            now,
+          });
+        }
+      } else {
+        const insertAward = this.db.prepare(
+          `INSERT INTO encounter_reward_awards
+           (encounter_id, player_id, effective_tokens, damage_total,
+            potion_bonus_damage, damage_rank, work_gold, damage_gold,
+            podium_gold, total_gold, model_version, awarded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'hybrid-v1', ?)`,
+        );
+        for (const award of hybridAwards) {
+          insertAward.run(
+            encId,
+            award.playerId,
+            award.tokens,
+            award.damage,
+            award.potionBonusDamage,
+            award.damageRank,
+            award.workGold,
+            award.damageGold,
+            award.podiumGold,
+            award.totalGold,
+            now,
+          );
+          applyGoldMutation(this.db, {
+            playerId: award.playerId,
+            amount: award.totalGold,
+            reason: 'encounter_reward',
+            sourceTable: 'encounter_reward_awards',
+            sourceId: String(encId),
+            now,
+          });
+        }
       }
       this.db.prepare(
         'UPDATE game_state SET defeat_until=?, last_defeat_encounter_id=?, current_encounter_id=NULL WHERE id=1',

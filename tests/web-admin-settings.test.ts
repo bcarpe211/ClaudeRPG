@@ -46,6 +46,43 @@ describe('admin settings', () => {
     expect(getSetting(db, 'pause_after_minutes')).toBe('20');
   });
 
+  it('updates all reward percentages when they total 100', async () => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send({
+        reward_work_pct: '70',
+        reward_damage_pct: '20',
+        reward_podium_first_pct: '5',
+        reward_podium_second_pct: '3',
+        reward_podium_third_pct: '2',
+      });
+    expect(res.status).toBe(302);
+    expect(getSetting(db, 'reward_work_pct')).toBe('70');
+    expect(getSetting(db, 'reward_damage_pct')).toBe('20');
+  });
+
+  it('rejects an invalid reward total without saving any reward percentage', async () => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send({
+        reward_work_pct: '79',
+        reward_damage_pct: '10',
+        reward_podium_first_pct: '5',
+        reward_podium_second_pct: '3',
+        reward_podium_third_pct: '2',
+      });
+    expect(res.status).toBe(400);
+    expect(getSetting(db, 'reward_work_pct')).toBe('80');
+    expect(getSetting(db, 'reward_damage_pct')).toBe('10');
+    expect(getSetting(db, 'reward_podium_first_pct')).toBe('5');
+    expect(getSetting(db, 'reward_podium_second_pct')).toBe('3');
+    expect(getSetting(db, 'reward_podium_third_pct')).toBe('2');
+  });
+
   it('never exposes the admin password hash as an editable knob', async () => {
     const agent = await adminAgent();
     const res = await agent.get('/admin/settings');

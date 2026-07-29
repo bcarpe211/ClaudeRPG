@@ -3,6 +3,7 @@ import { getAllSettings } from './settings';
 import { damageMultiplier } from './leveling';
 import { pickEncounterCreature, type EncounterKind } from './creatures';
 import { DUNGEONS } from './floorgroups';
+import { validateRewardConfig } from './rewards';
 import { pickWeighted } from './tilesheet';
 
 export interface EngineConfig {
@@ -18,6 +19,9 @@ export interface EngineConfig {
   monsterAttacksEnabled: number; monsterAttackIntervalMs: number;
   monsterAttackJitterMs: number; monsterGoldStealPct: number;
   monsterDebuffFactor: number; monsterDebuffSeconds: number;
+  rewardWorkPct: number; rewardDamagePct: number;
+  rewardPodiumFirstPct: number; rewardPodiumSecondPct: number;
+  rewardPodiumThirdPct: number;
 }
 
 export function loadEngineConfig(db: Database.Database): EngineConfig {
@@ -51,6 +55,11 @@ export function loadEngineConfig(db: Database.Database): EngineConfig {
     monsterGoldStealPct: n('monster_gold_steal_pct', 0.008),
     monsterDebuffFactor: n('monster_debuff_factor', 0.85),
     monsterDebuffSeconds: n('monster_debuff_seconds', 8),
+    rewardWorkPct: n('reward_work_pct', 80),
+    rewardDamagePct: n('reward_damage_pct', 10),
+    rewardPodiumFirstPct: n('reward_podium_first_pct', 5),
+    rewardPodiumSecondPct: n('reward_podium_second_pct', 3),
+    rewardPodiumThirdPct: n('reward_podium_third_pct', 2),
   };
 }
 
@@ -116,15 +125,29 @@ function spawnEncounter(
     (isBoss ? cfg.bossHpMult : 1);
   const dpm = estimateOfficeBaselineDpm(db, cfg);
   const hp = calibrateHp(dpm, cfg.baselineBattleMinutes, difficulty, cfg.minEncounterHp);
+  const rewardConfig = {
+    workPct: cfg.rewardWorkPct,
+    damagePct: cfg.rewardDamagePct,
+    podiumPct: [
+      cfg.rewardPodiumFirstPct,
+      cfg.rewardPodiumSecondPct,
+      cfg.rewardPodiumThirdPct,
+    ] as const,
+  };
+  validateRewardConfig(rewardConfig);
   let encId = 0;
   const tx = db.transaction(() => {
     const info = db.prepare(
       `INSERT INTO encounters
          (dungeon_id, index_in_dungeon, kind, creature_index, footprint, pack_count,
-          max_hp, current_hp, status, started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+          max_hp, current_hp, status, started_at, reward_model_version,
+          reward_work_pct, reward_damage_pct, reward_podium_first_pct,
+          reward_podium_second_pct, reward_podium_third_pct)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'hybrid-v1', ?, ?, ?, ?, ?)`,
     ).run(dungeon.id, index, kind, creature.creatureIndex, creature.footprint,
-          packCount, hp, hp, now);
+          packCount, hp, hp, now, rewardConfig.workPct, rewardConfig.damagePct,
+          rewardConfig.podiumPct[0], rewardConfig.podiumPct[1],
+          rewardConfig.podiumPct[2]);
     encId = Number(info.lastInsertRowid);
     db.prepare(
       'UPDATE game_state SET current_dungeon_id=?, current_encounter_id=?, defeat_until=NULL WHERE id=1',

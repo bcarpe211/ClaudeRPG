@@ -65,8 +65,8 @@ export const SETTINGS_META: Record<string, SettingMeta> = {
   // Economy
   gold_factor: { group: 'Economy', label: 'Gold per kill', min: 0, step: 0.005,
     description: 'Gold pool for a kill = monster max HP × dungeon level × this. Higher = more gold awarded per monster.' },
-  gold_damage_weight: { group: 'Economy', label: 'Gold: tokens vs damage', unit: '0–1', min: 0, max: 1, step: 0.1,
-    description: 'How the gold pool is split. 0 = purely by tokens burned during the fight (rewards work regardless of level); 1 = purely by damage dealt. In between blends the two.' },
+  gold_damage_weight: { group: 'Economy', label: 'Legacy gold: tokens vs damage', unit: '0–1', min: 0, max: 1, step: 0.1,
+    description: 'Applies only to encounters already marked legacy-v0. 0 = purely by tokens burned during the fight; 1 = purely by damage dealt. New encounters ignore this setting.' },
   // Encounters & pacing
   regular_encounters_min: { group: 'Encounters & pacing', label: 'Min monsters before boss', unit: 'count', min: 0, step: 1,
     description: "Fewest regular monsters cleared before a dungeon's boss appears." },

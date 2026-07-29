@@ -1,0 +1,105 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { openDb } from '../src/db/db';
+import { GameEngine } from '../src/domain/engine';
+import { ingestTokenUsage } from '../src/domain/ingest';
+import { createPlayer, getPlayerById } from '../src/domain/players';
+import { seedSettings, setSetting } from '../src/domain/settings';
+
+let db: ReturnType<typeof openDb>;
+
+beforeEach(() => {
+  db = openDb(':memory:');
+  seedSettings(db);
+  setSetting(db, 'min_encounter_hp', '1');
+  setSetting(db, 'baseline_battle_minutes', '0');
+  setSetting(db, 'gold_factor', '101');
+  setSetting(db, 'attack_interval_ms', '1000');
+  setSetting(db, 'attack_jitter_ms', '0');
+});
+
+function tokens(token: string, input: number) {
+  return { resourceMetrics: [{ resource: { attributes: [{ key: 'claude_rpg_token', value: { stringValue: token } }] },
+    scopeMetrics: [{ metrics: [{ name: 'claude_code.token.usage', sum: { aggregationTemporality: 1,
+      dataPoints: [{ asInt: String(input), startTimeUnixNano: 's', timeUnixNano: 't',
+        attributes: [{ key: 'type', value: { stringValue: 'input' } }] }] } }] }] }] };
+}
+
+function killOnNextAttack(engine: GameEngine, encounterId: number, now: number): void {
+  engine.tick(now + 1000);
+  expect(db.prepare('SELECT status FROM encounters WHERE id=?').get(encounterId))
+    .toEqual({ status: 'defeated' });
+}
+
+describe('versioned encounter reward awards', () => {
+  it('snapshots hybrid-v1 settings and stores exact component awards through the ledger', () => {
+    const first = createPlayer(db, { name: 'First', class_key: 'knight', gender: 'M' }, 1);
+    const second = createPlayer(db, { name: 'Second', class_key: 'wizard', gender: 'F' }, 1);
+    ingestTokenUsage(db, tokens(first.auth_token, 800), 100000, { cacheReadWeight: 0 });
+    ingestTokenUsage(db, tokens(second.auth_token, 200), 100000, { cacheReadWeight: 0 });
+
+    const engine = new GameEngine(db, { rng: () => 0.5 });
+    engine.tick(100000);
+    const active = db.prepare("SELECT * FROM encounters WHERE status='active'").get() as any;
+    expect(active.reward_model_version).toBe('hybrid-v1');
+    expect(active.reward_work_pct).toBe(80);
+    expect(active.reward_podium_third_pct).toBe(2);
+
+    setSetting(db, 'reward_work_pct', '70');
+    setSetting(db, 'reward_damage_pct', '20');
+    killOnNextAttack(engine, active.id, 100000);
+
+    const goldPool = Math.round(active.max_hp * 101);
+    const stored = db.prepare(
+      'SELECT * FROM encounter_reward_awards WHERE encounter_id=? ORDER BY damage_rank',
+    ).all(active.id) as any[];
+    expect(stored.reduce((sum, row) => sum + row.total_gold, 0)).toBe(goldPool);
+    expect(stored.every((row) => row.model_version === 'hybrid-v1')).toBe(true);
+    expect(stored.every((row) =>
+      row.work_gold + row.damage_gold + row.podium_gold === row.total_gold)).toBe(true);
+    expect(stored.every((row) => row.potion_bonus_damage === 0)).toBe(true);
+
+    const ledger = db.prepare(
+      `SELECT source_table, source_id FROM gold_ledger
+       WHERE reason='encounter_reward' ORDER BY player_id`,
+    ).all() as { source_table: string; source_id: string }[];
+    expect(ledger).toEqual([
+      { source_table: 'encounter_reward_awards', source_id: String(active.id) },
+      { source_table: 'encounter_reward_awards', source_id: String(active.id) },
+    ]);
+  });
+
+  it('finishes legacy-v0 encounters through splitGold without hybrid award rows', () => {
+    setSetting(db, 'gold_factor', '1');
+    const first = createPlayer(db, { name: 'Legacy First', class_key: 'knight', gender: 'M' }, 1);
+    const second = createPlayer(db, { name: 'Legacy Second', class_key: 'wizard', gender: 'F' }, 1);
+    const dungeon = db.prepare(
+      'INSERT INTO dungeons (level, theme, seed, regular_count, created_at) VALUES (1, ?, 1, 2, ?)',
+    ).run('Ossuary Pale', 100000);
+    const encounter = db.prepare(
+      `INSERT INTO encounters
+       (dungeon_id, index_in_dungeon, kind, creature_index, footprint, pack_count,
+        max_hp, current_hp, status, started_at)
+       VALUES (?, 0, 'single', 1, 1, 1, 100, 1, 'active', ?)`,
+    ).run(Number(dungeon.lastInsertRowid), 100000);
+    const encounterId = Number(encounter.lastInsertRowid);
+    db.prepare(
+      `UPDATE game_state
+       SET current_dungeon_id=?, current_encounter_id=?, defeat_until=NULL WHERE id=1`,
+    ).run(Number(dungeon.lastInsertRowid), encounterId);
+    ingestTokenUsage(db, tokens(first.auth_token, 300), 100000, { cacheReadWeight: 0 });
+    ingestTokenUsage(db, tokens(second.auth_token, 100), 100000, { cacheReadWeight: 0 });
+
+    const engine = new GameEngine(db, { rng: () => 0.5 });
+    engine.tick(100000);
+    killOnNextAttack(engine, encounterId, 100000);
+
+    expect(db.prepare(
+      'SELECT reward_model_version FROM encounters WHERE id=?',
+    ).get(encounterId)).toEqual({ reward_model_version: 'legacy-v0' });
+    expect(db.prepare(
+      'SELECT COUNT(*) AS count FROM encounter_reward_awards WHERE encounter_id=?',
+    ).get(encounterId)).toEqual({ count: 0 });
+    expect(getPlayerById(db, first.id)?.gold).toBe(75);
+    expect(getPlayerById(db, second.id)?.gold).toBe(25);
+  });
+});

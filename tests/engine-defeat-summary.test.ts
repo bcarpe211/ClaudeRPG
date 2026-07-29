@@ -19,6 +19,7 @@ describe('buildDefeatSummary', () => {
   it('summarizes per-player damage, gold, mvp, and creature for a defeated encounter', () => {
     setSetting(db, 'min_encounter_hp', '1');
     setSetting(db, 'baseline_battle_minutes', '0');
+    setSetting(db, 'gold_factor', '101');
     const p = createPlayer(db, { name: 'Aragorn', class_key: 'knight', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(p.auth_token, 1000), 100000, { cacheReadWeight: 0 });
     const eng = new GameEngine(db, { rng: () => 0.5 });
@@ -27,6 +28,12 @@ describe('buildDefeatSummary', () => {
     for (let t = 1; t <= 30 && (db.prepare('SELECT current_hp FROM encounters WHERE id=?').get(enc.id) as any).current_hp > 0; t++) {
       eng.tick(100000 + t * 1000);
     }
+    const stored = db.prepare(
+      'SELECT total_gold FROM encounter_reward_awards WHERE encounter_id=? AND player_id=?',
+    ).get(enc.id, p.id) as { total_gold: number };
+    setSetting(db, 'gold_factor', '9999');
+    setSetting(db, 'reward_work_pct', '70');
+    setSetting(db, 'reward_damage_pct', '20');
     const sum = buildDefeatSummary(db, enc.id);
     expect(sum.encounterId).toBe(enc.id);
     expect(sum.creatureIndex).toBe(enc.creature_index);
@@ -34,7 +41,7 @@ describe('buildDefeatSummary', () => {
     expect(sum.participants.length).toBe(1);
     expect(sum.participants[0].name).toBe('Aragorn');
     expect(sum.participants[0].damage).toBeGreaterThan(0);
-    expect(sum.participants[0].gold).toBeGreaterThanOrEqual(0);
+    expect(sum.participants[0].gold).toBe(stored.total_gold);
     expect(sum.mvpPlayerId).toBe(p.id);
   });
 });

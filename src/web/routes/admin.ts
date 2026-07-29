@@ -19,6 +19,7 @@ import {
   setSetting,
 } from '../../domain/settings';
 import { groupedSettings } from '../../domain/settings-meta';
+import { validateRewardConfig } from '../../domain/rewards';
 
 // Augment the session type with our admin flag.
 declare module 'express-session' {
@@ -31,6 +32,14 @@ const LoginInput = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
 });
+
+const REWARD_SETTING_KEYS = [
+  'reward_work_pct',
+  'reward_damage_pct',
+  'reward_podium_first_pct',
+  'reward_podium_second_pct',
+  'reward_podium_third_pct',
+] as const;
 
 export function requireAdmin(
   req: Request,
@@ -171,10 +180,34 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
   );
 
   app.post('/admin/settings', requireAdmin, (req, res) => {
-    for (const key of Object.keys(DEFAULT_SETTINGS)) {
-      const v = req.body?.[key];
-      if (typeof v === 'string' && v.length > 0) setSetting(db, key, v);
+    const hasRewardSetting = REWARD_SETTING_KEYS.some((key) => req.body?.[key] !== undefined);
+    if (hasRewardSetting) {
+      const submitted = REWARD_SETTING_KEYS.map((key) => req.body?.[key]);
+      if (submitted.some((value) => typeof value !== 'string' || value.trim().length === 0)) {
+        res.status(400).send('All reward percentages are required');
+        return;
+      }
+      try {
+        validateRewardConfig({
+          workPct: Number(submitted[0]),
+          damagePct: Number(submitted[1]),
+          podiumPct: [
+            Number(submitted[2]),
+            Number(submitted[3]),
+            Number(submitted[4]),
+          ],
+        });
+      } catch {
+        res.status(400).send('Reward percentages must be non-negative and total 100');
+        return;
+      }
     }
+    db.transaction(() => {
+      for (const key of Object.keys(DEFAULT_SETTINGS)) {
+        const v = req.body?.[key];
+        if (typeof v === 'string' && v.length > 0) setSetting(db, key, v);
+      }
+    })();
     res.redirect('/admin/settings');
   });
 }
