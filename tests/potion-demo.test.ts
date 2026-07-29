@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import SqliteDatabase from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { activatePotion, activePotionEffects } from '../src/domain/potions';
 import { buildPotionLabReport } from '../src/domain/potionlab';
 import {
+  main,
   resumePotionDemoCombat,
   seedPotionDemo,
   validateDemoDbPath,
@@ -43,6 +45,37 @@ describe('timed-consumables local demo seed', () => {
     ]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM potion_work_events').get()).toEqual({ n: 1 });
     expect(db.prepare('SELECT COUNT(*) AS n FROM potion_activation_encounters').get()).toEqual({ n: 1 });
+    const goldAudit = db.prepare(
+      `SELECT pa.activated_at AS activatedAt, pwe.created_at AS workAt,
+              te.ts AS tokenEventAt, pa.completed_at AS completedAt,
+              p.total_tokens AS totalTokens, p.effective_tokens AS effectiveTokens,
+              (SELECT SUM(total_delta) FROM token_events WHERE player_id=pa.player_id) AS eventTotalTokens,
+              (SELECT SUM(effective_delta) FROM token_events WHERE player_id=pa.player_id) AS eventEffectiveTokens
+       FROM potion_activations pa
+       JOIN potion_work_events pwe ON pwe.activation_id=pa.id
+       JOIN token_events te ON te.id=pwe.token_event_id
+       JOIN players p ON p.id=pa.player_id
+       WHERE pa.potion_type='gold' AND pa.status='completed'
+       GROUP BY pa.id`,
+    ).get() as {
+      activatedAt: number;
+      workAt: number;
+      tokenEventAt: number;
+      completedAt: number;
+      totalTokens: number;
+      effectiveTokens: number;
+      eventTotalTokens: number;
+      eventEffectiveTokens: number;
+    };
+    expect(goldAudit.activatedAt).toBeLessThan(goldAudit.tokenEventAt);
+    expect(goldAudit.tokenEventAt).toBe(goldAudit.workAt);
+    expect(goldAudit.workAt).toBeLessThanOrEqual(goldAudit.completedAt);
+    expect(goldAudit).toMatchObject({
+      totalTokens: 3_000_000,
+      effectiveTokens: 3_000_000,
+      eventTotalTokens: 3_000_000,
+      eventEffectiveTokens: 3_000_000,
+    });
 
     const report = buildPotionLabReport(db, {});
     expect(report.gold).toMatchObject({
@@ -52,7 +85,7 @@ describe('timed-consumables local demo seed', () => {
     });
     expect(report.gold.activations).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        completedAt: 1_991_000,
+        completedAt: 1_983_000,
         payout: 150_000,
         netGold: 50_000,
       }),
@@ -151,5 +184,36 @@ describe('timed-consumables local demo seed', () => {
     expect(() => validateDemoDbPath(directory, '/production/game.db')).toThrow(/file/);
     expect(() => validateDemoDbPath(nonEmpty, '/production/game.db')).toThrow(/new or empty/);
     expect(validateDemoDbPath(empty, '/production/game.db')).toBe(path.resolve(empty));
+  });
+
+  it('rejects an unrelated resume target without changing its bytes or schema', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clauderpg-potion-demo-'));
+    temporaryPaths.push(directory);
+    const unrelated = path.join(directory, 'unrelated.db');
+    const raw = new SqliteDatabase(unrelated);
+    raw.exec('CREATE TABLE unrelated (id INTEGER PRIMARY KEY, note TEXT NOT NULL)');
+    raw.prepare('INSERT INTO unrelated (note) VALUES (?)').run('do not touch');
+    raw.close();
+    const beforeBytes = fs.readFileSync(unrelated);
+    const before = new SqliteDatabase(unrelated, { readonly: true });
+    let beforeSchema: unknown[];
+    try {
+      beforeSchema = before
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name")
+        .all();
+    } finally {
+      before.close();
+    }
+
+    expect(() => main(['--resume', unrelated])).toThrow(/dedicated Armed-review fixture/);
+
+    expect(fs.readFileSync(unrelated)).toEqual(beforeBytes);
+    const after = new SqliteDatabase(unrelated, { readonly: true });
+    try {
+      expect(after.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name").all())
+        .toEqual(beforeSchema);
+    } finally {
+      after.close();
+    }
   });
 });

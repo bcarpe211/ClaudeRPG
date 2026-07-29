@@ -43,10 +43,11 @@ Start the app with the same local-only settings as above, replacing its `DB_PATH
 In a second local terminal, explicitly resume only that demo's combat clock:
 
 ```bash
-env -u DB_PATH npm exec tsx tools/seed-potion-demo.ts -- --resume /private/tmp/clauderpg-potion-armed-demo.db
+DB_PATH=/Users/carp/Code/ClaudeRPG/data/claude-rpg.db \
+npm exec tsx tools/seed-potion-demo.ts -- --resume /private/tmp/clauderpg-potion-armed-demo.db
 ```
 
-Refresh the Quiet Berserker page (or wait for the normal hub refresh). Verify the same potion now reads **Active**, with one millisecond of combat-active time consumed. The resume command refuses the configured production path and refuses any database that is not the known eight-player potion-demo cast.
+Keep `DB_PATH` set to the configured production database path for this command; it is only compared, never opened. Refresh the Quiet Berserker page (or wait for the normal hub refresh). Verify the same potion now reads **Active**, with one millisecond of combat-active time consumed. The resume command refuses the configured production path and, before any write-capable database open, read-only verifies both the durable Armed-review marker and the known eight-player demo cast.
 
 ## Bazaar and inventory
 

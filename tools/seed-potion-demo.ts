@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import SqliteDatabase from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import { loadConfig } from '../src/config';
 import { openDb } from '../src/db/db';
 import { applyGoldMutation } from '../src/domain/goldledger';
 import { advanceCombatClock } from '../src/domain/gameclock';
 import { purchaseConsumable } from '../src/domain/inventory';
+import { ingestTokenUsage } from '../src/domain/ingest';
 import { officeDayKey } from '../src/domain/office-time';
 import { activatePotion } from '../src/domain/potions';
 import { seedSettings, setSetting } from '../src/domain/settings';
@@ -13,6 +15,8 @@ import { seedSettings, setSetting } from '../src/domain/settings';
 const TIME_ZONE = 'America/New_York';
 const GOLD_SKU = 'potion_gold_t1';
 const DAMAGE_SKU = 'potion_damage_t1';
+const ARMED_REVIEW_MARKER_KEY = 'potion_demo_armed_review_marker';
+const ARMED_REVIEW_MARKER_VALUE = 'timed-consumables-armed-review-v1';
 
 export type PotionDemoState =
   | 'gold-only'
@@ -90,6 +94,28 @@ function applyDemoGold(
   if (result.status !== 'applied') {
     throw new Error(`Potion demo ${action} failed: ${result.status}`);
   }
+}
+
+function demoTokenUsagePayload(token: string, input: number): unknown {
+  return {
+    resourceMetrics: [{
+      resource: { attributes: [{ key: 'claude_rpg_token', value: { stringValue: token } }] },
+      scopeMetrics: [{
+        metrics: [{
+          name: 'claude_code.token.usage',
+          sum: {
+            aggregationTemporality: 1,
+            dataPoints: [{
+              asInt: String(input),
+              startTimeUnixNano: 'potion-demo-history',
+              timeUnixNano: 'potion-demo-history-work',
+              attributes: [{ key: 'type', value: { stringValue: 'input' } }],
+            }],
+          },
+        }],
+      }],
+    }],
+  };
 }
 
 export function seedPotionDemo(
@@ -194,16 +220,27 @@ export function seedPotionDemo(
         playerId: player.id,
         skuId: sku,
         requestId: `demo-history-drink-${player.id}-${sku}`,
-        now: now - 11_000 + index,
+        now: now - 19_000 + index,
         timeZone: TIME_ZONE,
       });
       mustSucceed(activation, `historical activation for ${member.name}`);
+      if (sku === GOLD_SKU) {
+        const ingestion = ingestTokenUsage(
+          db,
+          demoTokenUsagePayload(authToken, 2_500_000),
+          now - 18_000 + index,
+          { cacheReadWeight: 0 },
+        );
+        if (ingestion.appliedPlayers !== 1 || ingestion.ignoredUnknownTokens !== 0) {
+          throw new Error('Potion demo historical Gold work ingestion failed');
+        }
+      }
       historical.set(sku, { activationId: activation.activationId, playerId: player.id });
       db.prepare(
         `UPDATE potion_activations
          SET status='completed', completed_at=?
          WHERE id=?`,
-      ).run(now - 9_000 + index * 500, activation.activationId);
+      ).run(now - 17_000 + index * 500, activation.activationId);
     }
     for (const sku of member.potions) {
       const activation = activatePotion(db, {
@@ -244,43 +281,14 @@ export function seedPotionDemo(
   }
   db.prepare(
     `UPDATE potion_activations
-     SET start_game_ms=0, expires_game_ms=7200000, completed_at=?,
-         eligible_tokens=2500000, base_gold=125000, stretch_gold=25000
+     SET start_game_ms=0, expires_game_ms=7200000, completed_at=?
      WHERE id=?`,
-  ).run(now - 9_000, goldHistory.activationId);
+  ).run(now - 17_000, goldHistory.activationId);
   db.prepare(
     `UPDATE potion_activations
      SET start_game_ms=0, expires_game_ms=7200000, completed_at=?, potion_bonus_damage=250
      WHERE id=?`,
-  ).run(now - 8_500, damageHistory.activationId);
-
-  const tokenEvent = db.prepare(
-    `INSERT INTO token_events (player_id, ts, effective_delta, total_delta)
-     VALUES (?, ?, 2500000, 2500000)`,
-  ).run(goldHistory.playerId, now - 12_000);
-  const workEvent = db.prepare(
-    `INSERT INTO potion_work_events
-      (activation_id, token_event_id, effective_delta, base_gold,
-       stretch_gold, combat_active_ms, created_at)
-     VALUES (?, ?, 2500000, 125000, 25000, 7200000, ?)`,
-  ).run(goldHistory.activationId, Number(tokenEvent.lastInsertRowid), now - 10_000);
-  const workEventId = String(workEvent.lastInsertRowid);
-  applyDemoGold(db, {
-    playerId: goldHistory.playerId,
-    amount: 125_000,
-    reason: 'gold_potion_base',
-    sourceTable: 'potion_work_events',
-    sourceId: workEventId,
-    now: now - 10_000,
-  }, 'historical Gold base payout');
-  applyDemoGold(db, {
-    playerId: goldHistory.playerId,
-    amount: 25_000,
-    reason: 'gold_potion_stretch',
-    sourceTable: 'potion_work_events',
-    sourceId: workEventId,
-    now: now - 9_999,
-  }, 'historical Gold stretch payout');
+  ).run(now - 16_500, damageHistory.activationId);
 
   const historicalEncounter = db.prepare(
     `INSERT INTO encounters
@@ -332,6 +340,7 @@ export function seedPotionDemo(
       'UPDATE game_state SET paused=1, last_activity_at=? WHERE id=1',
     ).run(pausedAt);
     db.prepare('UPDATE players SET last_token_at=?').run(pausedAt);
+    setSetting(db, ARMED_REVIEW_MARKER_KEY, ARMED_REVIEW_MARKER_VALUE);
   } else {
     db.prepare('UPDATE game_state SET combat_active_ms=105000 WHERE id=1').run();
   }
@@ -349,6 +358,14 @@ export function seedPotionDemo(
   };
 }
 
+function assertArmedReviewMarker(db: Database.Database): void {
+  const marker = db.prepare('SELECT value FROM settings WHERE key=?')
+    .get(ARMED_REVIEW_MARKER_KEY) as { value: string } | undefined;
+  if (marker?.value !== ARMED_REVIEW_MARKER_VALUE) {
+    throw new Error('Refusing to resume a database without the Armed-review fixture marker');
+  }
+}
+
 function assertPotionDemoCast(db: Database.Database): void {
   const names = (db.prepare('SELECT name FROM players ORDER BY name').all() as { name: string }[])
     .map((row) => row.name);
@@ -361,6 +378,7 @@ function assertPotionDemoCast(db: Database.Database): void {
 /** Advance the isolated Armed-review fixture by one active millisecond. */
 export function resumePotionDemoCombat(db: Database.Database, now: number): void {
   if (!Number.isSafeInteger(now) || now < 0) throw new RangeError('now must be a non-negative safe integer');
+  assertArmedReviewMarker(db);
   assertPotionDemoCast(db);
   const reviewer = db.prepare('SELECT id FROM players WHERE name=?').get('Quiet Berserker') as { id: number } | undefined;
   if (!reviewer) throw new Error('Potion demo Armed-review player is missing');
@@ -396,12 +414,27 @@ function validateExistingDemoDbPath(target: string, productionPath: string): str
   return resolved;
 }
 
+function validateArmedReviewFixturePath(target: string, productionPath: string): string {
+  const resolved = validateExistingDemoDbPath(target, productionPath);
+  let db: Database.Database | undefined;
+  try {
+    db = new SqliteDatabase(resolved, { readonly: true, fileMustExist: true });
+    assertArmedReviewMarker(db);
+    assertPotionDemoCast(db);
+  } catch {
+    throw new Error('Potion demo resume requires a dedicated Armed-review fixture');
+  } finally {
+    db?.close();
+  }
+  return resolved;
+}
+
 export function main(argv: readonly string[] = process.argv.slice(2)): void {
   const config = loadConfig(process.env);
   const armedReview = argv[0] === '--armed-review';
   const resume = argv[0] === '--resume';
   const target = resume
-    ? validateExistingDemoDbPath(argv[1] ?? '', config.dbPath)
+    ? validateArmedReviewFixturePath(argv[1] ?? '', config.dbPath)
     : validateDemoDbPath(argv[armedReview ? 1 : 0] ?? '', config.dbPath);
   const db = openDb(target);
   try {
