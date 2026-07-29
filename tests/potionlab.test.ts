@@ -310,7 +310,7 @@ describe('Potion Lab report', () => {
   it('isolates one activation across shared and multiple encounters and records no-rank-change damage', () => {
     const fixture = seedCanonicalAuditRows();
     const second = buyAndActivate(
-      fixture.boosted,
+      fixture.rival,
       'potion_damage_t1',
       6_000,
       7_000,
@@ -326,9 +326,13 @@ describe('Potion Lab report', () => {
        VALUES (?, ?, 100)`,
     ).run(second.activationId, fixture.encounterId);
     db.prepare(
-      `UPDATE encounter_reward_awards SET potion_bonus_damage=350
+      `UPDATE encounter_reward_awards SET potion_bonus_damage=100
        WHERE encounter_id=? AND player_id=?`,
-    ).run(fixture.encounterId, fixture.boosted.id);
+    ).run(fixture.encounterId, fixture.rival.id);
+    db.prepare(
+      `UPDATE potion_activations SET completed_at=19000
+       WHERE id=?`,
+    ).run(fixture.damage.activationId);
 
     const secondEncounter = encounter(fixture.dungeonId, 16_000, 18_000);
     db.prepare(
@@ -351,8 +355,8 @@ describe('Potion Lab report', () => {
     expect(first.actualReward).toBe(842);
     expect(noRankChange).toMatchObject({
       bonusDamage: 100,
-      actualRank: 1,
-      counterfactualRank: 1,
+      actualRank: 2,
+      counterfactualRank: 2,
       podiumClimbs: 0,
     });
   });
