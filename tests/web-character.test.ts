@@ -41,6 +41,10 @@ describe('character sheet', () => {
     expect(res.text).toContain('id="hub-tab-live" role="tab" aria-selected="true"');
     expect(res.text).toContain('id="hub-live" role="tabpanel"');
     expect(res.text).toContain('<iframe class="hub-dungeon-frame" src="/tv/embed"');
+    expect(res.text.match(/class="hub-dungeon"/g)).toHaveLength(1);
+    expect(res.text.match(/class="hub-live-side"/g)).toHaveLength(1);
+    expect(res.text.indexOf('class="hub-dungeon"'))
+      .toBeLessThan(res.text.indexOf('class="hub-live-side"'));
     expect(res.text).toContain('id="hub-inventory" role="tabpanel" hidden');
     expect(res.text).toContain('id="hub-wardrobe" role="tabpanel" hidden');
     expect(res.text).toContain('/static/player-hub.css');

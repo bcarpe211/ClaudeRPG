@@ -16,6 +16,14 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[\s\S]*grid-template-columns:\s*1fr/);
   });
 
+  it('gives the compact dungeon a full-width row and splits summaries beneath it', () => {
+    expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-columns:\s*1fr/);
+    expect(css).toMatch(/\.hub-dungeon\{[^}]*padding:\s*0/);
+    expect(css).toMatch(/\.hub-dungeon\{[^}]*overflow:\s*hidden/);
+    expect(css).toMatch(/\.hub-live-side\{[^}]*grid-template-columns:\s*repeat\(2,minmax\(0,1fr\)\)/);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-live-side[^}]*grid-template-columns:\s*1fr/);
+  });
+
   it('builds a two-thirds dungeon-room inventory from existing pixel assets', () => {
     expect(css).toMatch(/\.hub-inventory-layout\{[^}]*grid-template-columns:\s*minmax\(0,2fr\) minmax\(240px,1fr\)/);
     expect(css).toMatch(/\.hub-inventory-room\{[^}]*border-image:[^}]*moss_wall\.png/);
