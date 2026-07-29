@@ -139,12 +139,14 @@ function createShopHarness(options: {
   enhanced?: boolean;
   consumeResult?: boolean;
   locationHref?: string;
+  playerGold?: number;
+  stockRemaining?: number;
 } = {}): ShopHarness {
   const form = new FakeHTMLFormElement();
   const offer = new FakeConsumableOffer();
   offer.setAttribute('data-unit-price', '100000');
-  offer.setAttribute('data-player-gold', '250000');
-  offer.setAttribute('data-stock-remaining', '3');
+  offer.setAttribute('data-player-gold', String(options.playerGold ?? 250_000));
+  offer.setAttribute('data-stock-remaining', String(options.stockRemaining ?? 3));
   const body = new FakeElement();
   const timers: Array<{ callback: () => void; delay: number }> = [];
   const replacedUrls: string[] = [];
@@ -202,6 +204,27 @@ function burstImages(harness: ShopHarness): FakeElement[] {
 }
 
 describe('Bazaar purchase celebration', () => {
+  it.each([
+    ['', '1', 'Buy 1 · 100,000g', false],
+    ['1.5', '1', 'Buy 1 · 100,000g', false],
+    ['-2', '1', 'Buy 1 · 100,000g', false],
+    ['4', '3', 'Buy 3 · 300,000g', true],
+  ])('normalizes quantity input %j so the submitted value matches the displayed total', (
+    entered,
+    normalized,
+    buttonText,
+    disabled,
+  ) => {
+    const harness = createShopHarness({ enhanced: false });
+
+    harness.offer.input.value = entered;
+    harness.offer.input.dispatch('input');
+
+    expect(harness.offer.input.value).toBe(normalized);
+    expect(harness.offer.button.textContent).toBe(buttonText);
+    expect(harness.offer.button.disabled).toBe(disabled);
+  });
+
   it('updates potion quantity totals locally and disables only unaffordable selections', () => {
     const harness = createShopHarness({ enhanced: false });
 

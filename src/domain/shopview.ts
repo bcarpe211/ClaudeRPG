@@ -6,6 +6,7 @@ import { getCosmetics, spriteId } from './cosmetics';
 import { getPlayerById } from './players';
 import { inventoryQuantity, remainingDailyStock } from './inventory';
 import { nextOfficeMidnight, officeDayKey } from './office-time';
+import { potionEffectSnapshot } from './potions';
 import { nextCosmeticSku, skuPrice } from './shop';
 import {
   consumableProduct,
@@ -33,6 +34,7 @@ export interface ConsumableOffer {
   tier: 1;
   unitPrice: number;
   durationMs: number;
+  durationLabel: string;
   inventory: number;
   stockRemaining: number;
   maxQuantity: number;
@@ -83,6 +85,32 @@ function joinChannelLabels(labels: string[]): string {
 
 function titleCaseLabel(label: string): string {
   return label.replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function activeDurationLabel(durationMs: number): string {
+  const units = [
+    { milliseconds: 3_600_000, singular: 'hour', plural: 'hours' },
+    { milliseconds: 60_000, singular: 'minute', plural: 'minutes' },
+  ];
+  for (const unit of units) {
+    if (durationMs >= unit.milliseconds && durationMs % unit.milliseconds === 0) {
+      const value = durationMs / unit.milliseconds;
+      return `${value.toLocaleString('en-US')} active ${value === 1 ? unit.singular : unit.plural}`;
+    }
+  }
+  const seconds = durationMs / 1_000;
+  const value = seconds.toLocaleString('en-US', { maximumFractionDigits: 3 });
+  return `${value} active ${seconds === 1 ? 'second' : 'seconds'}`;
+}
+
+function effectCopyFor(db: Database.Database, product: ConsumableProduct): string {
+  const snapshot = potionEffectSnapshot(db, product.potionType, product.durationMs);
+  if (!snapshot) throw new RangeError(`${product.id} effect settings are invalid`);
+  if (snapshot.kind === 'gold') {
+    return `${snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 effective tokens`;
+  }
+  const percent = Number(((snapshot.baseHitMultiplier - 1) * 100).toFixed(10));
+  return `+${percent.toLocaleString('en-US', { maximumFractionDigits: 10 })}% personal base hit`;
 }
 
 /** Build the Bazaar from fresh database state, including the exact next permanent unlock. */
@@ -158,14 +186,13 @@ export function buildShopViewModel(
       tier: product.tier,
       unitPrice: product.price,
       durationMs: product.durationMs,
+      durationLabel: activeDurationLabel(product.durationMs),
       inventory: inventoryQuantity(db, player.id, product.id),
       stockRemaining,
       maxQuantity: Math.min(3, stockRemaining),
       missingGoldForOne: Math.max(0, product.price - player.gold),
       iconClass: product.iconClass,
-      effectCopy: product.potionType === 'gold'
-        ? '50g per 1,000 effective tokens'
-        : '+25% personal base hit',
+      effectCopy: effectCopyFor(db, product),
     };
   });
 

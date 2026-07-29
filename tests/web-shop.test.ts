@@ -6,7 +6,7 @@ import { getCosmetics } from '../src/domain/cosmetics';
 import { inventoryQuantity, purchaseConsumable } from '../src/domain/inventory';
 import { getPlayerById, createPlayer } from '../src/domain/players';
 import { purchase } from '../src/domain/shop';
-import { seedSettings } from '../src/domain/settings';
+import { seedSettings, setSetting } from '../src/domain/settings';
 import { createApp, renderPage } from '../src/web/app';
 
 function ctx(gold = 0) {
@@ -73,6 +73,22 @@ describe('Bazaar', () => {
     expect(new Set(requestIds).size).toBe(2);
     expect(requestIds.every((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)))
       .toBe(true);
+  });
+
+  it('renders tuned potion potency and valid sub-hour durations without rounding to zero hours', async () => {
+    const { db, app, player } = ctx(700_000);
+    setSetting(db, 'potion_gold_t1_gold_per_1000', '73');
+    setSetting(db, 'potion_damage_t1_base_hit_pct', '12.5');
+    setSetting(db, 'potion_gold_t1_duration_s', '1');
+    setSetting(db, 'potion_damage_t1_duration_s', '1800');
+
+    const res = await request(app).get('/shop').query({ token: player.auth_token });
+
+    expect(res.text).toContain('73g per 1,000 effective tokens');
+    expect(res.text).toContain('+12.5% personal base hit');
+    expect(res.text).toContain('1 active second');
+    expect(res.text).toContain('30 active minutes');
+    expect(res.text).not.toContain('0 active hours');
   });
 
   it('enhances only an enabled next-offer purchase form', async () => {
@@ -181,6 +197,33 @@ describe('Bazaar', () => {
 
     expect(html).toContain('\\u003c/script>\\u003cscript>unsafe()\\u003c/script>');
     expect(html).not.toContain('</script><script>unsafe()</script>');
+  });
+
+  it('shows the closed mimic only when rendered without permanent or consumable offers', async () => {
+    const html = await renderPage('shop', {
+      title: 'The Bazaar',
+      frame: 'full',
+      player: { name: 'A', auth_token: 'secret-token' },
+      shop: {
+        currentTier: 3,
+        gold: 0,
+        avatarA: '/a.png',
+        avatarB: '/b.png',
+        nextOffer: null,
+        preview: null,
+        mastered: true,
+        consumables: [],
+        nextRestockAt: Date.parse('2026-07-30T04:00:00.000Z'),
+      },
+      purchaseResult: undefined,
+      mimicUrl: '/mimic.png',
+      consumableRequestIds: {},
+    });
+
+    expect(html).toContain('class="bazaar-closed"');
+    expect(html).toContain('The Bazaar is Closed');
+    expect(html).not.toContain('action="/shop/cosmetics/purchase"');
+    expect(html).not.toContain('action="/shop/consumables/purchase"');
   });
 
   it('purchases the exact next tier and redirects back to the Bazaar', async () => {
@@ -344,6 +387,7 @@ describe('Bazaar', () => {
     });
 
     expect(post.status).toBe(302);
+    expect(post.headers['cache-control']).toBe('private, no-store');
     expect(post.headers.location).toContain('result=potion_success');
     expect(getPlayerById(db, player.id)?.gold).toBe(300_000);
     expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(2);

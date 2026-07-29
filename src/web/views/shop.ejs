@@ -93,10 +93,6 @@
         <div class="bazaar-product-grid">
           <% for (const offer of shop.consumables) {
             const soldOut = offer.stockRemaining === 0;
-            const durationHours = offer.durationMs / 3_600_000;
-            const durationLabel = Number.isInteger(durationHours)
-              ? durationHours.toLocaleString()
-              : durationHours.toLocaleString(undefined, { maximumFractionDigits: 2 });
           %>
             <article class="bazaar-product <%= offer.iconClass %><%= soldOut ? ' is-sold-out' : '' %>"
               data-consumable-offer
@@ -114,7 +110,7 @@
                 </div>
               </div>
               <p class="bazaar-potion-effect"><%= offer.effectCopy %></p>
-              <p class="bazaar-potion-duration"><%= durationLabel %> active hour<%= durationHours === 1 ? '' : 's' %></p>
+              <p class="bazaar-potion-duration"><%= offer.durationLabel %></p>
               <dl class="bazaar-potion-stock">
                 <div><dt>Inventory</dt><dd><strong><%= offer.inventory %></strong></dd></div>
                 <div><dt>Stock</dt><dd><strong><%= offer.stockRemaining %></strong></dd></div>

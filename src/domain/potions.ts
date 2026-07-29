@@ -171,7 +171,7 @@ function configuredPauseAfterMinutes(db: Database.Database): number {
     : DEFAULT_PAUSE_AFTER_MINUTES;
 }
 
-function buildEffectSnapshot(
+export function potionEffectSnapshot(
   db: Database.Database,
   potionType: PotionType,
   durationMs: number,
@@ -357,7 +357,7 @@ export function activatePotion(
       ).get(input.playerId) as { id: number } | undefined;
       if (!player) return { ok: false, reason: 'no_player' };
 
-      const snapshot = buildEffectSnapshot(db, product.potionType, product.durationMs);
+      const snapshot = potionEffectSnapshot(db, product.potionType, product.durationMs);
       if (!snapshot) return { ok: false, reason: 'invalid_config' };
 
       const activationDay = officeDayKey(input.now, input.timeZone);

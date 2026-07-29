@@ -33,6 +33,7 @@
       const quantity = Number.isSafeInteger(selected)
         ? Math.max(1, Math.min(3, stockRemaining, selected))
         : 1;
+      quantityInput.value = String(quantity);
       const total = unitPrice * quantity;
       const missingGold = Math.max(0, total - playerGold);
       button.textContent = `Buy ${quantity} · ${total.toLocaleString('en-US')}g`;

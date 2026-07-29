@@ -8,7 +8,7 @@ import { classSpriteUrl } from '../src/domain/classes';
 import { createPlayer } from '../src/domain/players';
 import { purchaseConsumable } from '../src/domain/inventory';
 import { nextOfficeMidnight } from '../src/domain/office-time';
-import { seedSettings } from '../src/domain/settings';
+import { seedSettings, setSetting } from '../src/domain/settings';
 import { purchase } from '../src/domain/shop';
 import { buildShopViewModel } from '../src/domain/shopview';
 import { setSlotRule } from '../src/domain/slotcosmetics';
@@ -133,6 +133,7 @@ describe('buildShopViewModel', () => {
       tier: 1,
       unitPrice: 100_000,
       durationMs: 7_200_000,
+      durationLabel: '2 active hours',
       inventory: 0,
       stockRemaining: 3,
       maxQuantity: 3,
@@ -147,6 +148,28 @@ describe('buildShopViewModel', () => {
       effectCopy: '+25% personal base hit',
     });
     expect(view.nextRestockAt).toBe(nextOfficeMidnight(now, timeZone));
+  });
+
+  it('derives potion effect copy from the same tuned potency settings as activation', () => {
+    const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
+    setSetting(db, 'potion_gold_t1_gold_per_1000', '73');
+    setSetting(db, 'potion_damage_t1_base_hit_pct', '12.5');
+
+    const view = buildShopViewModel(db, player.id, undefined, undefined, now, timeZone)!;
+
+    expect(view.consumables[0].effectCopy).toBe('73g per 1,000 effective tokens');
+    expect(view.consumables[1].effectCopy).toBe('+12.5% personal base hit');
+  });
+
+  it('labels valid sub-hour durations with exact meaningful units', () => {
+    const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
+    setSetting(db, 'potion_gold_t1_duration_s', '1');
+    setSetting(db, 'potion_damage_t1_duration_s', '1800');
+
+    const view = buildShopViewModel(db, player.id, undefined, undefined, now, timeZone)!;
+
+    expect(view.consumables[0].durationLabel).toBe('1 active second');
+    expect(view.consumables[1].durationLabel).toBe('30 active minutes');
   });
 
   it('reflects purchased inventory, remaining stock, quantity cap, and affordability', () => {
