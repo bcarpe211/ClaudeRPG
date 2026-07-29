@@ -271,16 +271,24 @@ export function potionUsesForDay(
   )).length;
 }
 
-export function completeExpiredPotions(
+function completeExpiredPotionsAtGameMs(
   db: Database.Database,
   now: number,
+  currentGameMs: number,
 ): number {
   const result = db.prepare(
     `UPDATE potion_activations
      SET status = 'completed', completed_at = ?
      WHERE status = 'active' AND expires_game_ms <= ?`,
-  ).run(now, combatActiveMs(db));
+  ).run(now, currentGameMs);
   return result.changes;
+}
+
+export function completeExpiredPotions(
+  db: Database.Database,
+  now: number,
+): number {
+  return completeExpiredPotionsAtGameMs(db, now, combatActiveMs(db));
 }
 
 export function damagePotionMultiplier(
@@ -536,8 +544,8 @@ export function visiblePotionTiersByPlayer(
   db: Database.Database,
   now: number,
 ): Map<number, VisiblePotionTiers> {
-  completeExpiredPotions(db, now);
   const currentGameMs = combatActiveMs(db);
+  completeExpiredPotionsAtGameMs(db, now, currentGameMs);
   const rows = db.prepare(
     `SELECT player_id, potion_type, tier, start_game_ms, effect_snapshot
      FROM potion_activations

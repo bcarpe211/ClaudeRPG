@@ -557,10 +557,24 @@ describe('manual potion activation', () => {
     expect([...visiblePotionTiersByPlayer(db, dayOne)]).toEqual([]);
 
     db.prepare('UPDATE game_state SET combat_active_ms=combat_active_ms+1000 WHERE id=1').run();
-    expect([...visiblePotionTiersByPlayer(db, dayOne + 1_000)]).toEqual([
+    let combatClockReads = 0;
+    const countedDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'prepare') {
+          return (sql: string) => {
+            if (sql.includes('SELECT combat_active_ms FROM game_state')) combatClockReads += 1;
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    expect([...visiblePotionTiersByPlayer(countedDb, dayOne + 1_000)]).toEqual([
       [gold.id, { goldTier: 1, damageTier: null }],
       [damage.id, { goldTier: null, damageTier: 1 }],
     ]);
+    expect(combatClockReads).toBe(1);
 
     db.prepare('UPDATE encounters SET status=\'defeated\'').run();
     expect([...visiblePotionTiersByPlayer(db, dayOne + 2_000)]).toHaveLength(2);
