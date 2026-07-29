@@ -7,8 +7,8 @@
   <div><h2>Inventory</h2><p>Pack light, choose carefully, and keep future treasures in one place.</p></div>
 </div>
 <div class="hub-inventory-filters" aria-label="Inventory filters">
-  <button type="button" class="hub-filter" aria-pressed="true">All</button>
-  <button type="button" class="hub-filter" aria-pressed="false">Potions</button>
+  <button id="hub-filter-all" type="button" class="hub-filter" data-filter="all" aria-pressed="true">All</button>
+  <button id="hub-filter-potions" type="button" class="hub-filter" data-filter="potions" aria-pressed="false">Potions</button>
   <button type="button" class="hub-filter" aria-pressed="false" disabled>Materials</button>
   <button type="button" class="hub-filter" aria-pressed="false" disabled>Quest</button>
 </div>
@@ -25,20 +25,23 @@
       <% }); %>
     <% } %>
   </div>
-  <aside id="hub-item-detail" class="hub-item-detail" aria-live="polite">
-    <% if (inventory.length === 0) { %>
-      <p class="hub-empty-line">Select an owned item to read its ledger entry.</p>
-    <% } else { const item = inventory[0]; %>
+  <aside id="hub-item-detail" class="hub-item-detail" aria-live="polite" data-selected-sku="<%= inventory[0]?.sku ?? '' %>">
+    <p id="hub-item-detail-empty" class="hub-empty-line" <%= inventory.length > 0 ? 'hidden' : '' %>>Select an owned item to read its ledger entry.</p>
+    <div id="hub-item-detail-content" <%= inventory.length === 0 ? 'hidden' : '' %>>
+      <% const item = inventory[0]; %>
       <div class="hub-item-detail-head">
-        <img class="hub-item-icon <%= item.iconClass %>" src="/static/landing/potion.png" alt="" />
-        <div><span class="hub-item-tier">Tier <%= item.tier %> potion</span><h3><%= item.name %></h3></div>
+        <img id="hub-item-detail-icon" class="hub-item-icon <%= item?.iconClass ?? '' %>" src="/static/landing/potion.png" alt="" />
+        <div><span id="hub-item-detail-tier" class="hub-item-tier"><%= item ? `Tier ${item.tier} potion` : '' %></span><h3 id="hub-item-detail-name"><%= item?.name ?? '' %></h3></div>
       </div>
       <dl>
-        <dt>Owned</dt><dd><%= item.quantity %></dd>
-        <dt>Effect</dt><dd><%= item.effectCopy %></dd>
-        <dt>Duration</dt><dd><%= durationLabel(item.durationMs) %></dd>
-        <dt>Doses today</dt><dd><%= item.usesRemaining %> remaining</dd>
+        <dt>Owned</dt><dd id="hub-item-detail-owned"><%= item?.quantity ?? 0 %></dd>
+        <dt>Effect</dt><dd id="hub-item-detail-effect"><%= item?.effectCopy ?? '' %></dd>
+        <dt>Duration</dt><dd id="hub-item-detail-duration"><%= item ? durationLabel(item.durationMs) : '' %></dd>
+        <dt>Doses today</dt><dd id="hub-item-detail-doses"><%= item ? `${item.usesRemaining} remaining` : '' %></dd>
+        <dt>Daily reset</dt><dd id="hub-item-detail-reset"><%= item ? new Date(item.nextResetAt).toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' }) : '' %></dd>
       </dl>
-    <% } %>
+      <div id="hub-item-active-progress" class="hub-item-active-progress" hidden></div>
+      <button id="hub-potion-drink" type="button" class="btn btn-gold" <%= item ? '' : 'disabled' %>>Drink Potion</button>
+    </div>
   </aside>
 </div>

@@ -9,25 +9,27 @@
   <div class="hub-live-side">
     <section class="hub-subpanel" aria-labelledby="hub-leaders-title">
       <h3 id="hub-leaders-title">Fight Leaders</h3>
-      <% if (currentFight.leaders.length > 0) { %>
-        <ol class="hub-leaders">
-          <% currentFight.leaders.forEach(function (leader, index) { %>
-            <li><span class="hub-leaders-rank">#<%= index + 1 %></span><span class="hub-leaders-name"><%= leader.name %></span><span class="hub-leaders-damage"><%= leader.damage.toLocaleString('en-US') %> dmg</span></li>
-          <% }); %>
-        </ol>
-      <% } else { %>
-        <p class="hub-empty-line">The damage ledger is waiting for its first mark.</p>
-      <% } %>
+      <div id="hub-leaders">
+        <% if (currentFight.leaders.length > 0) { %>
+          <ol class="hub-leaders">
+            <% currentFight.leaders.forEach(function (leader, index) { %>
+              <li><span class="hub-leaders-rank">#<%= index + 1 %></span><span class="hub-leaders-name"><%= leader.name %></span><span class="hub-leaders-damage"><%= leader.damage.toLocaleString('en-US') %> dmg</span></li>
+            <% }); %>
+          </ol>
+        <% } else { %>
+          <p class="hub-empty-line">The damage ledger is waiting for its first mark.</p>
+        <% } %>
+      </div>
     </section>
     <section class="hub-subpanel" aria-labelledby="hub-today-title">
       <h3 id="hub-today-title">Today</h3>
       <div class="hub-today">
-        <div class="hub-today-card"><span>Effective tokens</span><strong><%= today.effectiveTokens.toLocaleString('en-US') %></strong></div>
-        <div class="hub-today-card"><span>Damage</span><strong><%= today.damage.toLocaleString('en-US') %></strong></div>
-        <div class="hub-today-card"><span>Fight rank</span><strong><%= today.fightRank == null ? '—' : '#' + today.fightRank %></strong></div>
-        <div class="hub-today-card"><span>Gold earned</span><strong><%= today.goldEarned.toLocaleString('en-US') %>g</strong></div>
-        <div class="hub-today-card"><span>Combat active</span><strong><%= Math.floor(today.combatActiveMs / 3600000) %>h <%= Math.floor((today.combatActiveMs % 3600000) / 60000) %>m</strong></div>
-        <div class="hub-today-card"><span>Potions used</span><strong><%= today.potionsUsed %></strong></div>
+        <div class="hub-today-card"><span>Effective tokens</span><strong id="hub-today-tokens"><%= today.effectiveTokens.toLocaleString('en-US') %></strong></div>
+        <div class="hub-today-card"><span>Damage</span><strong id="hub-today-damage"><%= today.damage.toLocaleString('en-US') %></strong></div>
+        <div class="hub-today-card"><span>Fight rank</span><strong id="hub-today-rank"><%= today.fightRank == null ? '—' : '#' + today.fightRank %></strong></div>
+        <div class="hub-today-card"><span>Gold earned</span><strong id="hub-today-gold"><%= today.goldEarned.toLocaleString('en-US') %>g</strong></div>
+        <div class="hub-today-card"><span>Combat active</span><strong id="hub-today-active"><%= Math.floor(today.combatActiveMs / 3600000) %>h <%= Math.floor((today.combatActiveMs % 3600000) / 60000) %>m</strong></div>
+        <div class="hub-today-card"><span>Potions used</span><strong id="hub-today-potions"><%= today.potionsUsed %></strong></div>
       </div>
     </section>
   </div>

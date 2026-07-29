@@ -21,4 +21,17 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-tabs[\s\S]*position:\s*sticky/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-effects[\s\S]*(left|inset)/);
   });
+
+  it('bounds the scalable effect surface and styles potion confirmation and feedback', () => {
+    expect(css).toMatch(/\.hub-effects-list[\s\S]*max-height[\s\S]*overflow-y:\s*auto/);
+    expect(css).toMatch(/\.hub-effect-progress[\s\S]*overflow:\s*hidden/);
+    expect(css).toMatch(/\.potion-confirm[\s\S]*backdrop/);
+    expect(css).toMatch(/\.hub-potion-feedback/);
+  });
+
+  it('uses a short reduced-motion-safe profile bottle burst without a persistent badge', () => {
+    expect(css).toMatch(/\.hub-bottle-burst\.is-bursting[\s\S]*animation/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion:reduce\)[\s\S]*\.hub-bottle-burst/);
+    expect(css).not.toContain('.hub-persistent-potion-icon');
+  });
 });

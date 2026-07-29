@@ -47,6 +47,14 @@ describe('character sheet', () => {
     expect(res.text).toContain('class="hub-character-settings"');
     expect(res.text).toContain('id="hub-effects"');
     expect(res.text).toContain('aria-controls="hub-effects"');
+    expect(res.text).toContain('id="hub-effects-list"');
+    expect(res.text).toContain('id="hub-effects-close"');
+    expect(res.text.match(/id="hub-item-detail"/g)).toHaveLength(1);
+    expect(res.text).toContain('<dialog id="potion-confirm"');
+    expect(res.text).toContain('id="potion-confirm-drink"');
+    expect(res.text).toContain('id="potion-confirm-keep"');
+    expect(res.text).toContain('id="hub-potion-feedback"');
+    expect(res.text).toContain('data-hub-gold');
     expect(res.text.match(/<span>Store<\/span>/g)).toHaveLength(1);
     const hubBootstrap = res.text.match(/window\.__PLAYER_HUB__ = (\{.*?\});<\/script>/s);
     expect(hubBootstrap).not.toBeNull();

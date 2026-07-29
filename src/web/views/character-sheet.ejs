@@ -1,17 +1,43 @@
+<% function effectRemainingLabel(ms) {
+  if (ms < 60000) return Math.max(0, Math.ceil(ms / 1000)) + 's remaining';
+  const minutes = Math.ceil(ms / 60000);
+  if (minutes < 60) return minutes + 'm remaining';
+  return Math.floor(minutes / 60) + 'h ' + (minutes % 60) + 'm remaining';
+} %>
 <div class="player-hub-shell">
   <section class="panel hub-hero" aria-labelledby="hub-player-name">
     <div class="hub-hero-grid">
-      <div class="hub-avatar-wrap">
+      <div id="hub-avatar-wrap" class="hub-avatar-wrap">
         <div class="character-avatar sprite-anim">
           <button type="button" class="hub-avatar-trigger"
             aria-label="View active effects" aria-controls="hub-effects" aria-expanded="false">
             <img id="character-avatar-a" src="<%= avatarA %>" alt="<%= player.name %>" class="px frame-a" />
             <img id="character-avatar-b" src="<%= avatarB %>" alt="" class="px frame-b" />
+            <span id="hub-bottle-burst" class="hub-bottle-burst" aria-hidden="true">
+              <img class="px" src="/static/landing/potion.png" alt="" />
+            </span>
           </button>
         </div>
         <aside id="hub-effects" class="hub-effects" hidden aria-label="Active Effects">
-          <h2>Active Effects</h2>
-          <p><%= effects.length === 0 ? 'No magic is clinging to you right now.' : effects.length + ' effect' + (effects.length === 1 ? '' : 's') + ' currently active.' %></p>
+          <div class="hub-effects-head">
+            <div><span class="dye-kicker">Current enchantments</span><h2>Active Effects</h2></div>
+            <button id="hub-effects-close" type="button" aria-label="Close active effects">×</button>
+          </div>
+          <div id="hub-effects-list" class="hub-effects-list">
+            <% if (effects.length === 0) { %>
+              <p class="hub-empty-line">No magic is clinging to you right now.</p>
+            <% } else { %>
+              <% effects.forEach(function (effect) { %>
+                <article class="hub-effect-row <%= effect.iconClass %>">
+                  <img class="px hub-effect-icon" src="<%= effect.kind === 'debuff' ? '/static/landing/skull.png' : '/static/landing/potion.png' %>" alt="" />
+                  <div><strong><%= effect.title %></strong><span><%= effect.description %></span>
+                    <small><%= effect.state ? effect.state[0].toUpperCase() + effect.state.slice(1) + ' · ' : '' %><%= effectRemainingLabel(effect.remainingMs) %></small>
+                    <% if (effect.progress) { %><div class="hub-effect-progress" role="progressbar" aria-valuemin="0" aria-valuemax="<%= effect.progress.max %>" aria-valuenow="<%= effect.progress.value %>"><i style="width:<%= Math.min(100, effect.progress.max > 0 ? effect.progress.value / effect.progress.max * 100 : 0) %>%"></i></div><% } %>
+                  </div>
+                </article>
+              <% }); %>
+            <% } %>
+          </div>
         </aside>
       </div>
       <div class="hub-identity">
@@ -26,7 +52,7 @@
       <div class="hub-stat"><span class="hub-stat-label">Level</span><span class="hub-stat-value"><%= player.level %></span></div>
       <div class="hub-stat"><span class="hub-stat-label">XP</span><span class="hub-stat-value"><%= player.effective_tokens.toLocaleString('en-US') %></span></div>
       <div class="hub-stat"><span class="hub-stat-label">Total tokens</span><span class="hub-stat-value"><%= player.total_tokens.toLocaleString('en-US') %></span></div>
-      <div class="hub-stat hub-stat-gold"><span class="hub-stat-label">Gold</span><span class="hub-stat-value"><%= gold.toLocaleString('en-US') %></span></div>
+      <div class="hub-stat hub-stat-gold"><span class="hub-stat-label">Gold</span><span class="hub-stat-value" data-hub-gold><%= gold.toLocaleString('en-US') %></span></div>
     </div>
   </section>
 
@@ -72,6 +98,23 @@
       </section>
     </div>
   </details>
+
+  <p id="hub-potion-feedback" class="hub-potion-feedback" role="status" aria-live="polite" hidden></p>
+  <dialog id="potion-confirm" class="potion-confirm" aria-labelledby="potion-confirm-title" aria-describedby="potion-confirm-copy">
+    <form method="dialog">
+      <span class="dye-kicker">Uncork with care</span>
+      <h2 id="potion-confirm-title">Drink this potion?</h2>
+      <p id="potion-confirm-copy">Drinking is irreversible. Its combat-active timer pauses whenever the dungeon is not accepting work.</p>
+      <dl>
+        <dt>After drinking</dt><dd id="potion-confirm-inventory">—</dd>
+        <dt>Doses today</dt><dd id="potion-confirm-doses">—</dd>
+      </dl>
+      <div class="potion-confirm-actions">
+        <button id="potion-confirm-keep" type="submit" value="cancel" class="btn btn-ghost">Keep Corked</button>
+        <button id="potion-confirm-drink" type="button" class="btn btn-gold">Drink Potion</button>
+      </div>
+    </form>
+  </dialog>
 </div>
 
 <% const playerHubState = { gold, inventory, effects, today, currentFight }; %>

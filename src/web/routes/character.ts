@@ -19,13 +19,19 @@ import { getCosmetics, spriteId } from '../../domain/cosmetics';
 import { dyeRule } from '../../domain/dye';
 import { channelFor } from '../../domain/cosmetic-entitlements';
 import { MAX_RECOLOR_SLOT } from '../../domain/slots';
-import { buildPlayerHubViewModel } from '../../domain/playerhub';
+import { buildPlayerHubState, buildPlayerHubViewModel } from '../../domain/playerhub';
+import { activatePotion } from '../../domain/potions';
 
 const RenameInput = z.object({
   token: z.string().min(1),
   name: z.string().trim().min(1).max(40),
 });
 const TokenInput = z.object({ token: z.string().min(1) });
+const PotionActivationInput = z.object({
+  token: z.string().min(1),
+  sku: z.enum(['potion_gold_t1', 'potion_damage_t1']),
+  request_id: z.string().uuid(),
+});
 const DyeSetInput = z.object({
   token: z.string().min(1),
   slot: z.coerce.number().int().min(0).max(MAX_RECOLOR_SLOT),
@@ -96,6 +102,43 @@ export function registerCharacterRoutes(
       styles: ['player-hub.css'],
     }));
   }));
+
+  app.get('/character/state', (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) {
+      res.status(400).json({ ok: false, reason: 'invalid_input' });
+      return;
+    }
+    const player = getPlayerByToken(db, token);
+    if (!player) {
+      res.status(404).json({ ok: false, reason: 'no_player' });
+      return;
+    }
+    res.json(buildPlayerHubState(db, player, Date.now(), config.officeTimeZone));
+  });
+
+  app.post('/character/potions/activate', (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    const parsed = PotionActivationInput.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ ok: false, reason: 'invalid_input' });
+      return;
+    }
+    const player = getPlayerByToken(db, parsed.data.token);
+    if (!player) {
+      res.status(404).json({ ok: false, reason: 'no_player' });
+      return;
+    }
+    const result = activatePotion(db, {
+      playerId: player.id,
+      skuId: parsed.data.sku,
+      requestId: parsed.data.request_id,
+      now: Date.now(),
+      timeZone: config.officeTimeZone,
+    });
+    res.status(result.ok ? 200 : 409).json(result);
+  });
 
   app.post('/character/rename', (req, res) => {
     const parsed = RenameInput.safeParse(req.body);
