@@ -218,6 +218,7 @@ function drawPotionMotes(p, drawX, drawY, w, t) {
   const potionFx = window.ClaudeRpgPotionFx;
   if (!potionFx || !p.potionEffects) return;
   const sourceScale = Math.max(1, Math.round(w / 26));
+  const moteScale = Math.max(1, Math.round(sourceScale * 2 / 3));
   const motes = potionFx.frame({
     playerId: p.id,
     goldTier: p.potionEffects.goldTier,
@@ -225,15 +226,15 @@ function drawPotionMotes(p, drawX, drawY, w, t) {
     timeMs: t,
   });
   for (const mote of motes) {
-    const size = mote.size * sourceScale;
+    const size = mote.size * moteScale;
     const x = Math.round(drawX + mote.dx * sourceScale - size / 2);
     const y = Math.round(drawY + mote.dy * sourceScale - size);
     ctx.save();
     ctx.globalAlpha = mote.alpha;
     ctx.fillStyle = 'rgba(7,4,12,0.9)';
-    ctx.fillRect(x + sourceScale, y + sourceScale, size, size);
+    ctx.fillRect(x + moteScale, y + moteScale, size, size);
     ctx.shadowColor = mote.color;
-    ctx.shadowBlur = sourceScale;
+    ctx.shadowBlur = moteScale;
     ctx.fillStyle = mote.color;
     ctx.fillRect(x, y, size, size);
     ctx.restore();

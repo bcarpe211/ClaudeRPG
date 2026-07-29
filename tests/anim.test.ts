@@ -47,6 +47,18 @@ describe('TV renderer bootstrap', () => {
     );
     expect(tvSource).toContain('ClaudeRpgPotionFx');
     expect(tvSource).toContain('potionFx.frame');
+    const drawMotes = tvSource.slice(
+      tvSource.indexOf('function drawPotionMotes'),
+      tvSource.indexOf('function groundShadow'),
+    );
+    expect(drawMotes).toContain(
+      'const moteScale = Math.max(1, Math.round(sourceScale * 2 / 3));',
+    );
+    expect(drawMotes).toContain('const size = mote.size * moteScale;');
+    expect(drawMotes).toContain('x + moteScale, y + moteScale');
+    expect(drawMotes).toContain('ctx.shadowBlur = moteScale;');
+    expect(drawMotes).toContain('mote.dx * sourceScale');
+    expect(drawMotes).toContain('mote.dy * sourceScale');
     expect(heroes.indexOf('drawSprite(animImg')).toBeLessThan(heroes.indexOf('drawPotionMotes'));
     expect(heroes.indexOf('drawPotionMotes')).toBeLessThan(heroes.indexOf('DEBUFF_BADGE'));
   });
