@@ -52,8 +52,16 @@ type PurchaseRow = {
 };
 
 function configuredDailyStock(db: Database.Database): number {
-  const value = Number(getSetting(db, 'potion_daily_stock_per_sku'));
-  return Number.isSafeInteger(value) && value >= 0 ? value : DEFAULT_DAILY_STOCK;
+  const raw = getSetting(db, 'potion_daily_stock_per_sku');
+  if (raw === undefined) return DEFAULT_DAILY_STOCK;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+      ? value
+      : DEFAULT_DAILY_STOCK;
+  } catch {
+    return DEFAULT_DAILY_STOCK;
+  }
 }
 
 function fifoLotQuantity(db: Database.Database, playerId: number, sku: string): number {

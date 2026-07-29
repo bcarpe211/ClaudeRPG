@@ -342,10 +342,29 @@ export const migrations: Migration[] = [
       UPDATE shop_purchases
       SET stock_remaining_after = MAX(
         0,
-        CAST(COALESCE(
-          (SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'),
-          '3'
-        ) AS INTEGER) - COALESCE((
+        CASE
+          WHEN json_valid(TRIM(COALESCE(
+            (SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'),
+            ''
+          ))) = 0 THEN 3
+          WHEN json_type(TRIM((
+            SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'
+          ))) NOT IN ('integer', 'real') THEN 3
+          WHEN json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'
+          )), '$') < 0 THEN 3
+          WHEN json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'
+          )), '$') > 9007199254740991 THEN 3
+          WHEN json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'
+          )), '$') != CAST(json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'
+          )), '$') AS INTEGER) THEN 3
+          ELSE CAST(json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'
+          )), '$') AS INTEGER)
+        END - COALESCE((
           SELECT SUM(prior.quantity)
           FROM shop_purchases AS prior
           WHERE prior.player_id = shop_purchases.player_id

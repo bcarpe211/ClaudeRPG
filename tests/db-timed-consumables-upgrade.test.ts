@@ -10,6 +10,31 @@ const columns = (db: ReturnType<typeof openDb>, table: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[])
     .map((row) => row.name);
 
+function create012PurchaseDatabase(dbPath: string, dailyStock: string): void {
+  const legacy = new Database(dbPath);
+  legacy.exec('CREATE TABLE _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+  const recordMigration = legacy.prepare(
+    'INSERT INTO _migrations (id, applied_at) VALUES (?, ?)',
+  );
+  for (const [index, migration] of migrations.slice(0, 12).entries()) {
+    legacy.exec(migration.sql);
+    recordMigration.run(migration.id, 1_000 + index);
+  }
+  legacy.prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
+    .run('potion_daily_stock_per_sku', dailyStock);
+  legacy.prepare(
+    `INSERT INTO players (id, name, class_key, gender, auth_token, created_at)
+     VALUES (1, 'Snapshot Hero', 'wizard', 'M', 'snapshot-token', 1111)`,
+  ).run();
+  legacy.prepare(
+    `INSERT INTO shop_purchases
+      (player_id, sku, quantity, unit_price, total_price, office_day, request_id,
+       inventory_after, gold_after, created_at)
+     VALUES (1, 'potion_gold_t1', 1, 100000, 100000, '2026-07-28', 'legacy-purchase', 1, 0, 1111)`,
+  ).run();
+  legacy.close();
+}
+
 describe('timed-consumables database upgrades', () => {
   it('preserves a live encounter and records one opening ledger balance', () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-upgrade-'));
@@ -74,36 +99,38 @@ describe('timed-consumables database upgrades', () => {
     const dbPath = join(fixtureDir, 'timed-consumables-012.db');
     let upgraded: Database.Database | undefined;
     try {
-      const legacy = new Database(dbPath);
-      legacy.exec('CREATE TABLE _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
-      const recordMigration = legacy.prepare(
-        'INSERT INTO _migrations (id, applied_at) VALUES (?, ?)',
-      );
-      for (const [index, migration] of migrations.slice(0, 12).entries()) {
-        legacy.exec(migration.sql);
-        recordMigration.run(migration.id, 1_000 + index);
-      }
-      legacy.prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
-        .run('potion_daily_stock_per_sku', '3');
-      legacy.prepare(
-        `INSERT INTO players (id, name, class_key, gender, auth_token, created_at)
-         VALUES (1, 'Snapshot Hero', 'wizard', 'M', 'snapshot-token', 1111)`,
-      ).run();
-      legacy.prepare(
-        `INSERT INTO shop_purchases
-          (player_id, sku, quantity, unit_price, total_price, office_day, request_id,
-           inventory_after, gold_after, created_at)
-         VALUES (1, 'potion_gold_t1', 1, 100000, 100000, '2026-07-28', 'legacy-purchase', 1, 0, 1111)`,
-      ).run();
-      legacy.close();
+      create012PurchaseDatabase(dbPath, '5');
 
       upgraded = openDb(dbPath);
 
       expect(columns(upgraded, 'shop_purchases')).toContain('stock_remaining_after');
       expect(upgraded.prepare('SELECT stock_remaining_after FROM shop_purchases WHERE id = 1').get())
-        .toEqual({ stock_remaining_after: 2 });
+        .toEqual({ stock_remaining_after: 4 });
       expect(upgraded.prepare('SELECT id FROM _migrations WHERE id = ?').get('013_shop_purchase_stock_snapshot'))
         .toEqual({ id: '013_shop_purchase_stock_snapshot' });
+    } finally {
+      upgraded?.close();
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['invalid text', 'invalid'],
+    ['malformed numeric prefix', '4oops'],
+    ['non-JSON numeric text', '0x10'],
+    ['negative value', '-1'],
+    ['fractional value', '1.5'],
+    ['unsafe integer', '9007199254740992'],
+  ])('uses the runtime default for a %s daily-stock setting', (_label, dailyStock) => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-upgrade-'));
+    const dbPath = join(fixtureDir, 'timed-consumables-invalid-setting.db');
+    let upgraded: Database.Database | undefined;
+    try {
+      create012PurchaseDatabase(dbPath, dailyStock);
+      upgraded = openDb(dbPath);
+
+      expect(upgraded.prepare('SELECT stock_remaining_after FROM shop_purchases WHERE id = 1').get())
+        .toEqual({ stock_remaining_after: 2 });
     } finally {
       upgraded?.close();
       rmSync(fixtureDir, { recursive: true, force: true });

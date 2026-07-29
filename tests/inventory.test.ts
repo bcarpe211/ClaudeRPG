@@ -93,6 +93,14 @@ describe('personal consumable inventory purchases', () => {
     expect(inventoryQuantity(db, player.id, 'potion_damage_t1')).toBe(1);
   });
 
+  it('uses the default daily stock for malformed numeric settings', () => {
+    const player = playerWithGold(1_000_000);
+    setSetting(db, 'potion_daily_stock_per_sku', '0x10');
+
+    expect(purchaseConsumable(db, request(player.id, 'malformed-daily-stock')))
+      .toMatchObject({ ok: true, stockRemaining: 2 });
+  });
+
   it('returns the original purchase on an exact request retry without another charge', () => {
     const player = playerWithGold(1_000_000);
     const input = request(player.id, 'retry-1', { quantity: 2 });
