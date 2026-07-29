@@ -247,6 +247,25 @@ export function remainingDailyUses(
   return Math.max(0, dailyLimit - used);
 }
 
+/** Count only activations whose immutable effect snapshot is still valid. */
+export function potionUsesForDay(
+  db: Database.Database,
+  playerId: number,
+  dayKey: string,
+): number {
+  const rows = db.prepare(
+    `SELECT potion_type, effect_snapshot
+     FROM potion_activations
+     WHERE player_id = ? AND activation_day = ?`,
+  ).all(playerId, dayKey) as {
+    potion_type: PotionType;
+    effect_snapshot: string;
+  }[];
+  return rows.filter((row) => (
+    parseStoredSnapshot(row.effect_snapshot, row.potion_type) !== undefined
+  )).length;
+}
+
 export function completeExpiredPotions(
   db: Database.Database,
   now: number,

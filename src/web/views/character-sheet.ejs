@@ -1,174 +1,88 @@
-<div class="panel">
-  <div class="character-profile-head">
-    <div class="character-avatar sprite-anim">
-      <img id="character-avatar-a" src="<%= avatarA %>" alt="avatar" class="px frame-a" />
-      <img id="character-avatar-b" src="<%= avatarB %>" alt="" class="px frame-b" />
-    </div>
-    <div class="character-profile-identity">
-      <h1><%= player.name %></h1>
-      <p><span><%= className %></span> · <%= player.gender === 'M' ? 'Male' : 'Female' %> · <%= connected ? 'Connected' : 'Not seen yet' %></p>
-    </div>
-    <a class="btn btn-gold character-store" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>" data-dye-guarded-nav>
-      <span aria-hidden="true">✦</span><span>Store</span>
-    </a>
-  </div>
-
-  <div class="stat-grid">
-    <div class="stat-card"><span class="stat-k">Level</span><span class="stat-v"><%= player.level %></span></div>
-    <div class="stat-card"><span class="stat-k">XP (effective tokens)</span><span class="stat-v"><%= player.effective_tokens %></span></div>
-    <div class="stat-card"><span class="stat-k">Total tokens</span><span class="stat-v"><%= player.total_tokens %></span></div>
-    <div class="stat-card"><span class="stat-k">Gold</span><span class="stat-v" style="color:var(--gold2)"><%= player.gold %></span></div>
-  </div>
-</div>
-
-<% if (!dye.available) { %>
-<div class="panel dye-unavailable">
-  <div class="dye-unavailable-art" aria-hidden="true">
-    <img class="px" src="<%= avatarA %>" width="96" height="96" alt="" />
-    <span>✂</span>
-  </div>
-  <div>
-    <p class="dye-kicker">The dungeon tailor</p>
-    <h2>Tailoring in progress</h2>
-    <p>Your sprite’s dye pattern is still being mapped pixel by pixel. The workbench will open here when it is ready — no gold can be spent before then.</p>
-  </div>
-</div>
-<% } else { %>
-<div class="panel dye-panel">
-  <div class="dye-head">
-    <div>
-      <p class="dye-kicker">Your personal dungeon tailor</p>
-      <h2>Dye Workbench</h2>
-      <p>Wardrobe Tier <%= dye.tier %> · unlocked colors stay free forever.</p>
-    </div>
-    <% if (dye.nextOffer) { %>
-      <a class="btn btn-gold" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>" data-dye-guarded-nav>Unlock the next tier</a>
-    <% } else { %>
-      <span class="dye-mastery">Dye mastery complete</span>
-    <% } %>
-  </div>
-
-  <div class="dye-tier-groups" aria-label="Wardrobe tiers">
-    <% for (const group of dye.groups) { %>
-      <section class="dye-tier-group" data-tier="<%= group.tier %>">
-        <div class="dye-tier-group-head">
-          <span>Tier <%= group.tier %></span>
-          <span class="dye-tier-lock"><%= group.unlocked ? 'Unlocked' : 'Locked' %></span>
+<div class="player-hub-shell">
+  <section class="panel hub-hero" aria-labelledby="hub-player-name">
+    <div class="hub-hero-grid">
+      <div class="hub-avatar-wrap">
+        <div class="character-avatar sprite-anim">
+          <button type="button" class="hub-avatar-trigger"
+            aria-label="View active effects" aria-controls="hub-effects" aria-expanded="false">
+            <img id="character-avatar-a" src="<%= avatarA %>" alt="<%= player.name %>" class="px frame-a" />
+            <img id="character-avatar-b" src="<%= avatarB %>" alt="" class="px frame-b" />
+          </button>
         </div>
-        <div class="dye-channels">
-          <% for (const channel of group.channels) { %>
-            <button type="button" class="dye-chan" data-slot="<%= channel.slot %>" data-required-tier="<%= channel.requiredTier %>"<%= group.unlocked ? '' : ' disabled' %> aria-pressed="false">
-              <span class="dye-dot is-default" aria-hidden="true"></span><span><%= channel.label %></span>
-            </button>
-          <% } %>
-        </div>
+        <aside id="hub-effects" class="hub-effects" hidden aria-label="Active Effects">
+          <h2>Active Effects</h2>
+          <p><%= effects.length === 0 ? 'No magic is clinging to you right now.' : effects.length + ' effect' + (effects.length === 1 ? '' : 's') + ' currently active.' %></p>
+        </aside>
+      </div>
+      <div class="hub-identity">
+        <h1 id="hub-player-name"><%= player.name %></h1>
+        <p><strong><%= className %></strong> · <%= player.gender === 'M' ? 'Male' : 'Female' %> · <%= connected ? 'Connected' : 'Not seen yet' %></p>
+      </div>
+      <a class="btn btn-gold character-store" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>" data-dye-guarded-nav>
+        <span aria-hidden="true">✦</span><span>Store</span>
+      </a>
+    </div>
+    <div class="hub-stats" aria-label="Character stats">
+      <div class="hub-stat"><span class="hub-stat-label">Level</span><span class="hub-stat-value"><%= player.level %></span></div>
+      <div class="hub-stat"><span class="hub-stat-label">XP</span><span class="hub-stat-value"><%= player.effective_tokens.toLocaleString('en-US') %></span></div>
+      <div class="hub-stat"><span class="hub-stat-label">Total tokens</span><span class="hub-stat-value"><%= player.total_tokens.toLocaleString('en-US') %></span></div>
+      <div class="hub-stat hub-stat-gold"><span class="hub-stat-label">Gold</span><span class="hub-stat-value"><%= gold.toLocaleString('en-US') %></span></div>
+    </div>
+  </section>
+
+  <div class="hub-tabs" role="tablist" aria-label="Character sections">
+    <button id="hub-tab-live" role="tab" aria-selected="true" class="hub-tab" type="button" aria-controls="hub-live" tabindex="0">Live Dungeon</button>
+    <button id="hub-tab-inventory" role="tab" aria-selected="false" class="hub-tab" type="button" aria-controls="hub-inventory" tabindex="-1">Inventory</button>
+    <button id="hub-tab-wardrobe" role="tab" aria-selected="false" class="hub-tab" type="button" aria-controls="hub-wardrobe" tabindex="-1">Wardrobe</button>
+  </div>
+
+  <section id="hub-live" role="tabpanel" class="panel hub-panel" aria-labelledby="hub-tab-live">
+    <%- include('character-live') %>
+  </section>
+  <section id="hub-inventory" role="tabpanel" hidden class="panel hub-panel" aria-labelledby="hub-tab-inventory">
+    <%- include('character-inventory') %>
+  </section>
+  <section id="hub-wardrobe" role="tabpanel" hidden class="hub-panel" aria-labelledby="hub-tab-wardrobe">
+    <%- include('character-wardrobe') %>
+  </section>
+
+  <details class="hub-character-settings">
+    <summary>Character settings</summary>
+    <div class="hub-settings-grid">
+      <section class="hub-settings-card">
+        <h2>Your setup snippet</h2>
+        <pre><%= snippet %></pre>
       </section>
-    <% } %>
-  </div>
-
-  <% if (dye.channels.length > 0) { %>
-    <div class="dye-workbench">
-      <div class="dye-stage">
-        <div class="dye-stage-head">
-          <span class="dye-stage-label">Live fitting</span>
-          <span id="dye-save-status" class="dye-save-status" data-state="saved" role="status" aria-live="polite">Saved</span>
-        </div>
-        <canvas id="dye-preview" width="168" height="168" class="px dye-preview" aria-label="Live character dye preview"></canvas>
-      </div>
-
-      <div class="dye-toolbox">
-        <div class="dye-section">
-          <div class="dye-paint-row">
-            <div class="dye-wheel-section">
-              <div class="dye-wheel-frame">
-                <canvas id="dye-wheel" width="72" height="72" class="dye-wheel"
-                  role="slider" tabindex="0" aria-label="Dye hue"
-                  aria-valuemin="0" aria-valuemax="359" aria-valuenow="0"></canvas>
-              </div>
-              <span class="dye-wheel-help">Drag, click, or use arrow keys</span>
-            </div>
-            <div class="dye-tone-section">
-              <label class="dye-tone-label" for="dye-tone">Tone <output id="dye-tone-value">Natural</output></label>
-              <div class="dye-tone-track"><span>Black</span><input id="dye-tone" type="range" min="-100" max="100" step="1" value="0"><span>White</span></div>
-              <div class="dye-finishes">
-                <button type="button" class="dye-fin" data-recipe="steel"><span class="dye-fin-swatch dye-fin-steel"></span><span>Forged steel</span></button>
-                <button type="button" class="dye-fin" data-recipe="bronze"><span class="dye-fin-swatch dye-fin-bronze"></span><span>Aged bronze</span></button>
-                <button type="button" class="dye-fin" data-recipe="gold"><span class="dye-fin-swatch dye-fin-gold"></span><span>Royal gold</span></button>
-                <button type="button" class="dye-fin" data-recipe="none"><span class="dye-fin-swatch dye-fin-default" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M4 4.5A5 5 0 1 1 3 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/><path d="M1.5 4.5H5v3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg></span><span>Restore default</span></button>
-              </div>
-              <span class="dye-action-label">Wardrobe changes</span>
-              <div class="dye-action-strip">
-                <button id="dye-reload" type="button" class="btn btn-ghost dye-action dye-reload" hidden title="Reload the latest saved Wardrobe">
-                  <span class="dye-action-icon" aria-hidden="true">↻</span><span>Reload</span>
-                </button>
-                <button id="dye-discard" type="button" class="btn btn-ghost dye-action dye-discard" disabled title="Discard all unsaved changes">
-                  <span class="dye-action-icon" aria-hidden="true">×</span><span>Discard</span>
-                </button>
-                <button id="dye-save" type="button" class="btn btn-gold dye-action dye-save" disabled title="Save all Wardrobe changes">
-                  <span class="dye-action-icon" aria-hidden="true">✓</span><span>Save</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <section class="hub-settings-card">
+        <h2>Rename</h2>
+        <form method="post" action="/character/rename">
+          <input type="hidden" name="token" value="<%= player.auth_token %>" />
+          <label for="name">New name</label>
+          <input id="name" name="name" maxlength="40" value="<%= player.name %>" required />
+          <button type="submit">Rename</button>
+        </form>
+      </section>
+      <section class="hub-settings-card hub-delete">
+        <h2>Delete character</h2>
+        <p style="color:var(--muted)">This permanently removes your character and its progress.</p>
+        <form method="post" action="/character/delete" onsubmit="return confirm('Delete this character permanently?');">
+          <input type="hidden" name="token" value="<%= player.auth_token %>" />
+          <button type="submit" class="btn-danger">Delete</button>
+        </form>
+      </section>
     </div>
-
-    <aside id="dye-nav-toast" class="dye-nav-toast" hidden role="alert"
-      aria-labelledby="dye-nav-title" aria-describedby="dye-nav-message">
-      <button id="dye-nav-close" type="button" class="dye-nav-close" aria-label="Keep editing and close this notice">×</button>
-      <span class="dye-nav-kicker">Unfinished fitting</span>
-      <h3 id="dye-nav-title">The tailor catches your sleeve!</h3>
-      <p id="dye-nav-message">You still have unfinished dye work on the fitting table. Save it before heading out, or leave it behind.</p>
-      <div class="dye-nav-actions">
-        <button id="dye-nav-save" type="button" class="btn btn-gold">
-          <span aria-hidden="true">✦</span><span id="dye-nav-save-label">Save &amp; Continue</span>
-        </button>
-        <button id="dye-nav-leave" type="button" class="btn btn-ghost">Leave Without Saving</button>
-      </div>
-    </aside>
-
-    <% const dyeClient = {
-      token: player.auth_token,
-      frames: dye.frames,
-      channels: dye.channels,
-      config: dye.config,
-      presets: dye.presets,
-      wheelSat: dye.wheelSat,
-      revisionSession: dye.revisionSession,
-      revisionSeed: dye.revisionSeed,
-    }; %>
-    <script>window.__DYE__ = <%- JSON.stringify(dyeClient).replace(/</g, '\\u003c') %>;</script>
-    <script src="/static/dye-color.js"></script>
-    <script src="/static/dye-draft.js"></script>
-    <script src="/static/dye.js"></script>
-  <% } %>
+  </details>
 </div>
-<% } %>
 
+<% const playerHubState = { gold, inventory, effects, today, currentFight }; %>
+<% const playerHubClient = {
+  token: player.auth_token,
+  initialState: playerHubState,
+  endpoints: {
+    state: '/character/state?token=' + encodeURIComponent(player.auth_token),
+    activate: '/character/potions/activate',
+  },
+}; %>
+<script>window.__PLAYER_HUB__ = <%- JSON.stringify(playerHubClient).replace(/</g, '\\u003c') %>;</script>
+<script src="/static/player-hub.js"></script>
 <script type="module">import { start } from '/static/anim.js'; start({ periodMs: 700 });</script>
-
-<div class="panel">
-  <h2>Your setup snippet</h2>
-  <pre><%= snippet %></pre>
-</div>
-
-<div class="panel">
-  <h2>Rename</h2>
-  <form method="post" action="/character/rename">
-    <input type="hidden" name="token" value="<%= player.auth_token %>" />
-    <label for="name">New name</label>
-    <input id="name" name="name" maxlength="40" value="<%= player.name %>" required />
-    <button type="submit">Rename</button>
-  </form>
-</div>
-
-<div class="panel">
-  <h2>Delete character</h2>
-  <p style="color:var(--muted)">This permanently removes your character and its progress.</p>
-  <form method="post" action="/character/delete"
-        onsubmit="return confirm('Delete this character permanently?');">
-    <input type="hidden" name="token" value="<%= player.auth_token %>" />
-    <button type="submit" class="btn-danger">Delete</button>
-  </form>
-</div>

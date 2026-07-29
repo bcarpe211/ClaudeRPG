@@ -5,6 +5,11 @@ export interface DebuffCfg {
   monsterDebuffSeconds: number;
 }
 
+export interface ActiveDebuff {
+  factor: number;
+  remainingMs: number;
+}
+
 /** Uniform random element, or null when the list is empty. One rng() draw. */
 export function pickTarget<T>(players: T[], rng: () => number): T | null {
   if (players.length === 0) return null;
@@ -28,18 +33,26 @@ export function goldSteal(currentGold: number, pctOfHeld: number): number {
   return Math.min(currentGold, Math.max(1, Math.round((currentGold * pctOfHeld) / 100)));
 }
 
-/**
- * Swing-damage multiplier from an active monster debuff, or 1 if none.
- * Derived from the monster_attacks log (single source of truth): a debuff is
- * active if a kind='debuff' row for the player has ts within the window ending
- * at `now`. Non-stacking — any such row yields the same flat factor.
- */
+/** Latest non-stacking monster debuff and its remaining wall-clock duration. */
+export function activeDebuff(
+  db: Database.Database, playerId: number, now: number, cfg: DebuffCfg,
+): ActiveDebuff | null {
+  const windowMs = cfg.monsterDebuffSeconds * 1000;
+  const row = db.prepare(
+    `SELECT ts FROM monster_attacks
+     WHERE player_id=? AND kind='debuff' AND ts>=? AND ts<=?
+     ORDER BY ts DESC, id DESC LIMIT 1`,
+  ).get(playerId, now - windowMs, now) as { ts: number } | undefined;
+  if (!row) return null;
+  return {
+    factor: cfg.monsterDebuffFactor,
+    remainingMs: Math.max(0, row.ts + windowMs - now),
+  };
+}
+
+/** Swing-damage multiplier from an active monster debuff, or 1 if none. */
 export function debuffFactor(
   db: Database.Database, playerId: number, now: number, cfg: DebuffCfg,
 ): number {
-  const windowMs = cfg.monsterDebuffSeconds * 1000;
-  const row = db.prepare(
-    "SELECT 1 FROM monster_attacks WHERE player_id=? AND kind='debuff' AND ts>=? AND ts<=? LIMIT 1",
-  ).get(playerId, now - windowMs, now);
-  return row ? cfg.monsterDebuffFactor : 1;
+  return activeDebuff(db, playerId, now, cfg)?.factor ?? 1;
 }

@@ -1,0 +1,34 @@
+<div class="hub-panel-head">
+  <div><h2>Live Dungeon</h2><p>The same battle playing on the office TV, packed into your field journal.</p></div>
+  <a href="/tv" class="btn btn-ghost">Watch full screen</a>
+</div>
+<div class="hub-live-grid">
+  <div class="hub-dungeon">
+    <iframe class="hub-dungeon-frame" src="/tv/embed" title="Live ClaudeRPG dungeon"></iframe>
+  </div>
+  <div class="hub-live-side">
+    <section class="hub-subpanel" aria-labelledby="hub-leaders-title">
+      <h3 id="hub-leaders-title">Fight Leaders</h3>
+      <% if (currentFight.leaders.length > 0) { %>
+        <ol class="hub-leaders">
+          <% currentFight.leaders.forEach(function (leader, index) { %>
+            <li><span class="hub-leaders-rank">#<%= index + 1 %></span><span class="hub-leaders-name"><%= leader.name %></span><span class="hub-leaders-damage"><%= leader.damage.toLocaleString('en-US') %> dmg</span></li>
+          <% }); %>
+        </ol>
+      <% } else { %>
+        <p class="hub-empty-line">The damage ledger is waiting for its first mark.</p>
+      <% } %>
+    </section>
+    <section class="hub-subpanel" aria-labelledby="hub-today-title">
+      <h3 id="hub-today-title">Today</h3>
+      <div class="hub-today">
+        <div class="hub-today-card"><span>Effective tokens</span><strong><%= today.effectiveTokens.toLocaleString('en-US') %></strong></div>
+        <div class="hub-today-card"><span>Damage</span><strong><%= today.damage.toLocaleString('en-US') %></strong></div>
+        <div class="hub-today-card"><span>Fight rank</span><strong><%= today.fightRank == null ? '—' : '#' + today.fightRank %></strong></div>
+        <div class="hub-today-card"><span>Gold earned</span><strong><%= today.goldEarned.toLocaleString('en-US') %>g</strong></div>
+        <div class="hub-today-card"><span>Combat active</span><strong><%= Math.floor(today.combatActiveMs / 3600000) %>h <%= Math.floor((today.combatActiveMs % 3600000) / 60000) %>m</strong></div>
+        <div class="hub-today-card"><span>Potions used</span><strong><%= today.potionsUsed %></strong></div>
+      </div>
+    </section>
+  </div>
+</div>

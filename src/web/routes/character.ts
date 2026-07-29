@@ -8,19 +8,18 @@ import {
   renamePlayer,
   deletePlayer,
 } from '../../domain/players';
-import { getClass, type Gender } from '../../domain/classes';
+import type { Gender } from '../../domain/classes';
 import {
   applySlotMutation,
   applySlotMutationBatch,
-  cosmeticSkinUrlForPlayer,
   getEntitledSlotConfig,
   skinRenderHash,
 } from '../../domain/slotcosmetics';
-import { buildSetupSnippet } from '../../domain/snippet';
 import { getCosmetics, spriteId } from '../../domain/cosmetics';
-import { dyeRule, dyeViewModel } from '../../domain/dye';
+import { dyeRule } from '../../domain/dye';
 import { channelFor } from '../../domain/cosmetic-entitlements';
 import { MAX_RECOLOR_SLOT } from '../../domain/slots';
+import { buildPlayerHubViewModel } from '../../domain/playerhub';
 
 const RenameInput = z.object({
   token: z.string().min(1),
@@ -83,25 +82,19 @@ export function registerCharacterRoutes(
       );
       return;
     }
-    res.send(
-      await renderPage('character-sheet', {
-        title: player.name,
-        player,
-        className: getClass(player.class_key)?.name ?? player.class_key,
-        avatarA: cosmeticSkinUrlForPlayer(
-          db, player, 'a', { spritesDir: config.spritesDir, slotmapsDir },
-        ),
-        avatarB: cosmeticSkinUrlForPlayer(
-          db, player, 'b', { spritesDir: config.spritesDir, slotmapsDir },
-        ),
-        dye: dyeViewModel(db, player, slotmapsDir),
-        connected: player.last_token_at != null,
-        snippet: buildSetupSnippet({
-          token: player.auth_token,
-          endpoint: config.publicUrl,
-        }),
-      }),
+    const hub = buildPlayerHubViewModel(
+      db,
+      player,
+      Date.now(),
+      config.officeTimeZone,
+      { spritesDir: config.spritesDir, slotmapsDir, publicUrl: config.publicUrl },
     );
+    res.send(await renderPage('character-sheet', {
+      title: player.name,
+      player,
+      ...hub,
+      styles: ['player-hub.css'],
+    }));
   }));
 
   app.post('/character/rename', (req, res) => {

@@ -1,0 +1,124 @@
+<% if (!dye.available) { %>
+<div class="panel dye-unavailable">
+  <div class="dye-unavailable-art" aria-hidden="true">
+    <img class="px" src="<%= avatarA %>" width="96" height="96" alt="" />
+    <span>✂</span>
+  </div>
+  <div>
+    <p class="dye-kicker">The dungeon tailor</p>
+    <h2>Tailoring in progress</h2>
+    <p>Your sprite’s dye pattern is still being mapped pixel by pixel. The workbench will open here when it is ready — no gold can be spent before then.</p>
+  </div>
+</div>
+<% } else { %>
+<div class="panel dye-panel">
+  <div class="dye-head">
+    <div>
+      <p class="dye-kicker">Your personal dungeon tailor</p>
+      <h2>Dye Workbench</h2>
+      <p>Wardrobe Tier <%= dye.tier %> · unlocked colors stay free forever.</p>
+    </div>
+    <% if (dye.nextOffer) { %>
+      <a class="btn btn-gold" href="/shop?token=<%= encodeURIComponent(player.auth_token) %>" data-dye-guarded-nav>Unlock the next tier</a>
+    <% } else { %>
+      <span class="dye-mastery">Dye mastery complete</span>
+    <% } %>
+  </div>
+
+  <div class="dye-tier-groups" aria-label="Wardrobe tiers">
+    <% for (const group of dye.groups) { %>
+      <section class="dye-tier-group" data-tier="<%= group.tier %>">
+        <div class="dye-tier-group-head">
+          <span>Tier <%= group.tier %></span>
+          <span class="dye-tier-lock"><%= group.unlocked ? 'Unlocked' : 'Locked' %></span>
+        </div>
+        <div class="dye-channels">
+          <% for (const channel of group.channels) { %>
+            <button type="button" class="dye-chan" data-slot="<%= channel.slot %>" data-required-tier="<%= channel.requiredTier %>"<%= group.unlocked ? '' : ' disabled' %> aria-pressed="false">
+              <span class="dye-dot is-default" aria-hidden="true"></span><span><%= channel.label %></span>
+            </button>
+          <% } %>
+        </div>
+      </section>
+    <% } %>
+  </div>
+
+  <% if (dye.channels.length > 0) { %>
+    <div class="dye-workbench">
+      <div class="dye-stage">
+        <div class="dye-stage-head">
+          <span class="dye-stage-label">Live fitting</span>
+          <span id="dye-save-status" class="dye-save-status" data-state="saved" role="status" aria-live="polite">Saved</span>
+        </div>
+        <canvas id="dye-preview" width="168" height="168" class="px dye-preview" aria-label="Live character dye preview"></canvas>
+      </div>
+
+      <div class="dye-toolbox">
+        <div class="dye-section">
+          <div class="dye-paint-row">
+            <div class="dye-wheel-section">
+              <div class="dye-wheel-frame">
+                <canvas id="dye-wheel" width="72" height="72" class="dye-wheel"
+                  role="slider" tabindex="0" aria-label="Dye hue"
+                  aria-valuemin="0" aria-valuemax="359" aria-valuenow="0"></canvas>
+              </div>
+              <span class="dye-wheel-help">Drag, click, or use arrow keys</span>
+            </div>
+            <div class="dye-tone-section">
+              <label class="dye-tone-label" for="dye-tone">Tone <output id="dye-tone-value">Natural</output></label>
+              <div class="dye-tone-track"><span>Black</span><input id="dye-tone" type="range" min="-100" max="100" step="1" value="0"><span>White</span></div>
+              <div class="dye-finishes">
+                <button type="button" class="dye-fin" data-recipe="steel"><span class="dye-fin-swatch dye-fin-steel"></span><span>Forged steel</span></button>
+                <button type="button" class="dye-fin" data-recipe="bronze"><span class="dye-fin-swatch dye-fin-bronze"></span><span>Aged bronze</span></button>
+                <button type="button" class="dye-fin" data-recipe="gold"><span class="dye-fin-swatch dye-fin-gold"></span><span>Royal gold</span></button>
+                <button type="button" class="dye-fin" data-recipe="none"><span class="dye-fin-swatch dye-fin-default" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M4 4.5A5 5 0 1 1 3 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/><path d="M1.5 4.5H5v3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg></span><span>Restore default</span></button>
+              </div>
+              <span class="dye-action-label">Wardrobe changes</span>
+              <div class="dye-action-strip">
+                <button id="dye-reload" type="button" class="btn btn-ghost dye-action dye-reload" hidden title="Reload the latest saved Wardrobe">
+                  <span class="dye-action-icon" aria-hidden="true">↻</span><span>Reload</span>
+                </button>
+                <button id="dye-discard" type="button" class="btn btn-ghost dye-action dye-discard" disabled title="Discard all unsaved changes">
+                  <span class="dye-action-icon" aria-hidden="true">×</span><span>Discard</span>
+                </button>
+                <button id="dye-save" type="button" class="btn btn-gold dye-action dye-save" disabled title="Save all Wardrobe changes">
+                  <span class="dye-action-icon" aria-hidden="true">✓</span><span>Save</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside id="dye-nav-toast" class="dye-nav-toast" hidden role="alert"
+      aria-labelledby="dye-nav-title" aria-describedby="dye-nav-message">
+      <button id="dye-nav-close" type="button" class="dye-nav-close" aria-label="Keep editing and close this notice">×</button>
+      <span class="dye-nav-kicker">Unfinished fitting</span>
+      <h3 id="dye-nav-title">The tailor catches your sleeve!</h3>
+      <p id="dye-nav-message">You still have unfinished dye work on the fitting table. Save it before heading out, or leave it behind.</p>
+      <div class="dye-nav-actions">
+        <button id="dye-nav-save" type="button" class="btn btn-gold">
+          <span aria-hidden="true">✦</span><span id="dye-nav-save-label">Save &amp; Continue</span>
+        </button>
+        <button id="dye-nav-leave" type="button" class="btn btn-ghost">Leave Without Saving</button>
+      </div>
+    </aside>
+
+    <% const dyeClient = {
+      token: player.auth_token,
+      frames: dye.frames,
+      channels: dye.channels,
+      config: dye.config,
+      presets: dye.presets,
+      wheelSat: dye.wheelSat,
+      revisionSession: dye.revisionSession,
+      revisionSeed: dye.revisionSeed,
+    }; %>
+    <script>window.__DYE__ = <%- JSON.stringify(dyeClient).replace(/</g, '\\u003c') %>;</script>
+    <script src="/static/dye-color.js"></script>
+    <script src="/static/dye-draft.js"></script>
+    <script src="/static/dye.js"></script>
+  <% } %>
+</div>
+<% } %>

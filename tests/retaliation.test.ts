@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { openDb } from '../src/db/db';
-import { pickTarget, rollConsequence, goldSteal, debuffFactor } from '../src/domain/retaliation';
+import {
+  activeDebuff,
+  pickTarget,
+  rollConsequence,
+  goldSteal,
+  debuffFactor,
+} from '../src/domain/retaliation';
 
 const cfg = { monsterDebuffFactor: 0.85, monsterDebuffSeconds: 8 };
 
@@ -38,11 +44,14 @@ describe('retaliation helpers', () => {
     expect(debuffFactor(db, 1, 10_000, cfg)).toBe(1);
     // a debuff at t=10_000; window is 8s
     db.prepare("INSERT INTO monster_attacks (encounter_id,player_id,kind,ts) VALUES (1,1,'debuff',10000)").run();
+    expect(activeDebuff(db, 1, 10_000, cfg)).toEqual({ factor: 0.85, remainingMs: 8_000 });
+    expect(activeDebuff(db, 1, 15_000, cfg)).toEqual({ factor: 0.85, remainingMs: 3_000 });
     expect(debuffFactor(db, 1, 10_000, cfg)).toBeCloseTo(0.85);        // same instant
     expect(debuffFactor(db, 1, 17_999, cfg)).toBeCloseTo(0.85);        // inside 8s
     expect(debuffFactor(db, 1, 18_001, cfg)).toBe(1);                  // expired
     // a gold row must NOT trigger a debuff
     db.prepare("INSERT INTO monster_attacks (encounter_id,player_id,kind,gold_delta,ts) VALUES (1,1,'gold',5,30000)").run();
     expect(debuffFactor(db, 1, 30_000, cfg)).toBe(1);
+    expect(activeDebuff(db, 1, 30_000, cfg)).toBeNull();
   });
 });

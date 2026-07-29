@@ -1,0 +1,44 @@
+<% function durationLabel(ms) {
+  if (ms % 3600000 === 0) { const n = ms / 3600000; return n + ' active ' + (n === 1 ? 'hour' : 'hours'); }
+  if (ms % 60000 === 0) { const n = ms / 60000; return n + ' active ' + (n === 1 ? 'minute' : 'minutes'); }
+  const n = ms / 1000; return n + ' active ' + (n === 1 ? 'second' : 'seconds');
+} %>
+<div class="hub-panel-head">
+  <div><h2>Inventory</h2><p>Pack light, choose carefully, and keep future treasures in one place.</p></div>
+</div>
+<div class="hub-inventory-filters" aria-label="Inventory filters">
+  <button type="button" class="hub-filter" aria-pressed="true">All</button>
+  <button type="button" class="hub-filter" aria-pressed="false">Potions</button>
+  <button type="button" class="hub-filter" aria-pressed="false" disabled>Materials</button>
+  <button type="button" class="hub-filter" aria-pressed="false" disabled>Quest</button>
+</div>
+<div class="hub-inventory-layout">
+  <div id="hub-inventory-grid" class="hub-inventory-grid" aria-label="Owned items">
+    <% if (inventory.length === 0) { %>
+      <div class="hub-satchel-empty"><strong>Your satchel is quiet.</strong><span>Purchased supplies will settle into these slots.</span></div>
+    <% } else { %>
+      <% inventory.forEach(function (item, index) { %>
+        <button type="button" class="hub-item-slot" data-sku="<%= item.sku %>" aria-pressed="<%= index === 0 ? 'true' : 'false' %>">
+          <img class="hub-item-icon <%= item.iconClass %>" src="/static/landing/potion.png" alt="" />
+          <span class="hub-item-name"><%= item.name %></span><span class="hub-item-qty">×<%= item.quantity %></span>
+        </button>
+      <% }); %>
+    <% } %>
+  </div>
+  <aside id="hub-item-detail" class="hub-item-detail" aria-live="polite">
+    <% if (inventory.length === 0) { %>
+      <p class="hub-empty-line">Select an owned item to read its ledger entry.</p>
+    <% } else { const item = inventory[0]; %>
+      <div class="hub-item-detail-head">
+        <img class="hub-item-icon <%= item.iconClass %>" src="/static/landing/potion.png" alt="" />
+        <div><span class="hub-item-tier">Tier <%= item.tier %> potion</span><h3><%= item.name %></h3></div>
+      </div>
+      <dl>
+        <dt>Owned</dt><dd><%= item.quantity %></dd>
+        <dt>Effect</dt><dd><%= item.effectCopy %></dd>
+        <dt>Duration</dt><dd><%= durationLabel(item.durationMs) %></dd>
+        <dt>Doses today</dt><dd><%= item.usesRemaining %> remaining</dd>
+      </dl>
+    <% } %>
+  </aside>
+</div>
