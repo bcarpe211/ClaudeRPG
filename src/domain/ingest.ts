@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { parseTokenDataPoints, type TokenDataPoint } from './otlp';
 import { getPlayerByToken } from './players';
+import { applyGoldPotionWork } from './potions';
 
 function seriesKey(p: TokenDataPoint): string {
   return `${p.token ?? ' '}|${p.type}|${p.model}|${p.startTimeUnixNano}`;
@@ -114,10 +115,18 @@ export function ingestTokenUsage(
          WHERE id = ?`,
       ).run(total, effective, now, player.id);
 
-      db.prepare(
+      const tokenEvent = db.prepare(
         `INSERT INTO token_events (player_id, ts, effective_delta, total_delta)
          VALUES (?, ?, ?, ?)`,
       ).run(player.id, now, effective, total);
+
+      applyGoldPotionWork(
+        db,
+        player.id,
+        Number(tokenEvent.lastInsertRowid),
+        effective,
+        now,
+      );
 
       appliedPlayers++;
     }
@@ -140,4 +149,3 @@ export function sumEffectiveSince(
     .get(playerId, since) as { s: number };
   return row.s;
 }
-

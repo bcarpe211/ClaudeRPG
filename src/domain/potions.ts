@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { combatActiveMs, isCombatAcceptingWork } from './gameclock';
+import { applyGoldMutation } from './goldledger';
 import { inventoryQuantity } from './inventory';
 import { officeDayKey } from './office-time';
 import { consumableProduct, type PotionType } from './shop-products';
@@ -38,6 +39,14 @@ export interface ActivePotionEffect {
   eligibleTokens: number;
   baseGold: number;
   stretchGold: number;
+}
+
+export interface GoldPotionWorkResult {
+  activationId: number | null;
+  eligibleTokens: number;
+  baseGold: number;
+  stretchGold: number;
+  duplicate: boolean;
 }
 
 export type ActivatePotionResult =
@@ -120,6 +129,13 @@ type ActiveRow = {
   expires_game_ms: number;
   effect_snapshot: string;
   eligible_tokens: number;
+  base_gold: number;
+  stretch_gold: number;
+};
+
+type GoldWorkRow = {
+  activation_id: number;
+  effective_delta: number;
   base_gold: number;
   stretch_gold: number;
 };
@@ -458,6 +474,155 @@ export function activePotionEffects(
     });
   }
   return effects;
+}
+
+export function applyGoldPotionWork(
+  db: Database.Database,
+  playerId: number,
+  tokenEventId: number,
+  effectiveDelta: number,
+  now: number,
+): GoldPotionWorkResult {
+  return db.transaction((): GoldPotionWorkResult => {
+    const priorWork = db.prepare(
+      `SELECT activation_id, effective_delta, base_gold, stretch_gold
+       FROM potion_work_events
+       WHERE token_event_id = ?
+       ORDER BY id
+       LIMIT 1`,
+    ).get(tokenEventId) as GoldWorkRow | undefined;
+    if (priorWork) {
+      return {
+        activationId: priorWork.activation_id,
+        eligibleTokens: priorWork.effective_delta,
+        baseGold: priorWork.base_gold,
+        stretchGold: priorWork.stretch_gold,
+        duplicate: true,
+      };
+    }
+
+    const zero: GoldPotionWorkResult = {
+      activationId: null,
+      eligibleTokens: 0,
+      baseGold: 0,
+      stretchGold: 0,
+      duplicate: false,
+    };
+    if (!Number.isSafeInteger(effectiveDelta) || effectiveDelta <= 0) return zero;
+
+    completeExpiredPotions(db, now);
+    retireInvalidActivePotions(db, playerId, now);
+    if (!isCombatAcceptingWork(
+      db,
+      now,
+      configuredPauseAfterMinutes(db),
+    )) {
+      return zero;
+    }
+
+    const currentGameMs = combatActiveMs(db);
+    const activation = db.prepare(
+      `SELECT id, sku, potion_type, tier, start_game_ms, expires_game_ms,
+              effect_snapshot, eligible_tokens, base_gold, stretch_gold
+       FROM potion_activations
+       WHERE player_id = ?
+         AND potion_type = 'gold'
+         AND status = 'active'
+         AND expires_game_ms > ?
+       ORDER BY id
+       LIMIT 1`,
+    ).get(playerId, currentGameMs) as ActiveRow | undefined;
+    if (!activation) return zero;
+
+    const parsedSnapshot = parseStoredSnapshot(
+      activation.effect_snapshot,
+      activation.potion_type,
+    );
+    if (!parsedSnapshot || parsedSnapshot.kind !== 'gold') return zero;
+
+    const nextTokens = activation.eligible_tokens + effectiveDelta;
+    if (!Number.isSafeInteger(nextTokens)) {
+      throw new RangeError('eligible Gold Potion tokens must be a safe integer');
+    }
+    const nextBase = Math.min(
+      Math.floor(nextTokens / parsedSnapshot.tokenUnit)
+        * parsedSnapshot.goldPerUnit,
+      parsedSnapshot.baseCap,
+    );
+    const baseGold = nextBase - activation.base_gold;
+    const stretchGold = (
+      activation.eligible_tokens < parsedSnapshot.stretchTokens
+      && nextTokens >= parsedSnapshot.stretchTokens
+      && activation.stretch_gold === 0
+    )
+      ? parsedSnapshot.stretchBonus
+      : 0;
+
+    const inserted = db.prepare(
+      `INSERT INTO potion_work_events
+        (activation_id, token_event_id, effective_delta, base_gold,
+         stretch_gold, combat_active_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      activation.id,
+      tokenEventId,
+      effectiveDelta,
+      baseGold,
+      stretchGold,
+      currentGameMs,
+      now,
+    );
+    const workEventId = Number(inserted.lastInsertRowid);
+
+    const updated = db.prepare(
+      `UPDATE potion_activations
+       SET eligible_tokens = ?, base_gold = ?, stretch_gold = ?
+       WHERE id = ? AND status = 'active'`,
+    ).run(
+      nextTokens,
+      nextBase,
+      activation.stretch_gold + stretchGold,
+      activation.id,
+    );
+    if (updated.changes !== 1) {
+      throw new Error('Gold Potion activation changed while applying work');
+    }
+
+    if (baseGold > 0) {
+      const result = applyGoldMutation(db, {
+        playerId,
+        amount: baseGold,
+        reason: 'gold_potion_base',
+        sourceTable: 'potion_work_events',
+        sourceId: `${workEventId}`,
+        now,
+      });
+      if (result.status !== 'applied') {
+        throw new Error(`unable to credit Gold Potion base payout: ${result.status}`);
+      }
+    }
+    if (stretchGold > 0) {
+      const result = applyGoldMutation(db, {
+        playerId,
+        amount: stretchGold,
+        reason: 'gold_potion_stretch',
+        sourceTable: 'potion_work_events',
+        sourceId: `${workEventId}`,
+        now,
+      });
+      if (result.status !== 'applied') {
+        throw new Error(`unable to credit Gold Potion stretch payout: ${result.status}`);
+      }
+    }
+
+    return {
+      activationId: activation.id,
+      eligibleTokens: effectiveDelta,
+      baseGold,
+      stretchGold,
+      duplicate: false,
+    };
+  })();
 }
 
 class InventoryChangedDuringActivation extends Error {}
