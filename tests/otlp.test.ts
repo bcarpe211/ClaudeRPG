@@ -42,7 +42,7 @@ describe('parseTokenDataPoints', () => {
     expect(pts.length).toBe(2);
     expect(pts[0]).toMatchObject({
       token: 'TOK1', type: 'input', model: 'claude-opus-4', value: 150,
-      startTimeUnixNano: '100', temporality: 'delta',
+      startTimeUnixNano: '100', timeUnixNano: '200', temporality: 'delta',
     });
     expect(pts[1]).toMatchObject({ token: 'TOK1', type: 'output', value: 40, temporality: 'delta' });
   });

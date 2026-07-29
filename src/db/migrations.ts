@@ -638,4 +638,15 @@ export const migrations: Migration[] = [
       END;
     `,
   },
+  {
+    id: '017_otlp_delivery_keys',
+    sql: `
+      CREATE TABLE metric_deliveries (
+        series_key TEXT NOT NULL,
+        time_unix_nano TEXT NOT NULL,
+        received_at INTEGER NOT NULL,
+        PRIMARY KEY (series_key, time_unix_nano)
+      ) WITHOUT ROWID;
+    `,
+  },
 ];

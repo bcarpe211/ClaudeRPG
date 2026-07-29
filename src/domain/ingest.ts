@@ -16,6 +16,7 @@ function seriesKey(p: TokenDataPoint): string {
 export function computeIncrement(
   db: Database.Database,
   p: TokenDataPoint,
+  now: number,
 ): number {
   if (p.temporality === 'delta') {
     return Math.max(0, Math.round(p.value));
@@ -37,7 +38,7 @@ export function computeIncrement(
     `INSERT INTO metric_series (series_key, last_value, updated_at)
      VALUES (?, ?, ?)
      ON CONFLICT(series_key) DO UPDATE SET last_value = excluded.last_value, updated_at = excluded.updated_at`,
-  ).run(key, current, Date.now());
+  ).run(key, current, now);
   return delta;
 }
 
@@ -73,24 +74,29 @@ export function ingestTokenUsage(
   opts: IngestOptions,
 ): IngestResult {
   const points = parseTokenDataPoints(body);
-  const byToken = new Map<string, PerToken>();
+  const apply = db.transaction((): IngestResult => {
+    const byToken = new Map<string, PerToken>();
+    const claimDelivery = db.prepare(
+      `INSERT OR IGNORE INTO metric_deliveries
+        (series_key, time_unix_nano, received_at)
+       VALUES (?, ?, ?)`,
+    );
+    for (const p of points) {
+      const claimed = claimDelivery.run(seriesKey(p), p.timeUnixNano, now);
+      if (claimed.changes === 0) continue;
+      const inc = computeIncrement(db, p, now);
+      if (inc <= 0 || p.token == null) continue;
+      const agg = byToken.get(p.token) ?? emptyPerToken();
+      if (p.type === 'input') agg.input += inc;
+      else if (p.type === 'output') agg.output += inc;
+      else if (p.type === 'cacheCreation') agg.cacheCreation += inc;
+      else if (p.type === 'cacheRead') agg.cacheRead += inc;
+      // unknown type strings contribute nothing
+      byToken.set(p.token, agg);
+    }
 
-  for (const p of points) {
-    const inc = computeIncrement(db, p);
-    if (inc <= 0 || p.token == null) continue;
-    const agg = byToken.get(p.token) ?? emptyPerToken();
-    if (p.type === 'input') agg.input += inc;
-    else if (p.type === 'output') agg.output += inc;
-    else if (p.type === 'cacheCreation') agg.cacheCreation += inc;
-    else if (p.type === 'cacheRead') agg.cacheRead += inc;
-    // unknown type strings contribute nothing
-    byToken.set(p.token, agg);
-  }
-
-  let appliedPlayers = 0;
-  let ignoredUnknownTokens = 0;
-
-  const apply = db.transaction(() => {
+    let appliedPlayers = 0;
+    let ignoredUnknownTokens = 0;
     for (const [token, agg] of byToken) {
       const player = getPlayerByToken(db, token);
       if (!player) {
@@ -130,10 +136,9 @@ export function ingestTokenUsage(
 
       appliedPlayers++;
     }
+    return { appliedPlayers, ignoredUnknownTokens };
   });
-  apply();
-
-  return { appliedPlayers, ignoredUnknownTokens };
+  return apply();
 }
 
 /** Sum of effective tokens a player received at or after `since` (engine helper). */

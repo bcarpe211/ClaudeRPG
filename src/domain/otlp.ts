@@ -6,6 +6,7 @@ export interface TokenDataPoint {
   model: string; // model attribute, or '' if absent
   value: number; // counter value for this data point
   startTimeUnixNano: string; // identifies a counter series; '' if absent
+  timeUnixNano: string; // stable identity of this exported data point; '' if absent
   temporality: Temporality;
 }
 
@@ -70,6 +71,8 @@ export function parseTokenDataPoints(body: unknown): TokenDataPoint[] {
             value: readValue(dp),
             startTimeUnixNano:
               typeof dp?.startTimeUnixNano === 'string' ? dp.startTimeUnixNano : '',
+            timeUnixNano:
+              typeof dp?.timeUnixNano === 'string' ? dp.timeUnixNano : '',
             temporality,
           });
         }

@@ -12,10 +12,23 @@ let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); });
 
 function dp(over: Partial<TokenDataPoint>): TokenDataPoint {
-  return { token: 'T', type: 'input', model: 'm', value: 0, startTimeUnixNano: 's1', temporality: 'cumulative', ...over };
+  return {
+    token: 'T',
+    type: 'input',
+    model: 'm',
+    value: 0,
+    startTimeUnixNano: 's1',
+    timeUnixNano: 't1',
+    temporality: 'cumulative',
+    ...over,
+  };
 }
 
-function cumulativeBody(token: string, value: number) {
+function cumulativeBody(
+  token: string,
+  value: number,
+  timeUnixNano = String(value),
+) {
   return {
     resourceMetrics: [{
       resource: {
@@ -32,7 +45,7 @@ function cumulativeBody(token: string, value: number) {
             dataPoints: [{
               asInt: String(value),
               startTimeUnixNano: 'gold-series',
-              timeUnixNano: 't',
+              timeUnixNano,
               attributes: [
                 { key: 'type', value: { stringValue: 'input' } },
                 { key: 'model', value: { stringValue: 'm' } },
@@ -97,30 +110,30 @@ function activeGoldPotionPlayer(at: number) {
 
 describe('computeIncrement', () => {
   it('delta points pass through unchanged and store no series', () => {
-    expect(computeIncrement(db, dp({ temporality: 'delta', value: 30 }))).toBe(30);
+    expect(computeIncrement(db, dp({ temporality: 'delta', value: 30 }), 1)).toBe(30);
     const rows = db.prepare('SELECT COUNT(*) AS c FROM metric_series').get() as any;
     expect(rows.c).toBe(0);
   });
 
   it('cumulative: first sighting counts the full value, then diffs', () => {
-    expect(computeIncrement(db, dp({ value: 100 }))).toBe(100); // first
-    expect(computeIncrement(db, dp({ value: 130 }))).toBe(30);  // +30
-    expect(computeIncrement(db, dp({ value: 130 }))).toBe(0);   // no change
+    expect(computeIncrement(db, dp({ value: 100 }), 1)).toBe(100); // first
+    expect(computeIncrement(db, dp({ value: 130 }), 2)).toBe(30);  // +30
+    expect(computeIncrement(db, dp({ value: 130 }), 3)).toBe(0);   // no change
   });
 
   it('cumulative: a counter reset (value drops) counts the new value', () => {
-    computeIncrement(db, dp({ value: 100 }));
-    expect(computeIncrement(db, dp({ value: 20 }))).toBe(20); // reset → treat as full
+    computeIncrement(db, dp({ value: 100 }), 1);
+    expect(computeIncrement(db, dp({ value: 20 }), 2)).toBe(20); // reset → treat as full
   });
 
   it('different series (startTime/type/model) are tracked independently', () => {
-    expect(computeIncrement(db, dp({ value: 50, startTimeUnixNano: 's1' }))).toBe(50);
-    expect(computeIncrement(db, dp({ value: 70, startTimeUnixNano: 's2' }))).toBe(70);
-    expect(computeIncrement(db, dp({ value: 9, type: 'output' }))).toBe(9);
+    expect(computeIncrement(db, dp({ value: 50, startTimeUnixNano: 's1' }), 1)).toBe(50);
+    expect(computeIncrement(db, dp({ value: 70, startTimeUnixNano: 's2' }), 1)).toBe(70);
+    expect(computeIncrement(db, dp({ value: 9, type: 'output' }), 1)).toBe(9);
   });
 
   it('a null token still computes (series keyed by literal null) but is harmless', () => {
-    expect(computeIncrement(db, dp({ token: null, value: 5 }))).toBe(5);
+    expect(computeIncrement(db, dp({ token: null, value: 5 }), 1)).toBe(5);
   });
 
   it('credits Gold Potion work from cumulative increments, not cumulative totals', () => {
@@ -162,5 +175,50 @@ describe('computeIncrement', () => {
       stretch_gold: 0,
     });
     expect(getPlayerById(db, player.id)?.gold).toBe(50);
+  });
+
+  it('rolls back a cumulative checkpoint when downstream token persistence fails', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Atomic Cumulative', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    const delivery = cumulativeBody(player.auth_token, 100, 'atomic-100');
+    db.exec(`
+      CREATE TRIGGER fail_token_event_insert
+      BEFORE INSERT ON token_events
+      BEGIN
+        SELECT RAISE(ABORT, 'forced token event failure');
+      END;
+    `);
+
+    expect(() => ingestTokenUsage(
+      db,
+      delivery,
+      1_000,
+      { cacheReadWeight: 0 },
+    )).toThrow('forced token event failure');
+    expect(db.prepare('SELECT COUNT(*) AS count FROM metric_series').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM metric_deliveries').get())
+      .toEqual({ count: 0 });
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+
+    db.exec('DROP TRIGGER fail_token_event_insert');
+    expect(ingestTokenUsage(
+      db,
+      delivery,
+      2_000,
+      { cacheReadWeight: 0 },
+    )).toEqual({ appliedPlayers: 1, ignoredUnknownTokens: 0 });
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: 100,
+      total_tokens: 100,
+      last_token_at: 2_000,
+    });
   });
 });

@@ -10,10 +10,14 @@ import { seedSettings } from '../src/domain/settings';
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); });
 
-function body(token: string, byType: Record<string, number>, temporality = 1) {
+function body(
+  token: string,
+  byType: Record<string, number>,
+  temporality = 1,
+  timeUnixNano = 't',
+) {
   const dataPoints = Object.entries(byType).map(([type, v]) => ({
-    asInt: String(v),
-    startTimeUnixNano: 's', timeUnixNano: 't',
+    asInt: String(v), startTimeUnixNano: 's', timeUnixNano,
     attributes: [{ key: 'type', value: { stringValue: type } }, { key: 'model', value: { stringValue: 'm' } }],
   }));
   return {
@@ -100,9 +104,36 @@ describe('ingestTokenUsage', () => {
 
   it('accumulates across multiple ingests', () => {
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
-    ingestTokenUsage(db, body(p.auth_token, { input: 100 }), 1, { cacheReadWeight: 0 });
-    ingestTokenUsage(db, body(p.auth_token, { input: 50 }), 2, { cacheReadWeight: 0 });
+    ingestTokenUsage(db, body(p.auth_token, { input: 100 }, 1, 't1'), 1, { cacheReadWeight: 0 });
+    ingestTokenUsage(db, body(p.auth_token, { input: 50 }, 1, 't2'), 2, { cacheReadWeight: 0 });
     expect(getPlayerById(db, p.id)!.effective_tokens).toBe(150);
+  });
+
+  it('applies an exact delta delivery only once when the exporter replays it', () => {
+    const p = createPlayer(
+      db,
+      { name: 'Replay', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    const replayed = body(p.auth_token, { input: 100 }, 1, 'delivery-100');
+
+    ingestTokenUsage(db, replayed, 1_000, { cacheReadWeight: 0 });
+    ingestTokenUsage(db, replayed, 2_000, { cacheReadWeight: 0 });
+
+    expect(getPlayerById(db, p.id)).toMatchObject({
+      effective_tokens: 100,
+      total_tokens: 100,
+      last_token_at: 1_000,
+    });
+    expect(db.prepare(
+      'SELECT effective_delta, total_delta FROM token_events WHERE player_id=?',
+    ).all(p.id)).toEqual([{ effective_delta: 100, total_delta: 100 }]);
+    expect(db.prepare(
+      'SELECT series_key, time_unix_nano FROM metric_deliveries',
+    ).all()).toEqual([{
+      series_key: `${p.auth_token}|input|m|s`,
+      time_unix_nano: 'delivery-100',
+    }]);
   });
 
   it('ignores unknown tokens', () => {
@@ -127,8 +158,18 @@ describe('ingestTokenUsage', () => {
   it('sumEffectiveSince totals only recent token_events', async () => {
     const { sumEffectiveSince } = await import('../src/domain/ingest');
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
-    ingestTokenUsage(db, body(p.auth_token, { input: 100 }), 1000, { cacheReadWeight: 0 });
-    ingestTokenUsage(db, body(p.auth_token, { input: 50 }), 5000, { cacheReadWeight: 0 });
+    ingestTokenUsage(
+      db,
+      body(p.auth_token, { input: 100 }, 1, 'recent-1'),
+      1000,
+      { cacheReadWeight: 0 },
+    );
+    ingestTokenUsage(
+      db,
+      body(p.auth_token, { input: 50 }, 1, 'recent-2'),
+      5000,
+      { cacheReadWeight: 0 },
+    );
     expect(sumEffectiveSince(db, p.id, 2000)).toBe(50);
     expect(sumEffectiveSince(db, p.id, 0)).toBe(150);
   });
