@@ -395,6 +395,17 @@ describe('mounted player hub tabs', () => {
 });
 
 describe('player hub inventory, effects, and refresh behavior', () => {
+  it('renders polling inventory cells with accessible quantity labels', () => {
+    const h = interactionHarness();
+    const gold = h.document.getElementById('hub-inventory-grid')!
+      .querySelectorAll('[data-sku]')
+      .find((button) => button.dataset.sku === 'potion_gold_t1')!;
+
+    expect(gold.getAttribute('aria-label')).toBe('Beginner Gold Potion, 2 owned');
+    expect(gold.children.some((child) => child.className === 'hub-item-name')).toBe(false);
+    expect(gold.children.find((child) => child.className === 'hub-item-qty')?.textContent).toBe('2');
+  });
+
   it('cancels an unsubmitted confirmation when polling makes its SKU unavailable', async () => {
     const h = interactionHarness({ responses: [] });
     const grid = h.document.getElementById('hub-inventory-grid')!;

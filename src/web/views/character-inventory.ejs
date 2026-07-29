@@ -13,17 +13,25 @@
   <button type="button" class="hub-filter" aria-pressed="false" disabled>Quest</button>
 </div>
 <div class="hub-inventory-layout">
-  <div id="hub-inventory-grid" class="hub-inventory-grid" aria-label="Owned items">
-    <% if (inventory.length === 0) { %>
-      <div class="hub-satchel-empty"><strong>Your satchel is quiet.</strong><span>Purchased supplies will settle into these slots.</span></div>
-    <% } else { %>
-      <% inventory.forEach(function (item, index) { %>
-        <button type="button" class="hub-item-slot" data-sku="<%= item.sku %>" aria-pressed="<%= index === 0 ? 'true' : 'false' %>">
-          <img class="hub-item-icon <%= item.iconClass %>" src="/static/landing/potion.png" alt="" />
-          <span class="hub-item-name"><%= item.name %></span><span class="hub-item-qty">×<%= item.quantity %></span>
-        </button>
-      <% }); %>
-    <% } %>
+  <div class="hub-inventory-room">
+    <span class="hub-room-tile hub-room-crack-a" aria-hidden="true"></span>
+    <span class="hub-room-tile hub-room-crack-b" aria-hidden="true"></span>
+    <span class="hub-room-tile hub-room-moss" aria-hidden="true"></span>
+    <div id="hub-inventory-grid" class="hub-inventory-grid" aria-label="Owned items">
+      <% if (inventory.length === 0) { %>
+        <div class="hub-satchel-empty"><strong>Your satchel is quiet.</strong><span>Purchased supplies will settle into these floor spaces.</span></div>
+      <% } else { %>
+        <% inventory.forEach(function (item, index) { %>
+          <button type="button" class="hub-item-slot" data-sku="<%= item.sku %>"
+            aria-label="<%= item.name %>, <%= item.quantity %> owned"
+            aria-pressed="<%= index === 0 ? 'true' : 'false' %>">
+            <img class="hub-item-icon <%= item.iconClass %>" src="/static/landing/potion.png" alt="" />
+            <span class="hub-item-qty" aria-hidden="true"><%= item.quantity %></span>
+          </button>
+        <% }); %>
+      <% } %>
+    </div>
+    <span class="hub-room-tile hub-room-door" aria-hidden="true"></span>
   </div>
   <aside id="hub-item-detail" class="hub-item-detail" aria-live="polite" data-selected-sku="<%= inventory[0]?.sku ?? '' %>">
     <p id="hub-item-detail-empty" class="hub-empty-line" <%= inventory.length > 0 ? 'hidden' : '' %>>Select an owned item to read its ledger entry.</p>

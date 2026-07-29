@@ -109,13 +109,14 @@
     const button = element('button', 'hub-item-slot');
     button.type = 'button';
     button.dataset.sku = item.sku;
+    button.setAttribute('aria-label', `${item.name}, ${number.format(item.quantity)} owned`);
     button.setAttribute('aria-pressed', item.sku === selectedSku ? 'true' : 'false');
     const icon = element('img', `hub-item-icon ${item.iconClass}`);
     icon.src = '/static/landing/potion.png';
     icon.alt = '';
-    button.append(icon);
-    button.append(element('span', 'hub-item-name', item.name));
-    button.append(element('span', 'hub-item-qty', `×${item.quantity}`));
+    const quantity = element('span', 'hub-item-qty', number.format(item.quantity));
+    quantity.setAttribute('aria-hidden', 'true');
+    button.append(icon, quantity);
     return button;
   }
 
@@ -130,7 +131,7 @@
     if (items.length === 0) {
       const empty = element('div', 'hub-satchel-empty');
       empty.append(element('strong', '', 'Your satchel is quiet.'));
-      empty.append(element('span', '', 'Purchased supplies will settle into these slots.'));
+      empty.append(element('span', '', 'Purchased supplies will settle into these floor spaces.'));
       grid.append(empty);
     } else {
       items.forEach((item) => grid.append(inventoryButton(item)));

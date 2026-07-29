@@ -113,7 +113,14 @@ describe('character sheet', () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain('Beginner Gold Potion');
-    expect(response.text).toContain('×1');
+    expect(response.text).toContain('class="hub-inventory-room"');
+    expect(response.text).toContain('class="hub-room-tile hub-room-crack-a"');
+    expect(response.text).toContain('class="hub-room-tile hub-room-crack-b"');
+    expect(response.text).toContain('class="hub-room-tile hub-room-moss"');
+    expect(response.text).toContain('class="hub-room-tile hub-room-door"');
+    expect(response.text).toContain('aria-label="Beginner Gold Potion, 1 owned"');
+    expect(response.text).toContain('<span class="hub-item-qty" aria-hidden="true">1</span>');
+    expect(response.text).not.toContain('class="hub-item-name"');
     expect(response.text).toContain('Potion tuning is temporarily unavailable.');
     expect(response.text).toContain('Unavailable until tuning is repaired');
     expect(response.text).toMatch(/id="hub-potion-drink"[^>]*disabled/);

@@ -16,6 +16,17 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[\s\S]*grid-template-columns:\s*1fr/);
   });
 
+  it('builds a two-thirds dungeon-room inventory from existing pixel assets', () => {
+    expect(css).toMatch(/\.hub-inventory-layout\{[^}]*grid-template-columns:\s*minmax\(0,2fr\) minmax\(240px,1fr\)/);
+    expect(css).toMatch(/\.hub-inventory-room\{[^}]*border-image:[^}]*moss_wall\.png/);
+    expect(css).toContain('/sprites/world_24x24/oryx_16bit_fantasy_world_349.png');
+    expect(css).toContain('/sheet/world.png');
+    expect(css).toMatch(/\.hub-room-door\{[^}]*background-position:\s*-1392px -144px/);
+    expect(css).toMatch(/\.hub-item-qty\{[^}]*top:/);
+    expect(css).toMatch(/\.hub-item-qty\{[^}]*text-shadow:/);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[^}]*grid-template-columns:\s*1fr/);
+  });
+
   it('keeps the gold tab rail sticky on narrow screens and reanchors effects', () => {
     expect(css).toMatch(/\.hub-tabs[\s\S]*border/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-tabs[\s\S]*position:\s*sticky/);
