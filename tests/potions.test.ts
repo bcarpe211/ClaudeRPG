@@ -8,6 +8,7 @@ import { createPlayer } from '../src/domain/players';
 import {
   activatePotion,
   activePotionEffects,
+  damagePotionMultiplier,
   visiblePotionTiersByPlayer,
   completeExpiredPotions,
   remainingDailyUses,
@@ -597,6 +598,25 @@ describe('manual potion activation', () => {
 
     db.prepare('UPDATE potion_activations SET effect_snapshot = ? WHERE id = ?')
       .run('{"kind":"damage","durationMs":"broken","baseHitMultiplier":99}', row.id);
+    expect(activePotionEffects(db, player.id, dayOne)).toEqual([]);
+  });
+
+  it('ignores an activated Damage snapshot above the 11x operational ceiling', () => {
+    const player = playerWithGold();
+    buy(player.id, 'potion_damage_t1', 1, 'extreme-damage-stock');
+    expect(activate(player.id, 'potion_damage_t1', 'extreme-damage'))
+      .toMatchObject({ ok: true, potionType: 'damage' });
+    db.prepare(
+      `UPDATE potion_activations
+       SET effect_snapshot=?
+       WHERE request_id='extreme-damage'`,
+    ).run(JSON.stringify({
+      kind: 'damage',
+      durationMs,
+      baseHitMultiplier: 11.000_001,
+    }));
+
+    expect(damagePotionMultiplier(db, player.id)).toBeNull();
     expect(activePotionEffects(db, player.id, dayOne)).toEqual([]);
   });
 });

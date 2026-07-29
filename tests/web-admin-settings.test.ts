@@ -152,6 +152,21 @@ describe('admin settings', () => {
     }
   });
 
+  it('rejects a damage bonus above 1,000% without saving any setting', async () => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send({
+        baseline_battle_minutes: '40',
+        ...potionSettings({ potion_damage_t1_base_hit_pct: '1000.0001' }),
+      });
+
+    expect(res.status).toBe(400);
+    expect(getSetting(db, 'baseline_battle_minutes')).toBe('45');
+    expect(getSetting(db, 'potion_damage_t1_base_hit_pct')).toBe('25');
+  });
+
   it('never exposes the admin password hash as an editable knob', async () => {
     const agent = await adminAgent();
     const res = await agent.get('/admin/settings');

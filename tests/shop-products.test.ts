@@ -35,6 +35,16 @@ describe('consumable product catalog', () => {
     });
   });
 
+  it('accepts a 1,000% damage bonus ceiling and rejects anything above it', () => {
+    setSetting(db, 'potion_damage_t1_base_hit_pct', '1000');
+    expect(currentPotionConfiguration(db)).toMatchObject({
+      damage: { baseHitPercent: 1_000 },
+    });
+
+    setSetting(db, 'potion_damage_t1_base_hit_pct', '1000.0001');
+    expect(currentPotionConfiguration(db)).toBeUndefined();
+  });
+
   it.each([
     ['negative price', 'potion_gold_t1_price', '-1'],
     ['fractional price', 'potion_damage_t1_price', '1.5'],

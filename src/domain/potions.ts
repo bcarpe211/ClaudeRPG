@@ -8,6 +8,7 @@ import {
   consumableProductForConfiguration,
   currentPotionConfiguration,
   isConsumableSku,
+  MAX_DAMAGE_POTION_MULTIPLIER,
   potionEffectSnapshotForConfiguration,
   type DamagePotionSnapshot,
   type GoldPotionSnapshot,
@@ -88,7 +89,8 @@ const goldPotionSnapshotSchema = z.object({
 const damagePotionSnapshotSchema = z.object({
   kind: z.literal('damage'),
   durationMs: positiveDuration,
-  baseHitMultiplier: z.number().finite().positive(),
+  baseHitMultiplier: z.number().finite().positive()
+    .max(MAX_DAMAGE_POTION_MULTIPLIER),
 }).strict();
 
 const potionEffectSnapshotSchema = z.discriminatedUnion('kind', [

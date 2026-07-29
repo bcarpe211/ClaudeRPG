@@ -26,4 +26,11 @@ describe('combat', () => {
   it('never deals less than 1', () => {
     expect(attackDamage(0, 1, 0.1, 1)).toBe(1);
   });
+
+  it('rejects non-finite and unsafe derived damage', () => {
+    expect(() => attackDamage(Infinity, 1, 0.1, 1))
+      .toThrow('damage must be a positive safe integer');
+    expect(() => attackDamage(Number.MAX_SAFE_INTEGER, 1, 0, 1.000_001))
+      .toThrow('damage must be a positive safe integer');
+  });
 });

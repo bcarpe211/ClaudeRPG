@@ -3,6 +3,13 @@ import { DEFAULT_SETTINGS, getSetting } from './settings';
 
 export type PotionType = 'gold' | 'damage';
 
+/**
+ * Operational Damage Potion ceiling: a 1,000% bonus is an 11x total hit.
+ * This is deliberately above Tier 1 so future tiers retain tuning room.
+ */
+export const MAX_DAMAGE_POTION_BONUS_PERCENT = 1_000;
+export const MAX_DAMAGE_POTION_MULTIPLIER = 11;
+
 export interface ConsumableProduct {
   id: 'potion_gold_t1' | 'potion_damage_t1';
   name: string;
@@ -157,9 +164,11 @@ export function parsePotionConfiguration(
     || damageDurationMs === undefined
     || baseHitPercent === undefined
     || baseHitPercent < 0
+    || baseHitPercent > MAX_DAMAGE_POTION_BONUS_PERCENT
     || baseHitMultiplier === undefined
     || !Number.isFinite(baseHitMultiplier)
     || baseHitMultiplier <= 0
+    || baseHitMultiplier > MAX_DAMAGE_POTION_MULTIPLIER
     || dailyStock === undefined
     || dailyUses === undefined
   ) {

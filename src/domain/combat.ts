@@ -18,5 +18,9 @@ export function attackDamage(
   modifier: number,
 ): number {
   const raw = baseHit * damageMultiplier(level, slope) * modifier;
-  return Math.max(1, Math.round(raw));
+  const damage = Math.max(1, Math.round(raw));
+  if (!Number.isSafeInteger(damage) || damage < 1) {
+    throw new RangeError('damage must be a positive safe integer');
+  }
+  return damage;
 }
