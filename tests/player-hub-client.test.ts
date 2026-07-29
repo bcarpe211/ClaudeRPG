@@ -278,6 +278,13 @@ function interactionHarness(options: {
   const cancelledFrames: number[] = [];
   const potionFxInputs: Array<Record<string, unknown>> = [];
   const potionCanvasCalls: Array<{ method: string; args: unknown[] }> = [];
+  const reducedMotionListeners: Array<() => unknown> = [];
+  const reducedMotionQuery = {
+    matches: options.reducedMotion ?? false,
+    addEventListener(type: string, listener: () => unknown) {
+      if (type === 'change') reducedMotionListeners.push(listener);
+    },
+  };
   const potionCanvas = document.getElementById('hub-potion-fx')!;
   potionCanvas.canvasContext = {
     clearRect(...args: unknown[]) { potionCanvasCalls.push({ method: 'clearRect', args }); },
@@ -311,7 +318,7 @@ function interactionHarness(options: {
     setInterval(callback: () => unknown, delay: number) { intervals.push({ callback, delay }); return 1; },
     setTimeout(callback: () => unknown) { timers.push(callback); return timers.length; },
     clearTimeout() {},
-    matchMedia: () => ({ matches: options.reducedMotion ?? false }),
+    matchMedia: () => reducedMotionQuery,
     requestAnimationFrame(callback: (time: number) => unknown) {
       const id = animationFrames.length + 1;
       animationFrames.push({ id, callback });
@@ -331,6 +338,7 @@ function interactionHarness(options: {
   return {
     document, context, fetchCalls, responses, intervals, initialState, refreshed, avatar,
     animationFrames, cancelledFrames, potionFxInputs, potionCanvasCalls,
+    reducedMotionQuery, reducedMotionListeners,
   };
 }
 
@@ -506,6 +514,38 @@ describe('player hub inventory, effects, and refresh behavior', () => {
       timeMs: 1_234,
     });
     expect(h.potionCanvasCalls.some((call) => call.method === 'fillRect')).toBe(true);
+  });
+
+  it('redraws the profile only when the shared 120ms mote step changes', () => {
+    const h = interactionHarness();
+
+    h.animationFrames[0].callback(1_234);
+    h.animationFrames[1].callback(1_235);
+    expect(h.potionFxInputs).toHaveLength(1);
+
+    h.animationFrames[2].callback(1_320);
+    expect(h.potionFxInputs).toHaveLength(2);
+  });
+
+  it('cancels and resumes one profile loop across visibility and reduced-motion changes', async () => {
+    const h = interactionHarness();
+    h.document.visibilityState = 'hidden';
+    h.document.dispatch('visibilitychange');
+    expect(h.cancelledFrames).toContain(1);
+
+    h.responses.splice(0, h.responses.length, { ok: true, json: async () => h.initialState });
+    h.document.visibilityState = 'visible';
+    h.document.dispatch('visibilitychange');
+    expect(h.animationFrames).toHaveLength(2);
+
+    h.reducedMotionQuery.matches = true;
+    h.reducedMotionListeners[0]();
+    expect(h.cancelledFrames).toContain(2);
+
+    h.reducedMotionQuery.matches = false;
+    h.reducedMotionListeners[0]();
+    expect(h.animationFrames).toHaveLength(3);
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it('stops and clears the profile mote loop when no started potion remains', async () => {

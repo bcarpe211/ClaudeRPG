@@ -41,6 +41,11 @@ export interface ActivePotionEffect {
   stretchGold: number;
 }
 
+export interface VisiblePotionTiers {
+  goldTier: number | null;
+  damageTier: number | null;
+}
+
 export interface GoldPotionWorkResult {
   activationId: number | null;
   eligibleTokens: number;
@@ -520,6 +525,42 @@ export function activePotionEffects(
     });
   }
   return effects;
+}
+
+/**
+ * One TV-facing snapshot for every player whose potion clock has started.
+ * Expiry and combat time are evaluated once so a broadcast never fans out
+ * through the full active-effect reader per player.
+ */
+export function visiblePotionTiersByPlayer(
+  db: Database.Database,
+  now: number,
+): Map<number, VisiblePotionTiers> {
+  completeExpiredPotions(db, now);
+  const currentGameMs = combatActiveMs(db);
+  const rows = db.prepare(
+    `SELECT player_id, potion_type, tier, start_game_ms, effect_snapshot
+     FROM potion_activations
+     WHERE status='active' AND expires_game_ms > ?
+     ORDER BY player_id, id`,
+  ).all(currentGameMs) as Array<{
+    player_id: number;
+    potion_type: PotionType;
+    tier: number;
+    start_game_ms: number;
+    effect_snapshot: string;
+  }>;
+
+  const byPlayer = new Map<number, VisiblePotionTiers>();
+  for (const row of rows) {
+    if (currentGameMs <= row.start_game_ms) continue;
+    if (!parseStoredSnapshot(row.effect_snapshot, row.potion_type)) continue;
+    const tiers = byPlayer.get(row.player_id) ?? { goldTier: null, damageTier: null };
+    if (row.potion_type === 'gold') tiers.goldTier = row.tier;
+    if (row.potion_type === 'damage') tiers.damageTier = row.tier;
+    byPlayer.set(row.player_id, tiers);
+  }
+  return byPlayer;
 }
 
 export function applyGoldPotionWork(

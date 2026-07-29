@@ -8,6 +8,7 @@ import { createPlayer } from '../src/domain/players';
 import {
   activatePotion,
   activePotionEffects,
+  visiblePotionTiersByPlayer,
   completeExpiredPotions,
   remainingDailyUses,
 } from '../src/domain/potions';
@@ -542,6 +543,27 @@ describe('manual potion activation', () => {
       status: 'completed',
       completed_at: dayOne + durationMs,
     });
+  });
+
+  it('loads visible potion tiers for every player in one bulk snapshot', () => {
+    const gold = playerWithGold();
+    const damage = playerWithGold();
+    buy(gold.id, 'potion_gold_t1', 1, 'bulk-gold-stock');
+    buy(damage.id, 'potion_damage_t1', 1, 'bulk-damage-stock');
+    seedActiveEncounter(gold.id, dayOne);
+    expect(activate(gold.id, 'potion_gold_t1', 'bulk-gold')).toMatchObject({ ok: true });
+    expect(activate(damage.id, 'potion_damage_t1', 'bulk-damage')).toMatchObject({ ok: true });
+
+    expect([...visiblePotionTiersByPlayer(db, dayOne)]).toEqual([]);
+
+    db.prepare('UPDATE game_state SET combat_active_ms=combat_active_ms+1000 WHERE id=1').run();
+    expect([...visiblePotionTiersByPlayer(db, dayOne + 1_000)]).toEqual([
+      [gold.id, { goldTier: 1, damageTier: null }],
+      [damage.id, { goldTier: null, damageTier: 1 }],
+    ]);
+
+    db.prepare('UPDATE encounters SET status=\'defeated\'').run();
+    expect([...visiblePotionTiersByPlayer(db, dayOne + 2_000)]).toHaveLength(2);
   });
 
   it('snapshots Damage settings and ignores malformed stored snapshots in active reads', () => {

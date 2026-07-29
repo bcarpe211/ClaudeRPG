@@ -153,6 +153,12 @@ describe('buildTvState', () => {
       })).toMatchObject({ ok: true });
     }
 
+    const armed = buildTvState(db, now);
+    expect(armed.players.find((player) => player.id === gold.id)?.potionEffects)
+      .toEqual({ goldTier: null, damageTier: null });
+    expect(armed.players.find((player) => player.id === damage.id)?.potionEffects)
+      .toEqual({ goldTier: null, damageTier: null });
+
     // One tick of combat-active time starts armed potions. The third row is then
     // expired deliberately to prove its absent mote is independent of the hex.
     db.prepare('UPDATE game_state SET combat_active_ms=combat_active_ms+1000 WHERE id=1').run();

@@ -62,6 +62,7 @@
   let refreshing = false;
   let refreshQueued = false;
   let potionFrameRequest = null;
+  let potionFrameKey = null;
 
   function clear(element) {
     while (element.firstChild) element.removeChild(element.firstChild);
@@ -288,6 +289,7 @@
   function stopPotionAnimation() {
     if (potionFrameRequest !== null) root.cancelAnimationFrame?.(potionFrameRequest);
     potionFrameRequest = null;
+    potionFrameKey = null;
     clearPotionCanvas();
   }
 
@@ -306,25 +308,32 @@
       return;
     }
 
-    clearPotionCanvas();
-    const motes = root.ClaudeRpgPotionFx.frame({
-      playerId: bootstrap.playerId,
-      ...tiers,
-      timeMs,
-    });
-    for (const mote of motes) {
-      const size = mote.size;
-      const x = Math.round(24 + mote.dx - size / 2);
-      const y = Math.round(45 + mote.dy - size);
-      potionContext.save();
-      potionContext.globalAlpha = mote.alpha;
-      potionContext.fillStyle = 'rgba(7,4,12,0.9)';
-      potionContext.fillRect(x + 1, y + 1, size, size);
-      potionContext.shadowColor = mote.color;
-      potionContext.shadowBlur = 1;
-      potionContext.fillStyle = mote.color;
-      potionContext.fillRect(x, y, size, size);
-      potionContext.restore();
+    const stepMs = Number.isFinite(root.ClaudeRpgPotionFx.stepMs)
+      ? root.ClaudeRpgPotionFx.stepMs
+      : 120;
+    const frameKey = `${tiers.goldTier ?? 0}:${tiers.damageTier ?? 0}:${Math.floor(timeMs / stepMs)}`;
+    if (frameKey !== potionFrameKey) {
+      potionFrameKey = frameKey;
+      clearPotionCanvas();
+      const motes = root.ClaudeRpgPotionFx.frame({
+        playerId: bootstrap.playerId,
+        ...tiers,
+        timeMs,
+      });
+      for (const mote of motes) {
+        const size = mote.size;
+        const x = Math.round(24 + mote.dx - size / 2);
+        const y = Math.round(45 + mote.dy - size);
+        potionContext.save();
+        potionContext.globalAlpha = mote.alpha;
+        potionContext.fillStyle = 'rgba(7,4,12,0.9)';
+        potionContext.fillRect(x + 1, y + 1, size, size);
+        potionContext.shadowColor = mote.color;
+        potionContext.shadowBlur = 1;
+        potionContext.fillStyle = mote.color;
+        potionContext.fillRect(x, y, size, size);
+        potionContext.restore();
+      }
     }
     potionFrameRequest = root.requestAnimationFrame?.(drawPotionFrame) ?? null;
   }

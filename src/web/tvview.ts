@@ -28,7 +28,7 @@ import { cosmeticSkinUrlForPlayer, type SkinAssetContext } from '../domain/slotc
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
 import { monsterByIndex, monsterName } from '../domain/bestiary';
 import { monsterTitle, pluralizeCreature } from '../domain/monstername';
-import { activePotionEffects } from '../domain/potions';
+import { visiblePotionTiersByPlayer } from '../domain/potions';
 
 export function creatureSpriteUrl(index: number): string {
   return `/sprites/creatures_24x24/${creatureSpriteFile(index)}`;
@@ -99,19 +99,10 @@ export function buildTvState(
   const rows = db.prepare(
     'SELECT * FROM players ORDER BY effective_tokens DESC, id ASC',
   ).all() as any[];
-  const playersWithPotions = new Set((db.prepare(
-    "SELECT DISTINCT player_id FROM potion_activations WHERE status='active'",
-  ).all() as { player_id: number }[]).map((row) => row.player_id));
+  const potionTiersByPlayer = visiblePotionTiersByPlayer(db, now);
   const players: TvHero[] = rows.map((p) => {
-    const potionEffects = { goldTier: null, damageTier: null } as TvHero['potionEffects'];
-    const activeEffects = playersWithPotions.has(p.id)
-      ? activePotionEffects(db, p.id, now)
-      : [];
-    for (const effect of activeEffects) {
-      if (effect.state === 'armed') continue;
-      if (effect.potionType === 'gold') potionEffects.goldTier = effect.tier;
-      if (effect.potionType === 'damage') potionEffects.damageTier = effect.tier;
-    }
+    const potionEffects = potionTiersByPlayer.get(p.id)
+      ?? { goldTier: null, damageTier: null };
     return {
       id: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a', assets),
       level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,

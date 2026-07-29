@@ -67,8 +67,20 @@ describe('shared potion mote vocabulary', () => {
 
     expect(dual).toHaveLength(6);
     expect(new Set(dual.map((mote) => mote.type))).toEqual(new Set(['gold', 'damage']));
+    expect(dual.map((mote) => mote.type)).toEqual([
+      'gold', 'damage', 'gold', 'damage', 'gold', 'damage',
+    ]);
     expect(new Set(dual.map((mote) => mote.color))).toEqual(new Set(['#f1c75b', '#e14b4b']));
     expect(Math.max(...dual.map((mote) => -mote.dy))).toBeLessThanOrEqual(28);
+  });
+
+  it('caps future single and dual tiers at eight visible motes', () => {
+    const api = loadPotionFx();
+
+    expect(api.frame({ playerId: 7, goldTier: 99, damageTier: null, timeMs: 1_000 }))
+      .toHaveLength(8);
+    expect(api.frame({ playerId: 7, goldTier: 99, damageTier: 99, timeMs: 1_000 }))
+      .toHaveLength(8);
   });
 
   it('changes only stepped integer positions as time advances', () => {

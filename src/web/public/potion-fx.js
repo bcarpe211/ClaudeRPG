@@ -54,5 +54,5 @@
     });
   }
 
-  root.ClaudeRpgPotionFx = Object.freeze({ frame });
+  root.ClaudeRpgPotionFx = Object.freeze({ frame, stepMs: STEP_MS });
 })(typeof window === 'undefined' ? globalThis : window);
