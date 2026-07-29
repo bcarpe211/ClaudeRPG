@@ -278,8 +278,7 @@ export class GameEngine {
     this.wasPaused = true;
   }
 
-  private recordClockState(now: number, pauseAfterMinutes: number): void {
-    this.previousTickAt = now;
+  private recordClockRunningState(now: number, pauseAfterMinutes: number): void {
     this.previousClockRunning = isCombatAcceptingWork(
       this.db,
       now,
@@ -290,66 +289,71 @@ export class GameEngine {
   /** Advance the game by one tick. `now` is epoch ms. */
   tick(now: number): void {
     const cfg = loadEngineConfig(this.db);
-    if (this.previousTickAt !== null && this.previousClockRunning) {
-      advanceCombatClock(
-        this.db,
-        now - this.previousTickAt,
-        now,
-        this.officeTimeZone,
-      );
-    }
-    const idle = isIdle(this.db, now, cfg.pauseAfterMinutes);
-
-    if (idle) {
-      setPaused(this.db, true, now);
-      this.wasPaused = true;
-      this.recordClockState(now, cfg.pauseAfterMinutes);
-      return;
-    }
-
-    // Active. Unpause; re-stagger attack timers on the paused->active transition.
-    setPaused(this.db, false, now);
-    if (this.wasPaused) {
-      this.nextAttackAt.clear();
-      this.nextMonsterAttackAt = 0;
-      this.wasPaused = false;
-    }
-
-    let gs = getGameState(this.db);
-    // Respect the defeat-popup window before spawning the next encounter.
-    if (gs.defeat_until && now < gs.defeat_until) {
-      this.recordClockState(now, cfg.pauseAfterMinutes);
-      return;
-    }
-
-    const hasActive = gs.current_encounter_id &&
-      (this.db.prepare("SELECT status FROM encounters WHERE id=?")
-        .get(gs.current_encounter_id) as any)?.status === 'active';
-    if (!hasActive) {
-      advanceToNextEncounter(this.db, now, cfg, this.rng);
-      gs = getGameState(this.db);
-    }
-
-    const encId = gs.current_encounter_id!;
-
-    for (const p of this.activePlayers()) {
-      this.updateLevel(p, cfg, now);
-      const next = this.nextAttackAt.get(p.id) ?? this.scheduleNext(now, cfg);
-      if (now >= next) {
-        const score = activityScore(this.db, p.id, now, cfg);
-        const am = tokenModifier(score, cfg.tokenModifierK, cfg.modifierCap); // player's own activity modifier (capped)
-        const mod = am * debuffFactor(this.db, p.id, now, cfg);
-        const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelCurveSlope, mod);
-        this.applyHit(encId, p.id, dmg);
-        this.db.prepare('UPDATE players SET peak_modifier=? WHERE id=? AND peak_modifier < ?').run(am, p.id, am);
-        this.nextAttackAt.set(p.id, this.scheduleNext(now, cfg));
-      } else {
-        this.nextAttackAt.set(p.id, next);
+    try {
+      if (
+        this.previousTickAt !== null
+        && this.previousClockRunning
+        && now >= this.previousTickAt
+      ) {
+        advanceCombatClock(
+          this.db,
+          now - this.previousTickAt,
+          now,
+          this.officeTimeZone,
+        );
       }
+      this.previousTickAt = now;
+
+      const idle = isIdle(this.db, now, cfg.pauseAfterMinutes);
+
+      if (idle) {
+        setPaused(this.db, true, now);
+        this.wasPaused = true;
+        return;
+      }
+
+      // Active. Unpause; re-stagger attack timers on the paused->active transition.
+      setPaused(this.db, false, now);
+      if (this.wasPaused) {
+        this.nextAttackAt.clear();
+        this.nextMonsterAttackAt = 0;
+        this.wasPaused = false;
+      }
+
+      let gs = getGameState(this.db);
+      // Respect the defeat-popup window before spawning the next encounter.
+      if (gs.defeat_until && now < gs.defeat_until) return;
+
+      const hasActive = gs.current_encounter_id &&
+        (this.db.prepare("SELECT status FROM encounters WHERE id=?")
+          .get(gs.current_encounter_id) as any)?.status === 'active';
+      if (!hasActive) {
+        advanceToNextEncounter(this.db, now, cfg, this.rng);
+        gs = getGameState(this.db);
+      }
+
+      const encId = gs.current_encounter_id!;
+
+      for (const p of this.activePlayers()) {
+        this.updateLevel(p, cfg, now);
+        const next = this.nextAttackAt.get(p.id) ?? this.scheduleNext(now, cfg);
+        if (now >= next) {
+          const score = activityScore(this.db, p.id, now, cfg);
+          const am = tokenModifier(score, cfg.tokenModifierK, cfg.modifierCap); // player's own activity modifier (capped)
+          const mod = am * debuffFactor(this.db, p.id, now, cfg);
+          const dmg = attackDamage(cfg.baseHit, p.level, cfg.levelCurveSlope, mod);
+          this.applyHit(encId, p.id, dmg);
+          this.db.prepare('UPDATE players SET peak_modifier=? WHERE id=? AND peak_modifier < ?').run(am, p.id, am);
+          this.nextAttackAt.set(p.id, this.scheduleNext(now, cfg));
+        } else {
+          this.nextAttackAt.set(p.id, next);
+        }
+      }
+      this.maybeMonsterAttack(encId, now, cfg);
+      this.resolveKillIfDead(encId, now, cfg);
+    } finally {
+      this.recordClockRunningState(now, cfg.pauseAfterMinutes);
     }
-    this.maybeMonsterAttack(encId, now, cfg);
-    this.resolveKillIfDead(encId, now, cfg);
-    this.recordClockState(now, cfg.pauseAfterMinutes);
   }
 
   private scheduleMonsterAttack(now: number, cfg: EngineConfig): number {

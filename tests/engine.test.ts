@@ -161,4 +161,63 @@ describe('engine combat-active clock', () => {
     restarted.tick(201_000);
     expect(combatActiveMs(db)).toBe(2_000);
   });
+
+  it('does not repeat elapsed time after a post-advancement tick failure', () => {
+    setSetting(db, 'attack_interval_ms', '1000');
+    setSetting(db, 'attack_jitter_ms', '0');
+    setSetting(db, 'monster_attacks_enabled', '0');
+    wakeOffice(100_000);
+    let failAfterAdvancement = false;
+    let encounterId: number | null = null;
+    const rng = () => {
+      if (failAfterAdvancement && encounterId !== null) {
+        db.transaction(() => {
+          db.prepare(
+            "UPDATE encounters SET status='defeated', ended_at=? WHERE id=?",
+          ).run(101_000, encounterId);
+          db.prepare(
+            'UPDATE game_state SET current_encounter_id=NULL WHERE id=1',
+          ).run();
+        })();
+        throw new Error('forced post-advancement failure');
+      }
+      return 0.5;
+    };
+    const eng = new GameEngine(db, {
+      rng,
+      officeTimeZone: 'America/New_York',
+    });
+    eng.tick(100_000);
+    encounterId = (db.prepare(
+      "SELECT id FROM encounters WHERE status='active'",
+    ).get() as { id: number }).id;
+
+    failAfterAdvancement = true;
+    expect(() => eng.tick(101_000)).toThrow('forced post-advancement failure');
+    expect(combatActiveMs(db)).toBe(1_000);
+
+    failAfterAdvancement = false;
+    eng.tick(102_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+  });
+
+  it('rebaselines backward wall time and continues processing immediately', () => {
+    wakeOffice(100_000);
+    const eng = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+    eng.tick(100_000);
+    eng.tick(101_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+
+    db.prepare('UPDATE game_state SET paused=1 WHERE id=1').run();
+    expect(() => eng.tick(99_500)).not.toThrow();
+    expect(db.prepare('SELECT paused FROM game_state WHERE id=1').get())
+      .toEqual({ paused: 0 });
+    expect(combatActiveMs(db)).toBe(1_000);
+
+    eng.tick(99_600);
+    expect(combatActiveMs(db)).toBe(1_100);
+  });
 });
