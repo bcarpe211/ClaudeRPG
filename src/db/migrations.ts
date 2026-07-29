@@ -375,4 +375,80 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '014_potion_activation_response_snapshots',
+    sql: `
+      ALTER TABLE potion_activations
+        ADD COLUMN inventory_remaining_after INTEGER NOT NULL DEFAULT 0
+        CHECK (inventory_remaining_after >= 0);
+      ALTER TABLE potion_activations
+        ADD COLUMN uses_remaining_after INTEGER NOT NULL DEFAULT 0
+        CHECK (uses_remaining_after >= 0);
+      ALTER TABLE potion_activations
+        ADD COLUMN initial_state TEXT NOT NULL DEFAULT 'armed'
+        CHECK (initial_state IN ('armed','active'));
+
+      UPDATE potion_activations
+      SET inventory_remaining_after = MAX(
+            0,
+            COALESCE((
+              SELECT SUM(purchase.quantity)
+              FROM shop_purchases AS purchase
+              WHERE purchase.player_id = potion_activations.player_id
+                AND purchase.sku = potion_activations.sku
+                AND purchase.created_at <= potion_activations.activated_at
+            ), 0) - (
+              SELECT COUNT(*)
+              FROM potion_activations AS prior
+              WHERE prior.player_id = potion_activations.player_id
+                AND prior.sku = potion_activations.sku
+                AND (
+                  prior.activated_at < potion_activations.activated_at
+                  OR (
+                    prior.activated_at = potion_activations.activated_at
+                    AND prior.id <= potion_activations.id
+                  )
+                )
+            )
+          ),
+          uses_remaining_after = MAX(
+            0,
+            CASE
+              WHEN json_valid(TRIM(COALESCE((
+                SELECT value FROM settings WHERE key = 'potion_daily_uses_per_type'
+              ), ''))) = 0 THEN 3
+              WHEN json_type(TRIM((
+                SELECT value FROM settings WHERE key = 'potion_daily_uses_per_type'
+              ))) NOT IN ('integer', 'real') THEN 3
+              WHEN json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'potion_daily_uses_per_type'
+              )), '$') < 0 THEN 3
+              WHEN json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'potion_daily_uses_per_type'
+              )), '$') > 9007199254740991 THEN 3
+              WHEN json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'potion_daily_uses_per_type'
+              )), '$') != CAST(json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'potion_daily_uses_per_type'
+              )), '$') AS INTEGER) THEN 3
+              ELSE CAST(json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'potion_daily_uses_per_type'
+              )), '$') AS INTEGER)
+            END - (
+              SELECT COUNT(*)
+              FROM potion_activations AS prior
+              WHERE prior.player_id = potion_activations.player_id
+                AND prior.potion_type = potion_activations.potion_type
+                AND prior.activation_day = potion_activations.activation_day
+                AND (
+                  prior.activated_at < potion_activations.activated_at
+                  OR (
+                    prior.activated_at = potion_activations.activated_at
+                    AND prior.id <= potion_activations.id
+                  )
+                )
+            )
+          );
+    `,
+  },
 ];

@@ -23,6 +23,9 @@ describe('timed-consumables schema migrations', () => {
     expect(columns(db, 'potion_activations')).toContain('effect_snapshot');
     expect(columns(db, 'potion_activations')).toContain('potion_bonus_damage');
     expect(columns(db, 'potion_activations')).toContain('purchase_unit_price');
+    expect(columns(db, 'potion_activations')).toEqual(expect.arrayContaining([
+      'inventory_remaining_after', 'uses_remaining_after', 'initial_state',
+    ]));
     expect(columns(db, 'potion_work_events')).toContain('token_event_id');
     expect(columns(db, 'potion_activation_encounters')).toEqual([
       'activation_id', 'encounter_id', 'bonus_damage',

@@ -16,6 +16,7 @@ import { seedSettings, setSetting } from '../src/domain/settings';
 let db: ReturnType<typeof openDb>;
 const timeZone = 'America/New_York';
 const dayOne = Date.parse('2026-07-28T16:00:00Z');
+const dayTwo = Date.parse('2026-07-29T16:00:00Z');
 const dayBefore = Date.parse('2026-07-27T16:00:00Z');
 const twoDaysBefore = Date.parse('2026-07-26T16:00:00Z');
 const durationMs = 7_200_000;
@@ -178,6 +179,77 @@ describe('manual potion activation', () => {
     expectStackMatchesLots(player.id, 'potion_gold_t1');
   });
 
+  it('replays the original response after expiry, state, inventory, and daily-use changes', () => {
+    const player = playerWithGold();
+    buy(player.id, 'potion_gold_t1', 3, 'delayed-retry-stock', twoDaysBefore);
+    seedActiveEncounter(player.id, dayOne);
+    const input = {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      requestId: 'delayed-retry',
+      now: dayOne,
+      timeZone,
+    };
+    const original = activatePotion(db, input);
+    expect(original).toMatchObject({
+      ok: true,
+      duplicate: false,
+      inventoryRemaining: 2,
+      usesRemaining: 2,
+      state: 'active',
+    });
+    if (!original.ok) throw new Error(`activation fixture failed: ${original.reason}`);
+    expect(db.prepare(
+      `SELECT inventory_remaining_after, uses_remaining_after, initial_state
+       FROM potion_activations WHERE id = ?`,
+    ).get(original.activationId)).toEqual({
+      inventory_remaining_after: 2,
+      uses_remaining_after: 2,
+      initial_state: 'active',
+    });
+
+    advanceCombatClock(db, durationMs, dayOne + durationMs, timeZone);
+    expect(completeExpiredPotions(db, dayOne + durationMs)).toBe(1);
+    expect(activate(
+      player.id,
+      'potion_gold_t1',
+      'later-same-day',
+      dayOne + durationMs,
+    )).toMatchObject({ ok: true, usesRemaining: 1 });
+    advanceCombatClock(db, durationMs, dayOne + durationMs * 2, timeZone);
+    expect(completeExpiredPotions(db, dayOne + durationMs * 2)).toBe(1);
+    buy(player.id, 'potion_gold_t1', 2, 'later-inventory', dayTwo);
+    db.prepare("UPDATE encounters SET status = 'defeated'").run();
+
+    const stateBeforeRetry = {
+      activations: db.prepare(
+        `SELECT id, request_id, status, completed_at
+         FROM potion_activations ORDER BY id`,
+      ).all(),
+      inventory: inventoryQuantity(db, player.id, 'potion_gold_t1'),
+      lots: db.prepare(
+        `SELECT id, remaining_quantity
+         FROM player_inventory_lots ORDER BY id`,
+      ).all(),
+    };
+    expect(stateBeforeRetry.inventory).toBe(3);
+
+    expect(activatePotion(db, { ...input, now: dayTwo }))
+      .toEqual({ ...original, duplicate: true });
+    expect({
+      activations: db.prepare(
+        `SELECT id, request_id, status, completed_at
+         FROM potion_activations ORDER BY id`,
+      ).all(),
+      inventory: inventoryQuantity(db, player.id, 'potion_gold_t1'),
+      lots: db.prepare(
+        `SELECT id, remaining_quantity
+         FROM player_inventory_lots ORDER BY id`,
+      ).all(),
+    }).toEqual(stateBeforeRetry);
+    expectStackMatchesLots(player.id, 'potion_gold_t1');
+  });
+
   it('rejects unknown products, missing players, empty inventory, and invalid effect settings', () => {
     const player = playerWithGold();
 
@@ -269,6 +341,44 @@ describe('manual potion activation', () => {
 
     expect(remainingDailyUses(db, player.id, 'gold', '2026-07-28', 3)).toBe(1);
     expect(remainingDailyUses(db, player.id, 'damage', '2026-07-28', 3)).toBe(3);
+  });
+
+  it('ignores malformed rows in reads and retires an invalid active row before activation', () => {
+    const player = playerWithGold();
+    const purchase = buy(player.id, 'potion_gold_t1', 1, 'malformed-row-stock');
+    db.prepare(
+      `INSERT INTO potion_activations
+        (player_id, sku, potion_type, tier, purchase_id, purchase_unit_price,
+         request_id, activation_day, activated_at, start_game_ms, expires_game_ms,
+         status, effect_snapshot)
+       VALUES (?, 'potion_gold_t1', 'gold', 1, ?, 100000, 'malformed-active',
+               '2026-07-28', ?, 0, ?, 'active', ?)`,
+    ).run(
+      player.id,
+      purchase.purchaseId,
+      dayOne,
+      durationMs,
+      '{"kind":"gold","durationMs":"broken"}',
+    );
+
+    expect(remainingDailyUses(db, player.id, 'gold', '2026-07-28', 3)).toBe(3);
+    expect(activePotionEffects(db, player.id, dayOne)).toEqual([]);
+
+    expect(activate(player.id, 'potion_gold_t1', 'valid-after-malformed')).toMatchObject({
+      ok: true,
+      duplicate: false,
+      inventoryRemaining: 0,
+      usesRemaining: 2,
+    });
+    expect(db.prepare(
+      `SELECT request_id, status, completed_at
+       FROM potion_activations ORDER BY id`,
+    ).all()).toEqual([
+      { request_id: 'malformed-active', status: 'completed', completed_at: dayOne },
+      { request_id: 'valid-after-malformed', status: 'active', completed_at: null },
+    ]);
+    expect(remainingDailyUses(db, player.id, 'gold', '2026-07-28', 3)).toBe(2);
+    expectStackMatchesLots(player.id, 'potion_gold_t1');
   });
 
   it('allows Gold and Damage to overlap but cannot stack, extend, replace, or queue one type', () => {
