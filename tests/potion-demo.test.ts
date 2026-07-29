@@ -45,6 +45,33 @@ describe('timed-consumables local demo seed', () => {
     ]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM potion_work_events').get()).toEqual({ n: 1 });
     expect(db.prepare('SELECT COUNT(*) AS n FROM potion_activation_encounters').get()).toEqual({ n: 1 });
+    const linkedWindows = db.prepare(
+      `SELECT pae.activation_id AS activationId, pae.encounter_id AS encounterId,
+              pa.activated_at AS activatedAt, pa.completed_at AS completedAt,
+              e.started_at AS encounterStartedAt, e.ended_at AS encounterEndedAt
+       FROM potion_activation_encounters pae
+       JOIN potion_activations pa ON pa.id=pae.activation_id
+       JOIN encounters e ON e.id=pae.encounter_id
+       ORDER BY pae.activation_id, pae.encounter_id`,
+    ).all() as Array<{
+      activationId: number;
+      encounterId: number;
+      activatedAt: number;
+      completedAt: number | null;
+      encounterStartedAt: number;
+      encounterEndedAt: number | null;
+    }>;
+    expect(linkedWindows.length).toBeGreaterThan(0);
+    for (const link of linkedWindows) {
+      expect(link.completedAt, `activation ${link.activationId} must be completed in this fixture`)
+        .not.toBeNull();
+      expect(link.encounterStartedAt, `encounter ${link.encounterId} starts before activation completion`)
+        .toBeLessThanOrEqual(link.completedAt!);
+      expect(link.encounterEndedAt, `encounter ${link.encounterId} ends after activation begins`)
+        .not.toBeNull();
+      expect(link.encounterEndedAt!, `encounter ${link.encounterId} overlaps activation ${link.activationId}`)
+        .toBeGreaterThanOrEqual(link.activatedAt);
+    }
     const goldAudit = db.prepare(
       `SELECT pa.activated_at AS activatedAt, pwe.created_at AS workAt,
               te.ts AS tokenEventAt, pa.completed_at AS completedAt,

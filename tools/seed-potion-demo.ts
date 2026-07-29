@@ -298,7 +298,7 @@ export function seedPotionDemo(
        reward_podium_first_pct, reward_podium_second_pct, reward_podium_third_pct)
      VALUES (?, 0, 'single', 1, 1, 1, 1000, 0, 'defeated', ?, ?,
        'hybrid-v1', 80, 10, 5, 3, 2)`,
-  ).run(dungeonId, now - 12_000, now - 8_000);
+  ).run(dungeonId, now - 18_500, now - 17_500);
   const historicalEncounterId = Number(historicalEncounter.lastInsertRowid);
   db.prepare(
     `INSERT INTO potion_activation_encounters (activation_id, encounter_id, bonus_damage)
