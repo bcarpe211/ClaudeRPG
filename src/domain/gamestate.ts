@@ -8,6 +8,7 @@ export interface GameState {
   last_activity_at: number | null;
   defeat_until: number | null;
   last_defeat_encounter_id: number | null;
+  combat_active_ms: number;
 }
 
 export function getGameState(db: Database.Database): GameState {

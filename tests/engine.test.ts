@@ -5,6 +5,7 @@ import { createPlayer, getPlayerById } from '../src/domain/players';
 import { ingestTokenUsage } from '../src/domain/ingest';
 import { activityScore } from '../src/domain/activity';
 import { GameEngine } from '../src/domain/engine';
+import { combatActiveMs } from '../src/domain/gameclock';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -14,6 +15,15 @@ function tokensPayload(token: string, input: number) {
     scopeMetrics: [{ metrics: [{ name: 'claude_code.token.usage', sum: { aggregationTemporality: 1,
       dataPoints: [{ asInt: String(input), startTimeUnixNano: 's', timeUnixNano: 't',
         attributes: [{ key: 'type', value: { stringValue: 'input' } }] }] } }] }] }] };
+}
+
+function wakeOffice(now: number): void {
+  const player = createPlayer(
+    db,
+    { name: 'Clock Tester', class_key: 'knight', gender: 'M' },
+    1,
+  );
+  db.prepare('UPDATE players SET last_token_at=? WHERE id=?').run(now, player.id);
 }
 
 describe('engine: accumulate-modifier damage + token-share gold', () => {
@@ -68,5 +78,87 @@ describe('engine: accumulate-modifier damage + token-share gold', () => {
     // A has less damage but far more tokens during the fight; at the default
     // gold_damage_weight (0, pure token share) A should earn at least as much gold.
     expect(goldA).toBeGreaterThanOrEqual(goldB);
+  });
+});
+
+describe('engine combat-active clock', () => {
+  it('uses the first tick as a baseline and counts the interval before idle', () => {
+    wakeOffice(100_000);
+    const eng = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+
+    eng.tick(100_000);
+    expect(combatActiveMs(db)).toBe(0);
+
+    eng.tick(101_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+
+    db.prepare('UPDATE players SET last_token_at=0').run();
+    eng.tick(200_000);
+    const pausedAt = combatActiveMs(db);
+    expect(pausedAt).toBe(100_000);
+
+    eng.tick(260_000);
+    expect(combatActiveMs(db)).toBe(pausedAt);
+  });
+
+  it('counts the interval ending in a kill and pauses the defeat window', () => {
+    setSetting(db, 'gold_factor', '0');
+    wakeOffice(100_000);
+    const eng = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+    eng.tick(100_000);
+    const encounter = db.prepare(
+      "SELECT id FROM encounters WHERE status='active'",
+    ).get() as { id: number };
+    db.prepare('UPDATE encounters SET current_hp=0 WHERE id=?').run(encounter.id);
+
+    eng.tick(101_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+
+    eng.tick(200_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+  });
+
+  it('charges no startup time when there is not yet an encounter', () => {
+    wakeOffice(100_000);
+    const eng = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+
+    eng.tick(100_000);
+    expect(combatActiveMs(db)).toBe(0);
+    expect(db.prepare(
+      "SELECT id FROM encounters WHERE status='active'",
+    ).get()).toBeTruthy();
+
+    eng.tick(101_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+  });
+
+  it('does not charge downtime on the first tick of a new engine instance', () => {
+    wakeOffice(100_000);
+    const first = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+    first.tick(100_000);
+    first.tick(101_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+
+    const restarted = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+    restarted.tick(200_000);
+    expect(combatActiveMs(db)).toBe(1_000);
+
+    restarted.tick(201_000);
+    expect(combatActiveMs(db)).toBe(2_000);
   });
 });

@@ -8,6 +8,7 @@ import { allocateEncounterGold, splitGold, type RewardAllocation } from './rewar
 import { getAllSettings } from './settings';
 import { pickTarget, rollConsequence, goldSteal, debuffFactor } from './retaliation';
 import { applyGoldMutation } from './goldledger';
+import { advanceCombatClock, isCombatAcceptingWork } from './gameclock';
 
 export interface DefeatParticipant {
   playerId: number;
@@ -121,6 +122,7 @@ export function buildDefeatSummary(
 
 export interface EngineDeps {
   rng?: () => number;
+  officeTimeZone?: string;
 }
 
 interface ActivePlayer {
@@ -134,9 +136,13 @@ export class GameEngine {
   private nextAttackAt = new Map<number, number>();
   private nextMonsterAttackAt = 0; // 0 = unscheduled (armed on the next active tick)
   private wasPaused = true;
+  private officeTimeZone: string;
+  private previousTickAt: number | null = null;
+  private previousClockRunning = false;
 
   constructor(private db: Database.Database, deps: EngineDeps = {}) {
     this.rng = deps.rng ?? Math.random;
+    this.officeTimeZone = deps.officeTimeZone ?? 'America/New_York';
   }
 
   private scheduleNext(now: number, cfg: EngineConfig): number {
@@ -272,14 +278,32 @@ export class GameEngine {
     this.wasPaused = true;
   }
 
+  private recordClockState(now: number, pauseAfterMinutes: number): void {
+    this.previousTickAt = now;
+    this.previousClockRunning = isCombatAcceptingWork(
+      this.db,
+      now,
+      pauseAfterMinutes,
+    );
+  }
+
   /** Advance the game by one tick. `now` is epoch ms. */
   tick(now: number): void {
     const cfg = loadEngineConfig(this.db);
+    if (this.previousTickAt !== null && this.previousClockRunning) {
+      advanceCombatClock(
+        this.db,
+        now - this.previousTickAt,
+        now,
+        this.officeTimeZone,
+      );
+    }
     const idle = isIdle(this.db, now, cfg.pauseAfterMinutes);
 
     if (idle) {
       setPaused(this.db, true, now);
       this.wasPaused = true;
+      this.recordClockState(now, cfg.pauseAfterMinutes);
       return;
     }
 
@@ -293,7 +317,10 @@ export class GameEngine {
 
     let gs = getGameState(this.db);
     // Respect the defeat-popup window before spawning the next encounter.
-    if (gs.defeat_until && now < gs.defeat_until) return;
+    if (gs.defeat_until && now < gs.defeat_until) {
+      this.recordClockState(now, cfg.pauseAfterMinutes);
+      return;
+    }
 
     const hasActive = gs.current_encounter_id &&
       (this.db.prepare("SELECT status FROM encounters WHERE id=?")
@@ -322,6 +349,7 @@ export class GameEngine {
     }
     this.maybeMonsterAttack(encId, now, cfg);
     this.resolveKillIfDead(encId, now, cfg);
+    this.recordClockState(now, cfg.pauseAfterMinutes);
   }
 
   private scheduleMonsterAttack(now: number, cfg: EngineConfig): number {

@@ -29,7 +29,7 @@ if (config.adminPassword === 'changeme') {
 
 const app = createApp({ db, config });
 
-const engine = new GameEngine(db);
+const engine = new GameEngine(db, { officeTimeZone: config.officeTimeZone });
 const tickMs = loadEngineConfig(db).tickIntervalMs;
 const tvHub = (app as unknown as { tvHub: import('./web/tvhub').TvHub }).tvHub;
 const tickTimer = setInterval(() => {
