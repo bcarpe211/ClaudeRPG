@@ -10,7 +10,8 @@ export interface SettingMeta {
 
 export const GROUP_ORDER = [
   'Progression', 'Combat', 'Activity modifier', 'Monster HP & difficulty',
-  'Monster retaliation', 'Economy', 'Encounters & pacing', 'Shop', 'System',
+  'Monster retaliation', 'Economy', 'Encounters & pacing', 'Shop', 'Potions',
+  'Reward allocation', 'System',
 ] as const;
 
 export const SETTINGS_META: Record<string, SettingMeta> = {
@@ -82,6 +83,40 @@ export const SETTINGS_META: Record<string, SettingMeta> = {
     description: 'Gold to unlock Tier-2 detail channels after Tier 1. Cosmetic only; recoloring remains free.' },
   cosmetic_wheel_t3_price: { group: 'Shop', label: 'Dye wheel (T3) price', unit: 'gold', min: 0, step: 10000,
     description: 'Gold to unlock Tier-3 weapon, shield, and equipment channels after Tier 2. Cosmetic only.' },
+  // Potions
+  potion_gold_t1_price: { group: 'Potions', label: 'Gold Potion (T1) price', unit: 'gold', min: 0, step: 1000,
+    description: 'Gold required for each future Beginner Gold Potion purchase. Higher = the potion costs more.' },
+  potion_gold_t1_duration_s: { group: 'Potions', label: 'Gold Potion (T1) duration', unit: 's', min: 1, step: 60,
+    description: 'Combat-active seconds for future Beginner Gold Potion activations. Higher = its work-reward window lasts longer.' },
+  potion_gold_t1_gold_per_1000: { group: 'Potions', label: 'Gold Potion reward per 1,000 tokens', unit: 'gold', min: 0, step: 1,
+    description: 'Gold awarded for each whole 1,000 eligible effective tokens during a future Gold Potion activation. Higher = more work reward.' },
+  potion_gold_t1_base_cap: { group: 'Potions', label: 'Gold Potion base reward cap', unit: 'gold', min: 0, step: 1000,
+    description: 'Maximum base gold a future Gold Potion activation can award before its stretch bonus. Higher = a larger possible base payout.' },
+  potion_gold_t1_stretch_tokens: { group: 'Potions', label: 'Gold Potion stretch tokens', unit: 'tokens', min: 0, step: 1000,
+    description: 'Eligible effective tokens needed for a future Gold Potion activation to earn its one-time stretch bonus. Higher = harder completion goal.' },
+  potion_gold_t1_stretch_bonus: { group: 'Potions', label: 'Gold Potion stretch bonus', unit: 'gold', min: 0, step: 1000,
+    description: 'One-time bonus for a future Gold Potion activation that reaches its stretch-token goal. Higher = a larger completion reward.' },
+  potion_damage_t1_price: { group: 'Potions', label: 'Damage Potion (T1) price', unit: 'gold', min: 0, step: 1000,
+    description: 'Gold required for each future Beginner Damage Potion purchase. Higher = the potion costs more.' },
+  potion_damage_t1_duration_s: { group: 'Potions', label: 'Damage Potion (T1) duration', unit: 's', min: 1, step: 60,
+    description: 'Combat-active seconds for future Beginner Damage Potion activations. Higher = its damage window lasts longer.' },
+  potion_damage_t1_base_hit_pct: { group: 'Potions', label: 'Damage Potion base-hit bonus', unit: '%', min: 0, step: 1,
+    description: 'Percent added to personal base hit for future Damage Potion activations before level, activity, and debuff multipliers. Higher = stronger potion hits.' },
+  potion_daily_stock_per_sku: { group: 'Potions', label: 'Daily potion stock per SKU', unit: 'count', min: 0, step: 1,
+    description: 'How many units of each future potion SKU a player may buy per local office day. Higher = more daily purchases.' },
+  potion_daily_uses_per_type: { group: 'Potions', label: 'Daily potion uses per type', unit: 'count', min: 0, step: 1,
+    description: 'How many activations of each future potion type a player may start per local office day. Higher = more daily uses.' },
+  // Reward allocation
+  reward_work_pct: { group: 'Reward allocation', label: 'Encounter reward: work share', unit: '%', min: 0, max: 100, step: 1,
+    description: 'Percent of a newly spawned encounter reward pool allocated by effective-token contribution. Higher = work contributes more to rewards.' },
+  reward_damage_pct: { group: 'Reward allocation', label: 'Encounter reward: damage share', unit: '%', min: 0, max: 100, step: 1,
+    description: 'Percent of a newly spawned encounter reward pool allocated by damage contribution. Higher = damage contributes more to rewards.' },
+  reward_podium_first_pct: { group: 'Reward allocation', label: 'Encounter reward: first-place podium', unit: '%', min: 0, max: 100, step: 1,
+    description: 'Percent of a newly spawned encounter reward pool awarded to the top damage rank. Higher = first place is more valuable.' },
+  reward_podium_second_pct: { group: 'Reward allocation', label: 'Encounter reward: second-place podium', unit: '%', min: 0, max: 100, step: 1,
+    description: 'Percent of a newly spawned encounter reward pool awarded to the second damage rank. Higher = second place is more valuable.' },
+  reward_podium_third_pct: { group: 'Reward allocation', label: 'Encounter reward: third-place podium', unit: '%', min: 0, max: 100, step: 1,
+    description: 'Percent of a newly spawned encounter reward pool awarded to the third damage rank. Higher = third place is more valuable.' },
   // System
   cache_read_weight: { group: 'System', label: 'Cache-read token weight', unit: '0–1', min: 0, max: 1, step: 0.05,
     description: "Fraction of cache-read tokens counted toward effective tokens (XP + damage). 0 = ignore cache reads; 1 = count them fully. Cache reads are cheap, so they're usually discounted." },

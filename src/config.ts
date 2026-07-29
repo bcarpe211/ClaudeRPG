@@ -14,6 +14,17 @@ export interface Config {
   enableCatalog: boolean;
   enableDungeonPreview: boolean;
   enableCosmeticsReview: boolean;
+  officeTimeZone: string;
+}
+
+function officeTimeZone(env: NodeJS.ProcessEnv): string {
+  const value = env.OFFICE_TIME_ZONE ?? 'America/New_York';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
+  } catch {
+    throw new Error(`Invalid OFFICE_TIME_ZONE: ${value}`);
+  }
+  return value;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -37,5 +48,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     enableCosmeticsReview:
       env.ENABLE_COSMETICS_REVIEW === '1'
       || env.ENABLE_COSMETICS_REVIEW === 'true',
+    officeTimeZone: officeTimeZone(env),
   };
 }

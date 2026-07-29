@@ -14,6 +14,30 @@ describe('settings metadata', () => {
       expect(m.description.length, key).toBeGreaterThan(0);
     }
   });
+  it('groups every launch potion and reward setting', () => {
+    const potionKeys = [
+      'potion_gold_t1_price', 'potion_gold_t1_duration_s',
+      'potion_gold_t1_gold_per_1000', 'potion_gold_t1_base_cap',
+      'potion_gold_t1_stretch_tokens', 'potion_gold_t1_stretch_bonus',
+      'potion_damage_t1_price', 'potion_damage_t1_duration_s',
+      'potion_damage_t1_base_hit_pct', 'potion_daily_stock_per_sku',
+      'potion_daily_uses_per_type',
+    ];
+    const rewardKeys = [
+      'reward_work_pct', 'reward_damage_pct', 'reward_podium_first_pct',
+      'reward_podium_second_pct', 'reward_podium_third_pct',
+    ];
+    for (const key of potionKeys) {
+      expect(DEFAULT_SETTINGS[key], key).toBeDefined();
+      expect(SETTINGS_META[key]?.group, key).toBe('Potions');
+    }
+    for (const key of rewardKeys) {
+      expect(DEFAULT_SETTINGS[key], key).toBeDefined();
+      expect(SETTINGS_META[key]?.group, key).toBe('Reward allocation');
+    }
+    expect(GROUP_ORDER).toContain('Potions');
+    expect(GROUP_ORDER).toContain('Reward allocation');
+  });
   it('groupedSettings covers every key once, in GROUP_ORDER', () => {
     const groups = groupedSettings(DEFAULT_SETTINGS);
     const order = groups.map((g) => g.group);

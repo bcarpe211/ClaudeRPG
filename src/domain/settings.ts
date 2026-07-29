@@ -34,6 +34,22 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   cosmetic_wheel_t1_price: '1500000', // gold to unlock the Tier-1 clothing dye wheel
   cosmetic_wheel_t2_price: '2000000',
   cosmetic_wheel_t3_price: '2500000',
+  potion_gold_t1_price: '100000',
+  potion_gold_t1_duration_s: '7200',
+  potion_gold_t1_gold_per_1000: '50',
+  potion_gold_t1_base_cap: '125000',
+  potion_gold_t1_stretch_tokens: '2500000',
+  potion_gold_t1_stretch_bonus: '25000',
+  potion_damage_t1_price: '150000',
+  potion_damage_t1_duration_s: '7200',
+  potion_damage_t1_base_hit_pct: '25',
+  potion_daily_stock_per_sku: '3',
+  potion_daily_uses_per_type: '3',
+  reward_work_pct: '80',
+  reward_damage_pct: '10',
+  reward_podium_first_pct: '5',
+  reward_podium_second_pct: '3',
+  reward_podium_third_pct: '2',
 };
 
 export function seedSettings(db: Database.Database): void {

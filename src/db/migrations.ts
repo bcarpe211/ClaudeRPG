@@ -189,4 +189,147 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '012_timed_consumables',
+    sql: `
+      ALTER TABLE game_state ADD COLUMN combat_active_ms INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE encounter_damage ADD COLUMN potion_bonus_damage INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE encounters ADD COLUMN reward_model_version TEXT NOT NULL DEFAULT 'legacy-v0';
+      ALTER TABLE encounters ADD COLUMN reward_work_pct REAL;
+      ALTER TABLE encounters ADD COLUMN reward_damage_pct REAL;
+      ALTER TABLE encounters ADD COLUMN reward_podium_first_pct REAL;
+      ALTER TABLE encounters ADD COLUMN reward_podium_second_pct REAL;
+      ALTER TABLE encounters ADD COLUMN reward_podium_third_pct REAL;
+
+      CREATE TABLE player_inventory (
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        sku TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (player_id, sku)
+      );
+
+      CREATE TABLE shop_purchases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        sku TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        unit_price INTEGER NOT NULL CHECK (unit_price >= 0),
+        total_price INTEGER NOT NULL CHECK (total_price >= 0),
+        office_day TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        inventory_after INTEGER NOT NULL CHECK (inventory_after >= 0),
+        gold_after INTEGER NOT NULL CHECK (gold_after >= 0),
+        created_at INTEGER NOT NULL,
+        UNIQUE (player_id, request_id)
+      );
+      CREATE INDEX idx_shop_purchases_day ON shop_purchases (player_id, sku, office_day);
+
+      CREATE TABLE player_inventory_lots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_id INTEGER NOT NULL UNIQUE REFERENCES shop_purchases(id) ON DELETE CASCADE,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        sku TEXT NOT NULL,
+        remaining_quantity INTEGER NOT NULL CHECK (remaining_quantity >= 0),
+        unit_price INTEGER NOT NULL CHECK (unit_price >= 0),
+        purchased_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_inventory_lots_fifo
+        ON player_inventory_lots (player_id, sku, remaining_quantity, purchased_at, id);
+
+      CREATE TABLE potion_activations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        sku TEXT NOT NULL,
+        potion_type TEXT NOT NULL CHECK (potion_type IN ('gold','damage')),
+        tier INTEGER NOT NULL CHECK (tier >= 1),
+        purchase_id INTEGER NOT NULL REFERENCES shop_purchases(id),
+        purchase_unit_price INTEGER NOT NULL CHECK (purchase_unit_price >= 0),
+        request_id TEXT NOT NULL,
+        activation_day TEXT NOT NULL,
+        activated_at INTEGER NOT NULL,
+        start_game_ms INTEGER NOT NULL,
+        expires_game_ms INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active','completed')),
+        completed_at INTEGER,
+        effect_snapshot TEXT NOT NULL,
+        eligible_tokens INTEGER NOT NULL DEFAULT 0,
+        base_gold INTEGER NOT NULL DEFAULT 0,
+        stretch_gold INTEGER NOT NULL DEFAULT 0,
+        potion_bonus_damage INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (player_id, request_id)
+      );
+      CREATE UNIQUE INDEX idx_potion_active_type
+        ON potion_activations (player_id, potion_type) WHERE status = 'active';
+      CREATE INDEX idx_potion_activation_day
+        ON potion_activations (player_id, potion_type, activation_day);
+
+      CREATE TABLE potion_work_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        activation_id INTEGER NOT NULL REFERENCES potion_activations(id) ON DELETE CASCADE,
+        token_event_id INTEGER NOT NULL REFERENCES token_events(id) ON DELETE CASCADE,
+        effective_delta INTEGER NOT NULL CHECK (effective_delta >= 0),
+        base_gold INTEGER NOT NULL DEFAULT 0,
+        stretch_gold INTEGER NOT NULL DEFAULT 0,
+        combat_active_ms INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX idx_potion_work_source
+        ON potion_work_events (activation_id, token_event_id);
+
+      CREATE TABLE potion_activation_encounters (
+        activation_id INTEGER NOT NULL REFERENCES potion_activations(id) ON DELETE CASCADE,
+        encounter_id INTEGER NOT NULL REFERENCES encounters(id) ON DELETE CASCADE,
+        bonus_damage INTEGER NOT NULL DEFAULT 0 CHECK (bonus_damage >= 0),
+        PRIMARY KEY (activation_id, encounter_id)
+      );
+
+      CREATE TABLE encounter_reward_awards (
+        encounter_id INTEGER NOT NULL REFERENCES encounters(id) ON DELETE CASCADE,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        effective_tokens INTEGER NOT NULL,
+        damage_total INTEGER NOT NULL,
+        potion_bonus_damage INTEGER NOT NULL DEFAULT 0,
+        damage_rank INTEGER NOT NULL,
+        work_gold INTEGER NOT NULL,
+        damage_gold INTEGER NOT NULL,
+        podium_gold INTEGER NOT NULL,
+        total_gold INTEGER NOT NULL,
+        model_version TEXT NOT NULL,
+        awarded_at INTEGER NOT NULL,
+        PRIMARY KEY (encounter_id, player_id)
+      );
+
+      CREATE TABLE gold_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        amount INTEGER NOT NULL,
+        balance_after INTEGER NOT NULL CHECK (balance_after >= 0),
+        reason TEXT NOT NULL,
+        source_table TEXT,
+        source_id TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX idx_gold_ledger_source
+        ON gold_ledger (player_id, reason, source_table, source_id)
+        WHERE source_table IS NOT NULL AND source_id IS NOT NULL;
+      INSERT INTO gold_ledger
+        (player_id, amount, balance_after, reason, source_table, source_id, created_at)
+      SELECT id, gold, gold, 'opening_balance', 'migration_012', CAST(id AS TEXT), created_at
+      FROM players;
+
+      CREATE TABLE game_clock_days (
+        office_day TEXT PRIMARY KEY,
+        active_ms INTEGER NOT NULL DEFAULT 0 CHECK (active_ms >= 0)
+      );
+
+      CREATE TABLE player_daily_combat (
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        office_day TEXT NOT NULL,
+        damage INTEGER NOT NULL DEFAULT 0 CHECK (damage >= 0),
+        potion_bonus_damage INTEGER NOT NULL DEFAULT 0 CHECK (potion_bonus_damage >= 0),
+        PRIMARY KEY (player_id, office_day)
+      );
+    `,
+  },
 ];

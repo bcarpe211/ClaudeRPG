@@ -8,6 +8,7 @@ describe('loadConfig', () => {
     expect(c.dbPath).toBe('./data/claude-rpg.db');
     expect(c.adminUsername).toBe('admin');
     expect(c.otelHost).toBe('claude-rpg.local');
+    expect(c.officeTimeZone).toBe('America/New_York');
     expect(typeof c.sessionSecret).toBe('string');
     expect(c.sessionSecret.length).toBeGreaterThan(10);
   });
@@ -27,6 +28,18 @@ describe('loadConfig', () => {
     expect(c.adminPassword).toBe('secret');
     expect(c.otelHost).toBe('rpg.lan');
     expect(c.sessionSecret).toBe('fixedsecretvalue');
+  });
+});
+
+describe('loadConfig officeTimeZone', () => {
+  it('reads a valid IANA office time zone', () => {
+    expect(loadConfig({ OFFICE_TIME_ZONE: 'Europe/London' }).officeTimeZone)
+      .toBe('Europe/London');
+  });
+
+  it('rejects an invalid office time zone', () => {
+    expect(() => loadConfig({ OFFICE_TIME_ZONE: 'Dungeon/Nowhere' }))
+      .toThrow(/OFFICE_TIME_ZONE/);
   });
 });
 
