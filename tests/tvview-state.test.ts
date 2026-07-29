@@ -6,6 +6,9 @@ import { ingestTokenUsage } from '../src/domain/ingest';
 import { GameEngine } from '../src/domain/engine';
 import { buildTvState } from '../src/web/tvview';
 import { monsterByIndex } from '../src/domain/bestiary';
+import { applyGoldMutation } from '../src/domain/goldledger';
+import { purchaseConsumable } from '../src/domain/inventory';
+import { activatePotion } from '../src/domain/potions';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -106,5 +109,80 @@ describe('buildTvState', () => {
     expect(s.defeat).not.toBeNull();
     expect(s.defeat!.participants.length).toBeGreaterThanOrEqual(1);
     expect(s.defeat!.creatureUrl.startsWith('/sprites/creatures_24x24/')).toBe(true);
+  });
+
+  it('shows only started Gold and Damage potion tiers while preserving an independent debuff', () => {
+    const now = Date.parse('2026-07-29T16:00:00Z');
+    const timeZone = 'America/New_York';
+    const gold = createPlayer(db, { name: 'Gilded', class_key: 'wizard', gender: 'M' }, now - 3);
+    const damage = createPlayer(db, { name: 'Scarlet', class_key: 'thief', gender: 'F' }, now - 2);
+    const expired = createPlayer(db, { name: 'Hexed', class_key: 'knight', gender: 'M' }, now - 1);
+    ingestTokenUsage(db, tokens(gold.auth_token, 1000), now, { cacheReadWeight: 0 });
+    new GameEngine(db, { rng: () => 0.5 }).tick(now);
+
+    for (const player of [gold, damage, expired]) {
+      applyGoldMutation(db, {
+        playerId: player.id,
+        amount: 500_000,
+        reason: 'opening_balance',
+        sourceTable: 'test',
+        sourceId: `tv-potion-${player.id}`,
+        now: now - 10_000,
+      });
+    }
+    for (const [player, sku, price] of [
+      [gold, 'potion_gold_t1', 100_000],
+      [damage, 'potion_damage_t1', 150_000],
+      [expired, 'potion_gold_t1', 100_000],
+    ] as const) {
+      expect(purchaseConsumable(db, {
+        playerId: player.id,
+        skuId: sku,
+        quantity: 1,
+        expectedUnitPrice: price,
+        requestId: `tv-buy-${player.id}`,
+        now: now - 5_000,
+        timeZone,
+      })).toMatchObject({ ok: true });
+      expect(activatePotion(db, {
+        playerId: player.id,
+        skuId: sku,
+        requestId: `tv-drink-${player.id}`,
+        now,
+        timeZone,
+      })).toMatchObject({ ok: true });
+    }
+
+    // One tick of combat-active time starts armed potions. The third row is then
+    // expired deliberately to prove its absent mote is independent of the hex.
+    db.prepare('UPDATE game_state SET combat_active_ms=combat_active_ms+1000 WHERE id=1').run();
+    db.prepare(
+      `UPDATE potion_activations SET expires_game_ms=1000
+       WHERE player_id=? AND potion_type='gold'`,
+    ).run(expired.id);
+    const encounter = db.prepare(
+      "SELECT id FROM encounters WHERE status='active' LIMIT 1",
+    ).get() as { id: number };
+    db.prepare(
+      `INSERT INTO monster_attacks (encounter_id, player_id, kind, ts)
+       VALUES (?, ?, 'debuff', ?)`,
+    ).run(encounter.id, expired.id, now - 1_000);
+
+    const active = buildTvState(db, now);
+    expect(active.players.find((player) => player.id === gold.id)?.potionEffects)
+      .toEqual({ goldTier: 1, damageTier: null });
+    expect(active.players.find((player) => player.id === damage.id)?.potionEffects)
+      .toEqual({ goldTier: null, damageTier: 1 });
+    expect(active.players.find((player) => player.id === expired.id)).toMatchObject({
+      potionEffects: { goldTier: null, damageTier: null },
+      debuffed: true,
+    });
+
+    // Paused combat keeps already-started potion magic visible; only newly armed
+    // rows are intentionally omitted from the battlefield effect vocabulary.
+    db.prepare('UPDATE game_state SET last_activity_at=? WHERE id=1').run(now - 20 * 60_000);
+    const paused = buildTvState(db, now);
+    expect(paused.players.find((player) => player.id === gold.id)?.potionEffects.goldTier).toBe(1);
+    expect(paused.players.find((player) => player.id === damage.id)?.potionEffects.damageTier).toBe(1);
   });
 });

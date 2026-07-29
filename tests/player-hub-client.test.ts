@@ -87,6 +87,9 @@ class FakeElement {
   src = '';
   alt = '';
   offsetWidth = 42;
+  width = 0;
+  height = 0;
+  canvasContext: Record<string, any> | null = null;
 
   constructor(readonly id: string, readonly tagName = 'div') {}
 
@@ -138,6 +141,9 @@ class FakeElement {
   }
   showModal(): void { this.open = true; this.hidden = false; }
   close(): void { this.open = false; this.hidden = true; }
+  getContext(type: string): Record<string, any> | null {
+    return type === '2d' ? this.canvasContext : null;
+  }
 }
 
 const source = readFileSync('src/web/public/player-hub.js', 'utf8');
@@ -195,8 +201,12 @@ function interactionHarness(options: {
     'potion-confirm-inventory', 'potion-confirm-doses', 'hub-potion-feedback',
     'hub-bottle-burst', 'hub-leaders', 'hub-today-tokens', 'hub-today-damage',
     'hub-today-rank', 'hub-today-gold', 'hub-today-active', 'hub-today-potions',
+    'hub-potion-fx',
   ];
-  ids.forEach((id) => register(id, id === 'potion-confirm' ? 'dialog' : 'div'));
+  ids.forEach((id) => register(
+    id,
+    id === 'potion-confirm' ? 'dialog' : id === 'hub-potion-fx' ? 'canvas' : 'div',
+  ));
   const avatar = register('avatar-trigger', 'button');
   avatar.className = 'hub-avatar-trigger';
   register('hub-gold').attributes.set('data-hub-gold', '');
@@ -264,9 +274,25 @@ function interactionHarness(options: {
   ];
   const intervals: Array<{ callback: () => unknown; delay: number }> = [];
   const timers: Array<() => unknown> = [];
+  const animationFrames: Array<{ id: number; callback: (time: number) => unknown }> = [];
+  const cancelledFrames: number[] = [];
+  const potionFxInputs: Array<Record<string, unknown>> = [];
+  const potionCanvasCalls: Array<{ method: string; args: unknown[] }> = [];
+  const potionCanvas = document.getElementById('hub-potion-fx')!;
+  potionCanvas.canvasContext = {
+    clearRect(...args: unknown[]) { potionCanvasCalls.push({ method: 'clearRect', args }); },
+    fillRect(...args: unknown[]) { potionCanvasCalls.push({ method: 'fillRect', args }); },
+    save() { potionCanvasCalls.push({ method: 'save', args: [] }); },
+    restore() { potionCanvasCalls.push({ method: 'restore', args: [] }); },
+    globalAlpha: 1,
+    fillStyle: '',
+    shadowColor: '',
+    shadowBlur: 0,
+  };
   const context: Record<string, any> = {
     document,
     __PLAYER_HUB__: {
+      playerId: 42,
       token: 'secret-token',
       initialState,
       endpoints: { state: '/character/state?token=secret-token', activate: '/character/potions/activate' },
@@ -286,11 +312,26 @@ function interactionHarness(options: {
     setTimeout(callback: () => unknown) { timers.push(callback); return timers.length; },
     clearTimeout() {},
     matchMedia: () => ({ matches: options.reducedMotion ?? false }),
+    requestAnimationFrame(callback: (time: number) => unknown) {
+      const id = animationFrames.length + 1;
+      animationFrames.push({ id, callback });
+      return id;
+    },
+    cancelAnimationFrame(id: number) { cancelledFrames.push(id); },
+    ClaudeRpgPotionFx: {
+      frame(input: Record<string, unknown>) {
+        potionFxInputs.push(input);
+        return [{ type: 'gold', color: '#f1c75b', dx: 1, dy: -2, size: 2, alpha: 1 }];
+      },
+    },
   };
   context.window = context;
   context.globalThis = context;
   vm.runInNewContext(source, context);
-  return { document, context, fetchCalls, responses, intervals, initialState, refreshed, avatar };
+  return {
+    document, context, fetchCalls, responses, intervals, initialState, refreshed, avatar,
+    animationFrames, cancelledFrames, potionFxInputs, potionCanvasCalls,
+  };
 }
 
 describe('mounted player hub tabs', () => {
@@ -449,6 +490,34 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
     expect(h.document.getElementById('hub-bottle-burst')!.classList.contains('is-bursting'))
       .toBe(false);
+    expect(h.animationFrames).toHaveLength(0);
+  });
+
+  it('reuses the shared active-potion motes on the profile and omits armed effects', () => {
+    const h = interactionHarness();
+
+    expect(h.animationFrames).toHaveLength(1);
+    h.animationFrames[0].callback(1_234);
+
+    expect(h.potionFxInputs[0]).toEqual({
+      playerId: 42,
+      goldTier: 1,
+      damageTier: null,
+      timeMs: 1_234,
+    });
+    expect(h.potionCanvasCalls.some((call) => call.method === 'fillRect')).toBe(true);
+  });
+
+  it('stops and clears the profile mote loop when no started potion remains', async () => {
+    const h = interactionHarness();
+    const noPotions: HubState = { ...h.initialState, effects: h.initialState.effects.filter((effect) => effect.kind === 'debuff') };
+    h.responses.splice(0, h.responses.length, { ok: true, json: async () => noPotions });
+
+    await h.intervals[0].callback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(h.cancelledFrames).toContain(1);
+    expect(h.potionCanvasCalls.some((call) => call.method === 'clearRect')).toBe(true);
   });
 
   it('polls every five seconds only while visible and refreshes immediately on return', async () => {

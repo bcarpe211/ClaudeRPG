@@ -28,6 +28,28 @@ describe('TV renderer bootstrap', () => {
     expect(source.match(/new EventSource\(/g)).toHaveLength(1);
     expect(source).toContain('if (!IS_COMPACT) drawLeaderboard(t);');
   });
+
+  it('loads the shared potion vocabulary before both TV renderers and layers motes below debuffs', () => {
+    const tvSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'), 'utf8');
+    for (const documentName of ['index.html', 'embed.html']) {
+      const documentSource = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'web', 'public', 'tv', documentName),
+        'utf8',
+      );
+      expect(documentSource.indexOf('/static/potion-fx.js')).toBeGreaterThanOrEqual(0);
+      expect(documentSource.indexOf('/static/potion-fx.js'))
+        .toBeLessThan(documentSource.indexOf('/static/tv/tv.js'));
+    }
+
+    const heroes = tvSource.slice(
+      tvSource.indexOf('function drawHeroes'),
+      tvSource.indexOf('function drawHpBar'),
+    );
+    expect(tvSource).toContain('ClaudeRpgPotionFx');
+    expect(tvSource).toContain('potionFx.frame');
+    expect(heroes.indexOf('drawSprite(animImg')).toBeLessThan(heroes.indexOf('drawPotionMotes'));
+    expect(heroes.indexOf('drawPotionMotes')).toBeLessThan(heroes.indexOf('DEBUFF_BADGE'));
+  });
 });
 
 describe('isFrameA', () => {

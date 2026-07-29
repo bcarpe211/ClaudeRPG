@@ -47,6 +47,9 @@
   const effectsClose = byId('hub-effects-close');
   const avatarTrigger = documentRef.querySelector('.hub-avatar-trigger');
   const avatarWrap = byId('hub-avatar-wrap');
+  const potionCanvas = byId('hub-potion-fx');
+  const potionContext = potionCanvas?.getContext?.('2d') ?? null;
+  const reducedMotion = root.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
   if (!grid || !detail || !drinkButton || !confirmDialog || !confirmDrink) return;
 
   const number = new Intl.NumberFormat('en-US');
@@ -58,6 +61,7 @@
   let pendingActivation = null;
   let refreshing = false;
   let refreshQueued = false;
+  let potionFrameRequest = null;
 
   function clear(element) {
     while (element.firstChild) element.removeChild(element.firstChild);
@@ -264,6 +268,84 @@
     renderInventory();
     renderEffects();
     renderTodayAndFight();
+    syncPotionAnimation();
+  }
+
+  function activePotionTiers() {
+    const tiers = { goldTier: null, damageTier: null };
+    for (const effect of state.effects) {
+      if (effect.state === 'armed' || !Number.isInteger(effect.tier) || effect.tier < 1) continue;
+      if (effect.kind === 'gold') tiers.goldTier = effect.tier;
+      if (effect.kind === 'damage') tiers.damageTier = effect.tier;
+    }
+    return tiers;
+  }
+
+  function clearPotionCanvas() {
+    potionContext?.clearRect(0, 0, potionCanvas.width, potionCanvas.height);
+  }
+
+  function stopPotionAnimation() {
+    if (potionFrameRequest !== null) root.cancelAnimationFrame?.(potionFrameRequest);
+    potionFrameRequest = null;
+    clearPotionCanvas();
+  }
+
+  function drawPotionFrame(timeMs) {
+    potionFrameRequest = null;
+    const tiers = activePotionTiers();
+    const hasEffect = tiers.goldTier !== null || tiers.damageTier !== null;
+    if (
+      !potionContext
+      || !hasEffect
+      || reducedMotion?.matches
+      || documentRef.visibilityState === 'hidden'
+      || !root.ClaudeRpgPotionFx
+    ) {
+      stopPotionAnimation();
+      return;
+    }
+
+    clearPotionCanvas();
+    const motes = root.ClaudeRpgPotionFx.frame({
+      playerId: bootstrap.playerId,
+      ...tiers,
+      timeMs,
+    });
+    for (const mote of motes) {
+      const size = mote.size;
+      const x = Math.round(24 + mote.dx - size / 2);
+      const y = Math.round(45 + mote.dy - size);
+      potionContext.save();
+      potionContext.globalAlpha = mote.alpha;
+      potionContext.fillStyle = 'rgba(7,4,12,0.9)';
+      potionContext.fillRect(x + 1, y + 1, size, size);
+      potionContext.shadowColor = mote.color;
+      potionContext.shadowBlur = 1;
+      potionContext.fillStyle = mote.color;
+      potionContext.fillRect(x, y, size, size);
+      potionContext.restore();
+    }
+    potionFrameRequest = root.requestAnimationFrame?.(drawPotionFrame) ?? null;
+  }
+
+  function syncPotionAnimation() {
+    const tiers = activePotionTiers();
+    const hasEffect = tiers.goldTier !== null || tiers.damageTier !== null;
+    if (
+      !potionContext
+      || !hasEffect
+      || reducedMotion?.matches
+      || documentRef.visibilityState === 'hidden'
+      || !root.ClaudeRpgPotionFx
+      || typeof root.requestAnimationFrame !== 'function'
+    ) {
+      stopPotionAnimation();
+      return;
+    }
+    if (potionFrameRequest === null) {
+      potionFrameRequest = root.requestAnimationFrame(drawPotionFrame);
+    }
   }
 
   function showFeedback(message, isError) {
@@ -466,8 +548,10 @@
     if (confirmDialog.open || !confirmDialog.hidden) closeDialog();
   });
   documentRef.addEventListener('visibilitychange', () => {
+    syncPotionAnimation();
     if (documentRef.visibilityState === 'visible') void refreshState();
   });
+  reducedMotion?.addEventListener?.('change', syncPotionAnimation);
   root.setInterval?.(() => {
     if (documentRef.visibilityState !== 'hidden') void refreshState();
   }, 5_000);

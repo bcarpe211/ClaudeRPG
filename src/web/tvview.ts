@@ -28,6 +28,7 @@ import { cosmeticSkinUrlForPlayer, type SkinAssetContext } from '../domain/slotc
 import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
 import { monsterByIndex, monsterName } from '../domain/bestiary';
 import { monsterTitle, pluralizeCreature } from '../domain/monstername';
+import { activePotionEffects } from '../domain/potions';
 
 export function creatureSpriteUrl(index: number): string {
   return `/sprites/creatures_24x24/${creatureSpriteFile(index)}`;
@@ -45,6 +46,7 @@ export interface TvHero {
   modifier: number; disabled: boolean; connected: boolean;
   damage: number; x: number | null; y: number | null;
   debuffed: boolean;
+  potionEffects: { goldTier: number | null; damageTier: number | null };
 }
 export interface TvDefeat extends DefeatSummary { creatureUrl: string; }
 export interface TvMonsterAttack {
@@ -97,14 +99,29 @@ export function buildTvState(
   const rows = db.prepare(
     'SELECT * FROM players ORDER BY effective_tokens DESC, id ASC',
   ).all() as any[];
-  const players: TvHero[] = rows.map((p) => ({
-    id: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a', assets),
-    level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,
-    gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK, cfg.modifierCap),
-    disabled: !!p.disabled, connected: p.last_token_at != null,
-    damage: dmgByPlayer.get(p.id) ?? 0, x: null, y: null,
-    debuffed: debuffFactor(db, p.id, now, cfg) < 1,
-  }));
+  const playersWithPotions = new Set((db.prepare(
+    "SELECT DISTINCT player_id FROM potion_activations WHERE status='active'",
+  ).all() as { player_id: number }[]).map((row) => row.player_id));
+  const players: TvHero[] = rows.map((p) => {
+    const potionEffects = { goldTier: null, damageTier: null } as TvHero['potionEffects'];
+    const activeEffects = playersWithPotions.has(p.id)
+      ? activePotionEffects(db, p.id, now)
+      : [];
+    for (const effect of activeEffects) {
+      if (effect.state === 'armed') continue;
+      if (effect.potionType === 'gold') potionEffects.goldTier = effect.tier;
+      if (effect.potionType === 'damage') potionEffects.damageTier = effect.tier;
+    }
+    return {
+      id: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a', assets),
+      level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,
+      gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK, cfg.modifierCap),
+      disabled: !!p.disabled, connected: p.last_token_at != null,
+      damage: dmgByPlayer.get(p.id) ?? 0, x: null, y: null,
+      debuffed: debuffFactor(db, p.id, now, cfg) < 1,
+      potionEffects,
+    };
+  });
 
   // Assign battlefield slots to enabled players (same order) from the layout.
   const layout = currentTvLayout(db);

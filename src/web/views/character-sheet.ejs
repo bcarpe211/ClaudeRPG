@@ -13,6 +13,7 @@
             aria-label="View active effects" aria-controls="hub-effects" aria-expanded="false">
             <img id="character-avatar-a" src="<%= avatarA %>" alt="<%= player.name %>" class="px frame-a" />
             <img id="character-avatar-b" src="<%= avatarB %>" alt="" class="px frame-b" />
+            <canvas id="hub-potion-fx" class="hub-potion-fx" width="48" height="48" aria-hidden="true"></canvas>
             <span id="hub-bottle-burst" class="hub-bottle-burst" aria-hidden="true">
               <img class="px" src="/static/landing/potion.png" alt="" />
             </span>
@@ -119,6 +120,7 @@
 
 <% const playerHubState = { gold, activationTiming, inventory, effects, today, currentFight }; %>
 <% const playerHubClient = {
+  playerId: player.id,
   token: player.auth_token,
   initialState: playerHubState,
   endpoints: {
@@ -127,5 +129,6 @@
   },
 }; %>
 <script>window.__PLAYER_HUB__ = <%- JSON.stringify(playerHubClient).replace(/</g, '\\u003c') %>;</script>
+<script src="/static/potion-fx.js"></script>
 <script src="/static/player-hub.js"></script>
 <script type="module">import { start } from '/static/anim.js'; start({ periodMs: 700 });</script>

@@ -8,6 +8,7 @@
 .hub-avatar-trigger:hover{transform:none;border-color:var(--gold-dim)}
 .hub-avatar-trigger:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
 .hub-avatar-trigger img{position:absolute;inset:3px;width:88px;height:88px;filter:drop-shadow(0 7px 4px #000c) drop-shadow(0 14px 9px #0008)}
+.hub-potion-fx{position:absolute;z-index:3;inset:0;width:var(--hub-avatar-size);height:var(--hub-avatar-size);pointer-events:none;image-rendering:pixelated}
 .hub-bottle-burst{position:absolute;z-index:4;left:35px;top:44px;width:24px;height:28px;pointer-events:none;opacity:0}
 .hub-bottle-burst img{inset:0;width:24px;height:28px;filter:drop-shadow(1px 2px 0 #120818) drop-shadow(-1px 0 3px #e7b9ff88)}
 .hub-bottle-burst.is-bursting{animation:hub-bottle-pop 850ms steps(6,end) both}

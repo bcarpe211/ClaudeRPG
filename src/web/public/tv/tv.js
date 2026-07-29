@@ -214,6 +214,32 @@ function drawSprite(im, cx, cy, w, h) {
   ctx.drawImage(im, Math.round(cx - w / 2), Math.round(cy - h), w, h);
 }
 
+function drawPotionMotes(p, drawX, drawY, w, t) {
+  const potionFx = window.ClaudeRpgPotionFx;
+  if (!potionFx || !p.potionEffects) return;
+  const sourceScale = Math.max(1, Math.round(w / 26));
+  const motes = potionFx.frame({
+    playerId: p.id,
+    goldTier: p.potionEffects.goldTier,
+    damageTier: p.potionEffects.damageTier,
+    timeMs: t,
+  });
+  for (const mote of motes) {
+    const size = mote.size * sourceScale;
+    const x = Math.round(drawX + mote.dx * sourceScale - size / 2);
+    const y = Math.round(drawY + mote.dy * sourceScale - size);
+    ctx.save();
+    ctx.globalAlpha = mote.alpha;
+    ctx.fillStyle = 'rgba(7,4,12,0.9)';
+    ctx.fillRect(x + sourceScale, y + sourceScale, size, size);
+    ctx.shadowColor = mote.color;
+    ctx.shadowBlur = sourceScale;
+    ctx.fillStyle = mote.color;
+    ctx.fillRect(x, y, size, size);
+    ctx.restore();
+  }
+}
+
 // Ground-shadow ellipse under an actor. Crop just the flat ellipse band from the shadow tile
 // and CENTRE it on the actor's foot line `feetY` (width `w`): its lower half peeks out below
 // the feet, its upper half tucks behind the sprite. `feetY` sits a little above the tile
@@ -384,6 +410,10 @@ function drawHeroes(t) {
       const fs = tilePx * 1.4;
       ctx.drawImage(fim, Math.round(drawX - fs / 2), Math.round(drawY - h / 2 - fs / 2), fs, fs);
     }
+
+    // Active potion magic rises in front of the hero, but stays below the
+    // persistent monster-debuff badge so both states remain legible.
+    drawPotionMotes(p, drawX, drawY, w, t);
 
     // persistent red "!" badge, top-right of the avatar, while debuffed
     if (p.debuffed) {
