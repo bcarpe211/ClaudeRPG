@@ -4,7 +4,11 @@ import { openDb } from '../src/db/db';
 import { loadConfig } from '../src/config';
 import { createApp } from '../src/web/app';
 import { ensureAdmin } from '../src/domain/admin';
-import { seedSettings, getSetting } from '../src/domain/settings';
+import {
+  DEFAULT_SETTINGS,
+  seedSettings,
+  getSetting,
+} from '../src/domain/settings';
 
 let db: ReturnType<typeof openDb>;
 let app: ReturnType<typeof createApp>;
@@ -14,6 +18,17 @@ async function adminAgent() {
   const agent = request.agent(app);
   await agent.post('/admin/login').type('form').send({ username: 'boss', password: 'secret' });
   return agent;
+}
+
+function potionSettings(
+  overrides: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    ...Object.fromEntries(
+      Object.entries(DEFAULT_SETTINGS).filter(([key]) => key.startsWith('potion_')),
+    ),
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -81,6 +96,60 @@ describe('admin settings', () => {
     expect(getSetting(db, 'reward_podium_first_pct')).toBe('5');
     expect(getSetting(db, 'reward_podium_second_pct')).toBe('3');
     expect(getSetting(db, 'reward_podium_third_pct')).toBe('2');
+  });
+
+  it('saves the complete potion configuration as one validated group', async () => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send(potionSettings({
+        potion_gold_t1_price: '110000',
+        potion_damage_t1_base_hit_pct: '12.5',
+      }));
+
+    expect(res.status).toBe(302);
+    expect(getSetting(db, 'potion_gold_t1_price')).toBe('110000');
+    expect(getSetting(db, 'potion_damage_t1_base_hit_pct')).toBe('12.5');
+  });
+
+  it('rejects a partial potion group without saving any submitted setting', async () => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send({
+        baseline_battle_minutes: '40',
+        potion_gold_t1_price: '110000',
+      });
+
+    expect(res.status).toBe(400);
+    expect(getSetting(db, 'baseline_battle_minutes')).toBe('45');
+    expect(getSetting(db, 'potion_gold_t1_price')).toBe('100000');
+  });
+
+  it.each([
+    ['zero duration', { potion_gold_t1_duration_s: '0' }],
+    ['unsafe duration milliseconds', { potion_damage_t1_duration_s: '9007199254741' }],
+    ['fractional economic value', { potion_gold_t1_price: '1.5' }],
+    ['unsafe economic value', { potion_gold_t1_stretch_tokens: '9007199254740992' }],
+    ['malformed effect value', { potion_damage_t1_base_hit_pct: 'not-a-number' }],
+    ['negative daily limit', { potion_daily_uses_per_type: '-1' }],
+  ])('rejects %s transactionally', async (_label, invalid) => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send({
+        baseline_battle_minutes: '40',
+        ...potionSettings(invalid),
+      });
+
+    expect(res.status).toBe(400);
+    expect(getSetting(db, 'baseline_battle_minutes')).toBe('45');
+    for (const [key, value] of Object.entries(potionSettings())) {
+      expect(getSetting(db, key), key).toBe(value);
+    }
   });
 
   it('never exposes the admin password hash as an editable knob', async () => {

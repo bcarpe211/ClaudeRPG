@@ -86,6 +86,76 @@ function create013ActivationDatabase(dbPath: string): void {
   legacy.close();
 }
 
+function create014RewardPoolDatabase(dbPath: string): {
+  activeHybridId: number;
+  defeatedHybridId: number;
+  legacyId: number;
+} {
+  const legacy = new Database(dbPath);
+  legacy.pragma('foreign_keys = ON');
+  legacy.exec('CREATE TABLE _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+  const recordMigration = legacy.prepare(
+    'INSERT INTO _migrations (id, applied_at) VALUES (?, ?)',
+  );
+  for (const [index, migration] of migrations.slice(0, 14).entries()) {
+    legacy.exec(migration.sql);
+    recordMigration.run(migration.id, 1_000 + index);
+  }
+  legacy.prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
+    .run('gold_factor', '0.5');
+  legacy.prepare(
+    `INSERT INTO players
+      (id, name, class_key, gender, auth_token, created_at)
+     VALUES (1, 'Reward Hero', 'wizard', 'M', 'reward-token', 1000)`,
+  ).run();
+  const dungeon = legacy.prepare(
+    `INSERT INTO dungeons (level, theme, seed, regular_count, created_at)
+     VALUES (3, 'Ossuary Pale', 42, 3, 1000)`,
+  ).run();
+  const insertEncounter = legacy.prepare(
+    `INSERT INTO encounters
+      (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
+       pack_count, max_hp, current_hp, status, started_at, ended_at,
+       reward_model_version, reward_work_pct, reward_damage_pct,
+       reward_podium_first_pct, reward_podium_second_pct,
+       reward_podium_third_pct)
+     VALUES (?, ?, 'single', 1, 1, 1, 101, ?, ?, 2000, ?, ?, 80, 10, 5, 3, 2)`,
+  );
+  const activeHybridId = Number(insertEncounter.run(
+    Number(dungeon.lastInsertRowid),
+    0,
+    101,
+    'active',
+    null,
+    'hybrid-v1',
+  ).lastInsertRowid);
+  const defeatedHybridId = Number(insertEncounter.run(
+    Number(dungeon.lastInsertRowid),
+    1,
+    0,
+    'defeated',
+    3000,
+    'hybrid-v1',
+  ).lastInsertRowid);
+  const legacyId = Number(insertEncounter.run(
+    Number(dungeon.lastInsertRowid),
+    2,
+    101,
+    'active',
+    null,
+    'legacy-v0',
+  ).lastInsertRowid);
+  legacy.prepare(
+    `INSERT INTO encounter_reward_awards
+      (encounter_id, player_id, effective_tokens, damage_total,
+       potion_bonus_damage, damage_rank, work_gold, damage_gold,
+       podium_gold, total_gold, model_version, awarded_at)
+     VALUES (?, 1, 100, 100, 0, 1, 60, 10, 7, 77, 'hybrid-v1', 3000)`,
+  ).run(defeatedHybridId);
+  legacy.close();
+  return { activeHybridId, defeatedHybridId, legacyId };
+}
+
 describe('timed-consumables database upgrades', () => {
   it('preserves a live encounter and records one opening ledger balance', () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-upgrade-'));
@@ -189,6 +259,35 @@ describe('timed-consumables database upgrades', () => {
         'SELECT id FROM _migrations WHERE id = ?',
       ).get('014_potion_activation_response_snapshots')).toEqual({
         id: '014_potion_activation_response_snapshots',
+      });
+    } finally {
+      upgraded?.close();
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('backfills immutable hybrid reward pools while leaving legacy encounters untouched', () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-upgrade-'));
+    const dbPath = join(fixtureDir, 'timed-consumables-014.db');
+    let upgraded: Database.Database | undefined;
+    try {
+      const fixture = create014RewardPoolDatabase(dbPath);
+      upgraded = openDb(dbPath);
+
+      expect(columns(upgraded, 'encounters')).toContain('reward_gold_pool');
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.activeHybridId)).toEqual({ reward_gold_pool: 152 });
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.defeatedHybridId)).toEqual({ reward_gold_pool: 77 });
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.legacyId)).toEqual({ reward_gold_pool: null });
+      expect(upgraded.prepare(
+        'SELECT id FROM _migrations WHERE id=?',
+      ).get('015_encounter_reward_gold_pool')).toEqual({
+        id: '015_encounter_reward_gold_pool',
       });
     } finally {
       upgraded?.close();

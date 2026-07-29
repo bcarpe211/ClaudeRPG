@@ -110,6 +110,10 @@ class FakeElement {
     if (name === 'class') this.className = value;
   }
   getAttribute(name: string): string | null { return this.attributes.get(name) ?? null; }
+  matches(selector: string): boolean {
+    return selector === ':focus-within'
+      && this.contains(this.ownerDocument?.activeElement ?? null);
+  }
   append(...children: FakeElement[]): void {
     for (const child of children) {
       child.parentElement = this;
@@ -215,6 +219,12 @@ function interactionHarness(options: {
   const filterPotions = register('hub-filter-potions', 'button');
   filterPotions.dataset.filter = 'potions';
   document.getElementById('hub-avatar-wrap')!.append(avatar);
+  document.getElementById('hub-effects')!.append(
+    document.getElementById('hub-effects-close')!,
+  );
+  document.getElementById('hub-avatar-wrap')!.append(
+    document.getElementById('hub-effects')!,
+  );
   document.getElementById('hub-item-detail')!.append(
     document.getElementById('hub-item-detail-empty')!,
     document.getElementById('hub-item-detail-content')!,
@@ -424,6 +434,22 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     h.document.getElementById('hub-effects-close')!.dispatch('click');
     expect(effects.hidden).toBe(true);
     expect(h.avatar.focusCount).toBe(2);
+  });
+
+  it('keeps an unpinned effects popover open on pointer leave while focus stays within the avatar', () => {
+    const h = interactionHarness();
+    const effects = h.document.getElementById('hub-effects')!;
+    const avatarWrap = h.document.getElementById('hub-avatar-wrap')!;
+    effects.hidden = true;
+
+    h.avatar.focus();
+    h.avatar.dispatch('focus');
+    expect(effects.hidden).toBe(false);
+    avatarWrap.dispatch('pointerleave');
+    expect(effects.hidden).toBe(false);
+
+    avatarWrap.dispatch('focusout', new FakeEvent('', avatarWrap, null));
+    expect(effects.hidden).toBe(true);
   });
 
   it('keeps a bottle corked without a request and restores rejected actions with thematic feedback', async () => {

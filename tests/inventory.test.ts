@@ -93,12 +93,17 @@ describe('personal consumable inventory purchases', () => {
     expect(inventoryQuantity(db, player.id, 'potion_damage_t1')).toBe(1);
   });
 
-  it('uses the default daily stock for malformed numeric settings', () => {
+  it('rejects malformed daily stock as an unusable configuration without mutation', () => {
     const player = playerWithGold(1_000_000);
     setSetting(db, 'potion_daily_stock_per_sku', '0x10');
 
     expect(purchaseConsumable(db, request(player.id, 'malformed-daily-stock')))
-      .toMatchObject({ ok: true, stockRemaining: 2 });
+      .toEqual({ ok: false, reason: 'invalid_config' });
+    expect(rowCount('shop_purchases')).toBe(0);
+    expect(rowCount('player_inventory_lots')).toBe(0);
+    expect(rowCount('player_inventory')).toBe(0);
+    expect(rowCount('gold_ledger')).toBe(1);
+    expect(getPlayerById(db, player.id)?.gold).toBe(1_000_000);
   });
 
   it('returns the original purchase on an exact request retry without another charge', () => {
@@ -177,6 +182,34 @@ describe('personal consumable inventory purchases', () => {
 
     expect(purchaseConsumable(db, request(player.id, 'stale-price')))
       .toEqual({ ok: false, reason: 'price_changed' });
+    expect(rowCount('shop_purchases')).toBe(0);
+    expect(rowCount('player_inventory_lots')).toBe(0);
+    expect(rowCount('player_inventory')).toBe(0);
+    expect(rowCount('gold_ledger')).toBe(1);
+    expect(getPlayerById(db, player.id)?.gold).toBe(1_000_000);
+  });
+
+  it('rejects a stale purchase when current activation settings are unusable', () => {
+    const player = playerWithGold(1_000_000);
+    setSetting(db, 'potion_damage_t1_base_hit_pct', 'not-a-number');
+
+    expect(purchaseConsumable(db, request(player.id, 'stale-effect-config')))
+      .toEqual({ ok: false, reason: 'invalid_config' });
+    expect(rowCount('shop_purchases')).toBe(0);
+    expect(rowCount('player_inventory_lots')).toBe(0);
+    expect(rowCount('player_inventory')).toBe(0);
+    expect(rowCount('gold_ledger')).toBe(1);
+    expect(getPlayerById(db, player.id)?.gold).toBe(1_000_000);
+  });
+
+  it('rejects an unsafe unit-price total before any mutation', () => {
+    const player = playerWithGold(1_000_000);
+    setSetting(db, 'potion_gold_t1_price', String(Number.MAX_SAFE_INTEGER));
+
+    expect(purchaseConsumable(db, request(player.id, 'unsafe-total', {
+      quantity: 2,
+      expectedUnitPrice: Number.MAX_SAFE_INTEGER,
+    }))).toEqual({ ok: false, reason: 'invalid_config' });
     expect(rowCount('shop_purchases')).toBe(0);
     expect(rowCount('player_inventory_lots')).toBe(0);
     expect(rowCount('player_inventory')).toBe(0);

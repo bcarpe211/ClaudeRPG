@@ -38,6 +38,7 @@ const ConsumablePurchaseInput = z.object({
 const PURCHASE_RESULTS = new Set([
   'success', 'insufficient_gold', 'price_changed', 'stale', 'out_of_sequence', 'invalid',
   'potion_success', 'potion_insufficient_gold', 'potion_price_changed', 'potion_sold_out',
+  'potion_unavailable',
 ]);
 
 type PurchaseResultCode =
@@ -50,7 +51,8 @@ type PurchaseResultCode =
   | 'potion_success'
   | 'potion_insufficient_gold'
   | 'potion_price_changed'
-  | 'potion_sold_out';
+  | 'potion_sold_out'
+  | 'potion_unavailable';
 
 function shopLocation(token: string, result: PurchaseResultCode): string {
   const query = new URLSearchParams({ token, result });
@@ -212,13 +214,15 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
     });
     const resultCode: PurchaseResultCode = result.ok
       ? 'potion_success'
-      : result.reason === 'price_changed'
-        ? 'potion_price_changed'
-        : result.reason === 'sold_out'
-          ? 'potion_sold_out'
-          : result.reason === 'insufficient_gold'
-            ? 'potion_insufficient_gold'
-            : 'invalid';
+      : result.reason === 'invalid_config'
+        ? 'potion_unavailable'
+        : result.reason === 'price_changed'
+          ? 'potion_price_changed'
+          : result.reason === 'sold_out'
+            ? 'potion_sold_out'
+            : result.reason === 'insufficient_gold'
+              ? 'potion_insufficient_gold'
+              : 'invalid';
     res.redirect(shopLocation(player.auth_token, resultCode));
   });
 }

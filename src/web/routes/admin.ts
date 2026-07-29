@@ -22,6 +22,11 @@ import { groupedSettings } from '../../domain/settings-meta';
 import { validateRewardConfig } from '../../domain/rewards';
 import { buildPotionLabReport } from '../../domain/potionlab';
 import { nextOfficeMidnight, officeDayKey, officeDayStart } from '../../domain/office-time';
+import {
+  POTION_SETTING_KEYS,
+  parsePotionConfiguration,
+  type PotionSettingKey,
+} from '../../domain/shop-products';
 
 // Augment the session type with our admin flag.
 declare module 'express-session' {
@@ -170,13 +175,14 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
       const to = toStart === undefined
         ? undefined
         : nextOfficeMidnight(toStart, deps.config.officeTimeZone) - 1;
+      const now = Date.now();
       const report = buildPotionLabReport(db, {
         from,
         to,
         playerId: parsed.data.player,
         sku: parsed.data.sku,
         timeZone: deps.config.officeTimeZone,
-      });
+      }, now);
       res.set('Cache-Control', 'private, no-store');
       res.send(await renderPage('admin-potions', {
         title: 'Potion Lab',
@@ -265,6 +271,27 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
   );
 
   app.post('/admin/settings', requireAdmin, (req, res) => {
+    const hasPotionSetting = POTION_SETTING_KEYS.some(
+      (key) => req.body?.[key] !== undefined,
+    );
+    if (hasPotionSetting) {
+      const submitted = Object.fromEntries(
+        POTION_SETTING_KEYS.map((key) => [key, req.body?.[key]]),
+      ) as Record<PotionSettingKey, unknown>;
+      if (POTION_SETTING_KEYS.some((key) => (
+        typeof submitted[key] !== 'string'
+        || submitted[key].trim().length === 0
+      ))) {
+        res.status(400).send('All potion settings are required');
+        return;
+      }
+      if (!parsePotionConfiguration(
+        submitted as Record<PotionSettingKey, string>,
+      )) {
+        res.status(400).send('Potion settings must form a usable configuration');
+        return;
+      }
+    }
     const hasRewardSetting = REWARD_SETTING_KEYS.some((key) => req.body?.[key] !== undefined);
     if (hasRewardSetting) {
       const submitted = REWARD_SETTING_KEYS.map((key) => req.body?.[key]);

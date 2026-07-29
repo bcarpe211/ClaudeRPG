@@ -1,5 +1,14 @@
 <% const fmt = (value) => Number(value).toLocaleString('en-US'); %>
 <% const signedGold = (value) => (value >= 0 ? '+' : '') + fmt(value) + 'g'; %>
+<% const pct = (value) => (Number(value) * 100).toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%'; %>
+<% const stamp = (value) => value === null ? 'In progress' : new Date(value).toISOString(); %>
+<% const span = (value) => {
+  const totalSeconds = Math.floor(Number(value) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}h ${minutes}m ${seconds}s`;
+}; %>
 <style>
   .lab-shell{display:grid;gap:16px;min-width:0}.lab-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.lab-head h1{margin-bottom:4px}
   .lab-kicker{color:#d8ad59;font:800 11px/1.2 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}.lab-muted{color:var(--muted)}
@@ -35,10 +44,12 @@
       <div class="lab-metric"><span>Base payout</span><strong><%= fmt(report.gold.basePayout) %>g</strong></div>
       <div class="lab-metric"><span>Stretch payout</span><strong><%= fmt(report.gold.stretchPayout) %>g</strong></div>
       <div class="lab-metric"><span>Break-even runs</span><strong><%= fmt(report.gold.breakEvenCount) %></strong></div>
+      <div class="lab-metric"><span>Break-even rate</span><strong><%= pct(report.gold.breakEvenRate) %></strong></div>
+      <div class="lab-metric"><span>Stretch rate</span><strong><%= pct(report.gold.stretchRate) %></strong></div>
     </div>
-    <div class="lab-table-wrap"><table class="lab-table"><thead><tr><th>Activation</th><th>Player</th><th>Tokens</th><th>Payout</th><th>Price</th><th>Net</th><th>Status</th></tr></thead><tbody>
-      <% if (report.gold.activations.length === 0) { %><tr><td colspan="7" class="lab-muted">No Gold Potion evidence matches these filters.</td></tr><% } %>
-      <% report.gold.activations.forEach(function(row) { %><tr><td>#<%= row.activationId %></td><td>#<%= row.playerId %></td><td><%= fmt(row.eligibleTokens) %></td><td><%= fmt(row.payout) %>g</td><td><%= fmt(row.purchasePrice) %>g</td><td class="<%= row.netGold >= 0 ? 'lab-good' : 'lab-bad' %>"><%= fmt(row.netGold) %>g net</td><td><%= row.completedAt === null ? 'In progress' : 'Completed' %></td></tr><% }); %>
+    <div class="lab-table-wrap"><table class="lab-table"><thead><tr><th>Activation</th><th>Player</th><th>Purchase date</th><th>Activation / completion</th><th>Wall span</th><th>Combat active</th><th>Tokens</th><th>Base payout</th><th>Stretch payout</th><th>Total payout</th><th>Purchase price</th><th>Net</th></tr></thead><tbody>
+      <% if (report.gold.activations.length === 0) { %><tr><td colspan="12" class="lab-muted">No Gold Potion evidence matches these filters.</td></tr><% } %>
+      <% report.gold.activations.forEach(function(row) { %><tr><td>#<%= row.activationId %></td><td>#<%= row.playerId %></td><td><time datetime="<%= new Date(row.purchasedAt).toISOString() %>"><%= stamp(row.purchasedAt) %></time></td><td><time datetime="<%= new Date(row.activatedAt).toISOString() %>"><%= stamp(row.activatedAt) %></time><br><% if (row.completedAt === null) { %>In progress<% } else { %>Completed · <time datetime="<%= new Date(row.completedAt).toISOString() %>"><%= stamp(row.completedAt) %></time><% } %></td><td><%= span(row.wallElapsedMs) %></td><td><%= span(row.activeElapsedMs) %></td><td><%= fmt(row.eligibleTokens) %></td><td><%= fmt(row.basePayout) %>g</td><td><%= fmt(row.stretchPayout) %>g</td><td><%= fmt(row.payout) %>g</td><td><%= fmt(row.purchasePrice) %>g</td><td class="<%= row.netGold >= 0 ? 'lab-good' : 'lab-bad' %>"><%= fmt(row.netGold) %>g net</td></tr><% }); %>
     </tbody></table></div>
     <div class="lab-distributions">
       <div class="lab-distribution"><h3>Median net by player</h3><ul><% if (report.gold.byPlayer.length === 0) { %><li>No matching evidence</li><% } %><% report.gold.byPlayer.forEach(function(row) { %><li><span>Player #<%= row.playerId %> · <%= row.activations %> run<%= row.activations === 1 ? '' : 's' %></span><strong><%= signedGold(row.medianNetGold) %></strong></li><% }); %></ul></div>
@@ -47,10 +58,10 @@
   </section>
 
   <section class="lab-section" aria-labelledby="lab-damage-title">
-    <h2 id="lab-damage-title">Damage counterfactuals</h2><p class="lab-muted">Each row removes only that activation's bonus damage, then reruns the encounter's stored 80/20 reward model.</p>
-    <div class="lab-table-wrap"><table class="lab-table"><thead><tr><th>Activation</th><th>Player</th><th>Bonus damage</th><th>Rank</th><th>Reward</th><th>Net after price</th></tr></thead><tbody>
-      <% if (report.damage.activations.length === 0) { %><tr><td colspan="6" class="lab-muted">No Damage Potion evidence matches these filters.</td></tr><% } %>
-      <% report.damage.activations.forEach(function(row) { %><tr><td>#<%= row.activationId %></td><td>#<%= row.playerId %></td><td><%= fmt(row.bonusDamage) %></td><td>Rank <%= row.actualRank || '—' %> → <%= row.counterfactualRank || '—' %></td><td>Actual <%= fmt(row.actualReward) %>g · Without potion <%= fmt(row.counterfactualReward) %>g</td><td class="<%= row.netGold >= 0 ? 'lab-good' : 'lab-bad' %>"><%= signedGold(row.netGold) %></td></tr><% }); %>
+    <h2 id="lab-damage-title">Damage counterfactuals</h2><p class="lab-muted">Each encounter removes only that activation's bonus damage, then reruns its stored hybrid work/damage/podium allocation (80/10/5/3/2 at launch).</p>
+    <div class="lab-table-wrap"><table class="lab-table"><thead><tr><th>Activation</th><th>Player</th><th>Activation window</th><th>Actual damage</th><th>Without potion damage</th><th>Bonus damage</th><th>Actual rank</th><th>Without potion rank</th><th>Actual reward</th><th>Without potion reward</th><th>Podium entries</th><th>Podium climbs</th><th>Purchase price</th><th>Net after price</th></tr></thead><tbody>
+      <% if (report.damage.activations.length === 0) { %><tr><td colspan="14" class="lab-muted">No Damage Potion evidence matches these filters.</td></tr><% } %>
+      <% report.damage.activations.forEach(function(row) { %><tr><td>#<%= row.activationId %><% if (row.encounters.length > 0) { %><details><summary><%= row.encounters.length %> encounter<%= row.encounters.length === 1 ? '' : 's' %></summary><ul><% row.encounters.forEach(function(encounter) { %><li>Encounter #<%= encounter.encounterId %> · <%= encounter.rewardSplit %> · Damage <%= fmt(encounter.actualDamage) %> / <%= fmt(encounter.counterfactualDamage) %> · Rank <%= encounter.actualRank %> → <%= encounter.counterfactualRank %> · Actual <%= fmt(encounter.actualReward) %>g / Without potion <%= fmt(encounter.counterfactualReward) %>g · <%= encounter.podiumEntry ? 'Podium entry' : encounter.podiumClimb > 0 ? `${encounter.podiumClimb} podium position climb` : 'No podium movement' %></li><% }); %></ul></details><% } %></td><td>#<%= row.playerId %></td><td><%= stamp(row.activatedAt) %><br><%= row.completedAt === null ? 'In progress' : `Completed · ${stamp(row.completedAt)}` %><br><span class="lab-muted"><%= span(row.wallElapsedMs) %> wall · <%= span(row.activeElapsedMs) %> combat</span></td><td><%= fmt(row.actualDamage) %></td><td><%= fmt(row.counterfactualDamage) %></td><td><%= fmt(row.bonusDamage) %></td><td>Rank <%= row.actualRank || '—' %></td><td>Rank <%= row.counterfactualRank || '—' %></td><td>Actual <%= fmt(row.actualReward) %>g</td><td>Without potion <%= fmt(row.counterfactualReward) %>g</td><td><%= fmt(row.podiumEntries) %></td><td><%= fmt(row.podiumClimbs) %> position<%= row.podiumClimbs === 1 ? '' : 's' %></td><td><%= fmt(row.purchasePrice) %>g</td><td class="<%= row.netGold >= 0 ? 'lab-good' : 'lab-bad' %>"><%= signedGold(row.netGold) %></td></tr><% }); %>
     </tbody></table></div>
     <p class="lab-muted" style="margin-top:12px">Encounter gold is redistributed, not minted; the potion changes a player's share of the stored reward pool.</p>
   </section>

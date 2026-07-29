@@ -428,6 +428,39 @@ describe('Bazaar', () => {
     expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(0);
   });
 
+  it('rejects a stale purchase as unavailable when current potion effects are unusable', async () => {
+    const { db, app, player } = ctx(500_000);
+    db.prepare('UPDATE settings SET value = ? WHERE key = ?')
+      .run('not-a-number', 'potion_damage_t1_base_hit_pct');
+
+    const post = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'potion_gold_t1',
+      quantity: '1',
+      expected_unit_price: '100000',
+      request_id: '56565656-5656-4565-8565-565656565656',
+    });
+
+    expect(post.status).toBe(302);
+    expect(post.headers.location).toContain('result=potion_unavailable');
+    expect(getPlayerById(db, player.id)?.gold).toBe(500_000);
+    expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM shop_purchases').get())
+      .toEqual({ count: 0 });
+  });
+
+  it('renders an unusable potion configuration as unavailable instead of throwing', async () => {
+    const { db, app, player } = ctx(500_000);
+    db.prepare('UPDATE settings SET value = ? WHERE key = ?')
+      .run('0', 'potion_gold_t1_duration_s');
+
+    const response = await request(app).get('/shop').query({ token: player.auth_token });
+
+    expect(response.status).toBe(200);
+    expect(response.text.match(/Temporarily unavailable/g)).toHaveLength(2);
+    expect(response.text).not.toContain('action="/shop/consumables/purchase"');
+  });
+
   it('keeps stock authoritative when a submitted quantity is no longer available', async () => {
     const { db, app, player } = ctx(1_000_000);
     expect(purchaseConsumable(db, {

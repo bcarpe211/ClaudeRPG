@@ -80,6 +80,7 @@
     <% if (purchaseResult === 'potion_price_changed') { %><p class="bazaar-potion-result err">This potion was repriced. Review the current stock; no gold was spent.</p><% } %>
     <% if (purchaseResult === 'potion_sold_out') { %><p class="bazaar-potion-result err">That quantity is no longer in stock. Review the current stock; no gold was spent.</p><% } %>
     <% if (purchaseResult === 'potion_insufficient_gold') { %><p class="bazaar-potion-result err">Your current balance cannot cover that purchase. No gold was spent.</p><% } %>
+    <% if (purchaseResult === 'potion_unavailable') { %><p class="bazaar-potion-result err">Potion tuning is temporarily unavailable. No gold was spent.</p><% } %>
 
     <% if (shop.consumables.length > 0) { %>
       <section class="bazaar-consumables" aria-labelledby="daily-potions-title">
@@ -92,9 +93,10 @@
         </div>
         <div class="bazaar-product-grid">
           <% for (const offer of shop.consumables) {
-            const soldOut = offer.stockRemaining === 0;
+            const unavailable = !offer.available;
+            const soldOut = offer.available && offer.stockRemaining === 0;
           %>
-            <article class="bazaar-product <%= offer.iconClass %><%= soldOut ? ' is-sold-out' : '' %>"
+            <article class="bazaar-product <%= offer.iconClass %><%= soldOut ? ' is-sold-out' : '' %><%= unavailable ? ' is-unavailable' : '' %>"
               data-consumable-offer
               data-unit-price="<%= offer.unitPrice %>"
               data-player-gold="<%= shop.gold %>"
@@ -116,23 +118,29 @@
                 <div><dt>Stock</dt><dd><strong><%= offer.stockRemaining %></strong></dd></div>
               </dl>
               <p class="bazaar-restock">
-                <time datetime="<%= new Date(shop.nextRestockAt).toISOString() %>">Restocks at midnight</time>
+                <% if (unavailable) { %>
+                  <span>Temporarily unavailable</span>
+                <% } else { %>
+                  <time datetime="<%= new Date(shop.nextRestockAt).toISOString() %>">Restocks at midnight</time>
+                <% } %>
               </p>
-              <form method="post" action="/shop/consumables/purchase"<%= !soldOut && offer.missingGoldForOne === 0 ? ' data-purchase-effect' : '' %>>
-                <input type="hidden" name="token" value="<%= player.auth_token %>">
-                <input type="hidden" name="sku" value="<%= offer.sku %>">
-                <input type="hidden" name="expected_unit_price" value="<%= offer.unitPrice %>">
-                <input type="hidden" name="request_id" value="<%= consumableRequestIds[offer.sku] %>">
-                <div class="bazaar-potion-controls">
-                  <label>Quantity
-                    <input type="number" name="quantity" min="1" max="<%= soldOut ? 1 : offer.maxQuantity %>" value="1" <%= soldOut ? 'disabled' : '' %>>
-                  </label>
-                  <button type="submit" class="btn btn-gold" <%= soldOut || offer.missingGoldForOne > 0 ? 'disabled' : '' %>><%= soldOut ? 'Back at midnight' : `Buy 1 · ${offer.unitPrice.toLocaleString()}g` %></button>
-                </div>
-                <p class="bazaar-affordability<%= !soldOut && offer.missingGoldForOne === 0 ? ' is-ready' : '' %>" data-potion-affordability>
-                  <% if (soldOut) { %>Back at midnight<% } else if (offer.missingGoldForOne > 0) { %>Need <%= offer.missingGoldForOne.toLocaleString() %>g more for 1.<% } else { %>Your purse is ready for 1.<% } %>
-                </p>
-              </form>
+              <% if (!unavailable) { %>
+                <form method="post" action="/shop/consumables/purchase"<%= !soldOut && offer.missingGoldForOne === 0 ? ' data-purchase-effect' : '' %>>
+                  <input type="hidden" name="token" value="<%= player.auth_token %>">
+                  <input type="hidden" name="sku" value="<%= offer.sku %>">
+                  <input type="hidden" name="expected_unit_price" value="<%= offer.unitPrice %>">
+                  <input type="hidden" name="request_id" value="<%= consumableRequestIds[offer.sku] %>">
+                  <div class="bazaar-potion-controls">
+                    <label>Quantity
+                      <input type="number" name="quantity" min="1" max="<%= soldOut ? 1 : offer.maxQuantity %>" value="1" <%= soldOut ? 'disabled' : '' %>>
+                    </label>
+                    <button type="submit" class="btn btn-gold" <%= soldOut || offer.missingGoldForOne > 0 ? 'disabled' : '' %>><%= soldOut ? 'Back at midnight' : `Buy 1 · ${offer.unitPrice.toLocaleString()}g` %></button>
+                  </div>
+                  <p class="bazaar-affordability<%= !soldOut && offer.missingGoldForOne === 0 ? ' is-ready' : '' %>" data-potion-affordability>
+                    <% if (soldOut) { %>Back at midnight<% } else if (offer.missingGoldForOne > 0) { %>Need <%= offer.missingGoldForOne.toLocaleString() %>g more for 1.<% } else { %>Your purse is ready for 1.<% } %>
+                  </p>
+                </form>
+              <% } %>
             </article>
           <% } %>
         </div>

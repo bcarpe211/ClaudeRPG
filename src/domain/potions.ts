@@ -4,29 +4,25 @@ import { combatActiveMs, isCombatAcceptingWork } from './gameclock';
 import { applyGoldMutation } from './goldledger';
 import { inventoryQuantity } from './inventory';
 import { officeDayKey } from './office-time';
-import { consumableProduct, type PotionType } from './shop-products';
+import {
+  consumableProductForConfiguration,
+  currentPotionConfiguration,
+  isConsumableSku,
+  potionEffectSnapshotForConfiguration,
+  type DamagePotionSnapshot,
+  type GoldPotionSnapshot,
+  type PotionEffectSnapshot,
+  type PotionType,
+} from './shop-products';
 import { getSetting } from './settings';
 
-const DEFAULT_DAILY_USES = 3;
 const DEFAULT_PAUSE_AFTER_MINUTES = 15;
 
-export interface GoldPotionSnapshot {
-  kind: 'gold';
-  durationMs: number;
-  tokenUnit: 1_000;
-  goldPerUnit: number;
-  baseCap: number;
-  stretchTokens: number;
-  stretchBonus: number;
-}
-
-export interface DamagePotionSnapshot {
-  kind: 'damage';
-  durationMs: number;
-  baseHitMultiplier: number;
-}
-
-export type PotionEffectSnapshot = GoldPotionSnapshot | DamagePotionSnapshot;
+export type {
+  DamagePotionSnapshot,
+  GoldPotionSnapshot,
+  PotionEffectSnapshot,
+} from './shop-products';
 
 export interface ActivePotionEffect {
   activationId: number;
@@ -162,13 +158,6 @@ function jsonNumberSetting(db: Database.Database, key: string): number | undefin
   }
 }
 
-function configuredDailyUses(db: Database.Database): number {
-  const value = jsonNumberSetting(db, 'potion_daily_uses_per_type');
-  return value !== undefined && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : DEFAULT_DAILY_USES;
-}
-
 function configuredPauseAfterMinutes(db: Database.Database): number {
   const value = jsonNumberSetting(db, 'pause_after_minutes');
   return value !== undefined && value >= 0
@@ -181,28 +170,10 @@ export function potionEffectSnapshot(
   potionType: PotionType,
   durationMs: number,
 ): PotionEffectSnapshot | undefined {
-  if (potionType === 'gold') {
-    const parsed = goldPotionSnapshotSchema.safeParse({
-      kind: 'gold',
-      durationMs,
-      tokenUnit: 1_000,
-      goldPerUnit: jsonNumberSetting(db, 'potion_gold_t1_gold_per_1000'),
-      baseCap: jsonNumberSetting(db, 'potion_gold_t1_base_cap'),
-      stretchTokens: jsonNumberSetting(db, 'potion_gold_t1_stretch_tokens'),
-      stretchBonus: jsonNumberSetting(db, 'potion_gold_t1_stretch_bonus'),
-    });
-    return parsed.success ? parsed.data : undefined;
-  }
-
-  const baseHitPercent = jsonNumberSetting(db, 'potion_damage_t1_base_hit_pct');
-  const parsed = damagePotionSnapshotSchema.safeParse({
-    kind: 'damage',
-    durationMs,
-    baseHitMultiplier: baseHitPercent === undefined || baseHitPercent < 0
-      ? undefined
-      : 1 + baseHitPercent / 100,
-  });
-  return parsed.success ? parsed.data : undefined;
+  const config = currentPotionConfiguration(db);
+  if (!config) return undefined;
+  const snapshot = potionEffectSnapshotForConfiguration(config, potionType);
+  return snapshot.durationMs === durationMs ? snapshot : undefined;
 }
 
 export function potionActivationState(
@@ -373,27 +344,25 @@ export function activatePotion(
       completeExpiredPotions(db, input.now);
       retireInvalidActivePotions(db, input.playerId, input.now);
 
-      let product;
-      try {
-        product = consumableProduct(db, input.skuId);
-      } catch (error) {
-        if (error instanceof RangeError) {
-          return { ok: false, reason: 'invalid_config' };
-        }
-        throw error;
+      if (!isConsumableSku(input.skuId)) {
+        return { ok: false, reason: 'unknown_sku' };
       }
-      if (!product) return { ok: false, reason: 'unknown_sku' };
+      const config = currentPotionConfiguration(db);
+      if (!config) return { ok: false, reason: 'invalid_config' };
+      const product = consumableProductForConfiguration(config, input.skuId);
 
       const player = db.prepare(
         'SELECT id FROM players WHERE id = ?',
       ).get(input.playerId) as { id: number } | undefined;
       if (!player) return { ok: false, reason: 'no_player' };
 
-      const snapshot = potionEffectSnapshot(db, product.potionType, product.durationMs);
-      if (!snapshot) return { ok: false, reason: 'invalid_config' };
+      const snapshot = potionEffectSnapshotForConfiguration(
+        config,
+        product.potionType,
+      );
 
       const activationDay = officeDayKey(input.now, input.timeZone);
-      const dailyLimit = configuredDailyUses(db);
+      const dailyLimit = config.dailyUses;
       const usesRemaining = remainingDailyUses(
         db,
         input.playerId,

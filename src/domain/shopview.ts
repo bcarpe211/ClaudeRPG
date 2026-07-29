@@ -6,14 +6,15 @@ import { getCosmetics, spriteId } from './cosmetics';
 import { getPlayerById } from './players';
 import { inventoryQuantity, remainingDailyStock } from './inventory';
 import { nextOfficeMidnight, officeDayKey } from './office-time';
-import { potionEffectSnapshot } from './potions';
 import { nextCosmeticSku, skuPrice } from './shop';
 import {
-  consumableProduct,
+  consumableProductForConfiguration,
+  currentPotionConfiguration,
+  parsePotionConfiguration,
+  potionEffectSnapshotForConfiguration,
   type ConsumableProduct,
   type PotionType,
 } from './shop-products';
-import { getSetting } from './settings';
 import { cosmeticSkinUrlForPlayer, getEntitledSlotConfig } from './slotcosmetics';
 import { loadSlotmap } from './slots';
 import type { SlotRule } from './spritetint';
@@ -41,6 +42,7 @@ export interface ConsumableOffer {
   missingGoldForOne: number;
   iconClass: ConsumableProduct['iconClass'];
   effectCopy: string;
+  available: boolean;
 }
 
 export interface ShopViewModel {
@@ -60,21 +62,6 @@ export interface ShopViewModel {
   mastered: boolean;
   consumables: ConsumableOffer[];
   nextRestockAt: number;
-}
-
-const DEFAULT_DAILY_STOCK = 3;
-
-function configuredDailyStock(db: Database.Database): number {
-  const raw = getSetting(db, 'potion_daily_stock_per_sku');
-  if (raw === undefined) return DEFAULT_DAILY_STOCK;
-  try {
-    const value: unknown = JSON.parse(raw);
-    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-      ? value
-      : DEFAULT_DAILY_STOCK;
-  } catch {
-    return DEFAULT_DAILY_STOCK;
-  }
 }
 
 function joinChannelLabels(labels: string[]): string {
@@ -103,9 +90,11 @@ function activeDurationLabel(durationMs: number): string {
   return `${value} active ${seconds === 1 ? 'second' : 'seconds'}`;
 }
 
-function effectCopyFor(db: Database.Database, product: ConsumableProduct): string {
-  const snapshot = potionEffectSnapshot(db, product.potionType, product.durationMs);
-  if (!snapshot) throw new RangeError(`${product.id} effect settings are invalid`);
+function effectCopyFor(
+  product: ConsumableProduct,
+  config: NonNullable<ReturnType<typeof currentPotionConfiguration>>,
+): string {
+  const snapshot = potionEffectSnapshotForConfiguration(config, product.potionType);
   if (snapshot.kind === 'gold') {
     return `${snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 effective tokens`;
   }
@@ -168,17 +157,22 @@ export function buildShopViewModel(
       .map((channel) => channel.slot),
   } : null;
   const dayKey = officeDayKey(now, timeZone);
-  const dailyStock = configuredDailyStock(db);
+  const potionConfig = currentPotionConfiguration(db);
+  const displayConfig = potionConfig ?? parsePotionConfiguration({});
+  if (!displayConfig) throw new Error('default potion configuration is invalid');
+  const dailyStock = potionConfig?.dailyStock ?? 0;
   const consumables = (['potion_gold_t1', 'potion_damage_t1'] as const).map((skuId) => {
-    const product = consumableProduct(db, skuId);
-    if (!product) throw new Error(`missing consumable product: ${skuId}`);
-    const stockRemaining = remainingDailyStock(
-      db,
-      player.id,
-      product.id,
-      dayKey,
-      dailyStock,
-    );
+    const product = consumableProductForConfiguration(displayConfig, skuId);
+    const available = potionConfig !== undefined;
+    const stockRemaining = available
+      ? remainingDailyStock(
+        db,
+        player.id,
+        product.id,
+        dayKey,
+        dailyStock,
+      )
+      : 0;
     return {
       sku: product.id,
       name: product.name,
@@ -192,7 +186,10 @@ export function buildShopViewModel(
       maxQuantity: Math.min(3, stockRemaining),
       missingGoldForOne: Math.max(0, product.price - player.gold),
       iconClass: product.iconClass,
-      effectCopy: effectCopyFor(db, product),
+      effectCopy: available
+        ? effectCopyFor(product, displayConfig)
+        : 'Potion tuning is unavailable.',
+      available,
     };
   });
 

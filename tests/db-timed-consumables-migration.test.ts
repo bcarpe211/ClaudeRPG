@@ -45,6 +45,7 @@ describe('timed-consumables schema migrations', () => {
     expect(columns(db, 'encounters')).toEqual(expect.arrayContaining([
       'reward_model_version', 'reward_work_pct', 'reward_damage_pct',
       'reward_podium_first_pct', 'reward_podium_second_pct', 'reward_podium_third_pct',
+      'reward_gold_pool',
     ]));
   });
 

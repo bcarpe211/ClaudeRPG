@@ -1,5 +1,10 @@
 import type Database from 'better-sqlite3';
-import { loadEngineConfig, advanceToNextEncounter, type EngineConfig } from './encounters';
+import {
+  loadEngineConfig,
+  advanceToNextEncounter,
+  encounterRewardGoldPool,
+  type EngineConfig,
+} from './encounters';
 import { isIdle, setPaused, getGameState } from './gamestate';
 import { levelForXp } from './leveling';
 import { tokenModifier, attackDamage } from './combat';
@@ -36,18 +41,67 @@ export interface DefeatSummary {
   participants: DefeatParticipant[];
 }
 
+interface EncounterParticipantRow {
+  player_id: number;
+  damage_total: number;
+  hits: number;
+  max_hit: number;
+  potion_bonus_damage: number;
+  effective_tokens: number;
+}
+
+function encounterParticipants(
+  db: Database.Database,
+  encounterId: number,
+  startedAt: number,
+  endedAt: number,
+): EncounterParticipantRow[] {
+  return db.prepare(
+    `SELECT participant.player_id,
+            COALESCE(damage.damage_total, 0) AS damage_total,
+            COALESCE(damage.hits, 0) AS hits,
+            COALESCE(damage.max_hit, 0) AS max_hit,
+            COALESCE(damage.potion_bonus_damage, 0) AS potion_bonus_damage,
+            COALESCE((
+              SELECT SUM(event.effective_delta)
+              FROM token_events AS event
+              WHERE event.player_id = participant.player_id
+                AND event.ts >= ?
+                AND event.ts <= ?
+            ), 0) AS effective_tokens
+     FROM (
+       SELECT player_id
+       FROM encounter_damage
+       WHERE encounter_id = ?
+       UNION
+       SELECT player_id
+       FROM token_events
+       WHERE ts >= ? AND ts <= ?
+     ) AS participant
+     LEFT JOIN encounter_damage AS damage
+       ON damage.encounter_id = ?
+      AND damage.player_id = participant.player_id
+     ORDER BY damage_total DESC, effective_tokens DESC, participant.player_id ASC`,
+  ).all(
+    startedAt,
+    endedAt,
+    encounterId,
+    startedAt,
+    endedAt,
+    encounterId,
+  ) as EncounterParticipantRow[];
+}
+
 export function buildDefeatSummary(
   db: Database.Database,
   encounterId: number,
 ): DefeatSummary {
   const enc = db.prepare('SELECT * FROM encounters WHERE id=?').get(encounterId) as any;
-  const dmgRows = db.prepare(
-    'SELECT * FROM encounter_damage WHERE encounter_id=? ORDER BY damage_total DESC',
-  ).all(encounterId) as any[];
-  const totalDamage = dmgRows.reduce((s, r) => s + r.damage_total, 0);
-
   const start = enc.started_at;
   const end = enc.ended_at ?? start;
+  const dmgRows = encounterParticipants(db, encounterId, start, end);
+  const totalDamage = dmgRows.reduce((s, r) => s + r.damage_total, 0);
+
   const storedAwards = enc.reward_model_version === 'legacy-v0'
     ? []
     : db.prepare(
@@ -58,13 +112,10 @@ export function buildDefeatSummary(
   const tokensByPlayer = new Map<number, number>();
   const rowMeta = dmgRows.map((r) => {
     const player = db.prepare('SELECT name FROM players WHERE id=?').get(r.player_id) as any;
-    const tok = db.prepare(
-      'SELECT COALESCE(SUM(effective_delta),0) AS s FROM token_events WHERE player_id=? AND ts>=? AND ts<=?',
-    ).get(r.player_id, start, end) as any;
     const lvl = db.prepare(
       'SELECT MAX(new_level) AS m FROM level_ups WHERE player_id=? AND ts>=? AND ts<=?',
     ).get(r.player_id, start, end) as any;
-    const tokens = storedByPlayer.get(r.player_id)?.effective_tokens ?? tok.s;
+    const tokens = storedByPlayer.get(r.player_id)?.effective_tokens ?? r.effective_tokens;
     tokensByPlayer.set(r.player_id, tokens);
     return { r, player, tokens, leveledTo: lvl.m ?? null };
   });
@@ -76,7 +127,7 @@ export function buildDefeatSummary(
       ? Number(settings['gold_damage_weight'])
       : 0;
     const dungeon = db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
-    const goldPool = Math.round(enc.max_hp * dungeon.level * goldFactor);
+    const goldPool = encounterRewardGoldPool(enc.max_hp, dungeon.level, goldFactor);
     goldByPlayer = splitGold(
       dmgRows.map((r) => ({
         playerId: r.player_id,
@@ -104,8 +155,10 @@ export function buildDefeatSummary(
   let mvpPlayerId: number | null = null;
   let biggest: { playerId: number; amount: number } | null = null;
   for (const r of dmgRows) {
-    if (mvpPlayerId === null) mvpPlayerId = r.player_id; // rows are damage-desc
-    if (!biggest || r.max_hit > biggest.amount) biggest = { playerId: r.player_id, amount: r.max_hit };
+    if (mvpPlayerId === null && r.damage_total > 0) mvpPlayerId = r.player_id;
+    if (r.max_hit > 0 && (!biggest || r.max_hit > biggest.amount)) {
+      biggest = { playerId: r.player_id, amount: r.max_hit };
+    }
   }
 
   return {
@@ -225,25 +278,20 @@ export class GameEngine {
     if (!enc || enc.status !== 'active' || enc.current_hp > 0) return;
 
     const dungeon = this.db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
-    const goldPool = Math.round(enc.max_hp * dungeon.level * cfg.goldFactor);
-    const rows = this.db.prepare(
-      `SELECT player_id, damage_total, potion_bonus_damage
-       FROM encounter_damage WHERE encounter_id=?`,
-    ).all(encId) as {
-      player_id: number;
-      damage_total: number;
-      potion_bonus_damage: number;
-    }[];
-    const tokQ = this.db.prepare(
-      'SELECT COALESCE(SUM(effective_delta),0) AS s FROM token_events WHERE player_id=? AND ts>=? AND ts<=?',
-    );
+    const rows = encounterParticipants(this.db, encId, enc.started_at, now);
     const participants = rows.map((r) => ({
       playerId: r.player_id,
       damage: r.damage_total,
-      tokens: (tokQ.get(r.player_id, enc.started_at, now) as { s: number }).s,
+      tokens: r.effective_tokens,
       potionBonusDamage: r.potion_bonus_damage,
     }));
     const isLegacy = enc.reward_model_version === 'legacy-v0';
+    const goldPool = isLegacy
+      ? encounterRewardGoldPool(enc.max_hp, dungeon.level, cfg.goldFactor)
+      : enc.reward_gold_pool;
+    if (!Number.isSafeInteger(goldPool) || goldPool < 0) {
+      throw new Error(`invalid snapshotted reward pool for encounter ${encId}`);
+    }
     let hybridAwards: RewardAllocation[] = [];
     let legacyGold = new Map<number, number>();
     if (isLegacy) {

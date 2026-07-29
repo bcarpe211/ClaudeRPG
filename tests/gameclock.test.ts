@@ -72,4 +72,13 @@ describe('combat-active game clock', () => {
     db.prepare("UPDATE encounters SET status='defeated'").run();
     expect(isCombatAcceptingWork(db, 2000, 15)).toBe(false);
   });
+
+  it('does not let a stale paused flag override otherwise-live combat eligibility', () => {
+    seedActiveEncounter(1_000);
+    db.prepare('UPDATE game_state SET paused=1 WHERE id=1').run();
+
+    expect(db.prepare('SELECT paused FROM game_state WHERE id=1').get())
+      .toEqual({ paused: 1 });
+    expect(isCombatAcceptingWork(db, 1_000, 15)).toBe(true);
+  });
 });

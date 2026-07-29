@@ -92,6 +92,28 @@ export function calibrateHp(
   return Math.max(minHp, Math.round(officeDpm * targetMinutes * difficultyFactor));
 }
 
+export function encounterRewardGoldPool(
+  maxHp: number,
+  dungeonLevel: number,
+  goldFactor: number,
+): number {
+  if (
+    !Number.isSafeInteger(maxHp)
+    || maxHp < 0
+    || !Number.isSafeInteger(dungeonLevel)
+    || dungeonLevel < 0
+    || !Number.isFinite(goldFactor)
+    || goldFactor < 0
+  ) {
+    throw new RangeError('encounter reward pool inputs must be non-negative finite values');
+  }
+  const pool = Math.round(maxHp * dungeonLevel * goldFactor);
+  if (!Number.isSafeInteger(pool) || pool < 0) {
+    throw new RangeError('encounter reward pool must be a non-negative safe integer');
+  }
+  return pool;
+}
+
 // Per-theme spawn weight over the 22 dungeon names; unlisted default to BASE.
 // Down-weight the visually loud / novelty wall themes. Curated from the roster
 // render — tune on the real TV. (Weights the WALL theme; floors come from compat.)
@@ -125,6 +147,7 @@ function spawnEncounter(
     (isBoss ? cfg.bossHpMult : 1);
   const dpm = estimateOfficeBaselineDpm(db, cfg);
   const hp = calibrateHp(dpm, cfg.baselineBattleMinutes, difficulty, cfg.minEncounterHp);
+  const rewardGoldPool = encounterRewardGoldPool(hp, dungeon.level, cfg.goldFactor);
   const rewardConfig = {
     workPct: cfg.rewardWorkPct,
     damagePct: cfg.rewardDamagePct,
@@ -142,12 +165,12 @@ function spawnEncounter(
          (dungeon_id, index_in_dungeon, kind, creature_index, footprint, pack_count,
           max_hp, current_hp, status, started_at, reward_model_version,
           reward_work_pct, reward_damage_pct, reward_podium_first_pct,
-          reward_podium_second_pct, reward_podium_third_pct)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'hybrid-v1', ?, ?, ?, ?, ?)`,
+          reward_podium_second_pct, reward_podium_third_pct, reward_gold_pool)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'hybrid-v1', ?, ?, ?, ?, ?, ?)`,
     ).run(dungeon.id, index, kind, creature.creatureIndex, creature.footprint,
           packCount, hp, hp, now, rewardConfig.workPct, rewardConfig.damagePct,
           rewardConfig.podiumPct[0], rewardConfig.podiumPct[1],
-          rewardConfig.podiumPct[2]);
+          rewardConfig.podiumPct[2], rewardGoldPool);
     encId = Number(info.lastInsertRowid);
     db.prepare(
       'UPDATE game_state SET current_dungeon_id=?, current_encounter_id=?, defeat_until=NULL WHERE id=1',

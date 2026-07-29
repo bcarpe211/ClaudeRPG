@@ -538,7 +538,7 @@
     if (effectsPinned) openEffects(); else closeEffects();
   });
   avatarWrap?.addEventListener('pointerleave', () => {
-    if (!effectsPinned) closeEffects();
+    if (!effectsPinned && !avatarWrap.matches(':focus-within')) closeEffects();
   });
   avatarWrap?.addEventListener('focusout', (event) => {
     if (!effectsPinned && !avatarWrap.contains(event.relatedTarget)) closeEffects();

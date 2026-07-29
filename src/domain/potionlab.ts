@@ -20,6 +20,8 @@ export interface PotionLabReport {
     stretchPayout: number;
     breakEvenCount: number;
     stretchCount: number;
+    breakEvenRate: number;
+    stretchRate: number;
     byPlayer: { playerId: number; activations: number; medianNetGold: number }[];
     byOfficeHour: { hour: number; activations: number; medianNetGold: number }[];
     activations: {
@@ -28,8 +30,11 @@ export interface PotionLabReport {
       purchasedAt: number;
       activatedAt: number;
       completedAt: number | null;
+      wallElapsedMs: number;
       activeElapsedMs: number;
       eligibleTokens: number;
+      basePayout: number;
+      stretchPayout: number;
       payout: number;
       purchasePrice: number;
       netGold: number;
@@ -40,14 +45,36 @@ export interface PotionLabReport {
       activationId: number;
       playerId: number;
       purchasedAt: number;
+      activatedAt: number;
+      completedAt: number | null;
+      startGameMs: number;
+      expiresGameMs: number;
+      wallElapsedMs: number;
+      activeElapsedMs: number;
+      actualDamage: number;
+      counterfactualDamage: number;
       bonusDamage: number;
       actualRank: number;
       counterfactualRank: number;
       actualReward: number;
       counterfactualReward: number;
+      podiumEntries: number;
       podiumClimbs: number;
       purchasePrice: number;
       netGold: number;
+      encounters: {
+        encounterId: number;
+        actualDamage: number;
+        counterfactualDamage: number;
+        bonusDamage: number;
+        actualRank: number;
+        counterfactualRank: number;
+        actualReward: number;
+        counterfactualReward: number;
+        podiumEntry: boolean;
+        podiumClimb: number;
+        rewardSplit: string;
+      }[];
     }[];
   };
   economy: {
@@ -211,11 +238,33 @@ function reconcilesLedger(
   });
 }
 
+export function podiumMovement(
+  actualRank: number,
+  counterfactualRank: number,
+): { podiumEntries: number; podiumClimbs: number } {
+  const actualOnPodium = actualRank >= 1 && actualRank <= 3;
+  const counterfactualOnPodium = counterfactualRank >= 1 && counterfactualRank <= 3;
+  return {
+    podiumEntries: actualOnPodium && counterfactualRank > 3 ? 1 : 0,
+    podiumClimbs: (
+      actualOnPodium
+      && counterfactualOnPodium
+      && actualRank < counterfactualRank
+    )
+      ? counterfactualRank - actualRank
+      : 0,
+  };
+}
+
 export function buildPotionLabReport(
   db: Database.Database,
   filters: PotionLabFilters,
+  now: number,
 ): PotionLabReport {
   validateFilters(filters);
+  if (!Number.isSafeInteger(now) || now < 0) {
+    throw new RangeError('now must be a non-negative safe integer');
+  }
   const officeHour = new Intl.DateTimeFormat('en-US', {
     timeZone: filters.timeZone ?? 'America/New_York',
     hour: '2-digit',
@@ -284,8 +333,14 @@ export function buildPotionLabReport(
         purchasedAt: row.purchased_at,
         activatedAt: row.activated_at,
         completedAt: row.completed_at,
+        wallElapsedMs: Math.max(
+          0,
+          (row.completed_at ?? now) - row.activated_at,
+        ),
         activeElapsedMs: Math.max(0, elapsedEnd - row.start_game_ms),
         eligibleTokens: audit.eligible_tokens,
+        basePayout: audit.base_gold,
+        stretchPayout: audit.stretch_gold,
         payout,
         purchasePrice: row.purchase_unit_price,
         netGold: payout - row.purchase_unit_price,
@@ -334,11 +389,15 @@ export function buildPotionLabReport(
     .filter((row) => row.potion_type === 'damage')
     .map((row): PotionLabReport['damage']['activations'][number] => {
       let bonusDamage = 0;
+      let actualDamage = 0;
+      let counterfactualDamage = 0;
       let actualReward = 0;
       let counterfactualReward = 0;
+      let podiumEntries = 0;
       let podiumClimbs = 0;
       const actualRanks: number[] = [];
       const counterfactualRanks: number[] = [];
+      const encounterOutcomes: PotionLabReport['damage']['activations'][number]['encounters'] = [];
       for (const link of linksByActivation.get(row.id) ?? []) {
         const encounter = encounters.get(link.encounter_id);
         const participants = awardsByEncounter.get(link.encounter_id) ?? [];
@@ -358,12 +417,16 @@ export function buildPotionLabReport(
         ];
         if (configValues.some((value) => value === null)) continue;
         const goldPool = participants.reduce((sum, participant) => sum + participant.total_gold, 0);
+        const withoutPotionDamage = Math.max(
+          0,
+          actual.damage_total - link.bonus_damage,
+        );
         const counterfactual = allocateEncounterGold(
           participants.map((participant) => ({
             playerId: participant.player_id,
             tokens: participant.effective_tokens,
             damage: participant.player_id === row.player_id
-              ? Math.max(0, participant.damage_total - link.bonus_damage)
+              ? withoutPotionDamage
               : participant.damage_total,
             potionBonusDamage: participant.player_id === row.player_id
               ? Math.max(0, participant.potion_bonus_damage - link.bonus_damage)
@@ -377,18 +440,52 @@ export function buildPotionLabReport(
           },
         ).find((participant) => participant.playerId === row.player_id);
         if (!counterfactual) continue;
+        const movement = podiumMovement(
+          actual.damage_rank,
+          counterfactual.damageRank,
+        );
         bonusDamage += link.bonus_damage;
+        actualDamage += actual.damage_total;
+        counterfactualDamage += withoutPotionDamage;
         actualReward += actual.total_gold;
         counterfactualReward += counterfactual.totalGold;
         actualRanks.push(actual.damage_rank);
         counterfactualRanks.push(counterfactual.damageRank);
-        podiumClimbs += Math.max(0, counterfactual.damageRank - actual.damage_rank);
+        podiumEntries += movement.podiumEntries;
+        podiumClimbs += movement.podiumClimbs;
+        encounterOutcomes.push({
+          encounterId: link.encounter_id,
+          actualDamage: actual.damage_total,
+          counterfactualDamage: withoutPotionDamage,
+          bonusDamage: link.bonus_damage,
+          actualRank: actual.damage_rank,
+          counterfactualRank: counterfactual.damageRank,
+          actualReward: actual.total_gold,
+          counterfactualReward: counterfactual.totalGold,
+          podiumEntry: movement.podiumEntries === 1,
+          podiumClimb: movement.podiumClimbs,
+          rewardSplit: configValues.map((value) => String(value)).join('/'),
+        });
       }
       const incrementalReward = actualReward - counterfactualReward;
+      const elapsedEnd = row.status === 'completed'
+        ? row.expires_game_ms
+        : Math.min(currentGameMs, row.expires_game_ms);
       return {
         activationId: row.id,
         playerId: row.player_id,
         purchasedAt: row.purchased_at,
+        activatedAt: row.activated_at,
+        completedAt: row.completed_at,
+        startGameMs: row.start_game_ms,
+        expiresGameMs: row.expires_game_ms,
+        wallElapsedMs: Math.max(
+          0,
+          (row.completed_at ?? now) - row.activated_at,
+        ),
+        activeElapsedMs: Math.max(0, elapsedEnd - row.start_game_ms),
+        actualDamage,
+        counterfactualDamage,
         bonusDamage,
         actualRank: actualRanks.length > 0 ? Math.min(...actualRanks) : 0,
         counterfactualRank: counterfactualRanks.length > 0
@@ -396,9 +493,11 @@ export function buildPotionLabReport(
           : 0,
         actualReward,
         counterfactualReward,
+        podiumEntries,
         podiumClimbs,
         purchasePrice: row.purchase_unit_price,
         netGold: incrementalReward - row.purchase_unit_price,
+        encounters: encounterOutcomes,
       };
     });
 
@@ -455,6 +554,16 @@ export function buildPotionLabReport(
   const enoughGoldActivations = completedGold >= 30;
   const enoughDamageActivations = completedDamage >= 30;
   const enoughPlayers = distinctPlayers >= 5;
+  const completedGoldActivations = goldActivations.filter(
+    (row) => row.completedAt !== null,
+  );
+  const breakEvenCount = completedGoldActivations.filter(
+    (row) => row.netGold >= 0,
+  ).length;
+  const stretchCount = completedGoldActivations.filter(
+    (row) => row.stretchPayout > 0,
+  ).length;
+  const completedGoldCount = completedGoldActivations.length;
 
   return {
     gold: {
@@ -468,10 +577,14 @@ export function buildPotionLabReport(
         .reduce((sum, row) => sum + goldAudit(row).base_gold, 0),
       stretchPayout: activationRows.filter((row) => row.potion_type === 'gold')
         .reduce((sum, row) => sum + goldAudit(row).stretch_gold, 0),
-      breakEvenCount: goldActivations.filter((row) => row.netGold >= 0).length,
-      stretchCount: activationRows.filter((row) => (
-        row.potion_type === 'gold' && goldAudit(row).stretch_gold > 0
-      )).length,
+      breakEvenCount,
+      stretchCount,
+      breakEvenRate: completedGoldCount === 0
+        ? 0
+        : breakEvenCount / completedGoldCount,
+      stretchRate: completedGoldCount === 0
+        ? 0
+        : stretchCount / completedGoldCount,
       byPlayer,
       byOfficeHour,
       activations: goldActivations,

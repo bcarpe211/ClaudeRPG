@@ -104,7 +104,7 @@ describe('timed-consumables local demo seed', () => {
       eventEffectiveTokens: 3_000_000,
     });
 
-    const report = buildPotionLabReport(db, {});
+    const report = buildPotionLabReport(db, {}, 2_000_000);
     expect(report.gold).toMatchObject({
       completed: 1,
       basePayout: 125_000,

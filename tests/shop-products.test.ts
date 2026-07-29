@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { seedSettings, setSetting } from '../src/domain/settings';
-import { consumableProduct } from '../src/domain/shop-products';
+import {
+  consumableProduct,
+  currentPotionConfiguration,
+} from '../src/domain/shop-products';
 
 let db: ReturnType<typeof openDb>;
 
@@ -22,17 +25,31 @@ describe('consumable product catalog', () => {
     expect(consumableProduct(db, 'toString')).toBeUndefined();
   });
 
-  it('reads valid configured price and duration values while falling back from invalid prices', () => {
+  it('reads valid configured price, duration, and fractional damage values', () => {
     setSetting(db, 'potion_gold_t1_price', '42');
     setSetting(db, 'potion_gold_t1_duration_s', '90');
+    setSetting(db, 'potion_damage_t1_base_hit_pct', '12.5');
     expect(consumableProduct(db, 'potion_gold_t1')).toMatchObject({ price: 42, durationMs: 90_000 });
-
-    setSetting(db, 'potion_gold_t1_price', '-1');
-    expect(consumableProduct(db, 'potion_gold_t1')).toMatchObject({ price: 100_000 });
+    expect(currentPotionConfiguration(db)).toMatchObject({
+      damage: { baseHitPercent: 12.5 },
+    });
   });
 
-  it('rejects a configured duration below one second', () => {
-    setSetting(db, 'potion_damage_t1_duration_s', '0');
-    expect(() => consumableProduct(db, 'potion_damage_t1')).toThrow(/duration/i);
+  it.each([
+    ['negative price', 'potion_gold_t1_price', '-1'],
+    ['fractional price', 'potion_damage_t1_price', '1.5'],
+    ['unsafe payout', 'potion_gold_t1_base_cap', '9007199254740992'],
+    ['malformed effect', 'potion_gold_t1_gold_per_1000', 'not-a-number'],
+    ['negative damage effect', 'potion_damage_t1_base_hit_pct', '-25'],
+    ['fractional stock', 'potion_daily_stock_per_sku', '1.5'],
+    ['negative uses', 'potion_daily_uses_per_type', '-1'],
+    ['zero duration', 'potion_damage_t1_duration_s', '0'],
+    ['fractional duration milliseconds', 'potion_gold_t1_duration_s', '0.0005'],
+    ['unsafe duration milliseconds', 'potion_gold_t1_duration_s', '9007199254741'],
+  ])('marks the whole catalog unavailable for %s', (_label, key, value) => {
+    setSetting(db, key, value);
+    expect(currentPotionConfiguration(db)).toBeUndefined();
+    expect(consumableProduct(db, 'potion_gold_t1')).toBeUndefined();
+    expect(consumableProduct(db, 'potion_damage_t1')).toBeUndefined();
   });
 });

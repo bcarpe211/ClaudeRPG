@@ -3,11 +3,15 @@ import { openDb } from '../src/db/db';
 import { applyGoldMutation } from '../src/domain/goldledger';
 import { purchaseConsumable } from '../src/domain/inventory';
 import { activatePotion } from '../src/domain/potions';
-import { buildPotionLabReport } from '../src/domain/potionlab';
+import {
+  buildPotionLabReport,
+  podiumMovement,
+} from '../src/domain/potionlab';
 import { createPlayer } from '../src/domain/players';
 import { seedSettings } from '../src/domain/settings';
 
 const timeZone = 'America/New_York';
+const reportNow = 100_000;
 let db: ReturnType<typeof openDb>;
 
 beforeEach(() => {
@@ -201,20 +205,29 @@ function seedCanonicalAuditRows() {
   return { goldUser, boosted, rival, third, gold, damage, encounterId, dungeonId: Number(dungeon.lastInsertRowid) };
 }
 
+function report(
+  filters: Parameters<typeof buildPotionLabReport>[1] = {},
+) {
+  return buildPotionLabReport(db, filters, reportNow);
+}
+
 describe('Potion Lab report', () => {
   it('uses ordinary zeroes for an empty economy report', () => {
-    const economy = buildPotionLabReport(db, {}).economy;
+    const empty = report();
+    const economy = empty.economy;
     expect(economy.potionGoldSpent).toBe(0);
     expect(economy.monsterGoldStolen).toBe(0);
     expect(economy.ledgerOutflow).toBe(0);
+    expect(empty.gold.breakEvenRate).toBe(0);
+    expect(empty.gold.stretchRate).toBe(0);
   });
 
   it('reports canonical Gold yield, Damage counterfactuals, and reconciled economy flow', () => {
     const fixture = seedCanonicalAuditRows();
 
-    const report = buildPotionLabReport(db, {});
+    const result = report();
 
-    expect(report.gold).toMatchObject({
+    expect(result.gold).toMatchObject({
       purchases: 1,
       completed: 1,
       spent: 100_000,
@@ -222,43 +235,72 @@ describe('Potion Lab report', () => {
       stretchPayout: 25_000,
       breakEvenCount: 1,
       stretchCount: 1,
+      breakEvenRate: 1,
+      stretchRate: 1,
     });
-    expect(report.gold.activations).toEqual([expect.objectContaining({
+    expect(result.gold.activations).toEqual([expect.objectContaining({
       activationId: fixture.gold.activationId,
       playerId: fixture.goldUser.id,
       purchasedAt: 1_000,
       activatedAt: 2_000,
       completedAt: 9_000,
+      wallElapsedMs: 7_000,
       activeElapsedMs: 7_200_000,
       eligibleTokens: 2_500_000,
+      basePayout: 125_000,
+      stretchPayout: 25_000,
       payout: 150_000,
       purchasePrice: 100_000,
       netGold: 50_000,
     })]);
-    expect(report.gold.byPlayer).toEqual([{
+    expect(result.gold.byPlayer).toEqual([{
       playerId: fixture.goldUser.id,
       activations: 1,
       medianNetGold: 50_000,
     }]);
-    expect(report.gold.byOfficeHour).toEqual([{
+    expect(result.gold.byOfficeHour).toEqual([{
       hour: 19,
       activations: 1,
       medianNetGold: 50_000,
     }]);
-    expect(report.damage.activations[0]).toMatchObject({
+    expect(result.damage.activations[0]).toMatchObject({
       activationId: fixture.damage.activationId,
       playerId: fixture.boosted.id,
       purchasedAt: 1_100,
+      activatedAt: 2_100,
+      completedAt: 9_500,
+      startGameMs: 0,
+      expiresGameMs: 7_200_000,
+      wallElapsedMs: 7_400,
+      activeElapsedMs: 7_200_000,
+      actualDamage: 1_000,
+      counterfactualDamage: 750,
       bonusDamage: 250,
       actualRank: 1,
       counterfactualRank: 2,
       actualReward: 367,
       counterfactualReward: 340,
+      podiumEntries: 0,
       podiumClimbs: 1,
       purchasePrice: 150_000,
       netGold: -149_973,
     });
-    expect(report.economy).toEqual({
+    expect(result.damage.activations[0].encounters).toEqual([
+      expect.objectContaining({
+        encounterId: fixture.encounterId,
+        actualDamage: 1_000,
+        counterfactualDamage: 750,
+        bonusDamage: 250,
+        actualRank: 1,
+        counterfactualRank: 2,
+        actualReward: 367,
+        counterfactualReward: 340,
+        podiumEntry: false,
+        podiumClimb: 1,
+        rewardSplit: '80/10/5/3/2',
+      }),
+    ]);
+    expect(result.economy).toEqual({
       potionGoldSpent: 250_000,
       goldPotionMinted: 150_000,
       encounterGoldAwarded: 1_000,
@@ -269,7 +311,7 @@ describe('Potion Lab report', () => {
       stockPurchased: 2,
       dosesUsed: 2,
     });
-    expect(report.readiness).toEqual({
+    expect(result.readiness).toEqual({
       distinctCombatDays: 1,
       completedGold: 1,
       completedDamage: 1,
@@ -288,22 +330,22 @@ describe('Potion Lab report', () => {
     fund(unfinished);
     buyAndActivate(unfinished, 'potion_gold_t1', 20_000, 21_000, 'unfinished-gold');
 
-    const goldOnly = buildPotionLabReport(db, { sku: 'potion_gold_t1' });
+    const goldOnly = report({ sku: 'potion_gold_t1' });
     expect(goldOnly.gold.purchases).toBe(2);
     expect(goldOnly.gold.completed).toBe(1);
     expect(goldOnly.gold.activations).toHaveLength(2);
     expect(goldOnly.damage.activations).toEqual([]);
 
-    const unfinishedOnly = buildPotionLabReport(db, { from: 20_000, playerId: unfinished.id });
+    const unfinishedOnly = report({ from: 20_000, playerId: unfinished.id });
     expect(unfinishedOnly.gold.activations).toEqual([
       expect.objectContaining({ playerId: unfinished.id, completedAt: null }),
     ]);
     expect(unfinishedOnly.gold.completed).toBe(0);
 
-    const beforeDamage = buildPotionLabReport(db, { to: 2_050 });
+    const beforeDamage = report({ to: 2_050 });
     expect(beforeDamage.gold.activations).toHaveLength(1);
     expect(beforeDamage.damage.activations).toHaveLength(0);
-    expect(buildPotionLabReport(db, { playerId: fixture.boosted.id }).gold.activations)
+    expect(report({ playerId: fixture.boosted.id }).gold.activations)
       .toEqual([]);
   });
 
@@ -348,7 +390,7 @@ describe('Potion Lab report', () => {
       work: 400, damageGold: 55, podium: 50,
     }, 18_000);
 
-    const rows = buildPotionLabReport(db, { sku: 'potion_damage_t1' }).damage.activations;
+    const rows = report({ sku: 'potion_damage_t1' }).damage.activations;
     const first = rows.find((row) => row.activationId === fixture.damage.activationId)!;
     const noRankChange = rows.find((row) => row.activationId === second.activationId)!;
     expect(first).toMatchObject({ bonusDamage: 300, actualRank: 1, counterfactualRank: 2, podiumClimbs: 1 });
@@ -365,7 +407,7 @@ describe('Potion Lab report', () => {
     const fixture = seedCanonicalAuditRows();
     db.prepare('UPDATE players SET gold=gold+1 WHERE id=?').run(fixture.goldUser.id);
 
-    expect(buildPotionLabReport(db, {}).economy.ledgerReconciled).toBe(false);
+    expect(report().economy.ledgerReconciled).toBe(false);
   });
 
   it('uses immutable work-event audit rows for Gold payout totals', () => {
@@ -374,9 +416,22 @@ describe('Potion Lab report', () => {
       'UPDATE potion_activations SET base_gold=1, stretch_gold=2 WHERE id=?',
     ).run(fixture.gold.activationId);
 
-    const report = buildPotionLabReport(db, {});
-    expect(report.gold).toMatchObject({ basePayout: 125_000, stretchPayout: 25_000 });
-    expect(report.gold.activations[0]).toMatchObject({ payout: 150_000, netGold: 50_000 });
+    const result = report();
+    expect(result.gold).toMatchObject({ basePayout: 125_000, stretchPayout: 25_000 });
+    expect(result.gold.activations[0]).toMatchObject({
+      basePayout: 125_000,
+      stretchPayout: 25_000,
+      payout: 150_000,
+      netGold: 50_000,
+    });
+  });
+
+  it.each([
+    ['off-podium improvement', 5, 8, { podiumEntries: 0, podiumClimbs: 0 }],
+    ['podium entry', 3, 4, { podiumEntries: 1, podiumClimbs: 0 }],
+    ['within-podium climb', 1, 3, { podiumEntries: 0, podiumClimbs: 2 }],
+  ])('classifies %s using podium-only movement', (_label, actual, counterfactual, expected) => {
+    expect(podiumMovement(actual, counterfactual)).toEqual(expected);
   });
 
   it('opens the evidence gate only at 14 days, 30 completed runs per type, and 5 players', () => {
@@ -429,7 +484,7 @@ describe('Potion Lab report', () => {
       }
     }
 
-    expect(buildPotionLabReport(db, {}).readiness).toEqual({
+    expect(report().readiness).toEqual({
       distinctCombatDays: 14,
       completedGold: 30,
       completedDamage: 30,
@@ -447,7 +502,7 @@ describe('Potion Lab report', () => {
       try {
         db.transaction(() => {
           mutate();
-          captured = buildPotionLabReport(db, {}).readiness;
+          captured = report().readiness;
           throw rollback;
         })();
       } catch (error) {

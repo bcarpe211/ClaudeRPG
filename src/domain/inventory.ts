@@ -1,10 +1,12 @@
 import type Database from 'better-sqlite3';
 import { applyGoldMutation } from './goldledger';
 import { officeDayKey } from './office-time';
-import { getSetting } from './settings';
-import { consumableProduct } from './shop-products';
-
-const DEFAULT_DAILY_STOCK = 3;
+import {
+  consumableProductForConfiguration,
+  currentPotionConfiguration,
+  isConsumableSku,
+  potionEffectSnapshotForConfiguration,
+} from './shop-products';
 
 export function inventoryQuantity(db: Database.Database, playerId: number, sku: string): number {
   const row = db.prepare(
@@ -38,7 +40,7 @@ export function remainingDailyStock(
 
 export type ConsumablePurchaseResult =
   | { ok: true; purchaseId: number; inventory: number; stockRemaining: number; newGold: number; duplicate: boolean }
-  | { ok: false; reason: 'unknown_sku' | 'invalid_quantity' | 'price_changed' | 'sold_out' | 'insufficient_gold' | 'no_player' | 'request_conflict' };
+  | { ok: false; reason: 'unknown_sku' | 'invalid_quantity' | 'invalid_config' | 'price_changed' | 'sold_out' | 'insufficient_gold' | 'no_player' | 'request_conflict' };
 
 type PurchaseRow = {
   id: number;
@@ -50,19 +52,6 @@ type PurchaseRow = {
   gold_after: number;
   stock_remaining_after: number;
 };
-
-function configuredDailyStock(db: Database.Database): number {
-  const raw = getSetting(db, 'potion_daily_stock_per_sku');
-  if (raw === undefined) return DEFAULT_DAILY_STOCK;
-  try {
-    const value: unknown = JSON.parse(raw);
-    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-      ? value
-      : DEFAULT_DAILY_STOCK;
-  } catch {
-    return DEFAULT_DAILY_STOCK;
-  }
-}
 
 function fifoLotQuantity(db: Database.Database, playerId: number, sku: string): number {
   const row = db.prepare(
@@ -107,10 +96,21 @@ export function purchaseConsumable(
       return duplicateResult(prior);
     }
 
-    const product = consumableProduct(db, input.skuId);
-    if (!product) return { ok: false, reason: 'unknown_sku' };
+    if (!isConsumableSku(input.skuId)) {
+      return { ok: false, reason: 'unknown_sku' };
+    }
     if (!Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > 3) {
       return { ok: false, reason: 'invalid_quantity' };
+    }
+    const config = currentPotionConfiguration(db);
+    if (!config) return { ok: false, reason: 'invalid_config' };
+    const product = consumableProductForConfiguration(config, input.skuId);
+    const activationSnapshot = potionEffectSnapshotForConfiguration(
+      config,
+      product.potionType,
+    );
+    if (activationSnapshot.durationMs !== product.durationMs) {
+      return { ok: false, reason: 'invalid_config' };
     }
     if (input.expectedUnitPrice !== product.price) {
       return { ok: false, reason: 'price_changed' };
@@ -122,12 +122,15 @@ export function purchaseConsumable(
     if (!player) return { ok: false, reason: 'no_player' };
 
     const officeDay = officeDayKey(input.now, input.timeZone);
-    const dailyStock = configuredDailyStock(db);
+    const dailyStock = config.dailyStock;
     const stockRemaining = remainingDailyStock(db, input.playerId, product.id, officeDay, dailyStock);
     if (input.quantity > stockRemaining) return { ok: false, reason: 'sold_out' };
     const stockRemainingAfter = stockRemaining - input.quantity;
 
     const totalPrice = product.price * input.quantity;
+    if (!Number.isSafeInteger(totalPrice)) {
+      return { ok: false, reason: 'invalid_config' };
+    }
     const inventoryAfter = fifoLotQuantity(db, input.playerId, product.id) + input.quantity;
     const goldAfter = player.gold - totalPrice;
     if (goldAfter < 0) return { ok: false, reason: 'insufficient_gold' };

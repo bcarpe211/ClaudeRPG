@@ -448,7 +448,55 @@ export const migrations: Migration[] = [
                   )
                 )
             )
-          );
+      );
+    `,
+  },
+  {
+    id: '015_encounter_reward_gold_pool',
+    sql: `
+      ALTER TABLE encounters
+        ADD COLUMN reward_gold_pool INTEGER
+        CHECK (
+          reward_gold_pool IS NULL
+          OR (
+            typeof(reward_gold_pool) = 'integer'
+            AND reward_gold_pool >= 0
+          )
+        );
+
+      UPDATE encounters
+      SET reward_gold_pool = COALESCE(
+        (
+          SELECT SUM(award.total_gold)
+          FROM encounter_reward_awards AS award
+          WHERE award.encounter_id = encounters.id
+        ),
+        CAST(ROUND(
+          encounters.max_hp
+          * (
+              SELECT dungeon.level
+              FROM dungeons AS dungeon
+              WHERE dungeon.id = encounters.dungeon_id
+            )
+          * CASE
+              WHEN json_valid(TRIM(COALESCE(
+                (SELECT value FROM settings WHERE key = 'gold_factor'),
+                ''
+              ))) = 1
+              AND json_type(TRIM((
+                SELECT value FROM settings WHERE key = 'gold_factor'
+              ))) IN ('integer', 'real')
+              AND json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'gold_factor'
+              )), '$') >= 0
+              THEN json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'gold_factor'
+              )), '$')
+              ELSE 0.01
+            END
+        ) AS INTEGER)
+      )
+      WHERE reward_model_version = 'hybrid-v1';
     `,
   },
 ];
