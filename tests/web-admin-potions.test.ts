@@ -168,6 +168,7 @@ describe('admin Potion Lab', () => {
     { to: '2026-99-99' },
     { player: 'abc' },
     { player: '0' },
+    { player: '9007199254740992' },
     { sku: 'potion_gold_t9' },
     { from: '2026-07-30', to: '2026-07-29' },
   ])('returns 400 for invalid filters: %j', async (query) => {

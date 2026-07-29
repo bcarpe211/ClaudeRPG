@@ -59,7 +59,7 @@ const PotionLabQuery = z.object({
   ),
   player: z.preprocess(
     (value) => value === '' ? undefined : value,
-    z.coerce.number().int().positive().optional(),
+    z.coerce.number().int().positive().refine(Number.isSafeInteger).optional(),
   ),
   sku: z.preprocess(
     (value) => value === '' ? undefined : value,

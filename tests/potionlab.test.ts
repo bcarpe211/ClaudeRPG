@@ -312,8 +312,8 @@ describe('Potion Lab report', () => {
     const second = buyAndActivate(
       fixture.boosted,
       'potion_damage_t1',
-      10_000,
-      11_000,
+      6_000,
+      7_000,
       'damage-two',
     );
     db.prepare(
@@ -436,5 +436,34 @@ describe('Potion Lab report', () => {
       enoughPlayers: true,
       readyForTier2Review: true,
     });
+
+    const rollback = Symbol('rollback readiness fixture');
+    const belowThreshold = (mutate: () => void) => {
+      let captured: ReturnType<typeof buildPotionLabReport>['readiness'] | undefined;
+      try {
+        db.transaction(() => {
+          mutate();
+          captured = buildPotionLabReport(db, {}).readiness;
+          throw rollback;
+        })();
+      } catch (error) {
+        if (error !== rollback) throw error;
+      }
+      if (!captured) throw new Error('threshold transaction did not build a report');
+      return captured;
+    };
+    expect(belowThreshold(() => {
+      db.prepare("DELETE FROM game_clock_days WHERE office_day='2026-07-14'").run();
+    })).toMatchObject({ distinctCombatDays: 13, enoughCombatDays: false, readyForTier2Review: false });
+    expect(belowThreshold(() => {
+      db.prepare("DELETE FROM potion_activations WHERE potion_type='gold' AND id=(SELECT MAX(id) FROM potion_activations WHERE potion_type='gold')").run();
+    })).toMatchObject({ completedGold: 29, enoughGoldActivations: false, readyForTier2Review: false });
+    expect(belowThreshold(() => {
+      db.prepare("DELETE FROM potion_activations WHERE potion_type='damage' AND id=(SELECT MAX(id) FROM potion_activations WHERE potion_type='damage')").run();
+    })).toMatchObject({ completedDamage: 29, enoughDamageActivations: false, readyForTier2Review: false });
+    expect(belowThreshold(() => {
+      const ids = db.prepare('SELECT MIN(id) AS first, MAX(id) AS last FROM players').get() as { first: number; last: number };
+      db.prepare('UPDATE potion_activations SET player_id=? WHERE player_id=?').run(ids.first, ids.last);
+    })).toMatchObject({ distinctPlayers: 4, enoughPlayers: false, readyForTier2Review: false });
   });
 });
