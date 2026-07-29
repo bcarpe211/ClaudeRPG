@@ -82,7 +82,7 @@
     <% if (purchaseResult === 'potion_insufficient_gold') { %><p class="bazaar-potion-result err">Your current balance cannot cover that purchase. No gold was spent.</p><% } %>
     <% if (purchaseResult === 'potion_unavailable') { %><p class="bazaar-potion-result err">Potion tuning is temporarily unavailable. No gold was spent.</p><% } %>
 
-    <% if (shop.consumables.length > 0) { %>
+    <% if (!shop.marketplaceClosed && shop.consumables.length > 0) { %>
       <section class="bazaar-consumables" aria-labelledby="daily-potions-title">
         <div class="bazaar-stock-heading">
           <div>
@@ -145,7 +145,7 @@
           <% } %>
         </div>
       </section>
-    <% } else if (!shop.nextOffer && !(shop.mastered && purchaseResult === 'success')) { %>
+    <% } else if (shop.marketplaceClosed && !(shop.mastered && purchaseResult === 'success')) { %>
       <section class="bazaar-closed" aria-label="Closed marketplace">
         <div class="bazaar-scene">
           <div class="bazaar-sign">

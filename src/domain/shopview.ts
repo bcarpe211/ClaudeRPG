@@ -60,6 +60,7 @@ export interface ShopViewModel {
     demoSlots: number[];
   } | null;
   mastered: boolean;
+  marketplaceClosed: boolean;
   consumables: ConsumableOffer[];
   nextRestockAt: number;
 }
@@ -192,6 +193,8 @@ export function buildShopViewModel(
       available,
     };
   });
+  const marketplaceClosed = nextOffer === null
+    && consumables.every((offer) => offer.available && offer.stockRemaining === 0);
 
   return {
     currentTier,
@@ -201,6 +204,7 @@ export function buildShopViewModel(
     nextOffer,
     preview,
     mastered: currentTier >= 3,
+    marketplaceClosed,
     consumables,
     nextRestockAt: nextOfficeMidnight(now, timeZone),
   };

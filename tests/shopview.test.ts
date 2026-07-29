@@ -19,6 +19,30 @@ beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
 const now = Date.parse('2026-07-29T14:00:00.000Z');
 const timeZone = 'America/New_York';
 
+function masterWardrobe(playerId: number): void {
+  db.prepare('UPDATE players SET gold = 7000000 WHERE id = ?').run(playerId);
+  purchase(db, playerId, 'cosmetic_wheel_t1', 1_500_000, now - 3);
+  purchase(db, playerId, 'cosmetic_wheel_t2', 2_000_000, now - 2);
+  purchase(db, playerId, 'cosmetic_wheel_t3', 2_500_000, now - 1);
+}
+
+function buyDailyStock(
+  playerId: number,
+  skuId: 'potion_gold_t1' | 'potion_damage_t1',
+  requestId: string,
+): void {
+  const unitPrice = skuId === 'potion_gold_t1' ? 100_000 : 150_000;
+  expect(purchaseConsumable(db, {
+    playerId,
+    skuId,
+    quantity: 3,
+    expectedUnitPrice: unitPrice,
+    requestId,
+    now,
+    timeZone,
+  })).toMatchObject({ ok: true, stockRemaining: 0 });
+}
+
 function writeSolidSlotmap(file: string, slot: number): void {
   const png = new PNG({ width: 24, height: 24 });
   const color = LEGEND.find(([candidate]) => candidate === slot)?.[1];
@@ -116,6 +140,30 @@ describe('buildShopViewModel', () => {
       nextOffer: null,
       preview: null,
     });
+  });
+
+  it('closes only when wardrobe and every configured potion are exhausted', () => {
+    const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
+    db.prepare('UPDATE players SET gold = 10000000 WHERE id = ?').run(player.id);
+    masterWardrobe(player.id);
+
+    expect(buildShopViewModel(db, player.id, undefined, undefined, now, timeZone)?.marketplaceClosed)
+      .toBe(false);
+    buyDailyStock(player.id, 'potion_gold_t1', 'sold-gold');
+    expect(buildShopViewModel(db, player.id, undefined, undefined, now, timeZone)?.marketplaceClosed)
+      .toBe(false);
+    buyDailyStock(player.id, 'potion_damage_t1', 'sold-damage');
+    expect(buildShopViewModel(db, player.id, undefined, undefined, now, timeZone)?.marketplaceClosed)
+      .toBe(true);
+  });
+
+  it('does not call invalid potion tuning sold out', () => {
+    const player = createPlayer(db, { name: 'A', class_key: 'wizard', gender: 'M' }, 1);
+    masterWardrobe(player.id);
+    setSetting(db, 'potion_damage_t1_base_hit_pct', 'not-a-number');
+
+    expect(buildShopViewModel(db, player.id, undefined, undefined, now, timeZone)?.marketplaceClosed)
+      .toBe(false);
   });
 
   it('builds both daily potion offers from canonical settings and fresh player state', () => {

@@ -187,6 +187,7 @@ describe('Bazaar', () => {
           demoSlots: [],
         },
         mastered: false,
+        marketplaceClosed: false,
         consumables: [],
         nextRestockAt: Date.parse('2026-07-30T04:00:00.000Z'),
       },
@@ -212,6 +213,7 @@ describe('Bazaar', () => {
         nextOffer: null,
         preview: null,
         mastered: true,
+        marketplaceClosed: true,
         consumables: [],
         nextRestockAt: Date.parse('2026-07-30T04:00:00.000Z'),
       },
@@ -355,7 +357,10 @@ describe('Bazaar', () => {
   });
 
   it('keeps a sold-out potion visible and disables its buy action until midnight', async () => {
-    const { db, app, player } = ctx(1_000_000);
+    const { db, app, player } = ctx(10_000_000);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 1);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 2);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 2_500_000, 3);
     expect(purchaseConsumable(db, {
       playerId: player.id,
       skuId: 'potion_gold_t1',
@@ -374,6 +379,38 @@ describe('Bazaar', () => {
     expect(card).toContain('Back at midnight');
     expect(card).toContain('disabled');
     expect(card).not.toContain('data-purchase-effect');
+  });
+
+  it('shows the closed mimic after wardrobe mastery and both daily stocks are exhausted', async () => {
+    const { db, app, player } = ctx(10_000_000);
+    purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 1);
+    purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 2);
+    purchase(db, player.id, 'cosmetic_wheel_t3', 2_500_000, 3);
+    for (const [skuId, price, requestId] of [
+      ['potion_gold_t1', 100_000, 'closed-gold'],
+      ['potion_damage_t1', 150_000, 'closed-damage'],
+    ] as const) {
+      expect(purchaseConsumable(db, {
+        playerId: player.id,
+        skuId,
+        quantity: 3,
+        expectedUnitPrice: price,
+        requestId,
+        now: Date.now(),
+        timeZone: 'America/New_York',
+      })).toMatchObject({ ok: true, stockRemaining: 0 });
+    }
+
+    const response = await request(app).get('/shop').query({
+      token: player.auth_token,
+      result: 'potion_success',
+    });
+
+    expect(response.text).toContain('Potion stock added to your inventory.');
+    expect(response.text).toContain('class="bazaar-closed"');
+    expect(response.text).toContain('The Bazaar is Closed');
+    expect(response.text).not.toContain('id="daily-potions-title"');
+    expect(response.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
   });
 
   it('buys a selected potion quantity and redirects with an allow-listed success result', async () => {
