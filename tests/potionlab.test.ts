@@ -21,6 +21,54 @@ beforeEach(() => {
 
 type Player = ReturnType<typeof createPlayer>;
 
+type QueryObservation = {
+  method: 'all' | 'get';
+  sql: string;
+  args: unknown[];
+  rowCount: number;
+};
+
+function observeQueries(database: typeof db): {
+  observedDb: typeof db;
+  observations: QueryObservation[];
+} {
+  const observations: QueryObservation[] = [];
+  const observedDb = new Proxy(database, {
+    get(target, property) {
+      if (property === 'prepare') {
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          return new Proxy(statement, {
+            get(statementTarget, statementProperty) {
+              if (statementProperty === 'all' || statementProperty === 'get') {
+                return (...args: unknown[]) => {
+                  const result = statementTarget[statementProperty](
+                    ...args as [],
+                  );
+                  observations.push({
+                    method: statementProperty,
+                    sql,
+                    args,
+                    rowCount: Array.isArray(result) ? result.length : (result ? 1 : 0),
+                  });
+                  return result;
+                };
+              }
+              const value = Reflect.get(statementTarget, statementProperty);
+              return typeof value === 'function'
+                ? value.bind(statementTarget)
+                : value;
+            },
+          });
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { observedDb, observations };
+}
+
 function fund(player: Player, amount = 1_000_000): void {
   expect(applyGoldMutation(db, {
     playerId: player.id,
@@ -424,6 +472,164 @@ describe('Potion Lab report', () => {
       payout: 150_000,
       netGold: 50_000,
     });
+  });
+
+  it('bounds filtered evidence queries on production-scale history and uses filter indexes', () => {
+    const historical = createPlayer(
+      db,
+      { name: 'Historical', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    const selected = createPlayer(
+      db,
+      { name: 'Selected', class_key: 'wizard', gender: 'F' },
+      2,
+    );
+    fund(historical, 1_000_000);
+    fund(selected, 1_000_000);
+    const dungeonId = Number(db.prepare(
+      `INSERT INTO dungeons (level, theme, seed, regular_count, created_at)
+       VALUES (1, 'Ossuary Pale', 1, 2, 1)`,
+    ).run().lastInsertRowid);
+
+    const insertPurchase = db.prepare(
+      `INSERT INTO shop_purchases
+        (player_id, sku, quantity, unit_price, total_price, office_day,
+         request_id, inventory_after, gold_after, created_at)
+       VALUES (?, 'potion_damage_t1', 1, 150000, 150000, '1970-01-01',
+               ?, 0, 0, ?)`,
+    );
+    const insertActivation = db.prepare(
+      `INSERT INTO potion_activations
+        (player_id, sku, potion_type, tier, purchase_id, purchase_unit_price,
+         request_id, activation_day, activated_at, start_game_ms,
+         expires_game_ms, status, completed_at, effect_snapshot)
+       VALUES (?, 'potion_damage_t1', 'damage', 1, ?, 150000, ?,
+               '1970-01-01', ?, 0, 1, 'completed', ?, '{}')`,
+    );
+    const insertTokenEvent = db.prepare(
+      `INSERT INTO token_events
+        (player_id, ts, effective_delta, total_delta)
+       VALUES (?, ?, 1, 1)`,
+    );
+    const insertWork = db.prepare(
+      `INSERT INTO potion_work_events
+        (activation_id, token_event_id, effective_delta, base_gold,
+         stretch_gold, combat_active_ms, created_at)
+       VALUES (?, ?, 1, 0, 0, 0, ?)`,
+    );
+    const insertEncounter = db.prepare(
+      `INSERT INTO encounters
+        (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
+         pack_count, max_hp, current_hp, status, started_at, ended_at,
+         reward_model_version, reward_work_pct, reward_damage_pct,
+         reward_podium_first_pct, reward_podium_second_pct,
+         reward_podium_third_pct)
+       VALUES (?, ?, 'single', 1, 1, 1, 1, 0, 'defeated', ?, ?,
+               'hybrid-v1', 80, 10, 5, 3, 2)`,
+    );
+    const insertLink = db.prepare(
+      `INSERT INTO potion_activation_encounters
+        (activation_id, encounter_id, bonus_damage)
+       VALUES (?, ?, 1)`,
+    );
+    const insertAward = db.prepare(
+      `INSERT INTO encounter_reward_awards
+        (encounter_id, player_id, effective_tokens, damage_total,
+         potion_bonus_damage, damage_rank, work_gold, damage_gold,
+         podium_gold, total_gold, model_version, awarded_at)
+       VALUES (?, ?, 1, 1, 1, 1, 0, 0, 0, 0, 'hybrid-v1', ?)`,
+    );
+    const insertLedger = db.prepare(
+      `INSERT INTO gold_ledger
+        (player_id, amount, balance_after, reason, created_at)
+       VALUES (?, 0, 1000000, 'historical_noop', ?)`,
+    );
+
+    db.transaction(() => {
+      for (let index = 1; index <= 2_000; index += 1) {
+        const purchaseId = Number(insertPurchase.run(
+          historical.id,
+          `historical-purchase-${index}`,
+          index,
+        ).lastInsertRowid);
+        const activationId = Number(insertActivation.run(
+          historical.id,
+          purchaseId,
+          `historical-activation-${index}`,
+          index,
+          index,
+        ).lastInsertRowid);
+        const tokenEventId = Number(insertTokenEvent.run(
+          historical.id,
+          index,
+        ).lastInsertRowid);
+        insertWork.run(activationId, tokenEventId, index);
+        const encounterId = Number(insertEncounter.run(
+          dungeonId,
+          index,
+          index,
+          index,
+        ).lastInsertRowid);
+        insertLink.run(activationId, encounterId);
+        insertAward.run(encounterId, historical.id, index);
+        insertLedger.run(historical.id, index);
+      }
+    })();
+
+    const selectedAt = 1_000_000;
+    const selectedActivation = buyAndActivate(
+      selected,
+      'potion_gold_t1',
+      selectedAt,
+      selectedAt,
+      'selected-gold',
+    );
+    const { observedDb, observations } = observeQueries(db);
+    const result = buildPotionLabReport(observedDb, {
+      from: selectedAt,
+      to: selectedAt,
+      playerId: selected.id,
+      sku: 'potion_gold_t1',
+      timeZone,
+    }, selectedAt + 1);
+
+    expect(result.gold.activations).toEqual([
+      expect.objectContaining({ activationId: selectedActivation.activationId }),
+    ]);
+    expect(result.damage.activations).toEqual([]);
+
+    for (const table of [
+      'potion_activations',
+      'shop_purchases',
+      'potion_work_events',
+      'potion_activation_encounters',
+      'encounter_reward_awards',
+      'encounters',
+      'gold_ledger',
+    ]) {
+      const materialized = observations
+        .filter((query) => (
+          query.method === 'all'
+          && query.sql.includes(`FROM ${table}`)
+        ))
+        .reduce((max, query) => Math.max(max, query.rowCount), 0);
+      expect(materialized, table).toBeLessThanOrEqual(1);
+    }
+
+    const planFor = (fragment: string): string => {
+      const query = observations.find((entry) => entry.sql.includes(fragment));
+      expect(query, fragment).toBeDefined();
+      return (db.prepare(`EXPLAIN QUERY PLAN ${query!.sql}`).all(
+        ...query!.args as [],
+      ) as { detail: string }[]).map((row) => row.detail).join('\n');
+    };
+    expect(planFor('FROM potion_activations pa'))
+      .toMatch(/idx_potion_lab_activations_(player|sku)_activated/);
+    expect(planFor('FROM shop_purchases'))
+      .toMatch(/idx_potion_lab_purchases_(player|sku)_created/);
+    expect(planFor('FROM gold_ledger'))
+      .toContain('idx_potion_lab_ledger_player_created');
   });
 
   it.each([

@@ -649,4 +649,29 @@ export const migrations: Migration[] = [
       ) WITHOUT ROWID;
     `,
   },
+  {
+    id: '018_potion_lab_query_indexes',
+    sql: `
+      CREATE INDEX idx_potion_lab_activations_activated
+        ON potion_activations (activated_at, id);
+      CREATE INDEX idx_potion_lab_activations_player_activated
+        ON potion_activations (player_id, activated_at, id);
+      CREATE INDEX idx_potion_lab_activations_sku_activated
+        ON potion_activations (sku, activated_at, id);
+      CREATE INDEX idx_potion_lab_activations_readiness
+        ON potion_activations (status, potion_type, player_id);
+
+      CREATE INDEX idx_potion_lab_purchases_created
+        ON shop_purchases (created_at, id);
+      CREATE INDEX idx_potion_lab_purchases_player_created
+        ON shop_purchases (player_id, created_at, id);
+      CREATE INDEX idx_potion_lab_purchases_sku_created
+        ON shop_purchases (sku, created_at, id);
+
+      CREATE INDEX idx_potion_lab_ledger_created
+        ON gold_ledger (created_at, id);
+      CREATE INDEX idx_potion_lab_ledger_player_created
+        ON gold_ledger (player_id, created_at, id);
+    `,
+  },
 ];

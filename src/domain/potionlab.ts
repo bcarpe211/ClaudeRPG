@@ -118,15 +118,6 @@ type ActivationRow = {
   purchased_at: number;
 };
 
-type PurchaseRow = {
-  id: number;
-  player_id: number;
-  sku: LaunchPotionSku;
-  quantity: number;
-  total_price: number;
-  created_at: number;
-};
-
 type EncounterLink = {
   activation_id: number;
   encounter_id: number;
@@ -153,17 +144,6 @@ type EncounterRow = {
   reward_podium_third_pct: number | null;
 };
 
-type LedgerRow = {
-  id: number;
-  player_id: number;
-  amount: number;
-  balance_after: number;
-  reason: string;
-  source_table: string | null;
-  source_id: string | null;
-  created_at: number;
-};
-
 function validateFilters(filters: PotionLabFilters): void {
   for (const [name, value] of [
     ['from', filters.from],
@@ -185,15 +165,6 @@ function validateFilters(filters: PotionLabFilters): void {
   } catch {
     throw new RangeError('invalid office time zone');
   }
-}
-
-function inRange(value: number, filters: PotionLabFilters): boolean {
-  return (filters.from === undefined || value >= filters.from)
-    && (filters.to === undefined || value <= filters.to);
-}
-
-function matchesPlayer(playerId: number, filters: PotionLabFilters): boolean {
-  return filters.playerId === undefined || filters.playerId === playerId;
 }
 
 function median(values: number[]): number {
@@ -221,21 +192,63 @@ function groupGoldActivations(
   }));
 }
 
-function reconcilesLedger(
-  players: { id: number; gold: number }[],
-  ledger: LedgerRow[],
-): boolean {
-  const byPlayer = new Map<number, LedgerRow[]>();
-  for (const row of ledger) {
-    byPlayer.set(row.player_id, [...(byPlayer.get(row.player_id) ?? []), row]);
+interface SqlFilter {
+  sql: string;
+  params: Array<number | string>;
+}
+
+function selectedRowFilter(
+  filters: PotionLabFilters,
+  fields: { timestamp: string; player: string; sku?: string },
+  requiredPredicates: string[] = [],
+): SqlFilter {
+  const predicates = [...requiredPredicates];
+  const params: Array<number | string> = [];
+  if (filters.from !== undefined) {
+    predicates.push(`${fields.timestamp} >= ?`);
+    params.push(filters.from);
   }
-  return players.every((player) => {
-    const rows = (byPlayer.get(player.id) ?? []).sort((a, b) => a.id - b.id);
-    const signedTotal = rows.reduce((sum, row) => sum + row.amount, 0);
-    const latest = rows.at(-1);
-    return signedTotal === player.gold
-      && (latest ? latest.balance_after === player.gold : player.gold === 0);
-  });
+  if (filters.to !== undefined) {
+    predicates.push(`${fields.timestamp} <= ?`);
+    params.push(filters.to);
+  }
+  if (filters.playerId !== undefined) {
+    predicates.push(`${fields.player} = ?`);
+    params.push(filters.playerId);
+  }
+  if (filters.sku !== undefined && fields.sku !== undefined) {
+    predicates.push(`${fields.sku} = ?`);
+    params.push(filters.sku);
+  }
+  return {
+    sql: predicates.length > 0 ? `WHERE ${predicates.join(' AND ')}` : '',
+    params,
+  };
+}
+
+function selectedIds(ids: number[]): string {
+  return JSON.stringify(ids);
+}
+
+function ledgerReconciles(db: Database.Database): boolean {
+  const row = db.prepare(
+    `SELECT COUNT(*) AS mismatches
+     FROM players AS player
+     LEFT JOIN (
+       SELECT player_id, SUM(amount) AS signed_total,
+              MAX(id) AS latest_id, COUNT(*) AS entry_count
+       FROM gold_ledger
+       GROUP BY player_id
+     ) AS totals ON totals.player_id = player.id
+     LEFT JOIN gold_ledger AS latest ON latest.id = totals.latest_id
+     WHERE COALESCE(totals.signed_total, 0) <> player.gold
+        OR (totals.entry_count IS NULL AND player.gold <> 0)
+        OR (
+          totals.entry_count IS NOT NULL
+          AND latest.balance_after <> player.gold
+        )`,
+  ).get() as { mismatches: number };
+  return row.mismatches === 0;
 }
 
 export function podiumMovement(
@@ -273,7 +286,12 @@ export function buildPotionLabReport(
   const currentGameMs = (db.prepare(
     'SELECT combat_active_ms FROM game_state WHERE id=1',
   ).get() as { combat_active_ms: number }).combat_active_ms;
-  const activations = db.prepare(
+  const activationFilter = selectedRowFilter(filters, {
+    timestamp: 'pa.activated_at',
+    player: 'pa.player_id',
+    sku: 'pa.sku',
+  });
+  const activationRows = db.prepare(
     `SELECT pa.id, pa.player_id, pa.sku, pa.potion_type,
             pa.purchase_unit_price, pa.activated_at, pa.start_game_ms,
             pa.expires_game_ms, pa.status, pa.completed_at,
@@ -281,38 +299,60 @@ export function buildPotionLabReport(
             sp.created_at AS purchased_at
      FROM potion_activations pa
      JOIN shop_purchases sp ON sp.id=pa.purchase_id
+     ${activationFilter.sql}
      ORDER BY pa.activated_at, pa.id`,
-  ).all() as ActivationRow[];
-  const purchases = db.prepare(
-    `SELECT id, player_id, sku, quantity, total_price, created_at
-     FROM shop_purchases
-     WHERE sku IN ('potion_gold_t1','potion_damage_t1')
-     ORDER BY created_at, id`,
-  ).all() as PurchaseRow[];
-  const activationRows = activations.filter((row) => (
-    inRange(row.activated_at, filters)
-    && matchesPlayer(row.player_id, filters)
-    && (filters.sku === undefined || filters.sku === row.sku)
-  ));
-  const purchaseRows = purchases.filter((row) => (
-    inRange(row.created_at, filters)
-    && matchesPlayer(row.player_id, filters)
-    && (filters.sku === undefined || filters.sku === row.sku)
-  ));
+  ).all(...activationFilter.params) as ActivationRow[];
 
-  const workTotals = new Map((db.prepare(
-    `SELECT activation_id,
-            SUM(effective_delta) AS eligible_tokens,
-            SUM(base_gold) AS base_gold,
-            SUM(stretch_gold) AS stretch_gold
-     FROM potion_work_events
-     GROUP BY activation_id`,
-  ).all() as Array<{
-    activation_id: number;
-    eligible_tokens: number;
-    base_gold: number;
-    stretch_gold: number;
-  }>).map((row) => [row.activation_id, row]));
+  const purchaseFilter = selectedRowFilter(
+    filters,
+    {
+      timestamp: 'shop_purchases.created_at',
+      player: 'shop_purchases.player_id',
+      sku: 'shop_purchases.sku',
+    },
+    ["shop_purchases.sku IN ('potion_gold_t1','potion_damage_t1')"],
+  );
+  const purchaseStats = db.prepare(
+    `SELECT
+       COALESCE(SUM(
+         CASE WHEN sku='potion_gold_t1' THEN 1 ELSE 0 END
+       ), 0) AS gold_purchases,
+       COALESCE(SUM(
+         CASE WHEN sku='potion_gold_t1' THEN total_price ELSE 0 END
+       ), 0) AS gold_spent,
+       COALESCE(SUM(quantity), 0) AS stock_purchased
+     FROM shop_purchases
+     ${purchaseFilter.sql}`,
+  ).get(...purchaseFilter.params) as {
+    gold_purchases: number;
+    gold_spent: number;
+    stock_purchased: number;
+  };
+
+  const goldActivationIds = activationRows
+    .filter((row) => row.potion_type === 'gold')
+    .map((row) => row.id);
+  const workRows = goldActivationIds.length === 0
+    ? []
+    : db.prepare(
+      `SELECT activation_id,
+              SUM(effective_delta) AS eligible_tokens,
+              SUM(base_gold) AS base_gold,
+              SUM(stretch_gold) AS stretch_gold
+       FROM potion_work_events
+       WHERE activation_id IN (
+         SELECT CAST(value AS INTEGER) FROM json_each(?)
+       )
+       GROUP BY activation_id`,
+    ).all(selectedIds(goldActivationIds)) as Array<{
+      activation_id: number;
+      eligible_tokens: number;
+      base_gold: number;
+      stretch_gold: number;
+    }>;
+  const workTotals = new Map(
+    workRows.map((row) => [row.activation_id, row]),
+  );
   const goldAudit = (row: ActivationRow) => workTotals.get(row.id) ?? {
     eligible_tokens: row.eligible_tokens,
     base_gold: row.base_gold,
@@ -353,11 +393,19 @@ export function buildPotionLabReport(
     (row) => Number(officeHour.format(row.activatedAt)),
   ).map(({ key, ...group }) => ({ hour: key, ...group }));
 
-  const links = db.prepare(
-    `SELECT activation_id, encounter_id, bonus_damage
-     FROM potion_activation_encounters
-     ORDER BY activation_id, encounter_id`,
-  ).all() as EncounterLink[];
+  const damageActivationIds = activationRows
+    .filter((row) => row.potion_type === 'damage')
+    .map((row) => row.id);
+  const links = damageActivationIds.length === 0
+    ? []
+    : db.prepare(
+      `SELECT activation_id, encounter_id, bonus_damage
+       FROM potion_activation_encounters
+       WHERE activation_id IN (
+         SELECT CAST(value AS INTEGER) FROM json_each(?)
+       )
+       ORDER BY activation_id, encounter_id`,
+    ).all(selectedIds(damageActivationIds)) as EncounterLink[];
   const linksByActivation = new Map<number, EncounterLink[]>();
   for (const link of links) {
     linksByActivation.set(link.activation_id, [
@@ -365,12 +413,18 @@ export function buildPotionLabReport(
       link,
     ]);
   }
-  const awards = db.prepare(
-    `SELECT encounter_id, player_id, effective_tokens, damage_total,
-            potion_bonus_damage, damage_rank, total_gold
-     FROM encounter_reward_awards
-     ORDER BY encounter_id, player_id`,
-  ).all() as AwardRow[];
+  const encounterIds = [...new Set(links.map((link) => link.encounter_id))];
+  const awards = encounterIds.length === 0
+    ? []
+    : db.prepare(
+      `SELECT encounter_id, player_id, effective_tokens, damage_total,
+              potion_bonus_damage, damage_rank, total_gold
+       FROM encounter_reward_awards
+       WHERE encounter_id IN (
+         SELECT CAST(value AS INTEGER) FROM json_each(?)
+       )
+       ORDER BY encounter_id, player_id`,
+    ).all(selectedIds(encounterIds)) as AwardRow[];
   const awardsByEncounter = new Map<number, AwardRow[]>();
   for (const award of awards) {
     awardsByEncounter.set(award.encounter_id, [
@@ -378,12 +432,18 @@ export function buildPotionLabReport(
       award,
     ]);
   }
-  const encounters = new Map((db.prepare(
-    `SELECT id, reward_model_version, reward_work_pct, reward_damage_pct,
-            reward_podium_first_pct, reward_podium_second_pct,
-            reward_podium_third_pct
-     FROM encounters`,
-  ).all() as EncounterRow[]).map((row) => [row.id, row]));
+  const encounterRows = encounterIds.length === 0
+    ? []
+    : db.prepare(
+      `SELECT id, reward_model_version, reward_work_pct, reward_damage_pct,
+              reward_podium_first_pct, reward_podium_second_pct,
+              reward_podium_third_pct
+       FROM encounters
+       WHERE id IN (
+         SELECT CAST(value AS INTEGER) FROM json_each(?)
+       )`,
+    ).all(selectedIds(encounterIds)) as EncounterRow[];
+  const encounters = new Map(encounterRows.map((row) => [row.id, row]));
 
   const damageActivations = activationRows
     .filter((row) => row.potion_type === 'damage')
@@ -501,55 +561,93 @@ export function buildPotionLabReport(
       };
     });
 
-  const ledger = db.prepare(
-    `SELECT id, player_id, amount, balance_after, reason,
-            source_table, source_id, created_at
-     FROM gold_ledger ORDER BY id`,
-  ).all() as LedgerRow[];
-  const ledgerScope = ledger.filter((row) => (
-    inRange(row.created_at, filters) && matchesPlayer(row.player_id, filters)
-  ));
-  const purchaseById = new Map(purchases.map((row) => [row.id, row]));
-  const workActivationById = new Map((db.prepare(
-    `SELECT pwe.id, pa.sku
-     FROM potion_work_events pwe
-     JOIN potion_activations pa ON pa.id=pwe.activation_id`,
-  ).all() as { id: number; sku: LaunchPotionSku }[]).map((row) => [row.id, row.sku]));
-  const skuMatchesLedgerSource = (row: LedgerRow): boolean => {
-    if (filters.sku === undefined) return true;
-    if (row.reason === 'shop_purchase' && row.source_table === 'shop_purchases') {
-      return purchaseById.get(Number(row.source_id))?.sku === filters.sku;
-    }
-    if (
-      (row.reason === 'gold_potion_base' || row.reason === 'gold_potion_stretch')
-      && row.source_table === 'potion_work_events'
-    ) {
-      return workActivationById.get(Number(row.source_id)) === filters.sku;
-    }
-    return true;
+  const ledgerFilter = selectedRowFilter(filters, {
+    timestamp: 'ledger.created_at',
+    player: 'ledger.player_id',
+  });
+  const economyParams: Array<number | string> = [];
+  const spentSkuPredicate = filters.sku === undefined
+    ? ''
+    : 'AND purchase.sku = ?';
+  if (filters.sku !== undefined) economyParams.push(filters.sku);
+  const mintedSkuPredicate = filters.sku === undefined
+    ? ''
+    : `AND (
+         ledger.source_table IS NOT 'potion_work_events'
+         OR activation.sku = ?
+       )`;
+  if (filters.sku !== undefined) economyParams.push(filters.sku);
+  economyParams.push(...ledgerFilter.params);
+  const economyTotals = db.prepare(
+    `SELECT
+       COALESCE(SUM(CASE
+         WHEN ledger.reason='shop_purchase'
+          AND ledger.source_table='shop_purchases'
+          AND purchase.sku IN ('potion_gold_t1','potion_damage_t1')
+          ${spentSkuPredicate}
+         THEN ledger.amount ELSE 0 END
+       ), 0) AS potion_spent,
+       COALESCE(SUM(CASE
+         WHEN ledger.reason IN ('gold_potion_base','gold_potion_stretch')
+          ${mintedSkuPredicate}
+         THEN ledger.amount ELSE 0 END
+       ), 0) AS potion_minted,
+       COALESCE(SUM(CASE
+         WHEN ledger.reason='encounter_reward' THEN ledger.amount ELSE 0 END
+       ), 0) AS encounter_awarded,
+       COALESCE(SUM(CASE
+         WHEN ledger.reason='monster_steal' THEN ledger.amount ELSE 0 END
+       ), 0) AS monster_stolen,
+       COALESCE(SUM(CASE
+         WHEN ledger.amount > 0 THEN ledger.amount ELSE 0 END
+       ), 0) AS ledger_inflow,
+       COALESCE(SUM(CASE
+         WHEN ledger.amount < 0 THEN ledger.amount ELSE 0 END
+       ), 0) AS ledger_outflow
+     FROM gold_ledger AS ledger
+     LEFT JOIN shop_purchases AS purchase
+       ON ledger.reason='shop_purchase'
+      AND ledger.source_table='shop_purchases'
+      AND purchase.id=CAST(ledger.source_id AS INTEGER)
+     LEFT JOIN potion_work_events AS work
+       ON ledger.reason IN ('gold_potion_base','gold_potion_stretch')
+      AND ledger.source_table='potion_work_events'
+      AND work.id=CAST(ledger.source_id AS INTEGER)
+     LEFT JOIN potion_activations AS activation
+       ON activation.id=work.activation_id
+     ${ledgerFilter.sql}`,
+  ).get(...economyParams) as {
+    potion_spent: number;
+    potion_minted: number;
+    encounter_awarded: number;
+    monster_stolen: number;
+    ledger_inflow: number;
+    ledger_outflow: number;
   };
-  const potionSpent = ledgerScope.filter((row) => (
-    row.reason === 'shop_purchase'
-    && row.source_table === 'shop_purchases'
-    && ['potion_gold_t1', 'potion_damage_t1'].includes(
-      purchaseById.get(Number(row.source_id))?.sku ?? '',
-    )
-    && skuMatchesLedgerSource(row)
-  ));
-  const potionMinted = ledgerScope.filter((row) => (
-    (row.reason === 'gold_potion_base' || row.reason === 'gold_potion_stretch')
-    && skuMatchesLedgerSource(row)
-  ));
-  const players = db.prepare('SELECT id, gold FROM players ORDER BY id')
-    .all() as { id: number; gold: number }[];
 
-  const completedGlobal = activations.filter((row) => row.status === 'completed');
   const distinctCombatDays = (db.prepare(
     'SELECT COUNT(*) AS count FROM game_clock_days WHERE active_ms > 0',
   ).get() as { count: number }).count;
-  const completedGold = completedGlobal.filter((row) => row.potion_type === 'gold').length;
-  const completedDamage = completedGlobal.filter((row) => row.potion_type === 'damage').length;
-  const distinctPlayers = new Set(completedGlobal.map((row) => row.player_id)).size;
+  const readinessTotals = db.prepare(
+    `SELECT
+       COALESCE(SUM(CASE
+         WHEN status='completed' AND potion_type='gold' THEN 1 ELSE 0 END
+       ), 0) AS completed_gold,
+       COALESCE(SUM(CASE
+         WHEN status='completed' AND potion_type='damage' THEN 1 ELSE 0 END
+       ), 0) AS completed_damage,
+       COUNT(DISTINCT CASE
+         WHEN status='completed' THEN player_id
+       END) AS distinct_players
+     FROM potion_activations`,
+  ).get() as {
+    completed_gold: number;
+    completed_damage: number;
+    distinct_players: number;
+  };
+  const completedGold = readinessTotals.completed_gold;
+  const completedDamage = readinessTotals.completed_damage;
+  const distinctPlayers = readinessTotals.distinct_players;
   const enoughCombatDays = distinctCombatDays >= 14;
   const enoughGoldActivations = completedGold >= 30;
   const enoughDamageActivations = completedDamage >= 30;
@@ -567,12 +665,11 @@ export function buildPotionLabReport(
 
   return {
     gold: {
-      purchases: purchaseRows.filter((row) => row.sku === 'potion_gold_t1').length,
+      purchases: purchaseStats.gold_purchases,
       completed: activationRows.filter((row) => (
         row.potion_type === 'gold' && row.status === 'completed'
       )).length,
-      spent: purchaseRows.filter((row) => row.sku === 'potion_gold_t1')
-        .reduce((sum, row) => sum + row.total_price, 0),
+      spent: purchaseStats.gold_spent,
       basePayout: activationRows.filter((row) => row.potion_type === 'gold')
         .reduce((sum, row) => sum + goldAudit(row).base_gold, 0),
       stretchPayout: activationRows.filter((row) => row.potion_type === 'gold')
@@ -591,18 +688,14 @@ export function buildPotionLabReport(
     },
     damage: { activations: damageActivations },
     economy: {
-      potionGoldSpent: Math.abs(potionSpent.reduce((sum, row) => sum + row.amount, 0)),
-      goldPotionMinted: potionMinted.reduce((sum, row) => sum + row.amount, 0),
-      encounterGoldAwarded: ledgerScope.filter((row) => row.reason === 'encounter_reward')
-        .reduce((sum, row) => sum + row.amount, 0),
-      monsterGoldStolen: Math.abs(ledgerScope.filter((row) => row.reason === 'monster_steal')
-        .reduce((sum, row) => sum + row.amount, 0)),
-      ledgerInflow: ledgerScope.filter((row) => row.amount > 0)
-        .reduce((sum, row) => sum + row.amount, 0),
-      ledgerOutflow: Math.abs(ledgerScope.filter((row) => row.amount < 0)
-        .reduce((sum, row) => sum + row.amount, 0)),
-      ledgerReconciled: reconcilesLedger(players, ledger),
-      stockPurchased: purchaseRows.reduce((sum, row) => sum + row.quantity, 0),
+      potionGoldSpent: Math.abs(economyTotals.potion_spent),
+      goldPotionMinted: economyTotals.potion_minted,
+      encounterGoldAwarded: economyTotals.encounter_awarded,
+      monsterGoldStolen: Math.abs(economyTotals.monster_stolen),
+      ledgerInflow: economyTotals.ledger_inflow,
+      ledgerOutflow: Math.abs(economyTotals.ledger_outflow),
+      ledgerReconciled: ledgerReconciles(db),
+      stockPurchased: purchaseStats.stock_purchased,
       dosesUsed: activationRows.length,
     },
     readiness: {
