@@ -46,11 +46,19 @@ describe('players', () => {
     const p = createPlayer(db, base, 1000);
     renamePlayer(db, p.id, 'Reginald the Bold');
     expect(getPlayerById(db, p.id)?.name).toBe('Reginald the Bold');
-    updatePlayer(db, p.id, { level: 5, gold: 250, disabled: 1 });
+    updatePlayer(db, p.id, { level: 5, disabled: 1 });
     const u = getPlayerById(db, p.id)!;
     expect(u.level).toBe(5);
-    expect(u.gold).toBe(250);
     expect(u.disabled).toBe(1);
+  });
+
+  it('rejects gold in a generic player patch', () => {
+    const p = createPlayer(db, base, 1000);
+    expect(() =>
+      // @ts-expect-error - gold must use setGoldBalance
+      updatePlayer(db, p.id, { gold: 250 }),
+    ).toThrow(/illegal column/);
+    expect(getPlayerById(db, p.id)?.gold).toBe(0);
   });
 
   it('deletes a player', () => {

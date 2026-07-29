@@ -46,6 +46,10 @@ describe('admin players', () => {
     expect(u.level).toBe(7);
     expect(u.gold).toBe(500);
     expect(u.disabled).toBe(1);
+    expect(db.prepare("SELECT reason FROM gold_ledger WHERE reason='admin_adjustment'").get())
+      .toEqual({ reason: 'admin_adjustment' });
+    expect(db.prepare("SELECT balance_after FROM gold_ledger WHERE reason='admin_adjustment'").get())
+      .toEqual({ balance_after: u.gold });
   });
 
   it('deletes a player', async () => {

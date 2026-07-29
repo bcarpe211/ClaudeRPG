@@ -69,6 +69,10 @@ describe('engine monster retaliation', () => {
     expect(row.kind).toBe('gold');
     expect(row.gold_delta).toBe(80);                  // 0.008% of 1,000,000 (monster_gold_steal_pct default)
     expect(getPlayerById(db, p.id)!.gold).toBe(999920);
+    expect(db.prepare("SELECT amount FROM gold_ledger WHERE reason='monster_steal'").get())
+      .toEqual({ amount: -80 });
+    expect(db.prepare("SELECT balance_after FROM gold_ledger WHERE reason='monster_steal'").get())
+      .toEqual({ balance_after: getPlayerById(db, p.id)!.gold });
   });
 
   it('monster_attacks_enabled=0 suppresses all retaliation', () => {

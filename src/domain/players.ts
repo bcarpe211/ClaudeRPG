@@ -74,7 +74,7 @@ export function renamePlayer(
 export type PlayerPatch = Partial<
   Pick<
     Player,
-    'name' | 'class_key' | 'gender' | 'level' | 'gold' | 'disabled' |
+    'name' | 'class_key' | 'gender' | 'level' | 'disabled' |
     'total_tokens' | 'effective_tokens'
   >
 >;
@@ -84,7 +84,6 @@ const PLAYER_PATCH_COLUMNS = new Set<keyof PlayerPatch>([
   'class_key',
   'gender',
   'level',
-  'gold',
   'disabled',
   'total_tokens',
   'effective_tokens',

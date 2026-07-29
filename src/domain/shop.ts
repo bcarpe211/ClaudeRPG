@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { getSetting } from './settings';
+import { applyGoldMutation } from './goldledger';
 
 export interface Sku { id: string; priceSetting: string; priceDefault: number; grantTier: 1 | 2 | 3 }
 export const SKUS: Record<string, Sku> = {
@@ -47,12 +48,25 @@ export function purchase(
     if (sku.grantTier <= currentTier) return { ok: false, reason: 'already_owned', currentTier };
     if (sku.grantTier !== currentTier + 1) return { ok: false, reason: 'out_of_sequence', currentTier };
     if (p.gold < price) return { ok: false, reason: 'insufficient_gold', price, gold: p.gold, currentTier };
-    db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(price, playerId);
-    db.prepare(
-      `INSERT INTO player_cosmetics (player_id, wheel_tier, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(player_id) DO UPDATE SET wheel_tier = MAX(wheel_tier, excluded.wheel_tier), updated_at = excluded.updated_at`,
-    ).run(playerId, sku.grantTier, now);
-    return { ok: true, newGold: p.gold - price, tier: sku.grantTier };
+    const charge = applyGoldMutation(db, {
+      playerId,
+      amount: -price,
+      reason: 'shop_purchase',
+      sourceTable: 'player_cosmetics',
+      sourceId: sku.id,
+      now,
+    });
+    if (charge.status === 'applied' || charge.status === 'duplicate') {
+      db.prepare(
+        `INSERT INTO player_cosmetics (player_id, wheel_tier, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(player_id) DO UPDATE SET wheel_tier = MAX(wheel_tier, excluded.wheel_tier), updated_at = excluded.updated_at`,
+      ).run(playerId, sku.grantTier, now);
+      return { ok: true, newGold: charge.balance, tier: sku.grantTier };
+    }
+    if (charge.status === 'insufficient_gold') {
+      return { ok: false, reason: 'insufficient_gold', price, gold: charge.balance ?? p.gold, currentTier };
+    }
+    return { ok: false, reason: 'no_player' };
   })();
 }
 

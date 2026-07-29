@@ -1,4 +1,5 @@
 import type { Express, Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AppDeps } from '../app';
 import { renderPage } from '../app';
@@ -10,6 +11,7 @@ import {
   updatePlayer,
   deletePlayer,
 } from '../../domain/players';
+import { setGoldBalance } from '../../domain/goldledger';
 import { CLASSES, getClass } from '../../domain/classes';
 import {
   DEFAULT_SETTINGS,
@@ -139,13 +141,13 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
       class_key: d.class_key,
       gender: d.gender,
       level: d.level,
-      gold: d.gold,
       disabled: d.disabled === '1' ? 1 : 0,
     };
     if (d.effective_tokens !== undefined) {
       patch.effective_tokens = d.effective_tokens;
     }
     updatePlayer(db, player.id, patch);
+    setGoldBalance(db, player.id, d.gold, randomUUID(), Date.now());
     res.redirect('/admin');
   });
 

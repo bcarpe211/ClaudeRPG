@@ -21,6 +21,10 @@ describe('purchase', () => {
     expect(purchase(db, p.id, 'cosmetic_wheel_t2', 2_000_000, 200)).toMatchObject({ ok: true, tier: 2, newGold: 3_500_000 });
     expect(purchase(db, p.id, 'cosmetic_wheel_t3', 2_500_000, 300)).toMatchObject({ ok: true, tier: 3, newGold: 1_000_000 });
     expect(getCosmetics(db, p.id)?.wheel_tier).toBe(3);
+    expect(db.prepare("SELECT amount, reason FROM gold_ledger WHERE reason='shop_purchase'").get())
+      .toMatchObject({ amount: -1_500_000, reason: 'shop_purchase' });
+    expect(db.prepare("SELECT balance_after FROM gold_ledger WHERE reason='shop_purchase' ORDER BY id DESC LIMIT 1").get())
+      .toEqual({ balance_after: getPlayerById(db, p.id)?.gold });
   });
 
   it('rejects skipping ahead without charging', () => {

@@ -7,6 +7,7 @@ import { activityScore } from './activity';
 import { splitGold } from './rewards';
 import { getAllSettings } from './settings';
 import { pickTarget, rollConsequence, goldSteal, debuffFactor } from './retaliation';
+import { applyGoldMutation } from './goldledger';
 
 export interface DefeatParticipant {
   playerId: number;
@@ -177,11 +178,20 @@ export class GameEngine {
       tokens: (tokQ.get(r.player_id, enc.started_at, now) as { s: number }).s,
     }));
     const goldByPlayer = splitGold(participants, goldPool, cfg.goldDamageWeight);
-    const award = this.db.prepare('UPDATE players SET gold = gold + ? WHERE id=?');
     const tx = this.db.transaction(() => {
       this.db.prepare("UPDATE encounters SET status='defeated', ended_at=? WHERE id=?")
         .run(now, encId);
-      for (const [playerId, gold] of goldByPlayer) if (gold > 0) award.run(gold, playerId);
+      for (const [playerId, gold] of goldByPlayer) {
+        if (gold <= 0) continue;
+        applyGoldMutation(this.db, {
+          playerId,
+          amount: gold,
+          reason: 'encounter_reward',
+          sourceTable: 'encounters',
+          sourceId: String(encId),
+          now,
+        });
+      }
       this.db.prepare(
         'UPDATE game_state SET defeat_until=?, last_defeat_encounter_id=?, current_encounter_id=NULL WHERE id=1',
       ).run(now + cfg.popupDurationS * 1000, encId);
@@ -268,12 +278,19 @@ export class GameEngine {
     }
 
     this.db.transaction(() => {
-      if (kind === 'gold' && amount > 0) {
-        this.db.prepare('UPDATE players SET gold = gold - ? WHERE id=?').run(amount, target.id);
-      }
-      this.db.prepare(
+      const attack = this.db.prepare(
         'INSERT INTO monster_attacks (encounter_id, player_id, kind, gold_delta, ts) VALUES (?, ?, ?, ?, ?)',
       ).run(encId, target.id, kind, amount, now);
+      if (kind === 'gold' && amount > 0) {
+        applyGoldMutation(this.db, {
+          playerId: target.id,
+          amount: -amount,
+          reason: 'monster_steal',
+          sourceTable: 'monster_attacks',
+          sourceId: String(attack.lastInsertRowid),
+          now,
+        });
+      }
     })();
   }
 }

@@ -35,6 +35,10 @@ describe('engine kill resolution', () => {
     expect(dead.status).toBe('defeated');
     expect(dead.ended_at).toBeGreaterThan(0);
     expect(getPlayerById(db, p.id)!.gold).toBeGreaterThan(0);
+    expect(db.prepare("SELECT reason FROM gold_ledger WHERE reason='encounter_reward'").get())
+      .toEqual({ reason: 'encounter_reward' });
+    expect(db.prepare("SELECT balance_after FROM gold_ledger WHERE reason='encounter_reward'").get())
+      .toEqual({ balance_after: getPlayerById(db, p.id)!.gold });
     const gs = db.prepare('SELECT * FROM game_state WHERE id=1').get() as any;
     expect(gs.defeat_until).toBeGreaterThan(0);
     expect(gs.last_defeat_encounter_id).toBe(enc.id);
