@@ -5,7 +5,9 @@ import { loadConfig } from '../src/config';
 import { createApp } from '../src/web/app';
 import { createPlayer, getPlayerById } from '../src/domain/players';
 import { purchase } from '../src/domain/shop';
-import { seedSettings } from '../src/domain/settings';
+import { applyGoldMutation } from '../src/domain/goldledger';
+import { purchaseConsumable } from '../src/domain/inventory';
+import { seedSettings, setSetting } from '../src/domain/settings';
 
 let db: ReturnType<typeof openDb>;
 let app: ReturnType<typeof createApp>;
@@ -78,6 +80,57 @@ describe('character sheet', () => {
     expect(res.text).not.toContain('class="dye-fin dye-default"');
     expect(res.text).not.toContain('↺');
     expect(res.text).toContain('class="dye-fin-swatch dye-fin-default" aria-hidden="true"');
+  });
+
+  it('renders owned potion quantity as unavailable when current tuning is invalid', async () => {
+    const player = createPlayer(
+      db,
+      { name: 'Shelf Keeper', class_key: 'wizard', gender: 'F' },
+      1_000,
+    );
+    applyGoldMutation(db, {
+      playerId: player.id,
+      amount: 500_000,
+      reason: 'opening_balance',
+      sourceTable: 'test',
+      sourceId: 'shelf-keeper-opening',
+      now: 1_001,
+    });
+    expect(purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      quantity: 1,
+      expectedUnitPrice: 100_000,
+      requestId: 'shelf-keeper-purchase',
+      now: 1_002,
+      timeZone: 'America/New_York',
+    })).toMatchObject({ ok: true, inventory: 1 });
+    setSetting(db, 'potion_damage_t1_base_hit_pct', 'not-a-number');
+
+    const response = await request(app).get('/character').query({
+      token: player.auth_token,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('Beginner Gold Potion');
+    expect(response.text).toContain('×1');
+    expect(response.text).toContain('Potion tuning is temporarily unavailable.');
+    expect(response.text).toContain('Unavailable until tuning is repaired');
+    expect(response.text).toMatch(/id="hub-potion-drink"[^>]*disabled/);
+    const hubBootstrap = response.text.match(
+      /window\.__PLAYER_HUB__ = (\{.*?\});<\/script>/s,
+    );
+    expect(hubBootstrap).not.toBeNull();
+    const hubClient = JSON.parse(hubBootstrap![1]) as {
+      initialState: { inventory: Array<Record<string, unknown>> };
+    };
+    expect(hubClient.initialState.inventory).toEqual([
+      expect.objectContaining({
+        sku: 'potion_gold_t1',
+        quantity: 1,
+        available: false,
+      }),
+    ]);
   });
 
   it('rejects an unknown token', async () => {

@@ -69,6 +69,40 @@ describe('character potion API', () => {
     expect(JSON.stringify(response.body)).not.toContain('auth_token');
   });
 
+  it('returns owned inventory as unavailable and rejects activation when tuning is invalid', async () => {
+    const player = playerWithStock();
+    setSetting(db, 'potion_damage_t1_base_hit_pct', 'not-a-number');
+
+    const state = await request(app)
+      .get('/character/state')
+      .query({ token: player.auth_token });
+    const activation = await request(app)
+      .post('/character/potions/activate')
+      .type('form')
+      .send({
+        token: player.auth_token,
+        sku: 'potion_gold_t1',
+        request_id: crypto.randomUUID(),
+      });
+
+    expect(state.status).toBe(200);
+    expect(state.body.inventory).toEqual([
+      expect.objectContaining({
+        sku: 'potion_gold_t1',
+        quantity: 1,
+        available: false,
+        durationMs: null,
+        effectCopy: 'Potion tuning is temporarily unavailable.',
+        usesRemaining: null,
+      }),
+    ]);
+    expect(activation.status).toBe(409);
+    expect(activation.body).toEqual({ ok: false, reason: 'invalid_config' });
+    expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM potion_activations').get())
+      .toEqual({ count: 0 });
+  });
+
   it('activates one owned potion and replays an exact UUID idempotently', async () => {
     const player = playerWithStock();
     const requestId = crypto.randomUUID();

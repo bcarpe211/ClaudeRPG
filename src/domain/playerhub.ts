@@ -6,7 +6,6 @@ import { listInventory } from './inventory';
 import { nextOfficeMidnight, officeDayKey, officeDayStart } from './office-time';
 import {
   activePotionEffects,
-  potionEffectSnapshot,
   potionActivationState,
   potionUsesForDay,
   remainingDailyUses,
@@ -14,8 +13,13 @@ import {
 import type { Player } from './players';
 import { activeDebuff } from './retaliation';
 import {
-  consumableProduct,
+  CONSUMABLE_SKUS,
+  consumableProductForConfiguration,
+  currentPotionConfiguration,
+  isConsumableSku,
+  potionEffectSnapshotForConfiguration,
   type ConsumableProduct,
+  type PotionConfiguration,
   type PotionType,
 } from './shop-products';
 import { getSetting } from './settings';
@@ -25,9 +29,9 @@ import {
 } from './slotcosmetics';
 import { buildSetupSnippet } from './snippet';
 
-const DEFAULT_DAILY_USES = 3;
 const DEFAULT_DEBUFF_FACTOR = 0.85;
 const DEFAULT_DEBUFF_SECONDS = 8;
+const POTION_UNAVAILABLE_COPY = 'Potion tuning is temporarily unavailable.';
 
 export interface PlayerHubToday {
   effectiveTokens: number;
@@ -44,10 +48,11 @@ export interface PlayerHubInventoryItem {
   potionType: PotionType;
   tier: 1;
   quantity: number;
-  durationMs: number;
+  available: boolean;
+  durationMs: number | null;
   iconClass: string;
   effectCopy: string;
-  usesRemaining: number;
+  usesRemaining: number | null;
   nextResetAt: number;
 }
 
@@ -91,14 +96,11 @@ function configuredNumber(
   return Number.isFinite(value) ? value : fallback;
 }
 
-function configuredDailyUses(db: Database.Database): number {
-  const value = configuredNumber(db, 'potion_daily_uses_per_type', DEFAULT_DAILY_USES);
-  return Number.isSafeInteger(value) && value >= 0 ? value : DEFAULT_DAILY_USES;
-}
-
-function productEffectCopy(db: Database.Database, product: ConsumableProduct): string {
-  const snapshot = potionEffectSnapshot(db, product.potionType, product.durationMs);
-  if (!snapshot) throw new RangeError(`${product.id} effect settings are invalid`);
+function productEffectCopy(
+  config: PotionConfiguration,
+  product: ConsumableProduct,
+): string {
+  const snapshot = potionEffectSnapshotForConfiguration(config, product.potionType);
   if (snapshot.kind === 'gold') {
     return `${snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 effective tokens`;
   }
@@ -213,23 +215,40 @@ export function buildPlayerHubState(
   const dayKey = officeDayKey(now, timeZone);
   const dayStart = officeDayStart(now, timeZone);
   const resetAt = nextOfficeMidnight(now, timeZone);
-  const dailyUses = configuredDailyUses(db);
+  const potionConfig = currentPotionConfiguration(db);
   const encounterId = currentEncounterId(db);
   const inventory = listInventory(db, player.id)
     .flatMap(({ sku, quantity }): PlayerHubInventoryItem[] => {
-      const product = consumableProduct(db, sku);
-      if (!product || quantity <= 0) return [];
+      if (!isConsumableSku(sku) || quantity <= 0) return [];
+      const catalogProduct = CONSUMABLE_SKUS[sku];
+      if (!potionConfig) {
+        return [{
+          sku: catalogProduct.id,
+          name: catalogProduct.name,
+          potionType: catalogProduct.potionType,
+          tier: catalogProduct.tier,
+          quantity,
+          available: false,
+          durationMs: null,
+          iconClass: catalogProduct.iconClass,
+          effectCopy: POTION_UNAVAILABLE_COPY,
+          usesRemaining: null,
+          nextResetAt: resetAt,
+        }];
+      }
+      const product = consumableProductForConfiguration(potionConfig, sku);
       return [{
         sku: product.id,
         name: product.name,
         potionType: product.potionType,
         tier: product.tier,
         quantity,
+        available: true,
         durationMs: product.durationMs,
         iconClass: product.iconClass,
-        effectCopy: productEffectCopy(db, product),
+        effectCopy: productEffectCopy(potionConfig, product),
         usesRemaining: remainingDailyUses(
-          db, player.id, product.potionType, dayKey, dailyUses,
+          db, player.id, product.potionType, dayKey, potionConfig.dailyUses,
         ),
         nextResetAt: resetAt,
       }];

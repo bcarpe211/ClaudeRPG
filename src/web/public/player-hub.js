@@ -167,8 +167,14 @@
     setText('hub-item-detail-name', item.name);
     setText('hub-item-detail-owned', number.format(item.quantity));
     setText('hub-item-detail-effect', item.effectCopy);
-    setText('hub-item-detail-duration', durationLabel(item.durationMs));
-    setText('hub-item-detail-doses', `${item.usesRemaining} remaining`);
+    setText(
+      'hub-item-detail-duration',
+      item.available ? durationLabel(item.durationMs) : 'Unavailable until tuning is repaired',
+    );
+    setText(
+      'hub-item-detail-doses',
+      item.available ? `${item.usesRemaining} remaining` : 'Unavailable until tuning is repaired',
+    );
     setText('hub-item-detail-reset', new Intl.DateTimeFormat(undefined, {
       hour: 'numeric', minute: '2-digit',
     }).format(new Date(item.nextResetAt)));
@@ -187,12 +193,14 @@
         }
       }
     }
-    drinkButton.disabled = item.usesRemaining <= 0 || Boolean(active);
-    drinkButton.textContent = active
-      ? 'Potion Already Active'
-      : item.usesRemaining <= 0
-        ? 'Daily Limit Reached'
-        : 'Drink Potion';
+    drinkButton.disabled = !item.available || item.usesRemaining <= 0 || Boolean(active);
+    drinkButton.textContent = !item.available
+      ? 'Potion Unavailable'
+      : active
+        ? 'Potion Already Active'
+        : item.usesRemaining <= 0
+          ? 'Daily Limit Reached'
+          : 'Drink Potion';
   }
 
   function renderEffects() {

@@ -191,6 +191,7 @@ function interactionHarness(options: {
   responses?: HarnessResponse[];
   activationTiming?: HubState['activationTiming'];
   reducedMotion?: boolean;
+  invalidTuning?: boolean;
 } = {}) {
   const document = new FakeDocument();
   const register = (id: string, tag = 'div') => document.register(new FakeElement(id, tag));
@@ -238,13 +239,13 @@ function interactionHarness(options: {
         sku: 'potion_gold_t1', name: 'Beginner Gold Potion', potionType: 'gold', tier: 1,
         quantity: 2, durationMs: 7_200_000, iconClass: 'potion-gold',
         effectCopy: '50g per 1,000 effective tokens', usesRemaining: 2,
-        nextResetAt: Date.parse('2026-07-30T04:00:00Z'),
+        nextResetAt: Date.parse('2026-07-30T04:00:00Z'), available: true,
       },
       {
         sku: 'potion_damage_t1', name: 'Beginner Damage Potion', potionType: 'damage', tier: 1,
         quantity: 1, durationMs: 7_200_000, iconClass: 'potion-damage',
         effectCopy: '+25% personal base hit', usesRemaining: 3,
-        nextResetAt: Date.parse('2026-07-30T04:00:00Z'),
+        nextResetAt: Date.parse('2026-07-30T04:00:00Z'), available: true,
       },
     ],
     effects: [
@@ -264,6 +265,15 @@ function interactionHarness(options: {
     },
     currentFight: { leaders: [{ playerId: 2, name: 'Rogue', damage: 900 }] },
   };
+  if (options.invalidTuning) {
+    initialState.inventory = initialState.inventory.map((item) => ({
+      ...item,
+      available: false,
+      durationMs: null,
+      effectCopy: 'Potion tuning is temporarily unavailable.',
+      usesRemaining: null,
+    }));
+  }
   const refreshed: HubState = {
     ...initialState,
     gold: 451_000,
@@ -385,6 +395,31 @@ describe('mounted player hub tabs', () => {
 });
 
 describe('player hub inventory, effects, and refresh behavior', () => {
+  it('renders owned inventory as unavailable and cannot submit an activation request', async () => {
+    const h = interactionHarness({ invalidTuning: true, responses: [] });
+    const grid = h.document.getElementById('hub-inventory-grid')!;
+    const drink = h.document.getElementById('hub-potion-drink')!;
+
+    expect(grid.querySelectorAll('[data-sku]').map((item) => item.dataset.sku)).toEqual([
+      'potion_gold_t1',
+      'potion_damage_t1',
+    ]);
+    expect(h.document.getElementById('hub-item-detail-owned')!.textContent).toBe('2');
+    expect(h.document.getElementById('hub-item-detail-effect')!.textContent)
+      .toBe('Potion tuning is temporarily unavailable.');
+    expect(h.document.getElementById('hub-item-detail-duration')!.textContent)
+      .toBe('Unavailable until tuning is repaired');
+    expect(h.document.getElementById('hub-item-detail-doses')!.textContent)
+      .toBe('Unavailable until tuning is repaired');
+    expect(drink.disabled).toBe(true);
+    expect(drink.textContent).toBe('Potion Unavailable');
+
+    drink.dispatch('click');
+    await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
+    expect(h.document.getElementById('potion-confirm')!.open).toBe(false);
+    expect(h.fetchCalls).toEqual([]);
+  });
+
   it('selects one reusable detail panel, confirms once, and refreshes without touching Wardrobe', async () => {
     const h = interactionHarness();
     const grid = h.document.getElementById('hub-inventory-grid')!;

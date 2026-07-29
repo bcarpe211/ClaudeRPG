@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { migrations } from '../src/db/migrations';
+import { GameEngine } from '../src/domain/engine';
 
 const columns = (db: ReturnType<typeof openDb>, table: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[])
@@ -86,7 +87,7 @@ function create013ActivationDatabase(dbPath: string): void {
   legacy.close();
 }
 
-function create014RewardPoolDatabase(dbPath: string): {
+function create014RewardPoolDatabase(dbPath: string, goldFactor = '0.5'): {
   activeHybridId: number;
   defeatedHybridId: number;
   legacyId: number;
@@ -102,7 +103,7 @@ function create014RewardPoolDatabase(dbPath: string): {
     recordMigration.run(migration.id, 1_000 + index);
   }
   legacy.prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
-    .run('gold_factor', '0.5');
+    .run('gold_factor', goldFactor);
   legacy.prepare(
     `INSERT INTO players
       (id, name, class_key, gender, auth_token, created_at)
@@ -154,6 +155,43 @@ function create014RewardPoolDatabase(dbPath: string): {
   ).run(defeatedHybridId);
   legacy.close();
   return { activeHybridId, defeatedHybridId, legacyId };
+}
+
+function prepareResolvableHybridDatabase(dbPath: string, encounterId: number): void {
+  const legacy = new Database(dbPath);
+  legacy.pragma('foreign_keys = ON');
+  const encounter = legacy.prepare(
+    'SELECT dungeon_id FROM encounters WHERE id=?',
+  ).get(encounterId) as { dungeon_id: number };
+  legacy.prepare('UPDATE encounters SET current_hp=0 WHERE id=?').run(encounterId);
+  legacy.prepare(
+    `INSERT INTO encounter_damage
+      (encounter_id, player_id, damage_total, hits, max_hit, potion_bonus_damage)
+     VALUES (?, 1, 100, 1, 100, 0)`,
+  ).run(encounterId);
+  legacy.prepare(
+    `UPDATE game_state
+     SET current_dungeon_id=?, current_encounter_id=?, last_activity_at=2000, paused=0
+     WHERE id=1`,
+  ).run(encounter.dungeon_id, encounterId);
+  legacy.prepare('UPDATE players SET last_token_at=2000 WHERE id=1').run();
+  legacy.close();
+}
+
+function create015UnsafeRewardPoolDatabase(dbPath: string): {
+  activeHybridId: number;
+  defeatedHybridId: number;
+  legacyId: number;
+} {
+  const fixture = create014RewardPoolDatabase(dbPath, '1e999');
+  const legacy = new Database(dbPath);
+  const migration = migrations[14];
+  legacy.exec(migration.sql);
+  legacy.prepare('INSERT INTO _migrations (id, applied_at) VALUES (?, ?)')
+    .run(migration.id, 2_000);
+  legacy.close();
+  prepareResolvableHybridDatabase(dbPath, fixture.activeHybridId);
+  return fixture;
 }
 
 describe('timed-consumables database upgrades', () => {
@@ -289,6 +327,75 @@ describe('timed-consumables database upgrades', () => {
       ).get('015_encounter_reward_gold_pool')).toEqual({
         id: '015_encounter_reward_gold_pool',
       });
+    } finally {
+      upgraded?.close();
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the canonical runtime fallback for a non-finite pre-015 reward factor and resolves safely', () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-upgrade-'));
+    const dbPath = join(fixtureDir, 'timed-consumables-infinite-factor-014.db');
+    let upgraded: Database.Database | undefined;
+    try {
+      const fixture = create014RewardPoolDatabase(dbPath, '1e999');
+      prepareResolvableHybridDatabase(dbPath, fixture.activeHybridId);
+
+      upgraded = openDb(dbPath);
+
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.activeHybridId)).toEqual({ reward_gold_pool: 3 });
+      expect(() => upgraded!.exec(
+        `UPDATE encounters SET reward_gold_pool=9007199254740992
+         WHERE id=${fixture.activeHybridId}`,
+      )).toThrow();
+
+      const engine = new GameEngine(upgraded, { rng: () => 0.5 });
+      engine.tick(2_000);
+
+      expect(upgraded.prepare(
+        'SELECT status, reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.activeHybridId)).toEqual({
+        status: 'defeated',
+        reward_gold_pool: 3,
+      });
+      expect(upgraded.prepare(
+        'SELECT SUM(total_gold) AS total FROM encounter_reward_awards WHERE encounter_id=?',
+      ).get(fixture.activeHybridId)).toEqual({ total: 3 });
+    } finally {
+      upgraded?.close();
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs and enforces safe pools for databases that already recorded migration 015', () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'clauderpg-upgrade-'));
+    const dbPath = join(fixtureDir, 'timed-consumables-infinite-factor-015.db');
+    let upgraded: Database.Database | undefined;
+    try {
+      const fixture = create015UnsafeRewardPoolDatabase(dbPath);
+
+      upgraded = openDb(dbPath);
+
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.activeHybridId)).toEqual({ reward_gold_pool: 3 });
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.defeatedHybridId)).toEqual({ reward_gold_pool: 77 });
+      expect(upgraded.prepare(
+        'SELECT reward_gold_pool FROM encounters WHERE id=?',
+      ).get(fixture.legacyId)).toEqual({ reward_gold_pool: null });
+      expect(upgraded.prepare(
+        'SELECT id FROM _migrations WHERE id=?',
+      ).get('016_safe_encounter_reward_gold_pool')).toEqual({
+        id: '016_safe_encounter_reward_gold_pool',
+      });
+      expect(() => upgraded!.exec(
+        `UPDATE encounters SET reward_gold_pool=9007199254740992
+         WHERE id=${fixture.activeHybridId}`,
+      )).toThrow();
     } finally {
       upgraded?.close();
       rmSync(fixtureDir, { recursive: true, force: true });

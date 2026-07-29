@@ -461,42 +461,181 @@ export const migrations: Migration[] = [
           OR (
             typeof(reward_gold_pool) = 'integer'
             AND reward_gold_pool >= 0
+            AND reward_gold_pool <= 9007199254740991
           )
         );
 
       UPDATE encounters
-      SET reward_gold_pool = COALESCE(
-        (
+      SET reward_gold_pool = CASE
+        WHEN (
           SELECT SUM(award.total_gold)
           FROM encounter_reward_awards AS award
           WHERE award.encounter_id = encounters.id
-        ),
-        CAST(ROUND(
+        ) BETWEEN 0 AND 9007199254740991
+          THEN (
+            SELECT SUM(award.total_gold)
+            FROM encounter_reward_awards AS award
+            WHERE award.encounter_id = encounters.id
+          )
+        WHEN json_valid(TRIM(COALESCE(
+          (SELECT value FROM settings WHERE key = 'gold_factor'),
+          ''
+        ))) = 1
+          AND json_type(TRIM((
+            SELECT value FROM settings WHERE key = 'gold_factor'
+          ))) IN ('integer', 'real')
+          AND json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'gold_factor'
+          )), '$') >= 0
+          AND json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'gold_factor'
+          )), '$') <= 1.7976931348623157e308
+          AND ROUND(
+            encounters.max_hp
+            * (
+                SELECT dungeon.level
+                FROM dungeons AS dungeon
+                WHERE dungeon.id = encounters.dungeon_id
+              )
+            * json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'gold_factor'
+              )), '$')
+          ) BETWEEN 0 AND 9007199254740991
+          THEN CAST(ROUND(
+            encounters.max_hp
+            * (
+                SELECT dungeon.level
+                FROM dungeons AS dungeon
+                WHERE dungeon.id = encounters.dungeon_id
+              )
+            * json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'gold_factor'
+              )), '$')
+          ) AS INTEGER)
+        WHEN ROUND(
           encounters.max_hp
           * (
               SELECT dungeon.level
               FROM dungeons AS dungeon
               WHERE dungeon.id = encounters.dungeon_id
             )
-          * CASE
-              WHEN json_valid(TRIM(COALESCE(
-                (SELECT value FROM settings WHERE key = 'gold_factor'),
-                ''
-              ))) = 1
-              AND json_type(TRIM((
-                SELECT value FROM settings WHERE key = 'gold_factor'
-              ))) IN ('integer', 'real')
-              AND json_extract(TRIM((
-                SELECT value FROM settings WHERE key = 'gold_factor'
-              )), '$') >= 0
-              THEN json_extract(TRIM((
+          * 0.01
+        ) BETWEEN 0 AND 9007199254740991
+          THEN CAST(ROUND(
+            encounters.max_hp
+            * (
+                SELECT dungeon.level
+                FROM dungeons AS dungeon
+                WHERE dungeon.id = encounters.dungeon_id
+              )
+            * 0.01
+          ) AS INTEGER)
+        ELSE 0
+      END
+      WHERE reward_model_version = 'hybrid-v1';
+    `,
+  },
+  {
+    id: '016_safe_encounter_reward_gold_pool',
+    sql: `
+      UPDATE encounters
+      SET reward_gold_pool = CASE
+        WHEN (
+          SELECT SUM(award.total_gold)
+          FROM encounter_reward_awards AS award
+          WHERE award.encounter_id = encounters.id
+        ) BETWEEN 0 AND 9007199254740991
+          THEN (
+            SELECT SUM(award.total_gold)
+            FROM encounter_reward_awards AS award
+            WHERE award.encounter_id = encounters.id
+          )
+        WHEN json_valid(TRIM(COALESCE(
+          (SELECT value FROM settings WHERE key = 'gold_factor'),
+          ''
+        ))) = 1
+          AND json_type(TRIM((
+            SELECT value FROM settings WHERE key = 'gold_factor'
+          ))) IN ('integer', 'real')
+          AND json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'gold_factor'
+          )), '$') >= 0
+          AND json_extract(TRIM((
+            SELECT value FROM settings WHERE key = 'gold_factor'
+          )), '$') <= 1.7976931348623157e308
+          AND ROUND(
+            encounters.max_hp
+            * (
+                SELECT dungeon.level
+                FROM dungeons AS dungeon
+                WHERE dungeon.id = encounters.dungeon_id
+              )
+            * json_extract(TRIM((
                 SELECT value FROM settings WHERE key = 'gold_factor'
               )), '$')
-              ELSE 0.01
-            END
-        ) AS INTEGER)
-      )
-      WHERE reward_model_version = 'hybrid-v1';
+          ) BETWEEN 0 AND 9007199254740991
+          THEN CAST(ROUND(
+            encounters.max_hp
+            * (
+                SELECT dungeon.level
+                FROM dungeons AS dungeon
+                WHERE dungeon.id = encounters.dungeon_id
+              )
+            * json_extract(TRIM((
+                SELECT value FROM settings WHERE key = 'gold_factor'
+              )), '$')
+          ) AS INTEGER)
+        WHEN ROUND(
+          encounters.max_hp
+          * (
+              SELECT dungeon.level
+              FROM dungeons AS dungeon
+              WHERE dungeon.id = encounters.dungeon_id
+            )
+          * 0.01
+        ) BETWEEN 0 AND 9007199254740991
+          THEN CAST(ROUND(
+            encounters.max_hp
+            * (
+                SELECT dungeon.level
+                FROM dungeons AS dungeon
+                WHERE dungeon.id = encounters.dungeon_id
+              )
+            * 0.01
+          ) AS INTEGER)
+        ELSE 0
+      END
+      WHERE reward_model_version = 'hybrid-v1'
+        AND (
+          reward_gold_pool IS NULL
+          OR typeof(reward_gold_pool) <> 'integer'
+          OR reward_gold_pool < 0
+          OR reward_gold_pool > 9007199254740991
+        );
+
+      CREATE TRIGGER encounters_reward_gold_pool_safe_insert
+      BEFORE INSERT ON encounters
+      WHEN NEW.reward_gold_pool IS NOT NULL
+        AND (
+          typeof(NEW.reward_gold_pool) <> 'integer'
+          OR NEW.reward_gold_pool < 0
+          OR NEW.reward_gold_pool > 9007199254740991
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'reward_gold_pool must be a non-negative safe integer');
+      END;
+
+      CREATE TRIGGER encounters_reward_gold_pool_safe_update
+      BEFORE UPDATE OF reward_gold_pool ON encounters
+      WHEN NEW.reward_gold_pool IS NOT NULL
+        AND (
+          typeof(NEW.reward_gold_pool) <> 'integer'
+          OR NEW.reward_gold_pool < 0
+          OR NEW.reward_gold_pool > 9007199254740991
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'reward_gold_pool must be a non-negative safe integer');
+      END;
     `,
   },
 ];

@@ -6,7 +6,7 @@ import { officeDayKey, nextOfficeMidnight } from '../src/domain/office-time';
 import { activatePotion } from '../src/domain/potions';
 import { createPlayer, getPlayerById } from '../src/domain/players';
 import { buildPlayerHubState } from '../src/domain/playerhub';
-import { seedSettings } from '../src/domain/settings';
+import { seedSettings, setSetting } from '../src/domain/settings';
 
 const timeZone = 'America/New_York';
 const now = Date.parse('2026-07-28T16:00:00Z');
@@ -165,6 +165,57 @@ describe('player hub state', () => {
     expect(hub.effects).toEqual([]);
     expect(hub.today.fightRank).toBeNull();
     expect(hub.currentFight.leaders).toEqual([]);
+  });
+
+  it('keeps owned inventory visible but unavailable when current tuning is invalid', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Closed Apothecary', class_key: 'wizard', gender: 'F' },
+      now - 20_000,
+    );
+    applyGoldMutation(db, {
+      playerId: player.id,
+      amount: 500_000,
+      reason: 'opening_balance',
+      sourceTable: 'test',
+      sourceId: 'closed-apothecary-opening',
+      now: now - 100_000,
+    });
+    expect(purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      quantity: 2,
+      expectedUnitPrice: 100_000,
+      requestId: 'closed-apothecary-purchase',
+      now: now - 60_000,
+      timeZone,
+    })).toMatchObject({ ok: true, inventory: 2 });
+    expect(activatePotion(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      requestId: 'closed-apothecary-activation',
+      now,
+      timeZone,
+    })).toMatchObject({ ok: true, inventoryRemaining: 1 });
+    setSetting(db, 'potion_damage_t1_base_hit_pct', 'not-a-number');
+
+    const hub = buildPlayerHubState(db, getPlayerById(db, player.id)!, now, timeZone);
+
+    expect(hub.inventory).toEqual([
+      expect.objectContaining({
+        sku: 'potion_gold_t1',
+        name: 'Beginner Gold Potion',
+        quantity: 1,
+        available: false,
+        durationMs: null,
+        effectCopy: 'Potion tuning is temporarily unavailable.',
+        usesRemaining: null,
+      }),
+    ]);
+    expect(hub.effects.find((effect) => effect.kind === 'gold')).toMatchObject({
+      description: '50g per 1,000 effective tokens',
+      state: 'armed',
+    });
   });
 
   it('keeps an active potion effect after its consumed inventory stack reaches zero', () => {

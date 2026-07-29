@@ -36,12 +36,12 @@
       <dl>
         <dt>Owned</dt><dd id="hub-item-detail-owned"><%= item?.quantity ?? 0 %></dd>
         <dt>Effect</dt><dd id="hub-item-detail-effect"><%= item?.effectCopy ?? '' %></dd>
-        <dt>Duration</dt><dd id="hub-item-detail-duration"><%= item ? durationLabel(item.durationMs) : '' %></dd>
-        <dt>Doses today</dt><dd id="hub-item-detail-doses"><%= item ? `${item.usesRemaining} remaining` : '' %></dd>
+        <dt>Duration</dt><dd id="hub-item-detail-duration"><%= item ? (item.available ? durationLabel(item.durationMs) : 'Unavailable until tuning is repaired') : '' %></dd>
+        <dt>Doses today</dt><dd id="hub-item-detail-doses"><%= item ? (item.available ? `${item.usesRemaining} remaining` : 'Unavailable until tuning is repaired') : '' %></dd>
         <dt>Daily reset</dt><dd id="hub-item-detail-reset"><%= item ? new Date(item.nextResetAt).toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' }) : '' %></dd>
       </dl>
       <div id="hub-item-active-progress" class="hub-item-active-progress" hidden></div>
-      <button id="hub-potion-drink" type="button" class="btn btn-gold" <%= item ? '' : 'disabled' %>>Drink Potion</button>
+      <button id="hub-potion-drink" type="button" class="btn btn-gold" <%= item?.available ? '' : 'disabled' %>><%= item && !item.available ? 'Potion Unavailable' : 'Drink Potion' %></button>
     </div>
   </aside>
 </div>
