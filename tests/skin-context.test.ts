@@ -79,7 +79,14 @@ describe('configured skin asset context', () => {
     );
     const expectedUrl = `/sprite/skin/${player.id}/a/${hash}.png`;
 
-    expect(buildShopViewModel(db, player.id, slotmapsDir, spritesDir)?.avatarA).toBe(expectedUrl);
+    expect(buildShopViewModel(
+      db,
+      player.id,
+      slotmapsDir,
+      spritesDir,
+      1_000,
+      'America/New_York',
+    )?.avatarA).toBe(expectedUrl);
     expect(buildTvState(db, 1_000, assets).players[0].avatarUrl).toBe(expectedUrl);
     for (const board of buildLeaderboards(db, 1_000, leaderboardCfg, { assets })) {
       expect(board.entries[0].avatarUrl).toBe(expectedUrl);

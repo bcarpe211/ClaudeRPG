@@ -79,4 +79,25 @@ describe('Gilded Mimic marketplace CSS', () => {
   it('layers the closed stall inside the Gilded Mimic marketplace shell', () => {
     expect(marketplace).toMatch(/\.bazaar-open \.bazaar-closed\{[^}]*position:relative[^}]*z-index:1/);
   });
+
+  it('keeps potion stock in a bounded two-column grid that collapses before the moss walls', () => {
+    const grid = declarations('.bazaar-product-grid');
+    expect(grid).toContain('grid-template-columns:repeat(2,minmax(0,1fr))');
+    expect(grid).toContain('max-width:');
+    expect(grid).toContain('min-width:0');
+    expect(marketplace).toMatch(
+      /@media \(max-width:760px\)\{[\s\S]*?\.bazaar-product-grid\{[^}]*grid-template-columns:1fr/,
+    );
+  });
+
+  it('keeps potion art pixelated and scopes the Gold recolor to its own card', () => {
+    expect(declarations('.bazaar-potion-icon')).toContain('image-rendering:pixelated');
+    expect(declarations('.potion-gold .bazaar-potion-icon')).toContain('filter:');
+    expect(declarations('.potion-damage .bazaar-potion-icon')).not.toContain('filter:');
+  });
+
+  it('gives sold-out cards a visible disabled state without hiding their stock', () => {
+    expect(declarations('.bazaar-product.is-sold-out')).toContain('opacity:');
+    expect(declarations('.bazaar-product.is-sold-out button')).toContain('cursor:not-allowed');
+  });
 });

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
-type Listener = (event: FakeSubmitEvent) => void;
+type Listener = (event: FakeSubmitEvent | { type: string }) => void;
 
 class FakeSubmitEvent {
   defaultPrevented = false;
@@ -31,6 +31,10 @@ class FakeClassList {
     for (const name of names) this.values.add(name);
   }
 
+  remove(...names: string[]): void {
+    for (const name of names) this.values.delete(name);
+  }
+
   contains(name: string): boolean {
     return this.values.has(name);
   }
@@ -45,6 +49,7 @@ class FakeElement {
   textContent = '';
   src = '';
   alt = '';
+  readonly listeners = new Map<string, Listener[]>();
 
   appendChild(child: FakeElement): FakeElement {
     this.children.push(child);
@@ -58,6 +63,14 @@ class FakeElement {
   getAttribute(name: string): string | null {
     return this.attributes.get(name) ?? null;
   }
+
+  addEventListener(type: string, listener: Listener): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  dispatch(type: string): void {
+    for (const listener of this.listeners.get(type) ?? []) listener({ type });
+  }
 }
 
 class FakeButton extends FakeElement {
@@ -70,7 +83,6 @@ class FakeButton extends FakeElement {
 
 class FakeHTMLFormElement extends FakeElement {
   readonly button = new FakeButton();
-  readonly listeners = new Map<string, Listener[]>();
   nativeSubmitCount = 0;
   shadowSubmitCount = 0;
 
@@ -80,10 +92,6 @@ class FakeHTMLFormElement extends FakeElement {
       value: () => { this.shadowSubmitCount += 1; },
       configurable: true,
     });
-  }
-
-  addEventListener(type: string, listener: Listener): void {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
   querySelector(selector: string): FakeButton | null {
@@ -101,8 +109,26 @@ class FakeHTMLFormElement extends FakeElement {
   }
 }
 
+class FakeInput extends FakeElement {
+  value = '1';
+}
+
+class FakeConsumableOffer extends FakeElement {
+  readonly input = new FakeInput();
+  readonly button = new FakeButton();
+  readonly affordability = new FakeElement();
+
+  querySelector(selector: string): FakeElement | null {
+    if (selector === 'input[name="quantity"]') return this.input;
+    if (selector === 'button[type="submit"]') return this.button;
+    if (selector === '[data-potion-affordability]') return this.affordability;
+    return null;
+  }
+}
+
 interface ShopHarness {
   form: FakeHTMLFormElement;
+  offer: FakeConsumableOffer;
   body: FakeElement;
   timers: Array<{ callback: () => void; delay: number }>;
   replacedUrls: string[];
@@ -115,6 +141,10 @@ function createShopHarness(options: {
   locationHref?: string;
 } = {}): ShopHarness {
   const form = new FakeHTMLFormElement();
+  const offer = new FakeConsumableOffer();
+  offer.setAttribute('data-unit-price', '100000');
+  offer.setAttribute('data-player-gold', '250000');
+  offer.setAttribute('data-stock-remaining', '3');
   const body = new FakeElement();
   const timers: Array<{ callback: () => void; delay: number }> = [];
   const replacedUrls: string[] = [];
@@ -126,6 +156,13 @@ function createShopHarness(options: {
       }
       if (selector !== 'form[data-purchase-effect]' || options.enhanced === false) return null;
       return form;
+    },
+    querySelectorAll(selector: string): FakeElement[] {
+      if (selector === '[data-consumable-offer]') return [offer];
+      if (selector === 'form[data-purchase-effect]') {
+        return options.enhanced === false ? [] : [form];
+      }
+      return [];
     },
     createElement(): FakeElement {
       return new FakeElement();
@@ -157,7 +194,7 @@ function createShopHarness(options: {
   context.window = context;
   context.globalThis = context;
   vm.runInNewContext(readFileSync('src/web/public/shop.js', 'utf8'), context);
-  return { form, body, timers, replacedUrls };
+  return { form, offer, body, timers, replacedUrls };
 }
 
 function burstImages(harness: ShopHarness): FakeElement[] {
@@ -165,6 +202,27 @@ function burstImages(harness: ShopHarness): FakeElement[] {
 }
 
 describe('Bazaar purchase celebration', () => {
+  it('updates potion quantity totals locally and disables only unaffordable selections', () => {
+    const harness = createShopHarness({ enhanced: false });
+
+    expect(harness.offer.button.textContent).toBe('Buy 1 · 100,000g');
+    expect(harness.offer.button.disabled).toBe(false);
+    harness.offer.input.value = '3';
+    harness.offer.input.dispatch('input');
+
+    expect(harness.offer.button.textContent).toBe('Buy 3 · 300,000g');
+    expect(harness.offer.button.disabled).toBe(true);
+    expect(harness.offer.affordability.textContent).toBe('Need 50,000g more for 3.');
+    expect(harness.offer.affordability.classList.contains('is-ready')).toBe(false);
+
+    harness.offer.input.value = '2';
+    harness.offer.input.dispatch('input');
+    expect(harness.offer.button.textContent).toBe('Buy 2 · 200,000g');
+    expect(harness.offer.button.disabled).toBe(false);
+    expect(harness.offer.affordability.textContent).toBe('Your purse is ready for 2.');
+    expect(harness.offer.affordability.classList.contains('is-ready')).toBe(true);
+  });
+
   it('consumes only the one-time result query while preserving token, other query, and hash', () => {
     const harness = createShopHarness({
       enhanced: false,

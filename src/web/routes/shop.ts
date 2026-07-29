@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import type { Express } from 'express';
 import { z } from 'zod';
 import type { AppDeps } from '../app';
@@ -9,6 +10,7 @@ import { getClass, creatureSpriteFile, type Gender } from '../../domain/classes'
 import { getPlayerById, getPlayerByToken } from '../../domain/players';
 import { purchase } from '../../domain/shop';
 import { buildShopViewModel } from '../../domain/shopview';
+import { purchaseConsumable } from '../../domain/inventory';
 import {
   CLOTHING, spriteFileIndex, spriteId,
 } from '../../domain/cosmetics';
@@ -25,11 +27,30 @@ const ShopPurchaseInput = z.object({
     .refine(Number.isSafeInteger),
 });
 
+const ConsumablePurchaseInput = z.object({
+  token: z.string().min(1),
+  sku: z.enum(['potion_gold_t1', 'potion_damage_t1']),
+  quantity: z.coerce.number().int().min(1).max(3),
+  expected_unit_price: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  request_id: z.string().uuid(),
+});
+
 const PURCHASE_RESULTS = new Set([
   'success', 'insufficient_gold', 'price_changed', 'stale', 'out_of_sequence', 'invalid',
+  'potion_success', 'potion_insufficient_gold', 'potion_price_changed', 'potion_sold_out',
 ]);
 
-type PurchaseResultCode = 'success' | 'insufficient_gold' | 'price_changed' | 'stale' | 'out_of_sequence' | 'invalid';
+type PurchaseResultCode =
+  | 'success'
+  | 'insufficient_gold'
+  | 'price_changed'
+  | 'stale'
+  | 'out_of_sequence'
+  | 'invalid'
+  | 'potion_success'
+  | 'potion_insufficient_gold'
+  | 'potion_price_changed'
+  | 'potion_sold_out';
 
 function shopLocation(token: string, result: PurchaseResultCode): string {
   const query = new URLSearchParams({ token, result });
@@ -118,8 +139,18 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
     const player = token ? getPlayerByToken(db, token) : undefined;
     const error = token && !player ? 'No character found for that token.' : undefined;
     const shop = player
-      ? buildShopViewModel(db, player.id, slotmapsDir, config.spritesDir)
+      ? buildShopViewModel(
+        db,
+        player.id,
+        slotmapsDir,
+        config.spritesDir,
+        Date.now(),
+        config.officeTimeZone,
+      )
       : null;
+    const consumableRequestIds = shop
+      ? Object.fromEntries(shop.consumables.map((offer) => [offer.sku, randomUUID()]))
+      : {};
     res.status(error ? 404 : 200).send(await renderPage('shop', {
       title: 'The Bazaar',
       frame: 'full',
@@ -128,6 +159,7 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
       error,
       purchaseResult: result,
       mimicUrl: `/sprites/creatures_24x24/${creatureSpriteFile(198)}`,
+      consumableRequestIds,
     }));
   }));
 
@@ -153,6 +185,39 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
           ? 'stale'
           : result.reason === 'out_of_sequence'
             ? 'out_of_sequence'
+            : 'invalid';
+    res.redirect(shopLocation(player.auth_token, resultCode));
+  });
+
+  app.post('/shop/consumables/purchase', (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    const parsed = ConsumablePurchaseInput.safeParse(req.body);
+    if (!parsed.success) {
+      res.redirect('/shop?result=invalid');
+      return;
+    }
+    const player = getPlayerByToken(db, parsed.data.token);
+    if (!player) {
+      res.redirect('/shop?result=invalid');
+      return;
+    }
+    const result = purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: parsed.data.sku,
+      quantity: parsed.data.quantity,
+      expectedUnitPrice: parsed.data.expected_unit_price,
+      requestId: parsed.data.request_id,
+      now: Date.now(),
+      timeZone: config.officeTimeZone,
+    });
+    const resultCode: PurchaseResultCode = result.ok
+      ? 'potion_success'
+      : result.reason === 'price_changed'
+        ? 'potion_price_changed'
+        : result.reason === 'sold_out'
+          ? 'potion_sold_out'
+          : result.reason === 'insufficient_gold'
+            ? 'potion_insufficient_gold'
             : 'invalid';
     res.redirect(shopLocation(player.auth_token, resultCode));
   });

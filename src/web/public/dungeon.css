@@ -432,6 +432,7 @@ button:disabled:hover{transform:none;box-shadow:none}
 .bazaar-tier{display:inline-flex;padding:5px 8px;border:1px solid var(--gold-dim);border-radius:4px;
   color:var(--gold2);font-size:10px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}
 .bazaar-product h2{margin:0 0 8px;font-size:clamp(21px,3vw,29px);line-height:1.2}
+.bazaar-product h3{margin:0;font-size:clamp(18px,2.2vw,23px);line-height:1.2}
 .bazaar-product-copy,.bazaar-mastery>p{max-width:620px;margin:0;color:#c6b6d6;font-size:14px;line-height:1.6}
 .bazaar-open .ok,.bazaar-open .err,.bazaar-affordability{margin:14px 0 0;padding:8px 10px;
   border:1px solid #554061;border-radius:6px;background:#120c1b;color:var(--muted);font-size:12px}
@@ -446,6 +447,42 @@ button:disabled:hover{transform:none;box-shadow:none}
 .bazaar-mastered .bazaar-product{border-color:#4b6654}.bazaar-mastered .bazaar-player{min-height:206px}
 .bazaar-login{position:relative;z-index:1;max-width:580px;margin:0 auto;padding:42px 24px;text-align:center}
 .bazaar-login p:not(.dye-kicker){color:var(--muted)}.bazaar-login .btn{margin-top:9px}
+
+.bazaar-consumables{position:relative;z-index:1;min-width:0;padding:8px clamp(22px,4vw,44px) 26px;
+  box-sizing:border-box}
+.bazaar-stock-heading{display:flex;align-items:end;justify-content:space-between;gap:20px;max-width:1100px;
+  margin:0 auto 14px;padding-top:16px;border-top:1px solid #584166}
+.bazaar-stock-heading h2{margin:1px 0 0;font-size:clamp(22px,3vw,30px)}
+.bazaar-stock-heading>p{max-width:360px;margin:0;color:var(--muted);font-size:12px;line-height:1.45;text-align:right}
+.bazaar-product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;width:100%;
+  max-width:1100px;min-width:0;margin:0 auto}
+.bazaar-product-grid .bazaar-product{padding:18px;overflow:hidden}
+.bazaar-potion-head{display:grid;grid-template-columns:58px minmax(0,1fr);gap:13px;align-items:center}
+.bazaar-potion-icon{width:58px;height:58px;image-rendering:pixelated;
+  filter:drop-shadow(0 7px 5px #000b) drop-shadow(0 0 9px #ff39392a)}
+.potion-gold .bazaar-potion-icon{filter:sepia(1) saturate(2.4) hue-rotate(350deg) brightness(1.22)
+  drop-shadow(0 7px 5px #000b) drop-shadow(0 0 10px #e8c96a55)}
+.bazaar-potion-head .bazaar-product-meta{margin:0 0 5px}
+.bazaar-potion-effect{margin:14px 0 3px;color:var(--head);font-size:14px;font-weight:800}
+.bazaar-potion-duration,.bazaar-restock{margin:0;color:var(--muted);font-size:11px}
+.bazaar-restock{margin-top:8px;color:#bca8cf}
+.bazaar-potion-stock{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0 0}
+.bazaar-potion-stock>div{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:8px 10px;
+  border:1px solid #4e3a5b;border-radius:6px;background:#140d1e}
+.bazaar-potion-stock dt{color:var(--muted);font-size:9px;font-weight:850;letter-spacing:.09em;text-transform:uppercase}
+.bazaar-potion-stock dd{margin:0;color:var(--gold2);font-variant-numeric:tabular-nums}
+.bazaar-potion-controls{display:grid;grid-template-columns:minmax(88px,.6fr) minmax(150px,1.4fr);gap:10px;
+  align-items:end;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.bazaar-potion-controls label{display:grid;gap:4px;color:var(--muted);font-size:9px;font-weight:850;
+  letter-spacing:.09em;text-transform:uppercase}
+.bazaar-potion-controls input{width:100%;min-width:0;margin:0;padding:9px 10px;border:1px solid #6d527b;
+  border-radius:6px;background:#100a18;color:var(--head);font:800 14px/1 ui-monospace,monospace;
+  box-sizing:border-box}
+.bazaar-potion-controls button{width:100%;min-width:0;margin:0;justify-content:center;white-space:nowrap}
+.bazaar-product-grid .bazaar-affordability{margin-top:9px}
+.bazaar-potion-result{position:relative;z-index:2;max-width:1100px;margin:18px auto 4px!important}
+.bazaar-product.is-sold-out{opacity:.76;border-color:#554760}
+.bazaar-product.is-sold-out button{cursor:not-allowed}
 
 .adventurer-ledger{position:sticky;z-index:5;bottom:12px;display:grid;
   grid-template-columns:minmax(0,1fr) auto;align-items:stretch;gap:10px;margin:0 20px 20px;padding:10px;
@@ -500,6 +537,10 @@ button:disabled:hover{transform:none;box-shadow:none}
   .bazaar-floor{grid-template-columns:1fr;gap:10px;padding:22px 18px 18px}
   .bazaar-player{min-height:180px;padding-top:24px}
   .bazaar-player canvas,.bazaar-player>img{width:164px;height:164px}
+  .bazaar-consumables{padding-inline:18px}
+  .bazaar-stock-heading{align-items:start;flex-direction:column;gap:5px}
+  .bazaar-stock-heading>p{text-align:left}
+  .bazaar-product-grid{grid-template-columns:1fr}
   .adventurer-ledger{grid-template-columns:1fr;margin:0 12px 12px;bottom:8px}
   .ledger-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .ledger-stat{min-height:48px;border-bottom:1px solid var(--line)}
@@ -512,6 +553,8 @@ button:disabled:hover{transform:none;box-shadow:none}
   .gilded-mimic-title h1{font-size:27px}.gilded-mimic-title p:last-child{display:none}
   .mimic-stock-sword,.mimic-stock-shield{display:none}
   .bazaar-floor{padding-inline:13px}.bazaar-product{padding:16px}
+  .bazaar-consumables{padding-inline:13px}
+  .bazaar-potion-controls{grid-template-columns:1fr}
   .bazaar-product-meta{align-items:flex-start}.bazaar-buy-row{align-items:stretch;flex-direction:column}
   .bazaar-buy-row form,.bazaar-buy-row button{width:100%}
   .adventurer-ledger{margin-inline:8px;padding:8px}.ledger-stat{padding:5px 8px}

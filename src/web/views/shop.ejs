@@ -23,79 +23,148 @@
       <p>The ledger only opens for a character whose dyes it can keep safe.</p>
       <a class="btn btn-gold" href="/character">Open character login</a>
     </section>
-  <% } else if (shop.nextOffer) { const offer = shop.nextOffer; %>
-    <section class="bazaar-floor" aria-label="Current marketplace offer">
-      <div class="bazaar-player">
-        <span class="bazaar-player-label"><%= player.name %> · Tier <%= shop.currentTier %></span>
-        <canvas id="shop-preview" width="24" height="24" class="px dye-preview"
-          role="img" aria-label="Animated preview of <%= player.name %>’s next Wardrobe tier"></canvas>
-      </div>
-
-      <article class="bazaar-product">
-        <div class="bazaar-product-meta">
-          <span class="bazaar-product-category"><img class="px" src="/static/landing/gem_purple.png" alt="">Permanent wardrobe</span>
-          <span class="bazaar-tier">Tier <%= offer.tier %></span>
-        </div>
-        <h2>Permanent Wardrobe Upgrade — Tier <%= offer.tier %></h2>
-        <p class="bazaar-product-copy"><%= offer.description %></p>
-
-        <% if (purchaseResult === 'success') { %><p class="ok">The new dyes are ready in your Wardrobe.</p><% } %>
-        <% if (purchaseResult === 'insufficient_gold') { %><p class="err">You need <%= offer.missingGold.toLocaleString() %> more gold.</p><% } %>
-        <% if (purchaseResult === 'price_changed') { %><p class="err">This offer was repriced. Review the current offer; no gold was spent.</p><% } %>
-        <% if (purchaseResult === 'stale') { %><p class="err">Your Wardrobe already advanced. This is your current offer.</p><% } %>
-        <% if (purchaseResult === 'out_of_sequence' || purchaseResult === 'invalid') { %><p class="err">That ledger entry is not available. No gold was spent.</p><% } %>
-        <% if (!purchaseResult && offer.missingGold > 0) { %><p class="bazaar-affordability">Gather <%= offer.missingGold.toLocaleString() %>g more to unlock this ledger page.</p><% } %>
-        <% if (!purchaseResult && offer.missingGold === 0) { %><p class="bazaar-affordability is-ready">Your purse is ready for this permanent upgrade.</p><% } %>
-
-        <div class="bazaar-buy-row">
-          <p class="bazaar-price"><span>Permanent unlock</span><strong><%= offer.price.toLocaleString() %>g</strong></p>
-          <form method="post" action="/shop/cosmetics/purchase"<%= offer.missingGold === 0 ? ' data-purchase-effect' : '' %>>
-            <input type="hidden" name="token" value="<%= player.auth_token %>">
-            <input type="hidden" name="sku" value="<%= offer.sku %>">
-            <input type="hidden" name="expected_price" value="<%= offer.price %>">
-            <button type="submit" class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %></button>
-          </form>
-        </div>
-      </article>
-    </section>
-  <% } else if (shop.mastered && purchaseResult === 'success') { %>
-    <section class="bazaar-floor bazaar-mastered" aria-label="Wardrobe mastery">
-      <div class="bazaar-player bazaar-player-mastered">
-        <span class="bazaar-player-label"><%= player.name %> · Tier <%= shop.currentTier %></span>
-        <img class="px" src="<%= shop.avatarA %>" alt="<%= player.name %> in their completed Wardrobe">
-      </div>
-      <article class="bazaar-product bazaar-mastery">
-        <div class="bazaar-product-meta">
-          <span class="bazaar-product-category"><img class="px" src="/static/landing/gem_purple.png" alt="">Permanent wardrobe</span>
-          <span class="dye-mastery">Mastered</span>
-        </div>
-        <h2>Dye Mastery Complete</h2>
-        <p>Every applicable cosmetic channel is unlocked. The Gilded Mimic has no more dye-ledger pages to sell you.</p>
-      </article>
-    </section>
   <% } else { %>
-    <section class="bazaar-closed" aria-label="Closed marketplace">
-      <div class="bazaar-scene">
-        <div class="bazaar-sign">
-          <span>THE BAZAAR</span>
-          <b>CLOSED</b>
+    <% if (shop.nextOffer) { const offer = shop.nextOffer; %>
+      <section class="bazaar-floor" aria-label="Permanent marketplace offer">
+        <div class="bazaar-player">
+          <span class="bazaar-player-label"><%= player.name %> · Tier <%= shop.currentTier %></span>
+          <canvas id="shop-preview" width="24" height="24" class="px dye-preview"
+            role="img" aria-label="Animated preview of <%= player.name %>’s next Wardrobe tier"></canvas>
         </div>
-        <span class="bazaar-spark bazaar-spark-a" aria-hidden="true">✦</span>
-        <span class="bazaar-spark bazaar-spark-b" aria-hidden="true">·</span>
-        <img class="px bazaar-mimic" src="<%= mimicUrl %>" width="168" height="168" alt="a suspicious treasure chest mimic guarding the empty stall">
-        <span class="bazaar-warning">Definitely not merchandise</span>
-      </div>
-      <div class="bazaar-copy">
-        <p class="dye-kicker">A note nailed to the stall</p>
-        <h1>The Bazaar is Closed</h1>
-        <p class="bazaar-lead">The merchant has packed up for now. Come back soon — new wares are being dragged up from the dungeon.</p>
-        <div class="bazaar-note">
-          <span aria-hidden="true">⚠</span>
-          <p>Please do not feed, pet, or attempt to purchase the treasure chest. It has already eaten one inventory ledger.</p>
+
+        <article class="bazaar-product">
+          <div class="bazaar-product-meta">
+            <span class="bazaar-product-category"><img class="px" src="/static/landing/gem_purple.png" alt="">Permanent wardrobe</span>
+            <span class="bazaar-tier">Tier <%= offer.tier %></span>
+          </div>
+          <h2>Permanent Wardrobe Upgrade — Tier <%= offer.tier %></h2>
+          <p class="bazaar-product-copy"><%= offer.description %></p>
+
+          <% if (purchaseResult === 'success') { %><p class="ok">The new dyes are ready in your Wardrobe.</p><% } %>
+          <% if (purchaseResult === 'insufficient_gold') { %><p class="err">You need <%= offer.missingGold.toLocaleString() %> more gold.</p><% } %>
+          <% if (purchaseResult === 'price_changed') { %><p class="err">This offer was repriced. Review the current offer; no gold was spent.</p><% } %>
+          <% if (purchaseResult === 'stale') { %><p class="err">Your Wardrobe already advanced. This is your current offer.</p><% } %>
+          <% if (purchaseResult === 'out_of_sequence' || purchaseResult === 'invalid') { %><p class="err">That ledger entry is not available. No gold was spent.</p><% } %>
+          <% if (!purchaseResult && offer.missingGold > 0) { %><p class="bazaar-affordability">Gather <%= offer.missingGold.toLocaleString() %>g more to unlock this ledger page.</p><% } %>
+          <% if (!purchaseResult && offer.missingGold === 0) { %><p class="bazaar-affordability is-ready">Your purse is ready for this permanent upgrade.</p><% } %>
+
+          <div class="bazaar-buy-row">
+            <p class="bazaar-price"><span>Permanent unlock</span><strong><%= offer.price.toLocaleString() %>g</strong></p>
+            <form method="post" action="/shop/cosmetics/purchase"<%= offer.missingGold === 0 ? ' data-purchase-effect' : '' %>>
+              <input type="hidden" name="token" value="<%= player.auth_token %>">
+              <input type="hidden" name="sku" value="<%= offer.sku %>">
+              <input type="hidden" name="expected_price" value="<%= offer.price %>">
+              <button type="submit" class="btn btn-gold" <%= offer.missingGold > 0 ? 'disabled' : '' %>>Buy Tier <%= offer.tier %></button>
+            </form>
+          </div>
+        </article>
+      </section>
+    <% } else if (shop.mastered && purchaseResult === 'success') { %>
+      <section class="bazaar-floor bazaar-mastered" aria-label="Wardrobe mastery">
+        <div class="bazaar-player bazaar-player-mastered">
+          <span class="bazaar-player-label"><%= player.name %> · Tier <%= shop.currentTier %></span>
+          <img class="px" src="<%= shop.avatarA %>" alt="<%= player.name %> in their completed Wardrobe">
         </div>
-        <p class="bazaar-wardrobe">Your completed Dye Wheel still lives in the <b>Wardrobe</b> on your character page.</p>
-      </div>
-    </section>
+        <article class="bazaar-product bazaar-mastery">
+          <div class="bazaar-product-meta">
+            <span class="bazaar-product-category"><img class="px" src="/static/landing/gem_purple.png" alt="">Permanent wardrobe</span>
+            <span class="dye-mastery">Mastered</span>
+          </div>
+          <h2>Dye Mastery Complete</h2>
+          <p>Every applicable cosmetic channel is unlocked. The Gilded Mimic has no more dye-ledger pages to sell you.</p>
+        </article>
+      </section>
+    <% } %>
+
+    <% if (purchaseResult === 'potion_success') { %><p class="bazaar-potion-result ok">Potion stock added to your inventory.</p><% } %>
+    <% if (purchaseResult === 'potion_price_changed') { %><p class="bazaar-potion-result err">This potion was repriced. Review the current stock; no gold was spent.</p><% } %>
+    <% if (purchaseResult === 'potion_sold_out') { %><p class="bazaar-potion-result err">That quantity is no longer in stock. Review the current stock; no gold was spent.</p><% } %>
+    <% if (purchaseResult === 'potion_insufficient_gold') { %><p class="bazaar-potion-result err">Your current balance cannot cover that purchase. No gold was spent.</p><% } %>
+
+    <% if (shop.consumables.length > 0) { %>
+      <section class="bazaar-consumables" aria-labelledby="daily-potions-title">
+        <div class="bazaar-stock-heading">
+          <div>
+            <p class="dye-kicker">Personal daily stock</p>
+            <h2 id="daily-potions-title">Beginner Potions</h2>
+          </div>
+          <p>Inventory keeps until used. Stock returns at local midnight.</p>
+        </div>
+        <div class="bazaar-product-grid">
+          <% for (const offer of shop.consumables) {
+            const soldOut = offer.stockRemaining === 0;
+            const durationHours = offer.durationMs / 3_600_000;
+            const durationLabel = Number.isInteger(durationHours)
+              ? durationHours.toLocaleString()
+              : durationHours.toLocaleString(undefined, { maximumFractionDigits: 2 });
+          %>
+            <article class="bazaar-product <%= offer.iconClass %><%= soldOut ? ' is-sold-out' : '' %>"
+              data-consumable-offer
+              data-unit-price="<%= offer.unitPrice %>"
+              data-player-gold="<%= shop.gold %>"
+              data-stock-remaining="<%= offer.stockRemaining %>">
+              <div class="bazaar-potion-head">
+                <img class="px bazaar-potion-icon" src="/static/landing/potion.png" alt="">
+                <div>
+                  <div class="bazaar-product-meta">
+                    <span class="bazaar-product-category">Daily potion</span>
+                    <span class="bazaar-tier">Beginner</span>
+                  </div>
+                  <h3><%= offer.name %></h3>
+                </div>
+              </div>
+              <p class="bazaar-potion-effect"><%= offer.effectCopy %></p>
+              <p class="bazaar-potion-duration"><%= durationLabel %> active hour<%= durationHours === 1 ? '' : 's' %></p>
+              <dl class="bazaar-potion-stock">
+                <div><dt>Inventory</dt><dd><strong><%= offer.inventory %></strong></dd></div>
+                <div><dt>Stock</dt><dd><strong><%= offer.stockRemaining %></strong></dd></div>
+              </dl>
+              <p class="bazaar-restock">
+                <time datetime="<%= new Date(shop.nextRestockAt).toISOString() %>">Restocks at midnight</time>
+              </p>
+              <form method="post" action="/shop/consumables/purchase"<%= !soldOut && offer.missingGoldForOne === 0 ? ' data-purchase-effect' : '' %>>
+                <input type="hidden" name="token" value="<%= player.auth_token %>">
+                <input type="hidden" name="sku" value="<%= offer.sku %>">
+                <input type="hidden" name="expected_unit_price" value="<%= offer.unitPrice %>">
+                <input type="hidden" name="request_id" value="<%= consumableRequestIds[offer.sku] %>">
+                <div class="bazaar-potion-controls">
+                  <label>Quantity
+                    <input type="number" name="quantity" min="1" max="<%= soldOut ? 1 : offer.maxQuantity %>" value="1" <%= soldOut ? 'disabled' : '' %>>
+                  </label>
+                  <button type="submit" class="btn btn-gold" <%= soldOut || offer.missingGoldForOne > 0 ? 'disabled' : '' %>><%= soldOut ? 'Back at midnight' : `Buy 1 · ${offer.unitPrice.toLocaleString()}g` %></button>
+                </div>
+                <p class="bazaar-affordability<%= !soldOut && offer.missingGoldForOne === 0 ? ' is-ready' : '' %>" data-potion-affordability>
+                  <% if (soldOut) { %>Back at midnight<% } else if (offer.missingGoldForOne > 0) { %>Need <%= offer.missingGoldForOne.toLocaleString() %>g more for 1.<% } else { %>Your purse is ready for 1.<% } %>
+                </p>
+              </form>
+            </article>
+          <% } %>
+        </div>
+      </section>
+    <% } else if (!shop.nextOffer && !(shop.mastered && purchaseResult === 'success')) { %>
+      <section class="bazaar-closed" aria-label="Closed marketplace">
+        <div class="bazaar-scene">
+          <div class="bazaar-sign">
+            <span>THE BAZAAR</span>
+            <b>CLOSED</b>
+          </div>
+          <span class="bazaar-spark bazaar-spark-a" aria-hidden="true">✦</span>
+          <span class="bazaar-spark bazaar-spark-b" aria-hidden="true">·</span>
+          <img class="px bazaar-mimic" src="<%= mimicUrl %>" width="168" height="168" alt="a suspicious treasure chest mimic guarding the empty stall">
+          <span class="bazaar-warning">Definitely not merchandise</span>
+        </div>
+        <div class="bazaar-copy">
+          <p class="dye-kicker">A note nailed to the stall</p>
+          <h1>The Bazaar is Closed</h1>
+          <p class="bazaar-lead">The merchant has packed up for now. Come back soon — new wares are being dragged up from the dungeon.</p>
+          <div class="bazaar-note">
+            <span aria-hidden="true">⚠</span>
+            <p>Please do not feed, pet, or attempt to purchase the treasure chest. It has already eaten one inventory ledger.</p>
+          </div>
+          <p class="bazaar-wardrobe">Your completed Dye Wheel still lives in the <b>Wardrobe</b> on your character page.</p>
+        </div>
+      </section>
+    <% } %>
   <% } %>
 
   <% if (player && shop) { %>
@@ -111,11 +180,11 @@
         </div>
         <div class="ledger-stat">
           <span>Inventory</span>
-          <strong>Coming Soon</strong>
+          <strong>Potions · Gold <%= shop.consumables.find((offer) => offer.potionType === 'gold')?.inventory ?? 0 %> · Damage <%= shop.consumables.find((offer) => offer.potionType === 'damage')?.inventory ?? 0 %></strong>
         </div>
         <div class="ledger-stat ledger-future">
           <span>Future products · Coming Soon</span>
-          <strong>Potions · Loot Boxes · Pets</strong>
+          <strong>Loot Boxes · Pets · Equipment</strong>
         </div>
       </div>
       <a class="btn btn-ghost ledger-return" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Return to Character</a>

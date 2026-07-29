@@ -3,6 +3,7 @@ import request from 'supertest';
 import { loadConfig } from '../src/config';
 import { openDb } from '../src/db/db';
 import { getCosmetics } from '../src/domain/cosmetics';
+import { inventoryQuantity, purchaseConsumable } from '../src/domain/inventory';
 import { getPlayerById, createPlayer } from '../src/domain/players';
 import { purchase } from '../src/domain/shop';
 import { seedSettings } from '../src/domain/settings';
@@ -43,8 +44,35 @@ describe('Bazaar', () => {
     expect(res.headers['cache-control']).toBe('private, no-store');
     expect(res.text).toContain('Tier 1');
     expect(res.text).toContain('1,500,000g');
-    expect(res.text.match(/name="sku"/g)).toHaveLength(1);
+    expect(res.text.match(/name="sku"/g)).toHaveLength(3);
     expect(res.text).not.toContain('2,000,000g');
+  });
+
+  it('renders both daily potion cards with canonical copy, stock, inventory, and unique request IDs', async () => {
+    const { app, player } = ctx(700_000);
+    const res = await request(app).get('/shop').query({ token: player.auth_token });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('private, no-store');
+    expect(res.text).toContain('Beginner Gold Potion');
+    expect(res.text).toContain('Beginner Damage Potion');
+    expect(res.text).toContain('50g per 1,000 effective tokens');
+    expect(res.text).toContain('+25% personal base hit');
+    expect(res.text.match(/2 active hours/g)).toHaveLength(2);
+    expect(res.text.match(/action="\/shop\/consumables\/purchase"/g)).toHaveLength(2);
+    expect(res.text).toContain('name="quantity" min="1" max="3" value="1"');
+    expect(res.text.match(/Restocks at midnight/g)).toHaveLength(2);
+    expect(res.text).toMatch(/Inventory<\/dt><dd><strong>0<\/strong>/);
+    expect(res.text).toMatch(/Stock<\/dt><dd><strong>3<\/strong>/);
+    expect(res.text).toContain('Buy 1 · 100,000g');
+    expect(res.text).toContain('Buy 1 · 150,000g');
+
+    const requestIds = [...res.text.matchAll(/name="request_id" value="([^"]+)"/g)]
+      .map((match) => match[1]);
+    expect(requestIds).toHaveLength(2);
+    expect(new Set(requestIds).size).toBe(2);
+    expect(requestIds.every((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)))
+      .toBe(true);
   });
 
   it('enhances only an enabled next-offer purchase form', async () => {
@@ -143,9 +171,12 @@ describe('Bazaar', () => {
           demoSlots: [],
         },
         mastered: false,
+        consumables: [],
+        nextRestockAt: Date.parse('2026-07-30T04:00:00.000Z'),
       },
       purchaseResult: undefined,
       mimicUrl: '/mimic.png',
+      consumableRequestIds: {},
     });
 
     expect(html).toContain('\\u003c/script>\\u003cscript>unsafe()\\u003c/script>');
@@ -252,13 +283,13 @@ describe('Bazaar', () => {
     expect(res.text).toContain('data-consume-shop-result');
     expect(res.text).toContain('Dye Mastery Complete');
     expect(res.text).not.toContain('The Bazaar is Closed');
-    expect(res.text).not.toContain('name="sku"');
+    expect(res.text.match(/name="sku"/g)).toHaveLength(2);
     expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
     expect(res.text).toContain('Wardrobe Tier 3');
     expect(res.text).toContain('Mastered');
   });
 
-  it('shows the closed mimic scene on later mastered visits while retaining the ledger', async () => {
+  it('keeps the Bazaar open for potion stock after the Wardrobe is mastered', async () => {
     const { db, app, player } = ctx(7_000_000);
     purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 1);
     purchase(db, player.id, 'cosmetic_wheel_t2', 2_000_000, 2);
@@ -266,16 +297,172 @@ describe('Bazaar', () => {
 
     const res = await request(app).get('/shop').query({ token: player.auth_token });
 
-    expect(res.text).toContain('class="bazaar-closed"');
-    expect(res.text).toContain('The Bazaar is Closed');
-    expect(res.text).toContain('Definitely not merchandise');
+    expect(res.text).not.toContain('class="bazaar-closed"');
+    expect(res.text).not.toContain('The Bazaar is Closed');
+    expect(res.text).toContain('Beginner Gold Potion');
+    expect(res.text).toContain('Beginner Damage Potion');
     expect(res.text).not.toContain('Dye Mastery Complete');
     expect(res.text).not.toContain('data-consume-shop-result');
     expect(res.text).not.toContain('action="/shop/cosmetics/purchase"');
+    expect(res.text.match(/action="\/shop\/consumables\/purchase"/g)).toHaveLength(2);
     expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
     expect(res.text).toContain('Wardrobe Tier 3');
     expect(res.text).toContain('Mastered');
     expect(res.text.match(/Return to Character/g)).toHaveLength(1);
+  });
+
+  it('keeps a sold-out potion visible and disables its buy action until midnight', async () => {
+    const { db, app, player } = ctx(1_000_000);
+    expect(purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      quantity: 3,
+      expectedUnitPrice: 100_000,
+      requestId: '22222222-2222-4222-8222-222222222222',
+      now: Date.now(),
+      timeZone: 'America/New_York',
+    }).ok).toBe(true);
+
+    const res = await request(app).get('/shop').query({ token: player.auth_token });
+    const card = res.text.match(/<article class="bazaar-product potion-gold[^"]*"[\s\S]*?<\/article>/)?.[0] ?? '';
+
+    expect(card).toContain('Beginner Gold Potion');
+    expect(card).toMatch(/Stock<\/dt><dd><strong>0<\/strong>/);
+    expect(card).toContain('Back at midnight');
+    expect(card).toContain('disabled');
+    expect(card).not.toContain('data-purchase-effect');
+  });
+
+  it('buys a selected potion quantity and redirects with an allow-listed success result', async () => {
+    const { db, app, player } = ctx(500_000);
+    const post = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'potion_gold_t1',
+      quantity: '2',
+      expected_unit_price: '100000',
+      request_id: '33333333-3333-4333-8333-333333333333',
+    });
+
+    expect(post.status).toBe(302);
+    expect(post.headers.location).toContain('result=potion_success');
+    expect(getPlayerById(db, player.id)?.gold).toBe(300_000);
+    expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(2);
+    const refreshed = await request(app).get(post.headers.location);
+    expect(refreshed.text).toContain('Potion stock added to your inventory.');
+  });
+
+  it.each(['0', '4', '1.5', 'forged'])('rejects forged potion quantity %j without mutation', async (quantity) => {
+    const { db, app, player } = ctx(500_000);
+    const post = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'potion_gold_t1',
+      quantity,
+      expected_unit_price: '100000',
+      request_id: '44444444-4444-4444-8444-444444444444',
+    });
+
+    expect(post.status).toBe(302);
+    expect(post.headers.location).toBe('/shop?result=invalid');
+    expect(getPlayerById(db, player.id)?.gold).toBe(500_000);
+    expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(0);
+  });
+
+  it('keeps changed potion prices authoritative on the server', async () => {
+    const { db, app, player } = ctx(500_000);
+    db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('110000', 'potion_gold_t1_price');
+
+    const post = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'potion_gold_t1',
+      quantity: '2',
+      expected_unit_price: '100000',
+      request_id: '55555555-5555-4555-8555-555555555555',
+    });
+
+    expect(post.headers.location).toContain('result=potion_price_changed');
+    expect(getPlayerById(db, player.id)?.gold).toBe(500_000);
+    expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(0);
+  });
+
+  it('keeps stock authoritative when a submitted quantity is no longer available', async () => {
+    const { db, app, player } = ctx(1_000_000);
+    expect(purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      quantity: 2,
+      expectedUnitPrice: 100_000,
+      requestId: '66666666-6666-4666-8666-666666666666',
+      now: Date.now(),
+      timeZone: 'America/New_York',
+    }).ok).toBe(true);
+
+    const post = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'potion_gold_t1',
+      quantity: '2',
+      expected_unit_price: '100000',
+      request_id: '77777777-7777-4777-8777-777777777777',
+    });
+
+    expect(post.headers.location).toContain('result=potion_sold_out');
+    expect(getPlayerById(db, player.id)?.gold).toBe(800_000);
+    expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(2);
+  });
+
+  it('keeps the fresh balance authoritative when funds are no longer sufficient', async () => {
+    const { db, app, player } = ctx(100_000);
+    const post = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: player.auth_token,
+      sku: 'potion_damage_t1',
+      quantity: '1',
+      expected_unit_price: '150000',
+      request_id: '88888888-8888-4888-8888-888888888888',
+    });
+
+    expect(post.headers.location).toContain('result=potion_insufficient_gold');
+    expect(getPlayerById(db, player.id)?.gold).toBe(100_000);
+    expect(inventoryQuantity(db, player.id, 'potion_damage_t1')).toBe(0);
+  });
+
+  it('rejects unknown tokens and malformed potion identities without echoing them', async () => {
+    const { app } = ctx(500_000);
+    const unknown = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: 'unknown-token',
+      sku: 'potion_gold_t1',
+      quantity: '1',
+      expected_unit_price: '100000',
+      request_id: '99999999-9999-4999-8999-999999999999',
+    });
+    const forged = await request(app).post('/shop/consumables/purchase').type('form').send({
+      token: 'unknown-token',
+      sku: 'potion_gold_t2',
+      quantity: '1',
+      expected_unit_price: '100000',
+      request_id: 'not-a-uuid',
+    });
+
+    expect(unknown.headers.location).toBe('/shop?result=invalid');
+    expect(forged.headers.location).toBe('/shop?result=invalid');
+    expect(forged.headers.location).not.toContain('potion_gold_t2');
+  });
+
+  it('replays an exact request ID without charging twice', async () => {
+    const { db, app, player } = ctx(500_000);
+    const input = {
+      token: player.auth_token,
+      sku: 'potion_gold_t1',
+      quantity: '1',
+      expected_unit_price: '100000',
+      request_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    };
+
+    const first = await request(app).post('/shop/consumables/purchase').type('form').send(input);
+    const duplicate = await request(app).post('/shop/consumables/purchase').type('form').send(input);
+
+    expect(first.headers.location).toContain('result=potion_success');
+    expect(duplicate.headers.location).toContain('result=potion_success');
+    expect(getPlayerById(db, player.id)?.gold).toBe(400_000);
+    expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(1);
   });
 
   it('keeps retired single-hue picker routes removed', async () => {

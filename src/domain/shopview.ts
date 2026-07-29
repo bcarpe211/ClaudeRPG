@@ -4,7 +4,15 @@ import type { CosmeticChannelDefinition, CosmeticTier } from './cosmetic-entitle
 import { channelsFor } from './cosmetic-entitlements';
 import { getCosmetics, spriteId } from './cosmetics';
 import { getPlayerById } from './players';
+import { inventoryQuantity, remainingDailyStock } from './inventory';
+import { nextOfficeMidnight, officeDayKey } from './office-time';
 import { nextCosmeticSku, skuPrice } from './shop';
+import {
+  consumableProduct,
+  type ConsumableProduct,
+  type PotionType,
+} from './shop-products';
+import { getSetting } from './settings';
 import { cosmeticSkinUrlForPlayer, getEntitledSlotConfig } from './slotcosmetics';
 import { loadSlotmap } from './slots';
 import type { SlotRule } from './spritetint';
@@ -16,6 +24,21 @@ export interface ShopOffer {
   missingGold: number;
   channels: CosmeticChannelDefinition[];
   description: string;
+}
+
+export interface ConsumableOffer {
+  sku: ConsumableProduct['id'];
+  name: string;
+  potionType: PotionType;
+  tier: 1;
+  unitPrice: number;
+  durationMs: number;
+  inventory: number;
+  stockRemaining: number;
+  maxQuantity: number;
+  missingGoldForOne: number;
+  iconClass: ConsumableProduct['iconClass'];
+  effectCopy: string;
 }
 
 export interface ShopViewModel {
@@ -33,6 +56,23 @@ export interface ShopViewModel {
     demoSlots: number[];
   } | null;
   mastered: boolean;
+  consumables: ConsumableOffer[];
+  nextRestockAt: number;
+}
+
+const DEFAULT_DAILY_STOCK = 3;
+
+function configuredDailyStock(db: Database.Database): number {
+  const raw = getSetting(db, 'potion_daily_stock_per_sku');
+  if (raw === undefined) return DEFAULT_DAILY_STOCK;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+      ? value
+      : DEFAULT_DAILY_STOCK;
+  } catch {
+    return DEFAULT_DAILY_STOCK;
+  }
 }
 
 function joinChannelLabels(labels: string[]): string {
@@ -49,8 +89,10 @@ function titleCaseLabel(label: string): string {
 export function buildShopViewModel(
   db: Database.Database,
   playerId: number,
-  slotmapsDir?: string,
-  spritesDir?: string,
+  slotmapsDir: string | undefined,
+  spritesDir: string | undefined,
+  now: number,
+  timeZone: string,
 ): ShopViewModel | null {
   const player = getPlayerById(db, playerId);
   if (!player) return null;
@@ -97,6 +139,35 @@ export function buildShopViewModel(
       .filter((channel) => presentSlots.has(channel.slot))
       .map((channel) => channel.slot),
   } : null;
+  const dayKey = officeDayKey(now, timeZone);
+  const dailyStock = configuredDailyStock(db);
+  const consumables = (['potion_gold_t1', 'potion_damage_t1'] as const).map((skuId) => {
+    const product = consumableProduct(db, skuId);
+    if (!product) throw new Error(`missing consumable product: ${skuId}`);
+    const stockRemaining = remainingDailyStock(
+      db,
+      player.id,
+      product.id,
+      dayKey,
+      dailyStock,
+    );
+    return {
+      sku: product.id,
+      name: product.name,
+      potionType: product.potionType,
+      tier: product.tier,
+      unitPrice: product.price,
+      durationMs: product.durationMs,
+      inventory: inventoryQuantity(db, player.id, product.id),
+      stockRemaining,
+      maxQuantity: Math.min(3, stockRemaining),
+      missingGoldForOne: Math.max(0, product.price - player.gold),
+      iconClass: product.iconClass,
+      effectCopy: product.potionType === 'gold'
+        ? '50g per 1,000 effective tokens'
+        : '+25% personal base hit',
+    };
+  });
 
   return {
     currentTier,
@@ -106,5 +177,7 @@ export function buildShopViewModel(
     nextOffer,
     preview,
     mastered: currentTier >= 3,
+    consumables,
+    nextRestockAt: nextOfficeMidnight(now, timeZone),
   };
 }
