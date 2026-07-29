@@ -482,18 +482,32 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(h.document.getElementById('hub-item-detail-effect')!.textContent)
       .toBe('+25% personal base hit');
 
+    const selectedSkuSurvivesPoll: HubState = {
+      ...h.initialState,
+      gold: 450_001,
+      inventory: h.initialState.inventory.map((item) => ({ ...item })),
+    };
+    h.responses.unshift({ ok: true, json: async () => selectedSkuSurvivesPoll });
+    await h.intervals[0].callback();
+    const refreshedDamage = grid.querySelectorAll('[data-sku]')
+      .find((button) => button.dataset.sku === 'potion_damage_t1')!;
+
+    expect(detail).toBe(h.document.getElementById('hub-item-detail'));
+    expect(detail.dataset.selectedSku).toBe('potion_damage_t1');
+    expect(refreshedDamage.getAttribute('aria-pressed')).toBe('true');
+
     h.document.getElementById('hub-potion-drink')!.dispatch('click');
     const dialog = h.document.getElementById('potion-confirm')!;
     expect(dialog.open).toBe(true);
     expect(h.document.getElementById('potion-confirm-inventory')!.textContent).toBe('1 → 0 owned');
     expect(h.document.getElementById('potion-confirm-copy')!.textContent).toContain('Starts now');
-    expect(h.fetchCalls).toHaveLength(0);
+    expect(h.fetchCalls).toHaveLength(1);
 
     await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
-    expect(h.fetchCalls).toHaveLength(2);
-    expect(h.fetchCalls[0].url).toBe('/character/potions/activate');
-    expect(String(h.fetchCalls[0].options.body)).toContain('request_id=11111111-1111-4111-8111-111111111111');
-    expect(h.fetchCalls[1].url).toContain('/character/state');
+    expect(h.fetchCalls).toHaveLength(3);
+    expect(h.fetchCalls[1].url).toBe('/character/potions/activate');
+    expect(String(h.fetchCalls[1].options.body)).toContain('request_id=11111111-1111-4111-8111-111111111111');
+    expect(h.fetchCalls[2].url).toContain('/character/state');
     expect(h.document.getElementById('hub-potion-feedback')!.textContent).toContain('waits for battle');
     expect(h.document.getElementById('hub-bottle-burst')!.classList.contains('is-bursting')).toBe(true);
     expect(h.document.getElementById('hub-today-potions')!.textContent).toBe('2');
