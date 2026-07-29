@@ -36,17 +36,17 @@ function findAttr(attrs: unknown, key: string): string | null {
   return null;
 }
 
-function readValue(dp: any): number {
-  if (dp == null) return 0;
+function readValue(dp: any): number | undefined {
+  if (dp == null) return undefined;
   if (dp.asInt !== undefined) {
     const n = Number(dp.asInt);
-    return Number.isFinite(n) ? n : 0;
+    return Number.isFinite(n) ? n : undefined;
   }
   if (dp.asDouble !== undefined) {
     const n = Number(dp.asDouble);
-    return Number.isFinite(n) ? n : 0;
+    return Number.isFinite(n) ? n : undefined;
   }
-  return 0;
+  return undefined;
 }
 
 function readTemporality(sum: any): Temporality {
@@ -78,11 +78,13 @@ export function parseTokenDataPoints(body: unknown): TokenDataPoint[] {
           if (metric?.name !== TOKEN_METRIC) continue;
           const type = findAttr(dp?.attributes, 'type');
           if (!type) continue; // a token data point must have a type
+          const value = readValue(dp);
+          if (value === undefined) continue;
           out.push({
             token,
             type,
             model: findAttr(dp?.attributes, 'model') ?? '',
-            value: readValue(dp),
+            value,
             startTimeUnixNano:
               typeof dp?.startTimeUnixNano === 'string' ? dp.startTimeUnixNano : '',
             timeUnixNano:

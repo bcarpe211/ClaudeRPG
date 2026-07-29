@@ -177,6 +177,39 @@ describe('ingestTokenUsage', () => {
       .toEqual({ c: 0 });
   });
 
+  it('rejects malformed numeric values before checkpoint or delivery writes', () => {
+    const p = createPlayer(
+      db,
+      { name: 'Valid Values', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    const malformed = body(
+      p.auth_token,
+      { input: 100 },
+      2,
+      'malformed-value',
+    );
+    malformed.resourceMetrics[0].scopeMetrics[0].metrics[0]
+      .sum.dataPoints[0].asInt = 'not-a-number';
+
+    expect(ingestTokenUsage(
+      db,
+      malformed,
+      1,
+      { cacheReadWeight: 0 },
+    )).toEqual({ appliedPlayers: 0, ignoredUnknownTokens: 0 });
+
+    expect(getPlayerById(db, p.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM metric_series').get())
+      .toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM metric_deliveries').get())
+      .toEqual({ c: 0 });
+  });
+
   it('ignores disabled players', () => {
     const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
     updatePlayer(db, p.id, { disabled: 1 });

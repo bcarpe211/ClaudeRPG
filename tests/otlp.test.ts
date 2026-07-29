@@ -79,6 +79,25 @@ describe('parseTokenDataPoints', () => {
     expect(parseTokenDataPoints({ resourceMetrics: [{}] })).toEqual([]);
   });
 
+  it('rejects data points with a missing or malformed numeric value', () => {
+    const attributes = [
+      { key: 'type', value: { stringValue: 'input' } },
+    ];
+    expect(parseTokenDataPoints(payload(2, [
+      {
+        asInt: 'not-a-number',
+        startTimeUnixNano: 'bad-series',
+        timeUnixNano: 'bad-value',
+        attributes,
+      },
+      {
+        startTimeUnixNano: 'missing-series',
+        timeUnixNano: 'missing-value',
+        attributes,
+      },
+    ]))).toEqual([]);
+  });
+
   it('accepts 1,024 points but rejects a request containing 1,025', () => {
     const point = (index: number) => ({
       asInt: '1',
