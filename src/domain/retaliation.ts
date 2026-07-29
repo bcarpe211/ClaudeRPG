@@ -40,13 +40,15 @@ export function activeDebuff(
   const windowMs = cfg.monsterDebuffSeconds * 1000;
   const row = db.prepare(
     `SELECT ts FROM monster_attacks
-     WHERE player_id=? AND kind='debuff' AND ts>=? AND ts<=?
+     WHERE player_id=? AND kind='debuff' AND ts>? AND ts<=?
      ORDER BY ts DESC, id DESC LIMIT 1`,
   ).get(playerId, now - windowMs, now) as { ts: number } | undefined;
   if (!row) return null;
+  const remainingMs = row.ts + windowMs - now;
+  if (remainingMs <= 0) return null;
   return {
     factor: cfg.monsterDebuffFactor,
-    remainingMs: Math.max(0, row.ts + windowMs - now),
+    remainingMs,
   };
 }
 

@@ -164,4 +164,75 @@ describe('player hub state', () => {
     expect(hub.today.fightRank).toBeNull();
     expect(hub.currentFight.leaders).toEqual([]);
   });
+
+  it('keeps an active potion effect after its consumed inventory stack reaches zero', () => {
+    const player = createPlayer(db, { name: 'Last Bottle', class_key: 'knight', gender: 'M' }, now - 20_000);
+    db.prepare('UPDATE players SET last_token_at=? WHERE id=?').run(now, player.id);
+    applyGoldMutation(db, {
+      playerId: player.id, amount: 500_000, reason: 'opening_balance',
+      sourceTable: 'test', sourceId: 'last-bottle-opening', now: now - 100_000,
+    });
+    seedFight(player.id);
+    expect(purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      quantity: 1,
+      expectedUnitPrice: 100_000,
+      requestId: 'last-bottle-purchase',
+      now: now - 60_000,
+      timeZone,
+    })).toMatchObject({ ok: true, inventory: 1 });
+    expect(activatePotion(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      requestId: 'last-bottle-activation',
+      now,
+      timeZone,
+    })).toMatchObject({ ok: true, inventoryRemaining: 0 });
+    db.prepare('UPDATE game_state SET combat_active_ms=combat_active_ms+1 WHERE id=1').run();
+
+    const hub = buildPlayerHubState(db, getPlayerById(db, player.id)!, now, timeZone);
+
+    expect(hub.inventory.find((item) => item.sku === 'potion_gold_t1')).toBeUndefined();
+    expect(hub.effects.find((effect) => effect.kind === 'gold')).toMatchObject({
+      title: 'Beginner Gold Potion',
+      state: 'active',
+    });
+  });
+
+  it('ranks tied current-fight damage by lower player id', () => {
+    const lower = createPlayer(db, { name: 'Lower ID', class_key: 'knight', gender: 'M' }, now - 2);
+    const higher = createPlayer(db, { name: 'Higher ID', class_key: 'thief', gender: 'F' }, now - 1);
+    const dungeon = db.prepare(
+      `INSERT INTO dungeons (level, theme, seed, regular_count, created_at)
+       VALUES (1, 'Ossuary Pale', 9, 2, ?)`,
+    ).run(now - 10_000);
+    const encounter = db.prepare(
+      `INSERT INTO encounters
+        (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
+         pack_count, max_hp, current_hp, status, started_at)
+       VALUES (?, 0, 'single', 1, 1, 1, 5000, 3000, 'active', ?)`,
+    ).run(Number(dungeon.lastInsertRowid), now - 10_000);
+    const encounterId = Number(encounter.lastInsertRowid);
+    db.prepare(
+      `UPDATE game_state SET current_dungeon_id=?, current_encounter_id=?,
+         last_activity_at=?, paused=0 WHERE id=1`,
+    ).run(Number(dungeon.lastInsertRowid), encounterId, now);
+    const damage = db.prepare(
+      `INSERT INTO encounter_damage
+        (encounter_id, player_id, damage_total, hits, max_hit)
+       VALUES (?, ?, 500, 1, 500)`,
+    );
+    damage.run(encounterId, higher.id);
+    damage.run(encounterId, lower.id);
+
+    const lowerHub = buildPlayerHubState(db, lower, now, timeZone);
+    const higherHub = buildPlayerHubState(db, higher, now, timeZone);
+
+    expect(lowerHub.today.fightRank).toBe(1);
+    expect(higherHub.today.fightRank).toBe(2);
+    expect(lowerHub.currentFight.leaders.map((leader) => leader.playerId)).toEqual([
+      lower.id, higher.id,
+    ]);
+  });
 });

@@ -48,6 +48,8 @@ describe('retaliation helpers', () => {
     expect(activeDebuff(db, 1, 15_000, cfg)).toEqual({ factor: 0.85, remainingMs: 3_000 });
     expect(debuffFactor(db, 1, 10_000, cfg)).toBeCloseTo(0.85);        // same instant
     expect(debuffFactor(db, 1, 17_999, cfg)).toBeCloseTo(0.85);        // inside 8s
+    expect(activeDebuff(db, 1, 18_000, cfg)).toBeNull();               // exact expiry
+    expect(debuffFactor(db, 1, 18_000, cfg)).toBe(1);                  // exclusive boundary
     expect(debuffFactor(db, 1, 18_001, cfg)).toBe(1);                  // expired
     // a gold row must NOT trigger a debuff
     db.prepare("INSERT INTO monster_attacks (encounter_id,player_id,kind,gold_delta,ts) VALUES (1,1,'gold',5,30000)").run();

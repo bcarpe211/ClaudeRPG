@@ -50,6 +50,7 @@ describe('character sheet', () => {
     expect(res.text.match(/<span>Store<\/span>/g)).toHaveLength(1);
     const hubBootstrap = res.text.match(/window\.__PLAYER_HUB__ = (\{.*?\});<\/script>/s);
     expect(hubBootstrap).not.toBeNull();
+    expect(hubBootstrap![1]).not.toContain('<');
     const hubClient = JSON.parse(hubBootstrap![1]) as {
       token: string;
       initialState: Record<string, unknown>;
@@ -74,6 +75,55 @@ describe('character sheet', () => {
   it('rejects an unknown token', async () => {
     const res = await request(app).get('/character').query({ token: 'nope' });
     expect(res.status).toBe(404);
+  });
+
+  it('escapes adversarial authenticated and public leader names in the player-hub bootstrap', async () => {
+    const playerName = 'Hero</script><script id="player-injected">';
+    const leaderName = 'Leader<script id="leader-injected">';
+    const player = createPlayer(db, { name: playerName, class_key: 'wizard', gender: 'M' }, 1000);
+    const leader = createPlayer(db, { name: leaderName, class_key: 'thief', gender: 'F' }, 1001);
+    const dungeon = db.prepare(
+      `INSERT INTO dungeons (level, theme, seed, regular_count, created_at)
+       VALUES (1, 'Ossuary Pale', 11, 2, 1000)`,
+    ).run();
+    const encounter = db.prepare(
+      `INSERT INTO encounters
+        (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
+         pack_count, max_hp, current_hp, status, started_at)
+       VALUES (?, 0, 'single', 1, 1, 1, 5000, 3000, 'active', 1000)`,
+    ).run(Number(dungeon.lastInsertRowid));
+    const encounterId = Number(encounter.lastInsertRowid);
+    db.prepare(
+      'UPDATE game_state SET current_dungeon_id=?, current_encounter_id=? WHERE id=1',
+    ).run(Number(dungeon.lastInsertRowid), encounterId);
+    db.prepare(
+      `INSERT INTO encounter_damage
+        (encounter_id, player_id, damage_total, hits, max_hit) VALUES (?, ?, ?, 1, ?)`,
+    ).run(encounterId, leader.id, 900, 900);
+    db.prepare(
+      `INSERT INTO encounter_damage
+        (encounter_id, player_id, damage_total, hits, max_hit) VALUES (?, ?, ?, 1, ?)`,
+    ).run(encounterId, player.id, 500, 500);
+
+    const res = await request(app).get('/character').query({ token: player.auth_token });
+
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('<script id="player-injected">');
+    expect(res.text).not.toContain('<script id="leader-injected">');
+    expect(res.text).not.toContain(playerName);
+    expect(res.text).not.toContain(leaderName);
+    expect(res.text).toContain('\\u003c/script>');
+    expect(res.text).toContain('Leader\\u003cscript');
+    const hubBootstrap = res.text.match(/window\.__PLAYER_HUB__ = (\{.*?\});<\/script>/s);
+    expect(hubBootstrap).not.toBeNull();
+    const hubClient = JSON.parse(hubBootstrap![1]) as {
+      initialState: { currentFight: { leaders: { name: string }[] } };
+    };
+    expect(hubClient.initialState.currentFight.leaders.map(({ name }) => name)).toEqual([
+      leaderName, playerName,
+    ]);
+    expect(JSON.stringify(hubClient.initialState)).not.toContain(player.auth_token);
+    expect(JSON.stringify(hubClient.initialState)).not.toContain('auth_token');
   });
 
   it('renames via POST /character/rename', async () => {
