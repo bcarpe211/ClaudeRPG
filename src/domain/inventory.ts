@@ -48,6 +48,7 @@ type PurchaseRow = {
   office_day: string;
   inventory_after: number;
   gold_after: number;
+  stock_remaining_after: number;
 };
 
 function configuredDailyStock(db: Database.Database): number {
@@ -63,30 +64,12 @@ function fifoLotQuantity(db: Database.Database, playerId: number, sku: string): 
   return row.quantity;
 }
 
-function stockRemainingAtPurchase(
-  db: Database.Database,
-  playerId: number,
-  purchase: PurchaseRow,
-  dailyStock: number,
-): number {
-  const row = db.prepare(
-    `SELECT COALESCE(SUM(quantity), 0) AS purchased
-     FROM shop_purchases
-     WHERE player_id = ? AND sku = ? AND office_day = ? AND id <= ?`,
-  ).get(playerId, purchase.sku, purchase.office_day, purchase.id) as { purchased: number };
-  return Math.max(0, dailyStock - row.purchased);
-}
-
-function duplicateResult(
-  db: Database.Database,
-  playerId: number,
-  purchase: PurchaseRow,
-): ConsumablePurchaseResult {
+function duplicateResult(purchase: PurchaseRow): ConsumablePurchaseResult {
   return {
     ok: true,
     purchaseId: purchase.id,
     inventory: purchase.inventory_after,
-    stockRemaining: stockRemainingAtPurchase(db, playerId, purchase, configuredDailyStock(db)),
+    stockRemaining: purchase.stock_remaining_after,
     newGold: purchase.gold_after,
     duplicate: true,
   };
@@ -102,7 +85,7 @@ export function purchaseConsumable(
   try {
     const execute = db.transaction((): ConsumablePurchaseResult => {
     const prior = db.prepare(
-      `SELECT id, sku, quantity, unit_price, office_day, inventory_after, gold_after
+      `SELECT id, sku, quantity, unit_price, office_day, inventory_after, gold_after, stock_remaining_after
        FROM shop_purchases WHERE player_id = ? AND request_id = ?`,
     ).get(input.playerId, input.requestId) as PurchaseRow | undefined;
     if (prior) {
@@ -113,7 +96,7 @@ export function purchaseConsumable(
       ) {
         return { ok: false, reason: 'request_conflict' };
       }
-      return duplicateResult(db, input.playerId, prior);
+      return duplicateResult(prior);
     }
 
     const product = consumableProduct(db, input.skuId);
@@ -134,6 +117,7 @@ export function purchaseConsumable(
     const dailyStock = configuredDailyStock(db);
     const stockRemaining = remainingDailyStock(db, input.playerId, product.id, officeDay, dailyStock);
     if (input.quantity > stockRemaining) return { ok: false, reason: 'sold_out' };
+    const stockRemainingAfter = stockRemaining - input.quantity;
 
     const totalPrice = product.price * input.quantity;
     const inventoryAfter = fifoLotQuantity(db, input.playerId, product.id) + input.quantity;
@@ -141,11 +125,12 @@ export function purchaseConsumable(
     if (goldAfter < 0) return { ok: false, reason: 'insufficient_gold' };
     const purchase = db.prepare(
       `INSERT INTO shop_purchases
-        (player_id, sku, quantity, unit_price, total_price, office_day, request_id, inventory_after, gold_after, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (player_id, sku, quantity, unit_price, total_price, office_day, request_id,
+         inventory_after, gold_after, created_at, stock_remaining_after)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       input.playerId, product.id, input.quantity, product.price, totalPrice,
-      officeDay, input.requestId, inventoryAfter, goldAfter, input.now,
+      officeDay, input.requestId, inventoryAfter, goldAfter, input.now, stockRemainingAfter,
     );
     const purchaseId = Number(purchase.lastInsertRowid);
     db.prepare(
@@ -181,7 +166,7 @@ export function purchaseConsumable(
       ok: true,
       purchaseId,
       inventory: inventoryAfter,
-      stockRemaining: stockRemaining - input.quantity,
+      stockRemaining: stockRemainingAfter,
       newGold: gold.balance,
       duplicate: false,
     };

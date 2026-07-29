@@ -119,6 +119,34 @@ describe('personal consumable inventory purchases', () => {
     expect(getPlayerById(db, player.id)?.gold).toBe(800_000);
   });
 
+  it('returns the persisted stock snapshot after the daily-stock setting changes', () => {
+    const player = playerWithGold(1_000_000);
+    const input = request(player.id, 'immutable-stock', { quantity: 2 });
+    expect(purchaseConsumable(db, input)).toMatchObject({
+      ok: true, duplicate: false, inventory: 2, stockRemaining: 1, newGold: 800_000,
+    });
+    const mutationsBeforeRetry = {
+      purchases: rowCount('shop_purchases'),
+      lots: rowCount('player_inventory_lots'),
+      inventory: rowCount('player_inventory'),
+      ledger: rowCount('gold_ledger'),
+    };
+    setSetting(db, 'potion_daily_stock_per_sku', '99');
+
+    expect(purchaseConsumable(db, input)).toMatchObject({
+      ok: true, duplicate: true, inventory: 2, stockRemaining: 1, newGold: 800_000,
+    });
+    expect(db.prepare('SELECT stock_remaining_after FROM shop_purchases WHERE player_id = ?').get(player.id))
+      .toEqual({ stock_remaining_after: 1 });
+    expect({
+      purchases: rowCount('shop_purchases'),
+      lots: rowCount('player_inventory_lots'),
+      inventory: rowCount('player_inventory'),
+      ledger: rowCount('gold_ledger'),
+    }).toEqual(mutationsBeforeRetry);
+    expect(getPlayerById(db, player.id)?.gold).toBe(800_000);
+  });
+
   it('rejects reusing a request ID with a different SKU, quantity, or displayed price', () => {
     const player = playerWithGold(1_000_000);
     purchaseConsumable(db, request(player.id, 'conflict-1'));

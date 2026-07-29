@@ -5,7 +5,7 @@ const columns = (db: ReturnType<typeof openDb>, table: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[])
     .map((row) => row.name);
 
-describe('012_timed_consumables migration', () => {
+describe('timed-consumables schema migrations', () => {
   it('creates durable inventory, potion, reward, and ledger records', () => {
     const db = openDb(':memory:');
     expect(columns(db, 'player_inventory')).toEqual([
@@ -14,6 +14,7 @@ describe('012_timed_consumables migration', () => {
     expect(columns(db, 'shop_purchases')).toEqual([
       'id', 'player_id', 'sku', 'quantity', 'unit_price', 'total_price',
       'office_day', 'request_id', 'inventory_after', 'gold_after', 'created_at',
+      'stock_remaining_after',
     ]);
     expect(columns(db, 'player_inventory_lots')).toEqual([
       'id', 'purchase_id', 'player_id', 'sku', 'remaining_quantity',

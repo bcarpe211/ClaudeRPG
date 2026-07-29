@@ -332,4 +332,28 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '013_shop_purchase_stock_snapshot',
+    sql: `
+      ALTER TABLE shop_purchases
+        ADD COLUMN stock_remaining_after INTEGER NOT NULL DEFAULT 0
+        CHECK (stock_remaining_after >= 0);
+
+      UPDATE shop_purchases
+      SET stock_remaining_after = MAX(
+        0,
+        CAST(COALESCE(
+          (SELECT value FROM settings WHERE key = 'potion_daily_stock_per_sku'),
+          '3'
+        ) AS INTEGER) - COALESCE((
+          SELECT SUM(prior.quantity)
+          FROM shop_purchases AS prior
+          WHERE prior.player_id = shop_purchases.player_id
+            AND prior.sku = shop_purchases.sku
+            AND prior.office_day = shop_purchases.office_day
+            AND prior.id <= shop_purchases.id
+        ), 0)
+      );
+    `,
+  },
 ];
