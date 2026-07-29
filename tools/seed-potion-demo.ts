@@ -120,6 +120,12 @@ export function seedPotionDemo(
       `INSERT INTO token_events (player_id, ts, effective_delta, total_delta)
        VALUES (?, ?, ?, ?)`,
     ).run(player.id, now - 30_000 + index, tokens, tokens);
+    if (index === 2) {
+      db.prepare(
+        `INSERT INTO player_cosmetics (player_id, wheel_tier, updated_at)
+         VALUES (?, 3, ?)`,
+      ).run(player.id, now - 25_000);
+    }
     const opening = applyGoldMutation(db, {
       playerId: player.id,
       amount: 4_000_000,

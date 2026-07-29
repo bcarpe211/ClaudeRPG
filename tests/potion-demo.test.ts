@@ -29,6 +29,9 @@ describe('timed-consumables local demo seed', () => {
     expect(db.prepare(
       "SELECT COUNT(*) AS n FROM encounters WHERE status='active'",
     ).get()).toEqual({ n: 1 });
+    expect(db.prepare(
+      'SELECT wheel_tier FROM player_cosmetics WHERE player_id=3',
+    ).get()).toEqual({ wheel_tier: 3 });
 
     expect(db.prepare(
       'SELECT COUNT(DISTINCT class_key) AS n FROM players',
