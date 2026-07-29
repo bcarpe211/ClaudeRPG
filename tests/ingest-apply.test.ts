@@ -137,9 +137,44 @@ describe('ingestTokenUsage', () => {
   });
 
   it('ignores unknown tokens', () => {
-    const res = ingestTokenUsage(db, body('nobody', { input: 100 }), 1, { cacheReadWeight: 0 });
+    const res = ingestTokenUsage(
+      db,
+      body('nobody', { input: 100 }, 2, 'unknown-token'),
+      1,
+      { cacheReadWeight: 0 },
+    );
     expect(res.appliedPlayers).toBe(0);
+    expect(res.ignoredUnknownTokens).toBe(1);
     expect(db.prepare('SELECT COUNT(*) AS c FROM token_events').get()).toMatchObject({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM metric_series').get())
+      .toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM metric_deliveries').get())
+      .toEqual({ c: 0 });
+  });
+
+  it('rejects unsupported metric types before checkpoint or delivery writes', () => {
+    const p = createPlayer(
+      db,
+      { name: 'Supported Types', class_key: 'knight', gender: 'M' },
+      1,
+    );
+
+    expect(ingestTokenUsage(
+      db,
+      body(p.auth_token, { arbitraryType: 100 }, 2, 'unsupported-type'),
+      1,
+      { cacheReadWeight: 0 },
+    )).toEqual({ appliedPlayers: 0, ignoredUnknownTokens: 0 });
+
+    expect(getPlayerById(db, p.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM metric_series').get())
+      .toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM metric_deliveries').get())
+      .toEqual({ c: 0 });
   });
 
   it('ignores disabled players', () => {

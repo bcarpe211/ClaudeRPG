@@ -83,4 +83,54 @@ describe('POST /v1/metrics', () => {
     expect(res.status).toBe(200);
     expect(getPlayerById(db, p.id)!.effective_tokens).toBe(0); // nothing ingested
   });
+
+  it('rejects an over-limit point batch before any ingestion state is written', async () => {
+    const p = createPlayer(
+      db,
+      { name: 'Bounded Batch', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    const overLimit = body(p.auth_token, {});
+    const metric = overLimit.resourceMetrics[0].scopeMetrics[0].metrics[0];
+    metric.sum.aggregationTemporality = 2;
+    metric.sum.dataPoints = Array.from({ length: 1_025 }, (_, index) => ({
+      asInt: '1',
+      startTimeUnixNano: 'bounded-series',
+      timeUnixNano: `bounded-${index}`,
+      attributes: [{ key: 'type', value: { stringValue: 'input' } }],
+    }));
+
+    const res = await request(app)
+      .post('/v1/metrics')
+      .set('Content-Type', 'application/json')
+      .send(overLimit);
+
+    expect(res.status).toBe(200);
+    expect(getPlayerById(db, p.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM metric_series').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM metric_deliveries').get())
+      .toEqual({ count: 0 });
+  });
+
+  it('allows 600 requests per client per minute and rate-limits the next one', async () => {
+    for (let requestNumber = 1; requestNumber <= 600; requestNumber += 1) {
+      const accepted = await request(app)
+        .post('/v1/metrics')
+        .set('Content-Type', 'application/json')
+        .send({});
+      expect(accepted.status, `request ${requestNumber}`).toBe(200);
+    }
+
+    const limited = await request(app)
+      .post('/v1/metrics')
+      .set('Content-Type', 'application/json')
+      .send({});
+    expect(limited.status).toBe(429);
+    expect(limited.headers['retry-after']).toBeDefined();
+  });
 });

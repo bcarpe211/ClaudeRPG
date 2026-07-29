@@ -78,4 +78,45 @@ describe('parseTokenDataPoints', () => {
     expect(parseTokenDataPoints({ resourceMetrics: 'nope' })).toEqual([]);
     expect(parseTokenDataPoints({ resourceMetrics: [{}] })).toEqual([]);
   });
+
+  it('accepts 1,024 points but rejects a request containing 1,025', () => {
+    const point = (index: number) => ({
+      asInt: '1',
+      startTimeUnixNano: 'bounded-series',
+      timeUnixNano: `bounded-${index}`,
+      attributes: [
+        { key: 'type', value: { stringValue: 'input' } },
+      ],
+    });
+
+    const tokenOnlyPayload = (count: number) => {
+      const body = payload(
+        1,
+        Array.from({ length: count }, (_, index) => point(index)),
+      );
+      body.resourceMetrics[0].scopeMetrics[0].metrics.splice(1);
+      return body;
+    };
+
+    expect(parseTokenDataPoints(tokenOnlyPayload(1_024))).toHaveLength(1_024);
+    expect(parseTokenDataPoints(tokenOnlyPayload(1_025))).toEqual([]);
+  });
+
+  it('accepts 64 attributes on one collection but rejects 65', () => {
+    const point = (attributeCount: number) => ({
+      asInt: '1',
+      startTimeUnixNano: 'attribute-series',
+      timeUnixNano: `attributes-${attributeCount}`,
+      attributes: [
+        { key: 'type', value: { stringValue: 'input' } },
+        ...Array.from({ length: attributeCount - 1 }, (_, index) => ({
+          key: `extra-${index}`,
+          value: { stringValue: 'x' },
+        })),
+      ],
+    });
+
+    expect(parseTokenDataPoints(payload(1, [point(64)]))).toHaveLength(1);
+    expect(parseTokenDataPoints(payload(1, [point(65)]))).toEqual([]);
+  });
 });

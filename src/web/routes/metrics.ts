@@ -4,9 +4,8 @@ import type { AppDeps } from '../app';
 import { asyncHandler } from '../async';
 import { ingestTokenUsage } from '../../domain/ingest';
 import { getSetting } from '../../domain/settings';
-
-const MAX_BODY_BYTES = 16 * 1024 * 1024; // 16 MB safety cap
-const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024; // 64 MB cap on inflated output
+import { METRICS_INGEST_LIMITS } from '../../domain/metrics-policy';
+import { createMetricsRateLimiter } from '../metrics-rate-limit';
 
 /**
  * Collect the raw request body and parse it as OTLP/JSON, transparently
@@ -28,7 +27,7 @@ function otlpBodyParser(
   req.on('data', (chunk: Buffer) => {
     if (aborted) return;
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > METRICS_INGEST_LIMITS.maxBodyBytes) {
       aborted = true;
       req.body = undefined;
       next();
@@ -46,7 +45,9 @@ function otlpBodyParser(
         .includes('gzip');
       const gzipMagic = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
       if (gzipHeader || gzipMagic) {
-        buf = gunzipSync(buf, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
+        buf = gunzipSync(buf, {
+          maxOutputLength: METRICS_INGEST_LIMITS.maxDecompressedBodyBytes,
+        });
       }
       req.body = buf.length ? (JSON.parse(buf.toString()) as unknown) : undefined;
     } catch {
@@ -63,8 +64,21 @@ function otlpBodyParser(
 }
 
 export function registerMetricsRoutes(app: Express, { db }: AppDeps): void {
+  const rateLimiter = createMetricsRateLimiter();
   app.post(
     '/v1/metrics',
+    (req, res, next) => {
+      const decision = rateLimiter.check(
+        req.ip || req.socket.remoteAddress || 'unknown',
+        Date.now(),
+      );
+      if (!decision.allowed) {
+        res.set('Retry-After', String(decision.retryAfterSeconds));
+        res.status(429).json({});
+        return;
+      }
+      next();
+    },
     otlpBodyParser,
     asyncHandler(async (req, res) => {
       const weight = Number(getSetting(db, 'cache_read_weight') ?? '0') || 0;

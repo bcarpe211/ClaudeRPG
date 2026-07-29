@@ -2,6 +2,14 @@ import type Database from 'better-sqlite3';
 import { parseTokenDataPoints, type TokenDataPoint } from './otlp';
 import { getPlayerByToken } from './players';
 import { applyGoldPotionWork } from './potions';
+import { METRICS_INGEST_LIMITS } from './metrics-policy';
+
+const SUPPORTED_TOKEN_TYPES = new Set([
+  'input',
+  'output',
+  'cacheCreation',
+  'cacheRead',
+]);
 
 function seriesKey(p: TokenDataPoint): string {
   return `${p.token ?? ' '}|${p.type}|${p.model}|${p.startTimeUnixNano}`;
@@ -62,6 +70,30 @@ function emptyPerToken(): PerToken {
   return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
 }
 
+function validPointIdentity(p: TokenDataPoint): boolean {
+  const roundedValue = Math.round(p.value);
+  return SUPPORTED_TOKEN_TYPES.has(p.type)
+    && Number.isFinite(p.value)
+    && p.value >= 0
+    && Number.isSafeInteger(roundedValue)
+    && p.timeUnixNano.length > 0
+    && p.timeUnixNano.length <= METRICS_INGEST_LIMITS.maxIdentityFieldLength
+    && p.startTimeUnixNano.length <= METRICS_INGEST_LIMITS.maxIdentityFieldLength
+    && p.model.length <= METRICS_INGEST_LIMITS.maxIdentityFieldLength;
+}
+
+function addIncrement(
+  aggregate: PerToken,
+  type: keyof PerToken,
+  increment: number,
+): void {
+  const next = aggregate[type] + increment;
+  if (!Number.isSafeInteger(next) || next < 0) {
+    throw new RangeError('token metric aggregate must be a non-negative safe integer');
+  }
+  aggregate[type] = next;
+}
+
 /**
  * Parse an OTLP body, recover per-data-point increments, aggregate per token,
  * and apply to players: bump total_tokens, effective_tokens, last_token_at, and
@@ -74,6 +106,24 @@ export function ingestTokenUsage(
   opts: IngestOptions,
 ): IngestResult {
   const points = parseTokenDataPoints(body);
+  const knownPlayers = new Map<string, NonNullable<ReturnType<typeof getPlayerByToken>>>();
+  const unknownTokens = new Set<string>();
+  const acceptedPoints: TokenDataPoint[] = [];
+
+  // Resolve every token and validate every point before the first stateful
+  // operation. Invalid/null/unknown points cannot claim delivery identities or
+  // advance cumulative checkpoints.
+  for (const point of points) {
+    if (!validPointIdentity(point) || point.token == null) continue;
+    let player = knownPlayers.get(point.token);
+    if (!player && !unknownTokens.has(point.token)) {
+      player = getPlayerByToken(db, point.token);
+      if (player) knownPlayers.set(point.token, player);
+      else unknownTokens.add(point.token);
+    }
+    if (player) acceptedPoints.push(point);
+  }
+
   const apply = db.transaction((): IngestResult => {
     const byToken = new Map<string, PerToken>();
     const claimDelivery = db.prepare(
@@ -81,28 +131,19 @@ export function ingestTokenUsage(
         (series_key, time_unix_nano, received_at)
        VALUES (?, ?, ?)`,
     );
-    for (const p of points) {
+    for (const p of acceptedPoints) {
       const claimed = claimDelivery.run(seriesKey(p), p.timeUnixNano, now);
       if (claimed.changes === 0) continue;
       const inc = computeIncrement(db, p, now);
       if (inc <= 0 || p.token == null) continue;
       const agg = byToken.get(p.token) ?? emptyPerToken();
-      if (p.type === 'input') agg.input += inc;
-      else if (p.type === 'output') agg.output += inc;
-      else if (p.type === 'cacheCreation') agg.cacheCreation += inc;
-      else if (p.type === 'cacheRead') agg.cacheRead += inc;
-      // unknown type strings contribute nothing
+      addIncrement(agg, p.type as keyof PerToken, inc);
       byToken.set(p.token, agg);
     }
 
     let appliedPlayers = 0;
-    let ignoredUnknownTokens = 0;
     for (const [token, agg] of byToken) {
-      const player = getPlayerByToken(db, token);
-      if (!player) {
-        ignoredUnknownTokens++;
-        continue;
-      }
+      const player = knownPlayers.get(token)!;
       if (player.disabled) continue;
 
       const effective =
@@ -112,6 +153,14 @@ export function ingestTokenUsage(
         Math.round(agg.cacheRead * opts.cacheReadWeight);
       const total = agg.input + agg.output + agg.cacheCreation + agg.cacheRead;
       if (effective <= 0 && total <= 0) continue;
+      if (
+        !Number.isSafeInteger(effective)
+        || !Number.isSafeInteger(total)
+        || !Number.isSafeInteger(player.effective_tokens + effective)
+        || !Number.isSafeInteger(player.total_tokens + total)
+      ) {
+        throw new RangeError('persisted token totals must remain safe integers');
+      }
 
       db.prepare(
         `UPDATE players
@@ -136,7 +185,10 @@ export function ingestTokenUsage(
 
       appliedPlayers++;
     }
-    return { appliedPlayers, ignoredUnknownTokens };
+    return {
+      appliedPlayers,
+      ignoredUnknownTokens: unknownTokens.size,
+    };
   });
   return apply();
 }

@@ -1,3 +1,5 @@
+import { METRICS_INGEST_LIMITS } from './metrics-policy';
+
 export type Temporality = 'delta' | 'cumulative';
 
 export interface TokenDataPoint {
@@ -14,6 +16,11 @@ const TOKEN_METRIC = 'claude_code.token.usage';
 
 function asArray(x: unknown): any[] {
   return Array.isArray(x) ? x : [];
+}
+
+function exceedsAttributeLimit(attrs: unknown): boolean {
+  return Array.isArray(attrs)
+    && attrs.length > METRICS_INGEST_LIMITS.maxAttributesPerCollection;
 }
 
 function findAttr(attrs: unknown, key: string): string | null {
@@ -54,14 +61,21 @@ function readTemporality(sum: any): Temporality {
 export function parseTokenDataPoints(body: unknown): TokenDataPoint[] {
   const out: TokenDataPoint[] = [];
   const root = body as any;
+  let dataPointCount = 0;
   for (const rm of asArray(root?.resourceMetrics)) {
+    if (exceedsAttributeLimit(rm?.resource?.attributes)) return [];
     const token = findAttr(rm?.resource?.attributes, 'claude_rpg_token');
     for (const sm of asArray(rm?.scopeMetrics)) {
+      if (exceedsAttributeLimit(sm?.scope?.attributes)) return [];
       for (const metric of asArray(sm?.metrics)) {
-        if (metric?.name !== TOKEN_METRIC) continue;
         const sum = metric.sum;
+        const dataPoints = asArray(sum?.dataPoints);
+        dataPointCount += dataPoints.length;
+        if (dataPointCount > METRICS_INGEST_LIMITS.maxDataPoints) return [];
         const temporality = readTemporality(sum);
-        for (const dp of asArray(sum?.dataPoints)) {
+        for (const dp of dataPoints) {
+          if (exceedsAttributeLimit(dp?.attributes)) return [];
+          if (metric?.name !== TOKEN_METRIC) continue;
           const type = findAttr(dp?.attributes, 'type');
           if (!type) continue; // a token data point must have a type
           out.push({
