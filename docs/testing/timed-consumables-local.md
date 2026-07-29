@@ -28,6 +28,26 @@ npm start
 
 Open the printed URLs. The seeded cast has eight distinct classes, both genders, six active potion rows, Gold-only, Damage-only, dual-potion, debuff-only, potion-plus-debuff, and unaffected controls. The active boss has deliberately high health so the local engine cannot immediately end the visual review.
 
+The fixture also includes two completed canonical audit rows using the same eight players: a Gold Potion with immutable 125,000g base plus 25,000g stretch payout, and a Damage Potion with 250 bonus damage, rank 1 → 2, and actual/counterfactual reward evidence. Potion Lab therefore has both live visual rows and completed report evidence.
+
+## Reproduce Armed → Active locally
+
+Use this separate fresh database only when reviewing the state transition. It contains the same eight-player cast, six active potion rows, two debuffs, one active encounter, and the historical Potion Lab evidence, but deliberately starts the encounter idle. No Pi or production database is involved.
+
+```bash
+PUBLIC_URL=http://localhost:8115 npm exec tsx tools/seed-potion-demo.ts -- --armed-review /private/tmp/clauderpg-potion-armed-demo.db
+```
+
+Start the app with the same local-only settings as above, replacing its `DB_PATH` with `/private/tmp/clauderpg-potion-armed-demo.db`. Open the printed **Quiet Berserker** character URL, open Inventory, and activate the spare Gold Potion through the confirmation dialog. Verify the new effect reads **Armed** and its remaining combat-active duration has not changed.
+
+In a second local terminal, explicitly resume only that demo's combat clock:
+
+```bash
+env -u DB_PATH npm exec tsx tools/seed-potion-demo.ts -- --resume /private/tmp/clauderpg-potion-armed-demo.db
+```
+
+Refresh the Quiet Berserker page (or wait for the normal hub refresh). Verify the same potion now reads **Active**, with one millisecond of combat-active time consumed. The resume command refuses the configured production path and refuses any database that is not the known eight-player potion-demo cast.
+
 ## Bazaar and inventory
 
 - Open the Bazaar from a character page and verify quantities 1, 2, and 3 update the total price correctly.
@@ -40,7 +60,7 @@ Open the printed URLs. The seeded cast has eight distinct classes, both genders,
 
 - Verify Live Dungeon is the default tab and includes the compact dungeon, compact leaderboard, Today statistics, Inventory, and Active Effects affordance.
 - Activate an inventory potion through the confirmation step. Verify the confirmed SKU cannot change underneath the dialog.
-- Verify the state reads armed before combat-active time advances, then active; remaining duration changes only with combat-active time.
+- Use the separate Armed-review fixture above to verify the state reads Armed before explicit local combat resume, then Active; remaining duration changes only with combat-active time.
 - Verify one active potion per type, Gold and Damage can overlap, and each type allows at most three daily doses.
 - Verify Inventory quantities and daily uses update after activation.
 - Begin an unsaved Wardrobe edit, change tabs, wait through the five-second hub refresh, and return. The draft must remain intact.

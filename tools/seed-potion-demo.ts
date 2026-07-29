@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import { loadConfig } from '../src/config';
 import { openDb } from '../src/db/db';
 import { applyGoldMutation } from '../src/domain/goldledger';
+import { advanceCombatClock } from '../src/domain/gameclock';
 import { purchaseConsumable } from '../src/domain/inventory';
 import { officeDayKey } from '../src/domain/office-time';
 import { activatePotion } from '../src/domain/potions';
@@ -32,21 +33,37 @@ export interface PotionDemoResult {
   tvUrl: string;
 }
 
+export interface PotionDemoSeedOptions {
+  /** Keep the local encounter idle so a reviewer can drink an Armed potion. */
+  startPaused?: boolean;
+}
+
 const CAST: Array<{
   name: string;
   classKey: string;
   gender: 'M' | 'F';
   state: PotionDemoState;
   potions: readonly (typeof GOLD_SKU | typeof DAMAGE_SKU)[];
+  historicalPotions?: readonly (typeof GOLD_SKU | typeof DAMAGE_SKU)[];
+  inventoryOnlyPotions?: readonly (typeof GOLD_SKU | typeof DAMAGE_SKU)[];
   debuffed?: boolean;
 }> = [
-  { name: 'Gilded Knight', classKey: 'knight', gender: 'M', state: 'gold-only', potions: [GOLD_SKU] },
-  { name: 'Scarlet Thief', classKey: 'thief', gender: 'M', state: 'damage-only', potions: [DAMAGE_SKU] },
+  {
+    name: 'Gilded Knight', classKey: 'knight', gender: 'M', state: 'gold-only',
+    potions: [GOLD_SKU], historicalPotions: [GOLD_SKU],
+  },
+  {
+    name: 'Scarlet Thief', classKey: 'thief', gender: 'M', state: 'damage-only',
+    potions: [DAMAGE_SKU], historicalPotions: [DAMAGE_SKU],
+  },
   { name: 'Twinbrew Ranger', classKey: 'ranger', gender: 'F', state: 'dual-potion', potions: [GOLD_SKU, DAMAGE_SKU] },
   { name: 'Hexed Wizard', classKey: 'wizard', gender: 'M', state: 'debuff-only', potions: [], debuffed: true },
   { name: 'Cursed Priest', classKey: 'priest', gender: 'F', state: 'potion-plus-debuff', potions: [DAMAGE_SKU], debuffed: true },
   { name: 'Golden Shaman', classKey: 'shaman', gender: 'F', state: 'gold-only', potions: [GOLD_SKU] },
-  { name: 'Quiet Berserker', classKey: 'berserker', gender: 'M', state: 'control', potions: [] },
+  {
+    name: 'Quiet Berserker', classKey: 'berserker', gender: 'M', state: 'control',
+    potions: [], inventoryOnlyPotions: [GOLD_SKU],
+  },
   { name: 'Quiet Paladin', classKey: 'paladin', gender: 'F', state: 'control', potions: [] },
 ];
 
@@ -64,10 +81,22 @@ function mustSucceed<T extends { ok: boolean }>(result: T, action: string): asse
   if (!result.ok) throw new Error(`Potion demo ${action} failed: ${JSON.stringify(result)}`);
 }
 
+function applyDemoGold(
+  db: Database.Database,
+  input: Parameters<typeof applyGoldMutation>[1],
+  action: string,
+): void {
+  const result = applyGoldMutation(db, input);
+  if (result.status !== 'applied') {
+    throw new Error(`Potion demo ${action} failed: ${result.status}`);
+  }
+}
+
 export function seedPotionDemo(
   db: Database.Database,
   now: number,
   baseUrl = 'http://localhost:8115',
+  options: PotionDemoSeedOptions = {},
 ): PotionDemoResult {
   if (!Number.isSafeInteger(now) || now < 0) throw new RangeError('now must be a non-negative safe integer');
   assertEmptyDemoDatabase(db);
@@ -102,6 +131,10 @@ export function seedPotionDemo(
      VALUES (?, 60000)`,
   ).run(officeDayKey(now, TIME_ZONE));
 
+  const historical = new Map<typeof GOLD_SKU | typeof DAMAGE_SKU, {
+    activationId: number;
+    playerId: number;
+  }>();
   const seeded = CAST.map((member, index) => {
     const authToken = `local-potion-demo-${index + 1}`;
     const inserted = db.prepare(
@@ -138,18 +171,41 @@ export function seedPotionDemo(
       throw new Error(`Potion demo opening balance for ${member.name} failed: ${opening.status}`);
     }
 
-    for (const sku of member.potions) {
+    const purchasablePotions = [...new Set([
+      ...member.potions,
+      ...(member.historicalPotions ?? []),
+      ...(member.inventoryOnlyPotions ?? []),
+    ])];
+    for (const sku of purchasablePotions) {
       const price = sku === GOLD_SKU ? 100_000 : 150_000;
       const purchase = purchaseConsumable(db, {
         playerId: player.id,
         skuId: sku,
-        quantity: 2,
+        quantity: member.potions.includes(sku) ? 3 : 1,
         expectedUnitPrice: price,
         requestId: `demo-buy-${player.id}-${sku}`,
         now: now - 20_000 + index,
         timeZone: TIME_ZONE,
       });
       mustSucceed(purchase, `purchase for ${member.name}`);
+    }
+    for (const sku of member.historicalPotions ?? []) {
+      const activation = activatePotion(db, {
+        playerId: player.id,
+        skuId: sku,
+        requestId: `demo-history-drink-${player.id}-${sku}`,
+        now: now - 11_000 + index,
+        timeZone: TIME_ZONE,
+      });
+      mustSucceed(activation, `historical activation for ${member.name}`);
+      historical.set(sku, { activationId: activation.activationId, playerId: player.id });
+      db.prepare(
+        `UPDATE potion_activations
+         SET status='completed', completed_at=?
+         WHERE id=?`,
+      ).run(now - 9_000 + index * 500, activation.activationId);
+    }
+    for (const sku of member.potions) {
       const activation = activatePotion(db, {
         playerId: player.id,
         skuId: sku,
@@ -181,9 +237,104 @@ export function seedPotionDemo(
     return { player, authToken };
   });
 
+  const goldHistory = historical.get(GOLD_SKU);
+  const damageHistory = historical.get(DAMAGE_SKU);
+  if (!goldHistory || !damageHistory) {
+    throw new Error('Potion demo historical audit activations are missing');
+  }
+  db.prepare(
+    `UPDATE potion_activations
+     SET start_game_ms=0, expires_game_ms=7200000, completed_at=?,
+         eligible_tokens=2500000, base_gold=125000, stretch_gold=25000
+     WHERE id=?`,
+  ).run(now - 9_000, goldHistory.activationId);
+  db.prepare(
+    `UPDATE potion_activations
+     SET start_game_ms=0, expires_game_ms=7200000, completed_at=?, potion_bonus_damage=250
+     WHERE id=?`,
+  ).run(now - 8_500, damageHistory.activationId);
+
+  const tokenEvent = db.prepare(
+    `INSERT INTO token_events (player_id, ts, effective_delta, total_delta)
+     VALUES (?, ?, 2500000, 2500000)`,
+  ).run(goldHistory.playerId, now - 12_000);
+  const workEvent = db.prepare(
+    `INSERT INTO potion_work_events
+      (activation_id, token_event_id, effective_delta, base_gold,
+       stretch_gold, combat_active_ms, created_at)
+     VALUES (?, ?, 2500000, 125000, 25000, 7200000, ?)`,
+  ).run(goldHistory.activationId, Number(tokenEvent.lastInsertRowid), now - 10_000);
+  const workEventId = String(workEvent.lastInsertRowid);
+  applyDemoGold(db, {
+    playerId: goldHistory.playerId,
+    amount: 125_000,
+    reason: 'gold_potion_base',
+    sourceTable: 'potion_work_events',
+    sourceId: workEventId,
+    now: now - 10_000,
+  }, 'historical Gold base payout');
+  applyDemoGold(db, {
+    playerId: goldHistory.playerId,
+    amount: 25_000,
+    reason: 'gold_potion_stretch',
+    sourceTable: 'potion_work_events',
+    sourceId: workEventId,
+    now: now - 9_999,
+  }, 'historical Gold stretch payout');
+
+  const historicalEncounter = db.prepare(
+    `INSERT INTO encounters
+      (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
+       pack_count, max_hp, current_hp, status, started_at, ended_at,
+       reward_model_version, reward_work_pct, reward_damage_pct,
+       reward_podium_first_pct, reward_podium_second_pct, reward_podium_third_pct)
+     VALUES (?, 0, 'single', 1, 1, 1, 1000, 0, 'defeated', ?, ?,
+       'hybrid-v1', 80, 10, 5, 3, 2)`,
+  ).run(dungeonId, now - 12_000, now - 8_000);
+  const historicalEncounterId = Number(historicalEncounter.lastInsertRowid);
+  db.prepare(
+    `INSERT INTO potion_activation_encounters (activation_id, encounter_id, bonus_damage)
+     VALUES (?, ?, 250)`,
+  ).run(damageHistory.activationId, historicalEncounterId);
+  const insertAward = db.prepare(
+    `INSERT INTO encounter_reward_awards
+      (encounter_id, player_id, effective_tokens, damage_total,
+       potion_bonus_damage, damage_rank, work_gold, damage_gold,
+       podium_gold, total_gold, model_version, awarded_at)
+     VALUES (?, ?, 100, ?, ?, ?, ?, ?, ?, ?, 'hybrid-v1', ?)`,
+  );
+  const historicalAwards = [
+    { playerId: damageHistory.playerId, damage: 1_000, bonus: 250, rank: 1, work: 267, damageGold: 50, podium: 50 },
+    { playerId: seeded[0].player.id, damage: 900, bonus: 0, rank: 2, work: 267, damageGold: 45, podium: 30 },
+    { playerId: seeded[2].player.id, damage: 100, bonus: 0, rank: 3, work: 266, damageGold: 5, podium: 20 },
+  ];
+  for (const award of historicalAwards) {
+    const total = award.work + award.damageGold + award.podium;
+    insertAward.run(
+      historicalEncounterId, award.playerId, award.damage, award.bonus, award.rank,
+      award.work, award.damageGold, award.podium, total, now - 8_000,
+    );
+    applyDemoGold(db, {
+      playerId: award.playerId,
+      amount: total,
+      reason: 'encounter_reward',
+      sourceTable: 'encounter_reward_awards',
+      sourceId: String(historicalEncounterId),
+      now: now - 8_000,
+    }, 'historical encounter reward');
+  }
+
   // Move every armed potion into its visible active state without consuming any
   // wall-clock-only time. The running server advances from this deterministic point.
-  db.prepare('UPDATE game_state SET combat_active_ms=105000 WHERE id=1').run();
+  if (options.startPaused) {
+    const pausedAt = now - 60 * 60_000;
+    db.prepare(
+      'UPDATE game_state SET paused=1, last_activity_at=? WHERE id=1',
+    ).run(pausedAt);
+    db.prepare('UPDATE players SET last_token_at=?').run(pausedAt);
+  } else {
+    db.prepare('UPDATE game_state SET combat_active_ms=105000 WHERE id=1').run();
+  }
 
   const normalizedBase = baseUrl.replace(/\/$/, '');
   return {
@@ -196,6 +347,26 @@ export function seedPotionDemo(
     })),
     tvUrl: `${normalizedBase}/tv`,
   };
+}
+
+function assertPotionDemoCast(db: Database.Database): void {
+  const names = (db.prepare('SELECT name FROM players ORDER BY name').all() as { name: string }[])
+    .map((row) => row.name);
+  const expected = CAST.map((member) => member.name).sort();
+  if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) {
+    throw new Error('Refusing to resume a database that is not the potion demo cast');
+  }
+}
+
+/** Advance the isolated Armed-review fixture by one active millisecond. */
+export function resumePotionDemoCombat(db: Database.Database, now: number): void {
+  if (!Number.isSafeInteger(now) || now < 0) throw new RangeError('now must be a non-negative safe integer');
+  assertPotionDemoCast(db);
+  const reviewer = db.prepare('SELECT id FROM players WHERE name=?').get('Quiet Berserker') as { id: number } | undefined;
+  if (!reviewer) throw new Error('Potion demo Armed-review player is missing');
+  db.prepare('UPDATE players SET last_token_at=? WHERE id=?').run(now, reviewer.id);
+  db.prepare('UPDATE game_state SET paused=0, last_activity_at=? WHERE id=1').run(now);
+  advanceCombatClock(db, 1, now, TIME_ZONE);
 }
 
 export function validateDemoDbPath(target: string, productionPath: string): string {
@@ -213,12 +384,33 @@ export function validateDemoDbPath(target: string, productionPath: string): stri
   return resolved;
 }
 
+function validateExistingDemoDbPath(target: string, productionPath: string): string {
+  if (!target || target === ':memory:') throw new Error('Pass an explicit local database path');
+  const resolved = path.resolve(target);
+  if (resolved === path.resolve(productionPath)) {
+    throw new Error('Refusing to resume the configured production database path');
+  }
+  if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory() || fs.statSync(resolved).size === 0) {
+    throw new Error('Potion demo resume requires an existing local database file');
+  }
+  return resolved;
+}
+
 export function main(argv: readonly string[] = process.argv.slice(2)): void {
   const config = loadConfig(process.env);
-  const target = validateDemoDbPath(argv[0] ?? '', config.dbPath);
+  const armedReview = argv[0] === '--armed-review';
+  const resume = argv[0] === '--resume';
+  const target = resume
+    ? validateExistingDemoDbPath(argv[1] ?? '', config.dbPath)
+    : validateDemoDbPath(argv[armedReview ? 1 : 0] ?? '', config.dbPath);
   const db = openDb(target);
   try {
-    const result = seedPotionDemo(db, Date.now(), config.publicUrl);
+    if (resume) {
+      resumePotionDemoCombat(db, Date.now());
+      console.log('Local potion demo combat resumed. Refresh the Armed-review character page.');
+      return;
+    }
+    const result = seedPotionDemo(db, Date.now(), config.publicUrl, { startPaused: armedReview });
     console.log('Character URLs:');
     for (const player of result.players) console.log(`${player.name}: ${player.characterUrl}`);
     console.log(`TV: ${result.tvUrl}`);
