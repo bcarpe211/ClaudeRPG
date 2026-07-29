@@ -20,6 +20,8 @@ import {
 } from '../../domain/settings';
 import { groupedSettings } from '../../domain/settings-meta';
 import { validateRewardConfig } from '../../domain/rewards';
+import { buildPotionLabReport } from '../../domain/potionlab';
+import { nextOfficeMidnight, officeDayKey, officeDayStart } from '../../domain/office-time';
 
 // Augment the session type with our admin flag.
 declare module 'express-session' {
@@ -40,6 +42,49 @@ const REWARD_SETTING_KEYS = [
   'reward_podium_second_pct',
   'reward_podium_third_pct',
 ] as const;
+
+const OptionalQueryString = z.preprocess(
+  (value) => value === '' ? undefined : value,
+  z.string().optional(),
+);
+
+const PotionLabQuery = z.object({
+  from: OptionalQueryString.refine(
+    (value) => value === undefined || /^\d{4}-\d{2}-\d{2}$/.test(value),
+    'invalid from date',
+  ),
+  to: OptionalQueryString.refine(
+    (value) => value === undefined || /^\d{4}-\d{2}-\d{2}$/.test(value),
+    'invalid to date',
+  ),
+  player: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.coerce.number().int().positive().optional(),
+  ),
+  sku: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.enum(['potion_gold_t1', 'potion_damage_t1']).optional(),
+  ),
+});
+
+function officeDateStart(
+  value: string | undefined,
+  timeZone: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  const utcNoon = Date.parse(`${value}T12:00:00.000Z`);
+  if (
+    !Number.isSafeInteger(utcNoon)
+    || new Date(utcNoon).toISOString().slice(0, 10) !== value
+  ) return undefined;
+  for (let offset = -2; offset <= 2; offset += 1) {
+    const candidate = utcNoon + offset * 86_400_000;
+    if (officeDayKey(candidate, timeZone) === value) {
+      return officeDayStart(candidate, timeZone);
+    }
+  }
+  return undefined;
+}
 
 export function requireAdmin(
   req: Request,
@@ -100,6 +145,46 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
           players: listPlayers(db),
         }),
       );
+    }),
+  );
+
+  app.get(
+    '/admin/potions',
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const parsed = PotionLabQuery.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).send('Invalid Potion Lab filters');
+        return;
+      }
+      const from = officeDateStart(parsed.data.from, deps.config.officeTimeZone);
+      const toStart = officeDateStart(parsed.data.to, deps.config.officeTimeZone);
+      if (
+        (parsed.data.from !== undefined && from === undefined)
+        || (parsed.data.to !== undefined && toStart === undefined)
+        || (from !== undefined && toStart !== undefined && from > toStart)
+      ) {
+        res.status(400).send('Invalid Potion Lab filters');
+        return;
+      }
+      const to = toStart === undefined
+        ? undefined
+        : nextOfficeMidnight(toStart, deps.config.officeTimeZone) - 1;
+      const report = buildPotionLabReport(db, {
+        from,
+        to,
+        playerId: parsed.data.player,
+        sku: parsed.data.sku,
+        timeZone: deps.config.officeTimeZone,
+      });
+      res.set('Cache-Control', 'private, no-store');
+      res.send(await renderPage('admin-potions', {
+        title: 'Potion Lab',
+        frame: 'lite',
+        report,
+        players: listPlayers(db),
+        filters: parsed.data,
+      }));
     }),
   );
 

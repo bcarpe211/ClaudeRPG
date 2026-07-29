@@ -1,0 +1,83 @@
+<% const fmt = (value) => Number(value).toLocaleString('en-US'); %>
+<% const signedGold = (value) => (value >= 0 ? '+' : '') + fmt(value) + 'g'; %>
+<style>
+  .lab-shell{display:grid;gap:16px}.lab-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.lab-head h1{margin-bottom:4px}
+  .lab-kicker{color:#d8ad59;font:800 11px/1.2 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}.lab-muted{color:var(--muted)}
+  .lab-nav{display:flex;gap:8px;flex-wrap:wrap}.lab-nav .btn{margin:0;padding:8px 11px}.lab-filter{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr)) auto;gap:10px;align-items:end;padding:14px;border:1px solid var(--line);border-radius:10px;background:#110d19}
+  .lab-filter label{margin:0;color:var(--muted);font-size:11px}.lab-filter input,.lab-filter select{margin-top:5px}.lab-filter button{margin:0;white-space:nowrap}
+  .lab-section{padding:17px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#21172d,#110c19)}.lab-section h2{margin:0 0 5px}.lab-section>p{margin:0 0 13px}
+  .lab-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px;margin-bottom:14px}.lab-metric{padding:10px;border:1px solid #443451;border-radius:8px;background:#0d0914}.lab-metric span{display:block;color:var(--muted);font:800 9px/1.2 ui-monospace,monospace;text-transform:uppercase}.lab-metric strong{display:block;margin-top:4px;color:#f0d580;font-size:18px}
+  .lab-table-wrap{overflow-x:auto}.lab-table{width:100%;font-size:12px}.lab-table th{color:#d8ad59}.lab-good{color:#79d79a}.lab-bad{color:#ff9eaa}.lab-checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.lab-check{padding:11px;border:1px solid #443451;border-radius:8px;background:#0d0914}.lab-check strong,.lab-check span{display:block}.lab-check span{margin-top:3px;color:var(--muted);font-size:11px}.lab-ready{border-color:#527d5d}.lab-waiting{border-color:#685533}
+  .lab-distributions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.lab-distribution{padding:11px;border:1px solid #3d3049;border-radius:8px;background:#0d0914}.lab-distribution h3{margin:0 0 8px;color:#d8ad59;font-size:13px}.lab-distribution ul{list-style:none;margin:0;padding:0;display:grid;gap:5px}.lab-distribution li{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:11px}.lab-distribution strong{color:var(--head)}
+  @media(max-width:760px){.lab-head{display:grid}.lab-filter{grid-template-columns:1fr 1fr}.lab-filter button{grid-column:1/-1}.lab-metrics{grid-template-columns:1fr 1fr}.lab-distributions{grid-template-columns:1fr}}
+</style>
+
+<div class="lab-shell">
+  <section class="panel lab-head">
+    <div><span class="lab-kicker">Admin telemetry · canonical audit rows</span><h1>Potion Lab</h1><p class="lab-muted">Measure real potion yield before brewing stronger tiers.</p></div>
+    <nav class="lab-nav" aria-label="Admin pages"><a class="btn" href="/admin">Players</a><a class="btn" href="/admin/settings">Settings</a></nav>
+  </section>
+
+  <form class="panel lab-filter" method="get" action="/admin/potions">
+    <label>From<input type="date" name="from" value="<%= filters.from || '' %>" /></label>
+    <label>To<input type="date" name="to" value="<%= filters.to || '' %>" /></label>
+    <label>Player<select name="player"><option value="">All players</option><% players.forEach(function(player) { %><option value="<%= player.id %>" <%= filters.player === player.id ? 'selected' : '' %>><%= player.name %></option><% }); %></select></label>
+    <label>Potion<select name="sku"><option value="">Both launch potions</option><option value="potion_gold_t1" <%= filters.sku === 'potion_gold_t1' ? 'selected' : '' %>>Beginner Gold</option><option value="potion_damage_t1" <%= filters.sku === 'potion_damage_t1' ? 'selected' : '' %>>Beginner Damage</option></select></label>
+    <button type="submit">Run report</button>
+  </form>
+
+  <section class="lab-section" aria-labelledby="lab-gold-title">
+    <h2 id="lab-gold-title">Gold Potion outcomes</h2><p class="lab-muted">Direct work-linked minting compared with each consumed bottle's FIFO purchase price.</p>
+    <div class="lab-metrics">
+      <div class="lab-metric"><span>Purchases</span><strong><%= fmt(report.gold.purchases) %></strong></div>
+      <div class="lab-metric"><span>Completed</span><strong><%= fmt(report.gold.completed) %></strong></div>
+      <div class="lab-metric"><span>Gold spent</span><strong><%= fmt(report.gold.spent) %>g</strong></div>
+      <div class="lab-metric"><span>Base payout</span><strong><%= fmt(report.gold.basePayout) %>g</strong></div>
+      <div class="lab-metric"><span>Stretch payout</span><strong><%= fmt(report.gold.stretchPayout) %>g</strong></div>
+      <div class="lab-metric"><span>Break-even runs</span><strong><%= fmt(report.gold.breakEvenCount) %></strong></div>
+    </div>
+    <div class="lab-table-wrap"><table class="lab-table"><thead><tr><th>Activation</th><th>Player</th><th>Tokens</th><th>Payout</th><th>Price</th><th>Net</th><th>Status</th></tr></thead><tbody>
+      <% if (report.gold.activations.length === 0) { %><tr><td colspan="7" class="lab-muted">No Gold Potion evidence matches these filters.</td></tr><% } %>
+      <% report.gold.activations.forEach(function(row) { %><tr><td>#<%= row.activationId %></td><td>#<%= row.playerId %></td><td><%= fmt(row.eligibleTokens) %></td><td><%= fmt(row.payout) %>g</td><td><%= fmt(row.purchasePrice) %>g</td><td class="<%= row.netGold >= 0 ? 'lab-good' : 'lab-bad' %>"><%= fmt(row.netGold) %>g net</td><td><%= row.completedAt === null ? 'In progress' : 'Completed' %></td></tr><% }); %>
+    </tbody></table></div>
+    <div class="lab-distributions">
+      <div class="lab-distribution"><h3>Median net by player</h3><ul><% if (report.gold.byPlayer.length === 0) { %><li>No matching evidence</li><% } %><% report.gold.byPlayer.forEach(function(row) { %><li><span>Player #<%= row.playerId %> · <%= row.activations %> run<%= row.activations === 1 ? '' : 's' %></span><strong><%= signedGold(row.medianNetGold) %></strong></li><% }); %></ul></div>
+      <div class="lab-distribution"><h3>Median net by office hour</h3><ul><% if (report.gold.byOfficeHour.length === 0) { %><li>No matching evidence</li><% } %><% report.gold.byOfficeHour.forEach(function(row) { %><li><span><%= String(row.hour).padStart(2, '0') %>:00 · <%= row.activations %> run<%= row.activations === 1 ? '' : 's' %></span><strong><%= signedGold(row.medianNetGold) %></strong></li><% }); %></ul></div>
+    </div>
+  </section>
+
+  <section class="lab-section" aria-labelledby="lab-damage-title">
+    <h2 id="lab-damage-title">Damage counterfactuals</h2><p class="lab-muted">Each row removes only that activation's bonus damage, then reruns the encounter's stored 80/20 reward model.</p>
+    <div class="lab-table-wrap"><table class="lab-table"><thead><tr><th>Activation</th><th>Player</th><th>Bonus damage</th><th>Rank</th><th>Reward</th><th>Net after price</th></tr></thead><tbody>
+      <% if (report.damage.activations.length === 0) { %><tr><td colspan="6" class="lab-muted">No Damage Potion evidence matches these filters.</td></tr><% } %>
+      <% report.damage.activations.forEach(function(row) { %><tr><td>#<%= row.activationId %></td><td>#<%= row.playerId %></td><td><%= fmt(row.bonusDamage) %></td><td>Rank <%= row.actualRank || '—' %> → <%= row.counterfactualRank || '—' %></td><td>Actual <%= fmt(row.actualReward) %>g · Without potion <%= fmt(row.counterfactualReward) %>g</td><td class="<%= row.netGold >= 0 ? 'lab-good' : 'lab-bad' %>"><%= signedGold(row.netGold) %></td></tr><% }); %>
+    </tbody></table></div>
+    <p class="lab-muted" style="margin-top:12px">Encounter gold is redistributed, not minted; the potion changes a player's share of the stored reward pool.</p>
+  </section>
+
+  <section class="lab-section" aria-labelledby="lab-economy-title">
+    <h2 id="lab-economy-title">Economy flow</h2><p class="lab-muted">Potion sinks and direct minting are separated from redistributed encounter rewards.</p>
+    <div class="lab-metrics">
+      <div class="lab-metric"><span>Potion gold spent</span><strong><%= fmt(report.economy.potionGoldSpent) %>g</strong></div>
+      <div class="lab-metric"><span>Gold Potion minted</span><strong><%= fmt(report.economy.goldPotionMinted) %>g</strong></div>
+      <div class="lab-metric"><span>Encounter gold awarded</span><strong><%= fmt(report.economy.encounterGoldAwarded) %>g</strong></div>
+      <div class="lab-metric"><span>Monster gold stolen</span><strong><%= fmt(report.economy.monsterGoldStolen) %>g</strong></div>
+      <div class="lab-metric"><span>Ledger inflow</span><strong><%= fmt(report.economy.ledgerInflow) %>g</strong></div>
+      <div class="lab-metric"><span>Ledger outflow</span><strong><%= fmt(report.economy.ledgerOutflow) %>g</strong></div>
+      <div class="lab-metric"><span>Stock purchased</span><strong><%= fmt(report.economy.stockPurchased) %></strong></div>
+      <div class="lab-metric"><span>Doses used</span><strong><%= fmt(report.economy.dosesUsed) %></strong></div>
+      <div class="lab-metric"><span>Ledger check</span><strong class="<%= report.economy.ledgerReconciled ? 'lab-good' : 'lab-bad' %>"><%= report.economy.ledgerReconciled ? 'Ledger reconciled' : 'Mismatch found' %></strong></div>
+    </div>
+  </section>
+
+  <section class="lab-section" aria-labelledby="lab-ready-title">
+    <h2 id="lab-ready-title">Tier 2 evidence</h2><p class="lab-muted">Evidence only. Passing these checks never enables a product automatically.</p>
+    <div class="lab-checks">
+      <div class="lab-check <%= report.readiness.enoughCombatDays ? 'lab-ready' : 'lab-waiting' %>"><strong><%= fmt(report.readiness.distinctCombatDays) %> / 14 combat days</strong><span>Days with combat-active time.</span></div>
+      <div class="lab-check <%= report.readiness.enoughGoldActivations ? 'lab-ready' : 'lab-waiting' %>"><strong><%= fmt(report.readiness.completedGold) %> / 30 Gold runs</strong><span>Completed Gold Potion activations.</span></div>
+      <div class="lab-check <%= report.readiness.enoughDamageActivations ? 'lab-ready' : 'lab-waiting' %>"><strong><%= fmt(report.readiness.completedDamage) %> / 30 Damage runs</strong><span>Completed Damage Potion activations.</span></div>
+      <div class="lab-check <%= report.readiness.enoughPlayers ? 'lab-ready' : 'lab-waiting' %>"><strong><%= fmt(report.readiness.distinctPlayers) %> / 5 players</strong><span>Distinct players with completed evidence.</span></div>
+    </div>
+    <p class="<%= report.readiness.readyForTier2Review ? 'lab-good' : 'lab-muted' %>" style="margin-top:13px"><strong><%= report.readiness.readyForTier2Review ? 'Ready for a human Tier 2 review.' : 'Keep collecting launch-tier evidence.' %></strong></p>
+  </section>
+</div>
