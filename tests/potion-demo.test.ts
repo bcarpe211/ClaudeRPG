@@ -4,8 +4,10 @@ import path from 'node:path';
 import SqliteDatabase from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
+import { monsterByIndex } from '../src/domain/bestiary';
 import { activatePotion, activePotionEffects } from '../src/domain/potions';
 import { buildPotionLabReport } from '../src/domain/potionlab';
+import { isFrameA } from '../src/web/public/anim.js';
 import {
   main,
   resumePotionDemoCombat,
@@ -26,6 +28,13 @@ describe('timed-consumables local demo seed', () => {
     const db = openDb(':memory:');
 
     const result = seedPotionDemo(db, 2_000_000);
+
+    const encounter = db.prepare(
+      "SELECT creature_index AS creatureIndex FROM encounters WHERE status='active'",
+    ).get() as { creatureIndex: number };
+    expect(encounter.creatureIndex).toBe(188);
+    expect(isFrameA(encounter.creatureIndex)).toBe(true);
+    expect(monsterByIndex(encounter.creatureIndex)).toMatchObject({ boss: true });
 
     expect(db.prepare('SELECT COUNT(*) AS n FROM players').get()).toEqual({ n: 8 });
     expect(db.prepare(

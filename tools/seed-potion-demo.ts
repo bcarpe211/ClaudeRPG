@@ -15,6 +15,7 @@ import { seedSettings, setSetting } from '../src/domain/settings';
 const TIME_ZONE = 'America/New_York';
 const GOLD_SKU = 'potion_gold_t1';
 const DAMAGE_SKU = 'potion_damage_t1';
+const DEMO_BOSS_CREATURE_INDEX = 188;
 const ARMED_REVIEW_MARKER_KEY = 'potion_demo_armed_review_marker';
 const ARMED_REVIEW_MARKER_VALUE = 'timed-consumables-armed-review-v1';
 
@@ -135,16 +136,16 @@ export function seedPotionDemo(
     `INSERT INTO dungeons (level, theme, seed, regular_count, created_at)
      VALUES (12, 'Ossuary Pale', 424242, 3, ?)`,
   ).run(now - 60_000);
+  const dungeonId = Number(dungeon.lastInsertRowid);
   const encounter = db.prepare(
     `INSERT INTO encounters
       (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
        pack_count, max_hp, current_hp, status, started_at,
        reward_model_version, reward_work_pct, reward_damage_pct,
        reward_podium_first_pct, reward_podium_second_pct, reward_podium_third_pct)
-     VALUES (?, 1, 'boss', 35, 2, 1, 500000000, 499000000, 'active', ?,
+     VALUES (?, 1, 'boss', ?, 2, 1, 500000000, 499000000, 'active', ?,
        'hybrid-v1', 80, 10, 5, 3, 2)`,
-  ).run(Number(dungeon.lastInsertRowid), now - 50_000);
-  const dungeonId = Number(dungeon.lastInsertRowid);
+  ).run(dungeonId, DEMO_BOSS_CREATURE_INDEX, now - 50_000);
   const encounterId = Number(encounter.lastInsertRowid);
   db.prepare(
     `UPDATE game_state
