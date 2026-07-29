@@ -282,9 +282,6 @@ export function activatePotion(
 ): ActivatePotionResult {
   try {
     const execute = db.transaction((): ActivatePotionResult => {
-      completeExpiredPotions(db, input.now);
-      retireInvalidActivePotions(db, input.playerId, input.now);
-
       const prior = db.prepare(
         `SELECT id, sku, potion_type, inventory_remaining_after,
                 uses_remaining_after, initial_state
@@ -297,6 +294,9 @@ export function activatePotion(
         }
         return duplicateResult(prior);
       }
+
+      completeExpiredPotions(db, input.now);
+      retireInvalidActivePotions(db, input.playerId, input.now);
 
       let product;
       try {

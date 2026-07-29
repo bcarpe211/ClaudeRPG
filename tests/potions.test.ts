@@ -88,6 +88,23 @@ function expectStackMatchesLots(playerId: number, sku: string): void {
   expect(inventoryQuantity(db, playerId, sku)).toBe(lots.quantity);
 }
 
+function activationWriteState(playerId: number) {
+  return {
+    totalChanges: (db.prepare(
+      'SELECT total_changes() AS changes',
+    ).get() as { changes: number }).changes,
+    activations: db.prepare(
+      'SELECT * FROM potion_activations WHERE player_id = ? ORDER BY id',
+    ).all(playerId),
+    inventory: db.prepare(
+      'SELECT * FROM player_inventory WHERE player_id = ? ORDER BY sku',
+    ).all(playerId),
+    lots: db.prepare(
+      'SELECT * FROM player_inventory_lots WHERE player_id = ? ORDER BY id',
+    ).all(playerId),
+  };
+}
+
 function seedActiveEncounter(playerId: number, now: number): void {
   db.prepare('UPDATE players SET last_token_at = ? WHERE id = ?').run(now, playerId);
   const dungeon = db.prepare(
@@ -176,6 +193,40 @@ describe('manual potion activation', () => {
     expect(activatePotion(db, { ...input, skuId: 'potion_damage_t1' }))
       .toEqual({ ok: false, reason: 'request_conflict' });
     expect(inventoryQuantity(db, player.id, 'potion_gold_t1')).toBe(0);
+    expectStackMatchesLots(player.id, 'potion_gold_t1');
+  });
+
+  it('replays an expired active response with zero writes before completion cleanup', () => {
+    const player = playerWithGold();
+    buy(player.id, 'potion_gold_t1', 1, 'uncompleted-retry-stock');
+    const input = {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      requestId: 'uncompleted-retry',
+      now: dayOne,
+      timeZone,
+    };
+    const original = activatePotion(db, input);
+    expect(original).toMatchObject({
+      ok: true,
+      duplicate: false,
+      inventoryRemaining: 0,
+      usesRemaining: 2,
+      state: 'armed',
+    });
+    if (!original.ok) throw new Error(`activation fixture failed: ${original.reason}`);
+    advanceCombatClock(db, durationMs + 1, dayOne + durationMs + 1, timeZone);
+    const beforeRetry = activationWriteState(player.id);
+    expect(db.prepare(
+      'SELECT status, completed_at FROM potion_activations WHERE id = ?',
+    ).get(original.activationId)).toEqual({
+      status: 'active',
+      completed_at: null,
+    });
+
+    expect(activatePotion(db, { ...input, now: dayOne + durationMs + 1 }))
+      .toEqual({ ...original, duplicate: true });
+    expect(activationWriteState(player.id)).toEqual(beforeRetry);
     expectStackMatchesLots(player.id, 'potion_gold_t1');
   });
 
@@ -346,13 +397,14 @@ describe('manual potion activation', () => {
   it('ignores malformed rows in reads and retires an invalid active row before activation', () => {
     const player = playerWithGold();
     const purchase = buy(player.id, 'potion_gold_t1', 1, 'malformed-row-stock');
-    db.prepare(
+    const malformed = db.prepare(
       `INSERT INTO potion_activations
         (player_id, sku, potion_type, tier, purchase_id, purchase_unit_price,
          request_id, activation_day, activated_at, start_game_ms, expires_game_ms,
-         status, effect_snapshot)
+         status, effect_snapshot, inventory_remaining_after,
+         uses_remaining_after, initial_state)
        VALUES (?, 'potion_gold_t1', 'gold', 1, ?, 100000, 'malformed-active',
-               '2026-07-28', ?, 0, ?, 'active', ?)`,
+               '2026-07-28', ?, 0, ?, 'active', ?, 0, 2, 'active')`,
     ).run(
       player.id,
       purchase.purchaseId,
@@ -363,6 +415,21 @@ describe('manual potion activation', () => {
 
     expect(remainingDailyUses(db, player.id, 'gold', '2026-07-28', 3)).toBe(3);
     expect(activePotionEffects(db, player.id, dayOne)).toEqual([]);
+
+    const malformedBeforeRetry = activationWriteState(player.id);
+    expect(activate(player.id, 'potion_gold_t1', 'malformed-active')).toEqual({
+      ok: true,
+      activationId: Number(malformed.lastInsertRowid),
+      duplicate: true,
+      potionType: 'gold',
+      inventoryRemaining: 0,
+      usesRemaining: 2,
+      state: 'active',
+    });
+    expect(activationWriteState(player.id)).toEqual(malformedBeforeRetry);
+    expect(activate(player.id, 'potion_damage_t1', 'malformed-active'))
+      .toEqual({ ok: false, reason: 'request_conflict' });
+    expect(activationWriteState(player.id)).toEqual(malformedBeforeRetry);
 
     expect(activate(player.id, 'potion_gold_t1', 'valid-after-malformed')).toMatchObject({
       ok: true,
