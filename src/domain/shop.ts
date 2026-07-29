@@ -9,14 +9,38 @@ export const SKUS: Record<string, Sku> = {
   cosmetic_wheel_t3: { id: 'cosmetic_wheel_t3', priceSetting: 'cosmetic_wheel_t3_price', priceDefault: 2_500_000, grantTier: 3 },
 };
 
+export const COSMETIC_PRICE_SETTING_KEYS = [
+  'cosmetic_wheel_t1_price',
+  'cosmetic_wheel_t2_price',
+  'cosmetic_wheel_t3_price',
+] as const;
+
+export type CosmeticPriceSettingKey =
+  typeof COSMETIC_PRICE_SETTING_KEYS[number];
+
 export type PurchaseResult =
   | { ok: true; newGold: number; tier: number }
   | { ok: false; reason: 'unknown_sku' | 'no_player' | 'already_owned' | 'out_of_sequence' | 'insufficient_gold' | 'invalid_price'; price?: number; gold?: number; currentTier?: number }
   | { ok: false; reason: 'price_changed'; expectedPrice: number; currentPrice: number };
 
+function safeCosmeticPrice(raw: unknown): number | undefined {
+  const value = typeof raw === 'string' || typeof raw === 'number'
+    ? Number(raw)
+    : NaN;
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+export function validCosmeticPriceSettings(
+  values: Record<CosmeticPriceSettingKey, string>,
+): boolean {
+  return COSMETIC_PRICE_SETTING_KEYS.every(
+    (key) => safeCosmeticPrice(values[key]) !== undefined,
+  );
+}
+
 export function skuPrice(db: Database.Database, sku: Sku): number {
-  const configured = Number(getSetting(db, sku.priceSetting));
-  return Number.isFinite(configured) && configured >= 0 ? configured : sku.priceDefault;
+  return safeCosmeticPrice(getSetting(db, sku.priceSetting))
+    ?? sku.priceDefault;
 }
 
 export function nextCosmeticSku(wheelTier: number): Sku | undefined {

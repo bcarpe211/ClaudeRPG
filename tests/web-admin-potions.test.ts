@@ -195,6 +195,7 @@ describe('admin Potion Lab', () => {
 
   it.each([
     { from: 'not-a-date' },
+    { from: '1969-12-31' },
     { to: '2026-99-99' },
     { player: 'abc' },
     { player: '0' },

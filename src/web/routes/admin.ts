@@ -27,6 +27,11 @@ import {
   parsePotionConfiguration,
   type PotionSettingKey,
 } from '../../domain/shop-products';
+import {
+  COSMETIC_PRICE_SETTING_KEYS,
+  validCosmeticPriceSettings,
+  type CosmeticPriceSettingKey,
+} from '../../domain/shop';
 
 // Augment the session type with our admin flag.
 declare module 'express-session' {
@@ -85,7 +90,8 @@ function officeDateStart(
   for (let offset = -2; offset <= 2; offset += 1) {
     const candidate = utcNoon + offset * 86_400_000;
     if (officeDayKey(candidate, timeZone) === value) {
-      return officeDayStart(candidate, timeZone);
+      const start = officeDayStart(candidate, timeZone);
+      return Number.isSafeInteger(start) && start >= 0 ? start : undefined;
     }
   }
   return undefined;
@@ -214,13 +220,22 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
     }),
   );
 
+  const SafeNonNegativeInteger = z.coerce.number()
+    .int()
+    .nonnegative()
+    .refine(Number.isSafeInteger, 'must be a safe integer');
+  const SafePositiveInteger = z.coerce.number()
+    .int()
+    .min(1)
+    .refine(Number.isSafeInteger, 'must be a safe integer');
+
   const EditInput = z.object({
     name: z.string().trim().min(1).max(40),
     class_key: z.string().refine((k) => !!getClass(k), 'unknown class'),
     gender: z.enum(['M', 'F']),
-    level: z.coerce.number().int().min(1),
-    gold: z.coerce.number().int().min(0),
-    effective_tokens: z.coerce.number().int().min(0).optional(),
+    level: SafePositiveInteger,
+    gold: SafeNonNegativeInteger,
+    effective_tokens: SafeNonNegativeInteger.optional(),
     disabled: z.union([z.literal('1'), z.undefined()]),
   });
 
@@ -246,8 +261,12 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
     if (d.effective_tokens !== undefined) {
       patch.effective_tokens = d.effective_tokens;
     }
-    updatePlayer(db, player.id, patch);
-    setGoldBalance(db, player.id, d.gold, randomUUID(), Date.now());
+    const requestId = randomUUID();
+    const now = Date.now();
+    db.transaction(() => {
+      updatePlayer(db, player.id, patch);
+      setGoldBalance(db, player.id, d.gold, requestId, now);
+    })();
     res.redirect('/admin');
   });
 
@@ -271,6 +290,29 @@ export function registerAdminRoutes(app: Express, deps: AppDeps): void {
   );
 
   app.post('/admin/settings', requireAdmin, (req, res) => {
+    const hasCosmeticPrice = COSMETIC_PRICE_SETTING_KEYS.some(
+      (key) => req.body?.[key] !== undefined,
+    );
+    if (hasCosmeticPrice) {
+      const submitted = Object.fromEntries(
+        COSMETIC_PRICE_SETTING_KEYS.map((key) => [key, req.body?.[key]]),
+      ) as Record<CosmeticPriceSettingKey, unknown>;
+      if (COSMETIC_PRICE_SETTING_KEYS.some((key) => (
+        typeof submitted[key] !== 'string'
+        || submitted[key].trim().length === 0
+      ))) {
+        res.status(400).send('All cosmetic prices are required');
+        return;
+      }
+      if (!validCosmeticPriceSettings(
+        submitted as Record<CosmeticPriceSettingKey, string>,
+      )) {
+        res.status(400).send(
+          'Cosmetic prices must be non-negative safe integers',
+        );
+        return;
+      }
+    }
     const hasPotionSetting = POTION_SETTING_KEYS.some(
       (key) => req.body?.[key] !== undefined,
     );

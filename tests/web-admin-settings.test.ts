@@ -31,6 +31,19 @@ function potionSettings(
   };
 }
 
+function cosmeticSettings(
+  overrides: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    ...Object.fromEntries(
+      Object.entries(DEFAULT_SETTINGS).filter(
+        ([key]) => key.startsWith('cosmetic_wheel_') && key.endsWith('_price'),
+      ),
+    ),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   db = openDb(':memory:');
   seedSettings(db);
@@ -165,6 +178,42 @@ describe('admin settings', () => {
     expect(res.status).toBe(400);
     expect(getSetting(db, 'baseline_battle_minutes')).toBe('45');
     expect(getSetting(db, 'potion_damage_t1_base_hit_pct')).toBe('25');
+  });
+
+  it('rejects a partial cosmetic-price group without saving any setting', async () => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send({
+        baseline_battle_minutes: '40',
+        cosmetic_wheel_t1_price: '100',
+      });
+
+    expect(res.status).toBe(400);
+    expect(getSetting(db, 'baseline_battle_minutes')).toBe('45');
+    expect(getSetting(db, 'cosmetic_wheel_t1_price')).toBe('1500000');
+  });
+
+  it.each([
+    ['negative', { cosmetic_wheel_t1_price: '-1' }],
+    ['fractional', { cosmetic_wheel_t2_price: '1.5' }],
+    ['unsafe', { cosmetic_wheel_t3_price: '9007199254740992' }],
+  ])('rejects a %s cosmetic price transactionally', async (_label, invalid) => {
+    const agent = await adminAgent();
+    const res = await agent
+      .post('/admin/settings')
+      .type('form')
+      .send({
+        baseline_battle_minutes: '40',
+        ...cosmeticSettings(invalid),
+      });
+
+    expect(res.status).toBe(400);
+    expect(getSetting(db, 'baseline_battle_minutes')).toBe('45');
+    for (const [key, value] of Object.entries(cosmeticSettings())) {
+      expect(getSetting(db, key), key).toBe(value);
+    }
   });
 
   it('never exposes the admin password hash as an editable knob', async () => {

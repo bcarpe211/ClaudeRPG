@@ -3,7 +3,12 @@ import { openDb } from '../src/db/db';
 import { seedSettings } from '../src/domain/settings';
 import { createPlayer } from '../src/domain/players';
 import { getPlayerById } from '../src/domain/players';
-import { purchase, setCosmeticHue } from '../src/domain/shop';
+import {
+  purchase,
+  setCosmeticHue,
+  skuPrice,
+  SKUS,
+} from '../src/domain/shop';
 import { getCosmetics, cosmeticSpriteUrl } from '../src/domain/cosmetics';
 
 let db: ReturnType<typeof openDb>;
@@ -61,6 +66,16 @@ describe('purchase', () => {
     expect(purchase(db, p.id, 'cosmetic_wheel_t1', 100, 100)).toMatchObject({ ok: true, newGold: 900 });
     expect(purchase(db, p.id, 'cosmetic_wheel_t2', 200, 200)).toMatchObject({ ok: true, newGold: 700 });
     expect(purchase(db, p.id, 'cosmetic_wheel_t3', 300, 300)).toMatchObject({ ok: true, newGold: 400 });
+  });
+
+  it.each([
+    ['fractional', '1.5'],
+    ['unsafe', '9007199254740992'],
+  ])('falls back from a %s configured cosmetic price', (_label, value) => {
+    db.prepare(
+      "UPDATE settings SET value=? WHERE key='cosmetic_wheel_t1_price'",
+    ).run(value);
+    expect(skuPrice(db, SKUS.cosmetic_wheel_t1)).toBe(1_500_000);
   });
 
   it('rejects a price increase from the displayed offer without charging or granting', () => {
