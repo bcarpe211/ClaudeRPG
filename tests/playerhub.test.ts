@@ -120,6 +120,7 @@ describe('player hub state', () => {
     const freshPlayer = getPlayerById(db, player.id)!;
     const hub = buildPlayerHubState(db, freshPlayer, now, timeZone);
 
+    expect(hub.activationTiming).toBe('starts_now');
     expect(hub.today).toEqual({
       effectiveTokens: 1234,
       damage: 500,
@@ -159,6 +160,7 @@ describe('player hub state', () => {
     const player = createPlayer(db, { name: 'Quiet', class_key: 'priest', gender: 'F' }, now);
     const hub = buildPlayerHubState(db, player, now, timeZone);
 
+    expect(hub.activationTiming).toBe('waits_for_battle');
     expect(hub.inventory).toEqual([]);
     expect(hub.effects).toEqual([]);
     expect(hub.today.fightRank).toBeNull();

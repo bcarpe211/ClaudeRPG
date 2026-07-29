@@ -200,7 +200,7 @@ export function potionEffectSnapshot(
   return parsed.success ? parsed.data : undefined;
 }
 
-function activationState(
+export function potionActivationState(
   db: Database.Database,
   now: number,
 ): 'armed' | 'active' {
@@ -423,7 +423,7 @@ export function activatePotion(
       }
 
       const startGameMs = combatActiveMs(db);
-      const initialState = activationState(db, input.now);
+      const initialState = potionActivationState(db, input.now);
       const inserted = db.prepare(
         `INSERT INTO potion_activations
           (player_id, sku, potion_type, tier, purchase_id, purchase_unit_price,

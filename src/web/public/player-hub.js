@@ -55,7 +55,7 @@
   let selectedFilter = 'all';
   let effectsPinned = false;
   let suppressFocusOpen = false;
-  let pendingRequestId = null;
+  let pendingActivation = null;
   let refreshing = false;
   let refreshQueued = false;
 
@@ -279,9 +279,16 @@
   function openDialog() {
     const item = selectedItem();
     if (!item || drinkButton.disabled) return;
-    pendingRequestId = root.crypto.randomUUID();
+    pendingActivation = {
+      requestId: root.crypto.randomUUID(),
+      sku: item.sku,
+      item: { ...item },
+    };
+    const timing = state.activationTiming === 'starts_now'
+      ? 'Starts now.'
+      : 'Waits for battle.';
     setText('potion-confirm-title', `Drink ${item.name}?`);
-    setText('potion-confirm-copy', `Drinking is irreversible. ${item.effectCopy} for ${durationLabel(item.durationMs)}. The timer pauses whenever the dungeon is not accepting work.`);
+    setText('potion-confirm-copy', `${timing} Drinking is irreversible. ${item.effectCopy} for ${durationLabel(item.durationMs)}. The timer pauses whenever the dungeon is not accepting work.`);
     setText('potion-confirm-inventory', `${item.quantity} → ${Math.max(0, item.quantity - 1)} owned`);
     setText('potion-confirm-doses', `${item.usesRemaining} → ${Math.max(0, item.usesRemaining - 1)} remaining`);
     if (typeof confirmDialog.showModal === 'function') {
@@ -301,7 +308,7 @@
       confirmDialog.hidden = true;
     }
     confirmDialog.classList.remove('is-open');
-    if (clearRequest) pendingRequestId = null;
+    if (clearRequest) pendingActivation = null;
   }
 
   function activationError(reason) {
@@ -349,14 +356,15 @@
   }
 
   async function activateSelected() {
-    const item = selectedItem();
-    if (!item || !pendingRequestId) return;
+    const pending = pendingActivation;
+    if (!pending) return;
+    const item = pending.item;
     confirmDrink.disabled = true;
     confirmDrink.textContent = 'Uncorking…';
     const body = new URLSearchParams({
       token: bootstrap.token,
-      sku: item.sku,
-      request_id: pendingRequestId,
+      sku: pending.sku,
+      request_id: pending.requestId,
     });
     try {
       const response = await root.fetch(bootstrap.endpoints.activate, {
@@ -380,7 +388,7 @@
       await refreshState(true);
     } catch {
       showFeedback('The courier lost the reply. Try again—the same ledger mark will be reused.', true);
-      // Keep pendingRequestId so a retry cannot consume a second bottle.
+      // Keep the confirmed UUID and SKU so a retry cannot consume a different bottle.
     } finally {
       confirmDrink.disabled = false;
       confirmDrink.textContent = 'Drink Potion';
@@ -397,6 +405,12 @@
     if (!effectsSurface || !avatarTrigger) return;
     effectsSurface.hidden = true;
     avatarTrigger.setAttribute('aria-expanded', 'false');
+  }
+
+  function returnFocusToAvatar() {
+    suppressFocusOpen = true;
+    avatarTrigger?.focus();
+    suppressFocusOpen = false;
   }
 
   grid.addEventListener('click', (event) => {
@@ -441,14 +455,14 @@
   effectsClose?.addEventListener('click', () => {
     effectsPinned = false;
     closeEffects();
-    suppressFocusOpen = true;
-    avatarTrigger?.focus();
-    suppressFocusOpen = false;
+    returnFocusToAvatar();
   });
   documentRef.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    const effectsWasOpen = effectsSurface && !effectsSurface.hidden;
     effectsPinned = false;
     closeEffects();
+    if (effectsWasOpen) returnFocusToAvatar();
     if (confirmDialog.open || !confirmDialog.hidden) closeDialog();
   });
   documentRef.addEventListener('visibilitychange', () => {

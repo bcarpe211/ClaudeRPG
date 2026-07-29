@@ -168,13 +168,20 @@ function tabHarness() {
 
 type HubState = {
   gold: number;
+  activationTiming: 'starts_now' | 'waits_for_battle';
   inventory: Array<Record<string, any>>;
   effects: Array<Record<string, any>>;
   today: Record<string, any>;
   currentFight: { leaders: Array<Record<string, any>> };
 };
 
-function interactionHarness(responseOverrides?: Array<{ ok: boolean; json: () => Promise<any> }>) {
+type HarnessResponse = { ok: boolean; json: () => Promise<any> } | Error;
+
+function interactionHarness(options: {
+  responses?: HarnessResponse[];
+  activationTiming?: HubState['activationTiming'];
+  reducedMotion?: boolean;
+} = {}) {
   const document = new FakeDocument();
   const register = (id: string, tag = 'div') => document.register(new FakeElement(id, tag));
   const ids = [
@@ -205,6 +212,7 @@ function interactionHarness(responseOverrides?: Array<{ ok: boolean; json: () =>
 
   const initialState: HubState = {
     gold: 450_000,
+    activationTiming: options.activationTiming ?? 'starts_now',
     inventory: [
       {
         sku: 'potion_gold_t1', name: 'Beginner Gold Potion', potionType: 'gold', tier: 1,
@@ -247,7 +255,7 @@ function interactionHarness(responseOverrides?: Array<{ ok: boolean; json: () =>
     today: { ...initialState.today, potionsUsed: 2 },
   };
   const fetchCalls: Array<{ url: string; options: Record<string, any> }> = [];
-  const responses = responseOverrides ?? [
+  const responses: HarnessResponse[] = options.responses ?? [
     { ok: true, json: async () => ({
       ok: true, duplicate: false, potionType: 'damage', inventoryRemaining: 0,
       usesRemaining: 2, state: 'armed',
@@ -267,6 +275,7 @@ function interactionHarness(responseOverrides?: Array<{ ok: boolean; json: () =>
       fetchCalls.push({ url, options });
       const response = responses.shift();
       if (!response) throw new Error('unexpected fetch');
+      if (response instanceof Error) throw response;
       return response;
     },
     crypto: { randomUUID: () => '11111111-1111-4111-8111-111111111111' },
@@ -276,7 +285,7 @@ function interactionHarness(responseOverrides?: Array<{ ok: boolean; json: () =>
     setInterval(callback: () => unknown, delay: number) { intervals.push({ callback, delay }); return 1; },
     setTimeout(callback: () => unknown) { timers.push(callback); return timers.length; },
     clearTimeout() {},
-    matchMedia: () => ({ matches: false }),
+    matchMedia: () => ({ matches: options.reducedMotion ?? false }),
   };
   context.window = context;
   context.globalThis = context;
@@ -334,6 +343,7 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     const dialog = h.document.getElementById('potion-confirm')!;
     expect(dialog.open).toBe(true);
     expect(h.document.getElementById('potion-confirm-inventory')!.textContent).toBe('1 → 0 owned');
+    expect(h.document.getElementById('potion-confirm-copy')!.textContent).toContain('Starts now');
     expect(h.fetchCalls).toHaveLength(0);
 
     await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
@@ -360,17 +370,19 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(effects.hidden).toBe(false);
     h.document.dispatch('keydown', new FakeEvent('Escape'));
     expect(effects.hidden).toBe(true);
+    expect(h.avatar.focusCount).toBe(1);
     h.avatar.dispatch('pointerenter');
     h.document.getElementById('hub-effects-close')!.dispatch('click');
     expect(effects.hidden).toBe(true);
-    expect(h.avatar.focusCount).toBe(1);
+    expect(h.avatar.focusCount).toBe(2);
   });
 
   it('keeps a bottle corked without a request and restores rejected actions with thematic feedback', async () => {
-    const rejected = interactionHarness([{
-      ok: false,
-      json: async () => ({ ok: false, reason: 'type_active' }),
-    }]);
+    const rejected = interactionHarness({ responses: [{
+        ok: false,
+        json: async () => ({ ok: false, reason: 'type_active' }),
+      }],
+    });
     const grid = rejected.document.getElementById('hub-inventory-grid')!;
     const damage = grid.querySelectorAll('[data-sku]')
       .find((button) => button.dataset.sku === 'potion_damage_t1')!;
@@ -387,6 +399,55 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(rejected.document.getElementById('hub-potion-feedback')!.textContent)
       .toContain('already flowing');
     expect(rejected.document.getElementById('hub-bottle-burst')!.classList.contains('is-bursting'))
+      .toBe(false);
+  });
+
+  it('freezes confirmed SKU and UUID across a lost reply and a state refresh', async () => {
+    const h = interactionHarness({ responses: [new Error('reply lost')] });
+    const grid = h.document.getElementById('hub-inventory-grid')!;
+    const damage = grid.querySelectorAll('[data-sku]')
+      .find((button) => button.dataset.sku === 'potion_damage_t1')!;
+    grid.dispatch('click', new FakeEvent('', damage));
+    h.document.getElementById('hub-potion-drink')!.dispatch('click');
+
+    await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
+    expect(h.fetchCalls).toHaveLength(1);
+
+    const withoutDamage: HubState = {
+      ...h.initialState,
+      activationTiming: 'waits_for_battle',
+      inventory: h.initialState.inventory.filter((item) => item.sku === 'potion_gold_t1'),
+    };
+    h.responses.push(
+      { ok: true, json: async () => withoutDamage },
+      { ok: true, json: async () => ({
+        ok: true, duplicate: true, potionType: 'damage', inventoryRemaining: 0,
+        usesRemaining: 2, state: 'armed',
+      }) },
+      { ok: true, json: async () => withoutDamage },
+    );
+    await h.intervals[0].callback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.document.getElementById('hub-item-detail')!.dataset.selectedSku).toBe('potion_gold_t1');
+
+    await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
+    const firstBody = String(h.fetchCalls[0].options.body);
+    const retryBody = String(h.fetchCalls[2].options.body);
+    expect(firstBody).toContain('sku=potion_damage_t1');
+    expect(retryBody).toContain('sku=potion_damage_t1');
+    expect(retryBody).toBe(firstBody);
+  });
+
+  it('shows Waits for battle before submission and suppresses the burst for reduced motion', async () => {
+    const h = interactionHarness({ activationTiming: 'waits_for_battle', reducedMotion: true });
+    const grid = h.document.getElementById('hub-inventory-grid')!;
+    const damage = grid.querySelectorAll('[data-sku]')
+      .find((button) => button.dataset.sku === 'potion_damage_t1')!;
+    grid.dispatch('click', new FakeEvent('', damage));
+    h.document.getElementById('hub-potion-drink')!.dispatch('click');
+    expect(h.document.getElementById('potion-confirm-copy')!.textContent).toContain('Waits for battle');
+    await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');
+    expect(h.document.getElementById('hub-bottle-burst')!.classList.contains('is-bursting'))
       .toBe(false);
   });
 

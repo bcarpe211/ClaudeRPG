@@ -7,6 +7,7 @@ import { nextOfficeMidnight, officeDayKey, officeDayStart } from './office-time'
 import {
   activePotionEffects,
   potionEffectSnapshot,
+  potionActivationState,
   potionUsesForDay,
   remainingDailyUses,
 } from './potions';
@@ -63,6 +64,7 @@ export interface PlayerHubEffect {
 
 export interface PlayerHubState {
   gold: number;
+  activationTiming: 'starts_now' | 'waits_for_battle';
   inventory: PlayerHubInventoryItem[];
   effects: PlayerHubEffect[];
   today: PlayerHubToday;
@@ -254,6 +256,9 @@ export function buildPlayerHubState(
 
   return {
     gold: balance.gold,
+    activationTiming: potionActivationState(db, now) === 'active'
+      ? 'starts_now'
+      : 'waits_for_battle',
     inventory,
     effects: activeEffects(db, player.id, now),
     today: {
