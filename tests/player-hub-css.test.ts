@@ -57,6 +57,19 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[^}]*grid-template-columns:\s*1fr/);
   });
 
+  it('limits narrow TV floor shadows to the approved top-interior cells', () => {
+    const narrowRoom = css.slice(
+      css.indexOf('@container (max-width:520px)'),
+      css.indexOf('@media (max-width:760px)'),
+    );
+    const narrowShadowCells = [...narrowRoom.matchAll(/\.hub-room-tile:nth-child\((\d+)\)::after/g)]
+      .map((match) => Number(match[1]));
+
+    expect(narrowRoom).toMatch(/\.hub-room-tile:nth-child\(11\)::after,[\s\S]*\.hub-room-tile:nth-child\(17\)::after\{content:none\}/);
+    expect(narrowRoom).toMatch(/\.hub-room-tile:nth-child\(8\)::after,[\s\S]*\.hub-room-tile:nth-child\(11\)::after\{content:""\}/);
+    expect(narrowShadowCells).toEqual([11, 12, 13, 14, 15, 16, 17, 8, 9, 10, 11]);
+  });
+
   it('keeps the gold tab rail sticky on narrow screens and reanchors effects', () => {
     expect(css).toMatch(/\.hub-tabs[\s\S]*border/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-tabs[\s\S]*position:\s*sticky/);

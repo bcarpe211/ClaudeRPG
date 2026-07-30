@@ -139,6 +139,13 @@
   .hub-inventory-grid{grid-template-columns:repeat(4,48px);grid-template-rows:repeat(7,48px);width:192px;height:336px}
   .hub-room-tile{background-position:-192px -576px}
   .hub-room-tile::after{content:none}
+  .hub-room-tile:nth-child(11)::after,
+  .hub-room-tile:nth-child(12)::after,
+  .hub-room-tile:nth-child(13)::after,
+  .hub-room-tile:nth-child(14)::after,
+  .hub-room-tile:nth-child(15)::after,
+  .hub-room-tile:nth-child(16)::after,
+  .hub-room-tile:nth-child(17)::after{content:none}
 
   .hub-room-tile:nth-child(-n+6),
   .hub-room-tile:nth-child(n+49){background-position:-576px -576px}
