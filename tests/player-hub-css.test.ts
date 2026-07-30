@@ -20,6 +20,8 @@ describe('player hub layout CSS', () => {
   it('lays out the tight dungeon beside leaders with Today across the bottom', () => {
     expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-columns:\s*minmax\(0,480px\) minmax\(240px,1fr\)/);
     expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-areas:\s*"dungeon leaders" "today today"/);
+    expect(css).toMatch(/\.hub-live-grid\{[^}]*gap:\s*12px 20px/);
+    expect(css).toMatch(/\.hub-today-panel h3\{[^}]*margin:\s*0 0 6px/);
     expect(css).toMatch(/\.hub-dungeon\{[^}]*aspect-ratio:\s*6\/5/);
     expect(css).toMatch(/\.hub-dungeon\{[^}]*overflow:\s*visible/);
     expect(css).toMatch(/\.hub-dungeon::before\{[^}]*top:\s*10%/);
@@ -35,12 +37,21 @@ describe('player hub layout CSS', () => {
     expect(css).not.toContain('.hub-live-side');
   });
 
-  it('builds a two-thirds dungeon-room inventory from existing pixel assets', () => {
+  it('builds the approved snapped inventory room from the world atlas', () => {
     expect(css).toMatch(/\.hub-inventory-layout\{[^}]*grid-template-columns:\s*minmax\(0,2fr\) minmax\(240px,1fr\)/);
-    expect(css).toMatch(/\.hub-inventory-room\{[^}]*border-image:[^}]*moss_wall\.png/);
-    expect(css).toContain('/sprites/world_24x24/oryx_16bit_fantasy_world_349.png');
-    expect(css).toContain('/sheet/world.png');
-    expect(css).toMatch(/\.hub-room-door\{[^}]*background-position:\s*-1392px -144px/);
+    expect(css).toMatch(/\.hub-inventory-room\{[^}]*--room-columns:\s*9[^}]*--room-rows:\s*6/);
+    expect(css).toMatch(/\.hub-room-tiles\{[^}]*grid-template-columns:\s*repeat\(var\(--room-columns\),48px\)/);
+    expect(css).toMatch(/\.hub-room-tile\{[^}]*background-size:\s*2732px 2014px/);
+    expect(css).toContain('background-position:-192px -576px');
+    expect(css).toContain('background-position:-1440px -1776px');
+    expect(css).toContain('-816px -624px');
+    expect(css).toContain('-960px -624px');
+    expect(css).toMatch(/\.hub-inventory-grid\{[^}]*grid-template-columns:\s*repeat\(7,48px\)/);
+    expect(css).toMatch(/@container \(max-width:\s*520px\)[\s\S]*--room-columns:\s*6[\s\S]*--room-rows:\s*9/);
+    expect(css).toMatch(/@container \(max-width:\s*520px\)[\s\S]*\.hub-inventory-grid\{[^}]*repeat\(4,48px\)/);
+    expect(css).not.toContain('moss_wall.png');
+    expect(css).not.toContain('.hub-room-door');
+    expect(css).not.toContain('.hub-room-crack');
     expect(css).toMatch(/\.hub-item-qty\{[^}]*top:/);
     expect(css).toMatch(/\.hub-item-qty\{[^}]*text-shadow:/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[^}]*grid-template-columns:\s*1fr/);
