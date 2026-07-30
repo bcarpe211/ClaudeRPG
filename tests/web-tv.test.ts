@@ -20,12 +20,14 @@ describe('TV routes', () => {
     expect(res.text).toContain('cursor: none');
   });
 
-  it('GET /tv/embed serves the responsive compact renderer', async () => {
+  it('GET /tv/embed serves the transparent shared compact renderer', async () => {
     const embed = await request(app).get('/tv/embed');
     expect(embed.status).toBe(200);
     expect(embed.text).toContain('<body data-tv-mode="compact">');
     expect(embed.text).toContain('<canvas id="stage"></canvas>');
+    expect(embed.text).toContain('/static/potion-fx.js');
     expect(embed.text).toContain('/static/tv/tv.js');
+    expect(embed.text).toContain('background: transparent');
     expect(embed.text).toContain('width: 100%');
     expect(embed.text).toContain('height: 100%');
     expect(embed.text).not.toContain('cursor: none');

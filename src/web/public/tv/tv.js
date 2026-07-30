@@ -5,6 +5,7 @@
 // below the panel; the monster HP bar sits in the strip above it.
 
 const TILE = 24;            // source tile size
+const COMPACT_STATUS = 40;  // source pixels above the 20x15 hub dungeon
 const TV_MODE = document.body.dataset.tvMode === 'compact' ? 'compact' : 'full';
 const IS_COMPACT = TV_MODE === 'compact';
 const SIDEBAR_FRAC = IS_COMPACT ? 0 : 0.30; // leaderboard width fraction
@@ -89,6 +90,20 @@ let leaderboards = null;  // last 'leaderboards' payload (array of boards)
 
 function computeScale() {
   const vw = canvas.width, vh = canvas.height;
+  if (IS_COMPACT) {
+    sidebarW = 0;
+    fieldX = 0;
+    const logicalW = 20 * TILE;
+    const logicalH = 15 * TILE + COMPACT_STATUS;
+    scale = Math.max(1, Math.floor(Math.min(vw / logicalW, vh / logicalH)));
+    tilePx = TILE * scale;
+    panelW = 20 * tilePx;
+    panelH = 15 * tilePx;
+    panelX = Math.round((vw - panelW) / 2);
+    panelY = Math.round((vh - logicalH * scale) / 2) + COMPACT_STATUS * scale;
+    return;
+  }
+
   sidebarW = Math.round(vw * SIDEBAR_FRAC);
   fieldX = sidebarW;
   const fieldW = vw - sidebarW;
@@ -106,8 +121,23 @@ function computeScale() {
 }
 
 function resize() {
-  canvas.width = window.innerWidth * (window.devicePixelRatio || 1);
-  canvas.height = window.innerHeight * (window.devicePixelRatio || 1);
+  const dpr = window.devicePixelRatio || 1;
+  if (IS_COMPACT) {
+    const compactFit = Math.min(1, window.innerWidth / 480, window.innerHeight / 400);
+    const compactDpr = Math.max(1, Math.floor(dpr));
+    canvas.width = 480 * compactDpr;
+    canvas.height = 400 * compactDpr;
+    canvas.style.width = '480px';
+    canvas.style.height = '400px';
+    canvas.style.transformOrigin = 'top left';
+    canvas.style.transform = `scale(${compactFit})`;
+  } else {
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+    canvas.style.transform = '';
+  }
   ctx.imageSmoothingEnabled = false; // reapply: setting canvas.width resets context state
   computeScale();
   buildBackground(); // rebuild backdrop + panel at the new scale
@@ -117,16 +147,24 @@ window.addEventListener('resize', resize);
 function buildBackground() {
   const sheet = img('/sheet/world.png');
   // backdrop texture (full canvas, tiled at the dungeon tile scale)
-  texbg = document.createElement('canvas');
-  texbg.width = canvas.width; texbg.height = canvas.height;
-  const tb = texbg.getContext('2d'); tb.imageSmoothingEnabled = false;
+  texbg = IS_COMPACT ? null : document.createElement('canvas');
+  let tb = null;
+  if (texbg) {
+    texbg.width = canvas.width;
+    texbg.height = canvas.height;
+    tb = texbg.getContext('2d');
+    tb.imageSmoothingEnabled = false;
+  }
   // dungeon panel (only if a layout has arrived)
   bg = layout ? document.createElement('canvas') : null;
   if (bg) { bg.width = panelW; bg.height = panelH; }
   const draw = () => {
-    for (let y = 0; y < texbg.height; y += tilePx)
-      for (let x = 0; x < texbg.width; x += tilePx)
-        tb.drawImage(sheet, TEX.col * TILE, TEX.row * TILE, TILE, TILE, x, y, tilePx, tilePx);
+    if (tb && texbg) {
+      for (let y = 0; y < texbg.height; y += tilePx)
+        for (let x = 0; x < texbg.width; x += tilePx)
+          tb.drawImage(sheet, TEX.col * TILE, TEX.row * TILE, TILE, TILE,
+            x, y, tilePx, tilePx);
+    }
     if (!bg) return;
     const b = bg.getContext('2d'); b.imageSmoothingEnabled = false;
     b.clearRect(0, 0, bg.width, bg.height);
@@ -270,7 +308,7 @@ function render(t) {
   requestAnimationFrame(render);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (texbg) ctx.drawImage(texbg, 0, 0);
-  else { ctx.fillStyle = '#14121a'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+  else if (!IS_COMPACT) { ctx.fillStyle = '#14121a'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 
   // dungeon panel with a soft drop shadow onto the backdrop
   if (bg) {
