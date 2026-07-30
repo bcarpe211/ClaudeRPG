@@ -14,24 +14,29 @@
 </div>
 <div class="hub-inventory-layout">
   <div class="hub-inventory-room">
-    <span class="hub-room-tile hub-room-crack-a" aria-hidden="true"></span>
-    <span class="hub-room-tile hub-room-crack-b" aria-hidden="true"></span>
-    <span class="hub-room-tile hub-room-moss" aria-hidden="true"></span>
-    <div id="hub-inventory-grid" class="hub-inventory-grid" aria-label="Owned items">
-      <% if (inventory.length === 0) { %>
-        <div class="hub-satchel-empty"><strong>Your satchel is quiet.</strong><span>Purchased supplies will settle into these floor spaces.</span></div>
-      <% } else { %>
-        <% inventory.forEach(function (item, index) { %>
-          <button type="button" class="hub-item-slot" data-sku="<%= item.sku %>"
-            aria-label="<%= item.name %>, <%= item.quantity %> owned"
-            aria-pressed="<%= index === 0 ? 'true' : 'false' %>">
-            <img class="hub-item-icon <%= item.iconClass %>" src="/static/landing/potion.png" alt="" />
-            <span class="hub-item-qty" aria-hidden="true"><%= item.quantity %></span>
-          </button>
-        <% }); %>
+    <div class="hub-room-tiles" aria-hidden="true">
+      <% for (let tileIndex = 0; tileIndex < 54; tileIndex += 1) { %>
+        <span class="hub-room-tile"></span>
       <% } %>
     </div>
-    <span class="hub-room-tile hub-room-door" aria-hidden="true"></span>
+    <div id="hub-inventory-grid" class="hub-inventory-grid" aria-label="Owned items">
+      <% for (let cellIndex = 0; cellIndex < 28; cellIndex += 1) { %>
+        <% const cellItem = inventory[cellIndex]; %>
+        <div class="hub-inventory-cell">
+          <% if (cellItem) { %>
+          <button type="button" class="hub-item-slot" data-sku="<%= cellItem.sku %>"
+            aria-label="<%= cellItem.name %>, <%= cellItem.quantity %> owned"
+            aria-pressed="<%= cellIndex === 0 ? 'true' : 'false' %>">
+            <img class="hub-item-icon <%= cellItem.iconClass %>" src="/static/landing/potion.png" alt="" />
+            <span class="hub-item-qty" aria-hidden="true"><%= cellItem.quantity %></span>
+          </button>
+          <% } %>
+        </div>
+      <% } %>
+      <% if (inventory.length === 0) { %>
+        <div class="hub-satchel-empty"><strong>Your satchel is quiet.</strong><span>Purchased supplies will settle into these floor spaces.</span></div>
+      <% } %>
+    </div>
   </div>
   <aside id="hub-item-detail" class="hub-item-detail" aria-live="polite" data-selected-sku="<%= inventory[0]?.sku ?? '' %>">
     <p id="hub-item-detail-empty" class="hub-empty-line" <%= inventory.length > 0 ? 'hidden' : '' %>>Select an owned item to read its ledger entry.</p>

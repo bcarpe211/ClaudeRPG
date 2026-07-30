@@ -52,6 +52,7 @@
   const reducedMotion = root.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
   if (!grid || !detail || !drinkButton || !confirmDialog || !confirmDrink) return;
 
+  const INVENTORY_CAPACITY = 28;
   const number = new Intl.NumberFormat('en-US');
   let state = bootstrap.initialState;
   let selectedSku = state.inventory[0]?.sku ?? null;
@@ -120,21 +121,31 @@
     return button;
   }
 
+  function inventoryCell(item) {
+    const cell = element('div', 'hub-inventory-cell');
+    if (item) cell.append(inventoryButton(item));
+    return cell;
+  }
+
   function renderInventory() {
     const priorFocus = documentRef.activeElement;
     const refocus = priorFocus && grid.contains(priorFocus);
     const items = selectedFilter === 'potions'
       ? state.inventory.filter((item) => item.potionType === 'gold' || item.potionType === 'damage')
       : state.inventory;
-    if (!items.some((item) => item.sku === selectedSku)) selectedSku = items[0]?.sku ?? null;
+    const visibleItems = items.slice(0, INVENTORY_CAPACITY);
+    if (!visibleItems.some((item) => item.sku === selectedSku)) {
+      selectedSku = visibleItems[0]?.sku ?? null;
+    }
     clear(grid);
-    if (items.length === 0) {
+    for (let index = 0; index < INVENTORY_CAPACITY; index += 1) {
+      grid.append(inventoryCell(visibleItems[index]));
+    }
+    if (visibleItems.length === 0) {
       const empty = element('div', 'hub-satchel-empty');
       empty.append(element('strong', '', 'Your satchel is quiet.'));
       empty.append(element('span', '', 'Purchased supplies will settle into these floor spaces.'));
       grid.append(empty);
-    } else {
-      items.forEach((item) => grid.append(inventoryButton(item)));
     }
     renderDetail();
     if (refocus) {

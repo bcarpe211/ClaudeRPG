@@ -397,6 +397,9 @@ describe('mounted player hub tabs', () => {
 describe('player hub inventory, effects, and refresh behavior', () => {
   it('renders polling inventory cells with accessible quantity labels', () => {
     const h = interactionHarness();
+    const grid = h.document.getElementById('hub-inventory-grid')!;
+    expect(grid.children.filter((child) => child.className === 'hub-inventory-cell'))
+      .toHaveLength(28);
     const gold = h.document.getElementById('hub-inventory-grid')!
       .querySelectorAll('[data-sku]')
       .find((button) => button.dataset.sku === 'potion_gold_t1')!;
