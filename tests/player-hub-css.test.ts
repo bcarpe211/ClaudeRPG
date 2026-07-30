@@ -22,6 +22,25 @@ describe('player hub layout CSS', () => {
     expect(constrainedPanel).toMatch(/\.hub-inventory-layout\{[^}]*grid-template-columns:\s*1fr/);
   });
 
+  it('keeps the wide potion ledger aligned with the inventory room', () => {
+    const constrainedPanel = css.slice(
+      css.indexOf('@container (max-width:739px)'),
+      css.indexOf('@container (max-width:520px)'),
+    );
+
+    expect(css).toMatch(/\.hub-item-detail\{[^}]*box-sizing:border-box[^}]*height:288px[^}]*min-height:0[^}]*padding:12px/);
+    expect(css).toMatch(/#hub-item-detail-content\{[^}]*display:flex[^}]*height:100%[^}]*min-height:0[^}]*flex-direction:column/);
+    expect(css).toMatch(/\.hub-item-detail-head\{[^}]*display:grid[^}]*grid-template-columns:70px minmax\(0,1fr\)[^}]*gap:10px/);
+    expect(css).toMatch(/\.hub-item-detail-head \.hub-item-icon\{[^}]*justify-self:start[^}]*margin:0/);
+    expect(css).toMatch(/\.hub-item-detail h3\{[^}]*font-size:16px[^}]*line-height:1\.2/);
+    expect(css).toMatch(/\.hub-item-detail dl\{[^}]*grid-template-columns:70px minmax\(0,1fr\)[^}]*gap:5px 10px[^}]*margin:10px 0 0[^}]*font-size:11px/);
+    expect(css).toMatch(/\.hub-item-active-progress\{[^}]*margin-top:8px[^}]*padding:7px/);
+    expect(css).toMatch(/\.hub-item-detail \.btn\{[^}]*width:100%[^}]*margin-top:auto/);
+    expect(constrainedPanel).toMatch(/\.hub-item-detail\{[^}]*height:auto[^}]*min-height:190px/);
+    expect(constrainedPanel).toMatch(/#hub-item-detail-content\{[^}]*height:auto/);
+    expect(constrainedPanel).toMatch(/\.hub-item-detail \.btn\{[^}]*margin-top:14px/);
+  });
+
   it('lays out the tight dungeon beside leaders with Today across the bottom', () => {
     expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-columns:\s*minmax\(0,480px\) minmax\(240px,1fr\)/);
     expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-areas:\s*"dungeon leaders" "today today"/);
