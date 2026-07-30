@@ -453,3 +453,10 @@ density + interaction. Needs a design pass.
 - [ ] Route/mode decision: a new `/watch` vs a `?mode=local` on `/tv`
 - [ ] Denser layout: smaller dungeon + expanded stats/leaderboard panes
 - [ ] Reuse the SSE stream + `dungeon.css` shell; do NOT regress the TV kiosk
+
+## 26. Bound delayed potion-clock credit at the idle deadline
+A delayed engine tick that crosses the office-idle deadline can currently credit
+post-idle elapsed time as combat-active potion time. A future fix should intersect
+the tick's elapsed interval with the eligible active-time window, then add a
+delayed-tick regression test proving no potion duration is credited after the
+idle cutoff.

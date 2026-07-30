@@ -12,7 +12,8 @@ describe('player hub layout CSS', () => {
   it('uses compact desktop grids and stacked narrow layouts', () => {
     expect(css).toMatch(/\.hub-live-grid[\s\S]*grid-template-columns/);
     expect(css).toMatch(/\.hub-inventory-layout[\s\S]*grid-template-columns/);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-live-grid[\s\S]*grid-template-columns:\s*1fr/);
+    expect(css).toMatch(/\.hub-panel\{[^}]*container-type:\s*inline-size/);
+    expect(css).toMatch(/@container \(max-width:\s*739px\)[\s\S]*\.hub-live-grid[\s\S]*grid-template-columns:\s*1fr/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[\s\S]*grid-template-columns:\s*1fr/);
   });
 
@@ -27,8 +28,9 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/\.hub-fight-leaders\{[^}]*grid-area:\s*leaders/);
     expect(css).toMatch(/\.hub-today-panel\{[^}]*grid-area:\s*today/);
     expect(css).toMatch(/\.hub-today\{[^}]*grid-template-columns:\s*repeat\(6,minmax\(0,1fr\)\)/);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*grid-template-areas:\s*"dungeon" "leaders" "today"/);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-today\{[^}]*repeat\(3,minmax\(0,1fr\)\)/);
+    expect(css).toMatch(/@container \(max-width:\s*739px\)[\s\S]*grid-template-areas:\s*"dungeon" "leaders" "today"/);
+    expect(css).toMatch(/@container \(max-width:\s*739px\)[\s\S]*\.hub-dungeon\{[^}]*justify-self:\s*center[^}]*width:\s*min\(480px,100%\)/);
+    expect(css).toMatch(/@container \(max-width:\s*739px\)[\s\S]*\.hub-today\{[^}]*repeat\(3,minmax\(0,1fr\)\)/);
     expect(css).toMatch(/@media \(max-width:\s*480px\)[\s\S]*\.hub-today\{[^}]*repeat\(2,minmax\(0,1fr\)\)/);
     expect(css).not.toContain('.hub-live-side');
   });

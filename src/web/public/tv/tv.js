@@ -6,6 +6,8 @@
 
 const TILE = 24;            // source tile size
 const COMPACT_STATUS = 40;  // source pixels above the 20x15 hub dungeon
+const COMPACT_WIDTH = 20 * TILE;
+const COMPACT_HEIGHT = 15 * TILE + COMPACT_STATUS;
 const TV_MODE = document.body.dataset.tvMode === 'compact' ? 'compact' : 'full';
 const IS_COMPACT = TV_MODE === 'compact';
 const SIDEBAR_FRAC = IS_COMPACT ? 0 : 0.30; // leaderboard width fraction
@@ -89,21 +91,19 @@ let monsterHit = null;   // {playerId, kind, amount, born} — last monster coun
 let leaderboards = null;  // last 'leaderboards' payload (array of boards)
 
 function computeScale() {
-  const vw = canvas.width, vh = canvas.height;
   if (IS_COMPACT) {
     sidebarW = 0;
     fieldX = 0;
-    const logicalW = 20 * TILE;
-    const logicalH = 15 * TILE + COMPACT_STATUS;
-    scale = Math.max(1, Math.floor(Math.min(vw / logicalW, vh / logicalH)));
-    tilePx = TILE * scale;
-    panelW = 20 * tilePx;
-    panelH = 15 * tilePx;
-    panelX = Math.round((vw - panelW) / 2);
-    panelY = Math.round((vh - logicalH * scale) / 2) + COMPACT_STATUS * scale;
+    scale = 1;
+    tilePx = TILE;
+    panelW = COMPACT_WIDTH;
+    panelH = 15 * TILE;
+    panelX = 0;
+    panelY = COMPACT_STATUS;
     return;
   }
 
+  const vw = canvas.width, vh = canvas.height;
   sidebarW = Math.round(vw * SIDEBAR_FRAC);
   fieldX = sidebarW;
   const fieldW = vw - sidebarW;
@@ -123,14 +123,15 @@ function computeScale() {
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   if (IS_COMPACT) {
-    const compactFit = Math.min(1, window.innerWidth / 480, window.innerHeight / 400);
+    const compactFit = Math.min(1, window.innerWidth / COMPACT_WIDTH, window.innerHeight / COMPACT_HEIGHT);
     const compactDpr = Math.max(1, Math.floor(dpr));
-    canvas.width = 480 * compactDpr;
-    canvas.height = 400 * compactDpr;
-    canvas.style.width = '480px';
-    canvas.style.height = '400px';
+    canvas.width = COMPACT_WIDTH * compactDpr;
+    canvas.height = COMPACT_HEIGHT * compactDpr;
+    canvas.style.width = `${COMPACT_WIDTH}px`;
+    canvas.style.height = `${COMPACT_HEIGHT}px`;
     canvas.style.transformOrigin = 'top left';
     canvas.style.transform = `scale(${compactFit})`;
+    ctx.setTransform(compactDpr, 0, 0, compactDpr, 0, 0);
   } else {
     canvas.width = window.innerWidth * dpr;
     canvas.height = window.innerHeight * dpr;
@@ -336,7 +337,8 @@ function withDungeonClip(draw) {
 
 function render(t) {
   requestAnimationFrame(render);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, IS_COMPACT ? COMPACT_WIDTH : canvas.width,
+    IS_COMPACT ? COMPACT_HEIGHT : canvas.height);
   if (texbg) ctx.drawImage(texbg, 0, 0);
   else if (!IS_COMPACT) { ctx.fillStyle = '#14121a'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 
@@ -517,22 +519,23 @@ function drawHpBar() {
     return;
   }
 
+  const statusTop = panelY - COMPACT_STATUS;
   const w = panelW * 0.86;
-  const h = Math.max(16, Math.round(tilePx * 0.34));
+  const h = 12;
   const x = panelX + (panelW - w) / 2;
-  const y = panelY - h - Math.round(tilePx * 0.5);
+  const y = statusTop + 24;
   const radius = Math.max(2, Math.round(h / 2));
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.65)';
-  ctx.shadowBlur = Math.round(h * 0.6);
-  ctx.shadowOffsetY = Math.round(h * 0.3);
-  fillRoundedRect(x - 4, y - 3, w + 8, h + 6, radius + 3, '#180a0a');
+  ctx.shadowBlur = 2;
+  ctx.shadowOffsetY = 0;
+  fillRoundedRect(x - 3, y - 2, w + 6, h + 4, radius + 2, '#180a0a');
   ctx.restore();
   fillRoundedRect(x, y, w, h, radius, '#3a0d0d');
   const hpW = w * Math.max(0, e.hp / e.maxHp);
   if (hpW > 0) fillRoundedRect(x, y, hpW, h, Math.min(radius, hpW / 2), '#d23b3b');
-  const nameSize = Math.max(14, Math.round(h * 1.15));
-  shadowText(e.name, panelX + panelW / 2, y - Math.round(h * 0.55),
+  const nameSize = 14;
+  shadowText(e.name, panelX + panelW / 2, statusTop + nameSize,
     `bold ${nameSize}px system-ui`, '#f2e4e4', 'center');
 }
 
