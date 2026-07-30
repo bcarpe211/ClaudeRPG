@@ -57,6 +57,37 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[^}]*grid-template-columns:\s*1fr/);
   });
 
+  it('resets every narrow interior tile to plain Duskstone with stronger specificity', () => {
+    const narrowRoom = css.slice(
+      css.indexOf('@container (max-width:520px)'),
+      css.indexOf('@media (max-width:760px)'),
+    );
+    const interiorIndices = [
+      ...Array.from({ length: 4 }, (_, offset) => 8 + offset),
+      ...Array.from({ length: 4 }, (_, offset) => 14 + offset),
+      ...Array.from({ length: 4 }, (_, offset) => 20 + offset),
+      ...Array.from({ length: 4 }, (_, offset) => 26 + offset),
+      ...Array.from({ length: 4 }, (_, offset) => 32 + offset),
+      ...Array.from({ length: 4 }, (_, offset) => 38 + offset),
+      ...Array.from({ length: 4 }, (_, offset) => 44 + offset),
+    ];
+    const resetStart = narrowRoom.indexOf('.hub-inventory-room .hub-room-tile:nth-child(8)');
+    const resetEnd = narrowRoom.indexOf('}', resetStart);
+    const edgeOverrideStart = narrowRoom.indexOf('.hub-room-tile:nth-child(-n+6)');
+    const reset = narrowRoom.slice(resetStart, resetEnd);
+
+    expect(resetStart).toBeGreaterThan(-1);
+    expect(resetStart).toBeLessThan(edgeOverrideStart);
+    expect(reset).toMatch(/background-position:-192px -576px/);
+    for (const index of interiorIndices) {
+      expect(reset).toContain(`.hub-inventory-room .hub-room-tile:nth-child(${index})`);
+    }
+  });
+
+  it('resets Today padding inherited from the global section rule', () => {
+    expect(css).toMatch(/\.hub-today-panel\{[^}]*grid-area:today;min-width:0;padding:0/);
+  });
+
   it('limits narrow TV floor shadows to the approved top-interior cells', () => {
     const narrowRoom = css.slice(
       css.indexOf('@container (max-width:520px)'),

@@ -58,7 +58,7 @@
 .hub-leaders-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#baadbf}
 .hub-leaders-damage{color:#776b80;font-variant-numeric:tabular-nums}
 .hub-empty-line{margin:0;color:var(--muted);font-size:12px}
-.hub-today-panel{grid-area:today;min-width:0}
+.hub-today-panel{grid-area:today;min-width:0;padding:0}
 .hub-today{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;overflow:hidden;border:1px solid #34283f;border-radius:9px;background:#34283f}
 .hub-today-card{min-width:0;padding:10px 9px;background:linear-gradient(180deg,#140d1dd1,#0b0710e0)}
 .hub-today-card span{display:block;overflow:hidden;color:#746879;font-size:9px;letter-spacing:.06em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
@@ -138,6 +138,34 @@
   .hub-inventory-room{--room-columns:6;--room-rows:9;width:288px;height:432px}
   .hub-inventory-grid{grid-template-columns:repeat(4,48px);grid-template-rows:repeat(7,48px);width:192px;height:336px}
   .hub-room-tile{background-position:-192px -576px}
+  .hub-inventory-room .hub-room-tile:nth-child(8),
+  .hub-inventory-room .hub-room-tile:nth-child(9),
+  .hub-inventory-room .hub-room-tile:nth-child(10),
+  .hub-inventory-room .hub-room-tile:nth-child(11),
+  .hub-inventory-room .hub-room-tile:nth-child(14),
+  .hub-inventory-room .hub-room-tile:nth-child(15),
+  .hub-inventory-room .hub-room-tile:nth-child(16),
+  .hub-inventory-room .hub-room-tile:nth-child(17),
+  .hub-inventory-room .hub-room-tile:nth-child(20),
+  .hub-inventory-room .hub-room-tile:nth-child(21),
+  .hub-inventory-room .hub-room-tile:nth-child(22),
+  .hub-inventory-room .hub-room-tile:nth-child(23),
+  .hub-inventory-room .hub-room-tile:nth-child(26),
+  .hub-inventory-room .hub-room-tile:nth-child(27),
+  .hub-inventory-room .hub-room-tile:nth-child(28),
+  .hub-inventory-room .hub-room-tile:nth-child(29),
+  .hub-inventory-room .hub-room-tile:nth-child(32),
+  .hub-inventory-room .hub-room-tile:nth-child(33),
+  .hub-inventory-room .hub-room-tile:nth-child(34),
+  .hub-inventory-room .hub-room-tile:nth-child(35),
+  .hub-inventory-room .hub-room-tile:nth-child(38),
+  .hub-inventory-room .hub-room-tile:nth-child(39),
+  .hub-inventory-room .hub-room-tile:nth-child(40),
+  .hub-inventory-room .hub-room-tile:nth-child(41),
+  .hub-inventory-room .hub-room-tile:nth-child(44),
+  .hub-inventory-room .hub-room-tile:nth-child(45),
+  .hub-inventory-room .hub-room-tile:nth-child(46),
+  .hub-inventory-room .hub-room-tile:nth-child(47){background-position:-192px -576px}
   .hub-room-tile::after{content:none}
   .hub-room-tile:nth-child(11)::after,
   .hub-room-tile:nth-child(12)::after,
