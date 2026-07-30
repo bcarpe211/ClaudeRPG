@@ -46,6 +46,25 @@ describe('TV renderer bootstrap', () => {
     expect(source).toContain("else if (!IS_COMPACT) { ctx.fillStyle = '#14121a';");
   });
 
+  it('clips the compact room and keeps status and pause treatment compact-only', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'),
+      'utf8',
+    );
+
+    expect(source).toContain('function roundedRectPath(x, y, w, h, radius)');
+    expect(source).toContain('function fillRoundedRect(x, y, w, h, radius, color)');
+    expect(source).toContain('function withDungeonClip(draw)');
+    expect(source).toContain('Math.round(11 * scale)');
+    expect(source).toContain('withDungeonClip(() => {');
+    expect(source).toContain('if (!IS_COMPACT) {');
+    expect(source).toContain('const w = panelW * 0.86;');
+    expect(source).toContain('const overlayX = IS_COMPACT ? panelX : 0;');
+    expect(source).toContain('const overlayY = IS_COMPACT ? panelY : 0;');
+    expect(source).toContain('const defeatX = IS_COMPACT ? panelX : fieldX;');
+    expect(source).toContain('const defeatY = IS_COMPACT ? panelY : 0;');
+  });
+
   it('loads the shared potion vocabulary before both TV renderers and layers motes below debuffs', () => {
     const tvSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'), 'utf8');
     for (const documentName of ['index.html', 'embed.html']) {

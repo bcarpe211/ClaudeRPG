@@ -304,30 +304,67 @@ function shadowText(txt, x, y, font, fill, align) {
   ctx.fillStyle = fill; ctx.fillText(txt, x, y);
 }
 
+function roundedRectPath(x, y, w, h, radius) {
+  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function fillRoundedRect(x, y, w, h, radius, color) {
+  roundedRectPath(x, y, w, h, radius);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function withDungeonClip(draw) {
+  if (!IS_COMPACT) { draw(); return; }
+  ctx.save();
+  roundedRectPath(panelX, panelY, panelW, panelH, Math.round(11 * scale));
+  ctx.clip();
+  draw();
+  ctx.restore();
+}
+
 function render(t) {
   requestAnimationFrame(render);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (texbg) ctx.drawImage(texbg, 0, 0);
   else if (!IS_COMPACT) { ctx.fillStyle = '#14121a'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 
-  // dungeon panel with a soft drop shadow onto the backdrop
-  if (bg) {
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.75)';
-    ctx.shadowBlur = Math.round(tilePx * 0.45);
-    ctx.shadowOffsetX = Math.round(tilePx * 0.10);
-    ctx.shadowOffsetY = Math.round(tilePx * 0.20);
-    ctx.drawImage(bg, panelX, panelY);
-    ctx.restore();
-  }
+  withDungeonClip(() => {
+    if (bg) {
+      if (IS_COMPACT) {
+        ctx.drawImage(bg, panelX, panelY);
+      } else {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.75)';
+        ctx.shadowBlur = Math.round(tilePx * 0.45);
+        ctx.shadowOffsetX = Math.round(tilePx * 0.10);
+        ctx.shadowOffsetY = Math.round(tilePx * 0.20);
+        ctx.drawImage(bg, panelX, panelY);
+        ctx.restore();
+      }
+    }
 
-  drawAnimDecor(t);
+    drawAnimDecor(t);
+    if (state) {
+      drawMonster(t);
+      drawHeroes(t);
+      drawFloaters(t);
+    }
+  });
 
   if (state) {
-    drawMonster(t);
-    drawHeroes(t);
     drawHpBar();
-    drawFloaters(t);
     if (!IS_COMPACT) drawLeaderboard(t);
     if (state.paused) drawOverlay('The dungeon rests… awaiting adventurers');
     if (state.defeat) drawDefeat();
@@ -464,18 +501,36 @@ function drawHeroes(t) {
 
 function drawHpBar() {
   const e = state.encounter; if (!e) return;
-  const w = panelW * 0.6, h = Math.max(16, Math.round(tilePx * 0.34));
+  if (!IS_COMPACT) {
+    const w = panelW * 0.6, h = Math.max(16, Math.round(tilePx * 0.34));
+    const x = panelX + (panelW - w) / 2;
+    const y = panelY - h - Math.round(tilePx * 0.5);
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.65)'; ctx.shadowBlur = Math.round(h * 0.6); ctx.shadowOffsetY = Math.round(h * 0.3);
+    ctx.fillStyle = '#180a0a'; ctx.fillRect(x - 4, y - 3, w + 8, h + 6);
+    ctx.restore();
+    ctx.fillStyle = '#3a0d0d'; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#d23b3b'; ctx.fillRect(x, y, w * Math.max(0, e.hp / e.maxHp), h);
+    const nameSize = Math.max(14, Math.round(h * 1.15));
+    shadowText(e.name, panelX + panelW / 2, y - Math.round(h * 0.55),
+      `bold ${nameSize}px system-ui`, '#f2e4e4', 'center');
+    return;
+  }
+
+  const w = panelW * 0.86;
+  const h = Math.max(16, Math.round(tilePx * 0.34));
   const x = panelX + (panelW - w) / 2;
-  // sit above the panel with a clear gap; the monster name is drawn in the strip
-  // above the bar (bigger than the bar), below.
   const y = panelY - h - Math.round(tilePx * 0.5);
+  const radius = Math.max(2, Math.round(h / 2));
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.65)'; ctx.shadowBlur = Math.round(h * 0.6); ctx.shadowOffsetY = Math.round(h * 0.3);
-  ctx.fillStyle = '#180a0a'; ctx.fillRect(x - 4, y - 3, w + 8, h + 6);
+  ctx.shadowColor = 'rgba(0,0,0,0.65)';
+  ctx.shadowBlur = Math.round(h * 0.6);
+  ctx.shadowOffsetY = Math.round(h * 0.3);
+  fillRoundedRect(x - 4, y - 3, w + 8, h + 6, radius + 3, '#180a0a');
   ctx.restore();
-  ctx.fillStyle = '#3a0d0d'; ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = '#d23b3b'; ctx.fillRect(x, y, w * Math.max(0, e.hp / e.maxHp), h);
-  // monster name in the reserved strip above the bar, a step larger than the HP text
+  fillRoundedRect(x, y, w, h, radius, '#3a0d0d');
+  const hpW = w * Math.max(0, e.hp / e.maxHp);
+  if (hpW > 0) fillRoundedRect(x, y, hpW, h, Math.min(radius, hpW / 2), '#d23b3b');
   const nameSize = Math.max(14, Math.round(h * 1.15));
   shadowText(e.name, panelX + panelW / 2, y - Math.round(h * 0.55),
     `bold ${nameSize}px system-ui`, '#f2e4e4', 'center');
@@ -576,19 +631,34 @@ function drawLeaderboard(t) {
 }
 
 function drawOverlay(text) {
+  const overlayX = IS_COMPACT ? panelX : 0;
+  const overlayY = IS_COMPACT ? panelY : 0;
+  const overlayW = IS_COMPACT ? panelW : canvas.width;
+  const overlayH = IS_COMPACT ? panelH : canvas.height;
+  ctx.save();
+  if (IS_COMPACT) {
+    roundedRectPath(panelX, panelY, panelW, panelH, Math.round(11 * scale));
+    ctx.clip();
+  }
   ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = '#000b'; // dim the WHOLE screen (sidebar + field) while resting
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#e8c96a'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#000b';
+  ctx.fillRect(overlayX, overlayY, overlayW, overlayH);
+  ctx.fillStyle = '#e8c96a';
+  ctx.textAlign = 'center';
   ctx.font = `${Math.round(20 * scale)}px system-ui`;
-  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  ctx.fillText(text, overlayX + overlayW / 2, overlayY + overlayH / 2);
+  ctx.restore();
 }
 
 function drawDefeat() {
-  ctx.textBaseline = 'alphabetic';
   const d = state.defeat;
-  const w = (canvas.width - fieldX) * 0.7, h = canvas.height * 0.7;
-  const x = fieldX + ((canvas.width - fieldX) - w) / 2, y = (canvas.height - h) / 2;
+  const defeatX = IS_COMPACT ? panelX : fieldX;
+  const defeatY = IS_COMPACT ? panelY : 0;
+  const defeatW = IS_COMPACT ? panelW : canvas.width - fieldX;
+  const defeatH = IS_COMPACT ? panelH : canvas.height;
+  const w = defeatW * 0.7, h = defeatH * 0.7;
+  const x = defeatX + (defeatW - w) / 2;
+  const y = defeatY + (defeatH - h) / 2;
   ctx.fillStyle = '#1a1022ee'; ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = '#6b5436'; ctx.lineWidth = 4; ctx.strokeRect(x, y, w, h);
   ctx.textAlign = 'center';
