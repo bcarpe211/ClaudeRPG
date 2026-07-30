@@ -238,7 +238,7 @@ describe('versioned encounter reward awards', () => {
     expect(getPlayerById(db, second.id)?.gold).toBe(25);
   });
 
-  it('uses the same token-and-damage participant union for legacy awards and summaries', () => {
+  it('keeps token-only players out of legacy-v0 awards and summaries', () => {
     setSetting(db, 'gold_factor', '1');
     setSetting(db, 'gold_damage_weight', '0');
     const tokenOnly = createPlayer(
@@ -274,22 +274,16 @@ describe('versioned encounter reward awards', () => {
     engine.tick(100_000);
     killOnNextAttack(engine, encounterId, 100_000);
 
-    expect(getPlayerById(db, tokenOnly.id)?.gold).toBe(100);
-    expect(getPlayerById(db, damageOnly.id)?.gold).toBe(0);
+    expect(getPlayerById(db, tokenOnly.id)?.gold).toBe(0);
+    expect(getPlayerById(db, damageOnly.id)?.gold).toBe(100);
     const summary = buildDefeatSummary(db, encounterId);
-    expect(summary.participants).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        playerId: tokenOnly.id,
-        damage: 0,
-        gold: 100,
-        tokensDuringFight: 300,
-      }),
+    expect(summary.participants).toEqual([
       expect.objectContaining({
         playerId: damageOnly.id,
         damage: 100,
-        gold: 0,
+        gold: 100,
         tokensDuringFight: 0,
       }),
-    ]));
+    ]);
   });
 });

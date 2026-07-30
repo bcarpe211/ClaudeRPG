@@ -10,11 +10,16 @@ describe('player hub layout CSS', () => {
   });
 
   it('uses compact desktop grids and stacked narrow layouts', () => {
+    const constrainedPanel = css.slice(
+      css.indexOf('@container (max-width:739px)'),
+      css.indexOf('@container (max-width:520px)'),
+    );
+
     expect(css).toMatch(/\.hub-live-grid[\s\S]*grid-template-columns/);
     expect(css).toMatch(/\.hub-inventory-layout[\s\S]*grid-template-columns/);
     expect(css).toMatch(/\.hub-panel\{[^}]*container-type:\s*inline-size/);
-    expect(css).toMatch(/@container \(max-width:\s*739px\)[\s\S]*\.hub-live-grid[\s\S]*grid-template-columns:\s*1fr/);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[\s\S]*grid-template-columns:\s*1fr/);
+    expect(constrainedPanel).toMatch(/\.hub-live-grid\{[^}]*grid-template-columns:\s*1fr/);
+    expect(constrainedPanel).toMatch(/\.hub-inventory-layout\{[^}]*grid-template-columns:\s*1fr/);
   });
 
   it('lays out the tight dungeon beside leaders with Today across the bottom', () => {
@@ -54,7 +59,6 @@ describe('player hub layout CSS', () => {
     expect(css).not.toContain('.hub-room-crack');
     expect(css).toMatch(/\.hub-item-qty\{[^}]*top:/);
     expect(css).toMatch(/\.hub-item-qty\{[^}]*text-shadow:/);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[^}]*grid-template-columns:\s*1fr/);
   });
 
   it('resets every narrow interior tile to plain Duskstone with stronger specificity', () => {

@@ -55,6 +55,7 @@ function encounterParticipants(
   encounterId: number,
   startedAt: number,
   endedAt: number,
+  rewardModelVersion: string,
 ): EncounterParticipantRow[] {
   return db.prepare(
     `SELECT participant.player_id,
@@ -76,7 +77,7 @@ function encounterParticipants(
        UNION
        SELECT player_id
        FROM token_events
-       WHERE ts >= ? AND ts <= ?
+       WHERE ? != 'legacy-v0' AND ts >= ? AND ts <= ?
      ) AS participant
      LEFT JOIN encounter_damage AS damage
        ON damage.encounter_id = ?
@@ -86,6 +87,7 @@ function encounterParticipants(
     startedAt,
     endedAt,
     encounterId,
+    rewardModelVersion,
     startedAt,
     endedAt,
     encounterId,
@@ -99,7 +101,7 @@ export function buildDefeatSummary(
   const enc = db.prepare('SELECT * FROM encounters WHERE id=?').get(encounterId) as any;
   const start = enc.started_at;
   const end = enc.ended_at ?? start;
-  const dmgRows = encounterParticipants(db, encounterId, start, end);
+  const dmgRows = encounterParticipants(db, encounterId, start, end, enc.reward_model_version);
   const totalDamage = dmgRows.reduce((s, r) => s + r.damage_total, 0);
 
   const storedAwards = enc.reward_model_version === 'legacy-v0'
@@ -278,7 +280,13 @@ export class GameEngine {
     if (!enc || enc.status !== 'active' || enc.current_hp > 0) return;
 
     const dungeon = this.db.prepare('SELECT * FROM dungeons WHERE id=?').get(enc.dungeon_id) as any;
-    const rows = encounterParticipants(this.db, encId, enc.started_at, now);
+    const rows = encounterParticipants(
+      this.db,
+      encId,
+      enc.started_at,
+      now,
+      enc.reward_model_version,
+    );
     const participants = rows.map((r) => ({
       playerId: r.player_id,
       damage: r.damage_total,

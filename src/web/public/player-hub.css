@@ -130,6 +130,7 @@
 
 @container (max-width:739px){
   .hub-live-grid{grid-template-columns:1fr;grid-template-areas:"dungeon" "leaders" "today"}
+  .hub-inventory-layout{grid-template-columns:1fr}
   .hub-dungeon{justify-self:center;width:min(480px,100%)}
   .hub-today{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
