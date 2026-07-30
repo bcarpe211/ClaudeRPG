@@ -5,6 +5,7 @@ import SqliteDatabase from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { monsterByIndex } from '../src/domain/bestiary';
+import { GameEngine } from '../src/domain/engine';
 import { activatePotion, activePotionEffects } from '../src/domain/potions';
 import { buildPotionLabReport } from '../src/domain/potionlab';
 import { isFrameA } from '../src/web/public/anim.js';
@@ -180,6 +181,22 @@ describe('timed-consumables local demo seed', () => {
 
     resumePotionDemoCombat(db, now + 1);
     expect(activePotionEffects(db, control.id, now + 1)).toMatchObject([{ state: 'active' }]);
+  });
+
+  it('seeds an active hybrid encounter that resolves its defeat with a snapshotted reward pool', () => {
+    const db = openDb(':memory:');
+    const now = 2_000_000;
+    seedPotionDemo(db, now);
+    const active = db.prepare(
+      "SELECT id FROM encounters WHERE status='active'",
+    ).get() as { id: number };
+    db.prepare('UPDATE encounters SET current_hp=0 WHERE id=?').run(active.id);
+
+    const engine = new GameEngine(db, { rng: () => 0.5 });
+    expect(() => engine.tick(now + 1)).not.toThrow();
+    expect(db.prepare(
+      'SELECT status, reward_gold_pool AS rewardGoldPool FROM encounters WHERE id=?',
+    ).get(active.id)).toEqual({ status: 'defeated', rewardGoldPool: 60_000_000 });
   });
 
   it('is deterministic for the same timestamp', () => {

@@ -4,6 +4,7 @@ import SqliteDatabase from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import { loadConfig } from '../src/config';
 import { openDb } from '../src/db/db';
+import { encounterRewardGoldPool } from '../src/domain/encounters';
 import { applyGoldMutation } from '../src/domain/goldledger';
 import { advanceCombatClock } from '../src/domain/gameclock';
 import { purchaseConsumable } from '../src/domain/inventory';
@@ -137,15 +138,17 @@ export function seedPotionDemo(
      VALUES (12, 'Ossuary Pale', 424242, 3, ?)`,
   ).run(now - 60_000);
   const dungeonId = Number(dungeon.lastInsertRowid);
+  const activeRewardGoldPool = encounterRewardGoldPool(500_000_000, 12, 0.01);
   const encounter = db.prepare(
     `INSERT INTO encounters
       (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
        pack_count, max_hp, current_hp, status, started_at,
        reward_model_version, reward_work_pct, reward_damage_pct,
-       reward_podium_first_pct, reward_podium_second_pct, reward_podium_third_pct)
+       reward_podium_first_pct, reward_podium_second_pct, reward_podium_third_pct,
+       reward_gold_pool)
      VALUES (?, 1, 'boss', ?, 2, 1, 500000000, 499000000, 'active', ?,
-       'hybrid-v1', 80, 10, 5, 3, 2)`,
-  ).run(dungeonId, DEMO_BOSS_CREATURE_INDEX, now - 50_000);
+       'hybrid-v1', 80, 10, 5, 3, 2, ?)`,
+  ).run(dungeonId, DEMO_BOSS_CREATURE_INDEX, now - 50_000, activeRewardGoldPool);
   const encounterId = Number(encounter.lastInsertRowid);
   db.prepare(
     `UPDATE game_state
