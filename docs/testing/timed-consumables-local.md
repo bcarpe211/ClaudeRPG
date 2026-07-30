@@ -70,7 +70,10 @@ Keep `DB_PATH` set to the configured production database path for this command; 
 - Hover, keyboard-focus, click, and tap the character to open Active Effects. Verify each potion icon, remaining active time, short effect copy, Gold progress, and monster debuff appear together without overflowing the card.
 - Verify click-away and Escape close the popover and return focus to the trigger.
 - Confirm Inventory is a moss-walled dungeon room with deterministic floor, cracks, moss, one door, title-free item tiles, and gold upper-right quantities.
-- Confirm the compact dungeon uses the full panel width and Fight Leaders / Today split evenly beneath it.
+- Confirm the compact renderer has no TV backdrop: only the centered monster name/rounded HP strip and the complete rounded 20×15 dungeon are visible.
+- At desktop width, confirm the 480×400 dungeon sits beside Fight Leaders and Today spans the full row beneath both.
+- Confirm the dungeon has only a restrained bottom-right shadow; there is no four-sided halo or ambient glow.
+- At narrow widths, confirm the order is dungeon, Fight Leaders, Today; Today becomes 3×2 and then 2×3 without overflow.
 
 ## Animated male/female effect review
 
