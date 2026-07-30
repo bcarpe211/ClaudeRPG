@@ -95,12 +95,16 @@
           <% for (const offer of shop.consumables) {
             const unavailable = !offer.available;
             const soldOut = offer.available && offer.stockRemaining === 0;
+            const readyCopy = offer.potionType === 'gold'
+              ? 'Ready to turn hard work into bonus gold.'
+              : 'Ready to put more force behind every hit.';
           %>
             <article class="bazaar-product <%= offer.iconClass %><%= soldOut ? ' is-sold-out' : '' %><%= unavailable ? ' is-unavailable' : '' %>"
               data-consumable-offer
               data-unit-price="<%= offer.unitPrice %>"
               data-player-gold="<%= shop.gold %>"
-              data-stock-remaining="<%= offer.stockRemaining %>">
+              data-stock-remaining="<%= offer.stockRemaining %>"
+              data-ready-copy="<%= readyCopy %>">
               <div class="bazaar-potion-head">
                 <img class="px bazaar-potion-icon" src="/static/landing/potion.png" alt="">
                 <div>
@@ -137,7 +141,7 @@
                     <button type="submit" class="btn btn-gold" <%= soldOut || offer.missingGoldForOne > 0 ? 'disabled' : '' %>><%= soldOut ? 'Back at midnight' : `Buy 1 · ${offer.unitPrice.toLocaleString()}g` %></button>
                   </div>
                   <p class="bazaar-affordability<%= !soldOut && offer.missingGoldForOne === 0 ? ' is-ready' : '' %>" data-potion-affordability>
-                    <% if (soldOut) { %>Back at midnight<% } else if (offer.missingGoldForOne > 0) { %>Need <%= offer.missingGoldForOne.toLocaleString() %>g more for 1.<% } else { %>Your purse is ready for 1.<% } %>
+                    <% if (soldOut) { %>Back at midnight<% } else if (offer.missingGoldForOne > 0) { %>Need <%= offer.missingGoldForOne.toLocaleString() %>g more for 1.<% } else { %><%= readyCopy %><% } %>
                   </p>
                 </form>
               <% } %>

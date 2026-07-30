@@ -21,7 +21,8 @@
     const unitPrice = Number(offer.getAttribute('data-unit-price'));
     const playerGold = Number(offer.getAttribute('data-player-gold'));
     const stockRemaining = Number(offer.getAttribute('data-stock-remaining'));
-    if (!quantityInput || !button || !affordability) return;
+    const readyCopy = offer.getAttribute('data-ready-copy');
+    if (!quantityInput || !button || !affordability || !readyCopy) return;
     if (![unitPrice, playerGold, stockRemaining].every(Number.isSafeInteger)) return;
 
     function updateConsumableTotal() {
@@ -42,7 +43,7 @@
         affordability.textContent = `Need ${missingGold.toLocaleString('en-US')}g more for ${quantity}.`;
         affordability.classList.remove('is-ready');
       } else {
-        affordability.textContent = `Your purse is ready for ${quantity}.`;
+        affordability.textContent = readyCopy;
         affordability.classList.add('is-ready');
       }
     }

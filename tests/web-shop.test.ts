@@ -66,6 +66,15 @@ describe('Bazaar', () => {
     expect(res.text).toMatch(/Stock<\/dt><dd><strong>3<\/strong>/);
     expect(res.text).toContain('Buy 1 · 100,000g');
     expect(res.text).toContain('Buy 1 · 150,000g');
+    expect(res.text).toContain(
+      'data-ready-copy="Ready to turn hard work into bonus gold."',
+    );
+    expect(res.text).toContain(
+      'data-ready-copy="Ready to put more force behind every hit."',
+    );
+    expect(res.text).toContain('Ready to turn hard work into bonus gold.');
+    expect(res.text).toContain('Ready to put more force behind every hit.');
+    expect(res.text).not.toContain('Your purse is ready for 1.');
 
     const requestIds = [...res.text.matchAll(/name="request_id" value="([^"]+)"/g)]
       .map((match) => match[1]);

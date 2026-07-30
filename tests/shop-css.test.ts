@@ -100,4 +100,21 @@ describe('Gilded Mimic marketplace CSS', () => {
     expect(declarations('.bazaar-product.is-sold-out')).toContain('opacity:');
     expect(declarations('.bazaar-product.is-sold-out button')).toContain('cursor:not-allowed');
   });
+
+  it('keeps the one-time potion result compact and inside the marketplace gutter', () => {
+    const shell = declarations('.bazaar-open');
+    const result = declarations('.bazaar-potion-result');
+
+    expect(shell).toContain('--bazaar-gutter:clamp(22px,4vw,44px)');
+    expect(result).toContain('box-sizing:border-box');
+    expect(result).toContain('width:max-content');
+    expect(result).toContain('max-width:calc(100% - 2 * var(--bazaar-gutter))');
+    expect(result).toContain('padding:6px 10px!important');
+    expect(marketplace).toMatch(
+      /@media \(max-width:760px\)\{[\s\S]*?\.bazaar-open\{[^}]*--bazaar-gutter:18px/,
+    );
+    expect(marketplace).toMatch(
+      /@media \(max-width:480px\)\{[\s\S]*?\.bazaar-open\{[^}]*--bazaar-gutter:13px/,
+    );
+  });
 });

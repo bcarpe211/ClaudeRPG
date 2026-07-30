@@ -140,6 +140,7 @@ function createShopHarness(options: {
   consumeResult?: boolean;
   locationHref?: string;
   playerGold?: number;
+  readyCopy?: string;
   stockRemaining?: number;
 } = {}): ShopHarness {
   const form = new FakeHTMLFormElement();
@@ -147,6 +148,10 @@ function createShopHarness(options: {
   offer.setAttribute('data-unit-price', '100000');
   offer.setAttribute('data-player-gold', String(options.playerGold ?? 250_000));
   offer.setAttribute('data-stock-remaining', String(options.stockRemaining ?? 3));
+  offer.setAttribute(
+    'data-ready-copy',
+    options.readyCopy ?? 'Ready to turn hard work into bonus gold.',
+  );
   const body = new FakeElement();
   const timers: Array<{ callback: () => void; delay: number }> = [];
   const replacedUrls: string[] = [];
@@ -242,7 +247,24 @@ describe('Bazaar purchase celebration', () => {
     harness.offer.input.dispatch('input');
     expect(harness.offer.button.textContent).toBe('Buy 2 · 200,000g');
     expect(harness.offer.button.disabled).toBe(false);
-    expect(harness.offer.affordability.textContent).toBe('Your purse is ready for 2.');
+    expect(harness.offer.affordability.textContent).toBe(
+      'Ready to turn hard work into bonus gold.',
+    );
+    expect(harness.offer.affordability.classList.contains('is-ready')).toBe(true);
+  });
+
+  it.each([
+    ['Ready to turn hard work into bonus gold.'],
+    ['Ready to put more force behind every hit.'],
+  ])('retains the product guidance %j for every affordable quantity', (readyCopy) => {
+    const harness = createShopHarness({ readyCopy, playerGold: 500_000 });
+
+    expect(harness.offer.affordability.textContent).toBe(readyCopy);
+    harness.offer.input.value = '3';
+    harness.offer.input.dispatch('input');
+
+    expect(harness.offer.button.disabled).toBe(false);
+    expect(harness.offer.affordability.textContent).toBe(readyCopy);
     expect(harness.offer.affordability.classList.contains('is-ready')).toBe(true);
   });
 
