@@ -128,8 +128,7 @@ function currentFight(
      FROM encounter_damage ed
      JOIN players p ON p.id = ed.player_id
      WHERE ed.encounter_id = ? AND ed.damage_total > 0
-     ORDER BY ed.damage_total DESC, p.id ASC
-     LIMIT 5`,
+     ORDER BY ed.damage_total DESC, p.id ASC`,
   ).all(encounterId) as PlayerHubState['currentFight']['leaders'];
   return { leaders };
 }

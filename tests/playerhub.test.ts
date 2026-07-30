@@ -156,6 +156,50 @@ describe('player hub state', () => {
     expect(JSON.stringify(hub)).not.toContain('auth_token');
   });
 
+  it('returns every positive-damage current-fight participant in rank order', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Hero', class_key: 'wizard', gender: 'M' },
+      now - 20_000,
+    );
+    const encounterId = seedFight(player.id);
+    const addDamage = db.prepare(
+      `INSERT INTO encounter_damage
+        (encounter_id, player_id, damage_total, hits, max_hit)
+       VALUES (?, ?, ?, 1, ?)`,
+    );
+    for (const [name, damage] of [
+      ['Fourth', 400],
+      ['Fifth', 300],
+      ['Sixth', 200],
+      ['Seventh', 100],
+    ] as const) {
+      const extra = createPlayer(
+        db,
+        { name, class_key: 'knight', gender: 'M' },
+        now,
+      );
+      addDamage.run(encounterId, extra.id, damage, damage);
+    }
+
+    const hub = buildPlayerHubState(
+      db,
+      getPlayerById(db, player.id)!,
+      now,
+      timeZone,
+    );
+
+    expect(hub.currentFight.leaders.map(({ name, damage }) => [name, damage])).toEqual([
+      ['Ahead', 900],
+      ['Hero', 500],
+      ['Fourth', 400],
+      ['Fifth', 300],
+      ['Sixth', 200],
+      ['Behind', 100],
+      ['Seventh', 100],
+    ]);
+  });
+
   it('omits zero inventory stacks and returns no fight rank without a current encounter', () => {
     const player = createPlayer(db, { name: 'Quiet', class_key: 'priest', gender: 'F' }, now);
     const hub = buildPlayerHubState(db, player, now, timeZone);
