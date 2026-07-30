@@ -23,6 +23,7 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/\.hub-dungeon\{[^}]*overflow:\s*visible/);
     expect(css).toMatch(/\.hub-dungeon::before\{[^}]*top:\s*10%/);
     expect(css).toMatch(/\.hub-dungeon::before\{[^}]*8px 10px 20px -11px/);
+    expect(css).not.toMatch(/\.hub-dungeon::before\{[^}]*0 0 0 2px/);
     expect(css).toMatch(/\.hub-fight-leaders\{[^}]*grid-area:\s*leaders/);
     expect(css).toMatch(/\.hub-today-panel\{[^}]*grid-area:\s*today/);
     expect(css).toMatch(/\.hub-today\{[^}]*grid-template-columns:\s*repeat\(6,minmax\(0,1fr\)\)/);

@@ -45,7 +45,7 @@
 
 .hub-live-grid{display:grid;grid-template-columns:minmax(0,480px) minmax(240px,1fr);grid-template-areas:"dungeon leaders" "today today";gap:22px 20px;align-items:stretch}
 .hub-dungeon{grid-area:dungeon;position:relative;isolation:isolate;min-width:0;width:min(480px,100%);aspect-ratio:6/5;overflow:visible;border:0;background:transparent}
-.hub-dungeon::before{content:"";position:absolute;z-index:-1;left:0;right:0;top:10%;bottom:0;border-radius:11px;box-shadow:8px 10px 20px -11px #000e,3px 4px 8px -5px #000f,0 0 0 2px #08040cf0;pointer-events:none}
+.hub-dungeon::before{content:"";position:absolute;z-index:-1;left:0;right:0;top:10%;bottom:0;border-radius:11px;box-shadow:8px 10px 20px -11px #000e,3px 4px 8px -5px #000f;pointer-events:none}
 .hub-dungeon-frame{position:relative;z-index:1;display:block;width:100%;height:100%;aspect-ratio:6/5;border:0;background:transparent;image-rendering:pixelated}
 .hub-subpanel{padding:13px;border:1px solid #3b2d48;border-radius:11px;background:linear-gradient(180deg,#191024d1,#0c0812db)}
 .hub-fight-leaders{grid-area:leaders;min-width:0}
