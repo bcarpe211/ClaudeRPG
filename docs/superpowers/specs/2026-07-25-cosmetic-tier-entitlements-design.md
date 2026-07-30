@@ -1,7 +1,7 @@
 # Cosmetic Tier Entitlements, Tone, and Bazaar Reopening Design
 
 **Date:** 2026-07-25
-**Status:** Approved for implementation planning
+**Status:** Implemented and locally approved; Pi release gate pending
 **Track:** Player Shop Phase 1 — complete the cosmetic product after slot-map Phase 2C
 **Branch:** `feat/player-shop-cosmetics`
 

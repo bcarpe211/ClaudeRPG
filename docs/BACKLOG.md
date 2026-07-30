@@ -378,32 +378,39 @@ per dungeon (`tvlayout.ts` / `dungeon2`), so this is a periodic re-roll of the
       jumping) — keep positions, swap only wall/floor/decor theme
 
 ## 22. Player shop — a multi-phase PROGRAM (spend gold; the missing gold sink) 🔥
+**Branch status 2026-07-30:** Phases 0 and 1 plus the Tier 1 launch of Phase 2
+are implemented and locally approved on `feat/player-shop-cosmetics`. The
+remaining gate for that release is Pi visual/performance verification followed
+by a separately authorized idle-only deployment. Phase 2 higher strengths and
+Phases 3–4 remain future projects.
+
 Most-requested feature, and the **missing gold sink**: the 2026-07-19 balance
 review found gold only inflates (38M+ in circulation, ~6.7M/day minted, near-zero
 removal even after the new 0.008% steal — see #20). Player vision (2026-07-21) is a
 program of ~5 interlocking subsystems — **decompose into sequenced sub-projects,
 each its own spec→plan→build.** Dependencies: Phase 0 → {1,2,3} → 4.
 
-**Phase 0 — Foundation (shared spine).** Player inventory/ownership model + currency
+**Phase 0 — Foundation (shared spine) ✅ IMPLEMENTED.** Player inventory/ownership model + currency
 balances (gold now; gems later), a shop page on the `dungeon.css` shell (#18) gated
 to a logged-in character, and an **atomic, server-authoritative** purchase +
 gold-deduction. Every product line plugs into this; ship with one product to prove
 the loop end-to-end.
 
-**Phase 1 — Cosmetics: character color customization.** Unlock a **color wheel**
-that recolors the character's dominant clothing colour to any chosen colour. Tiered
-(pay more to unlock deeper): T1 single dominant colour; T2 split — primary (body) +
-secondary (hood/etc.); T3 adds a weapon colour. Expensive (~1–2M gold/tier), meant
-to take a couple weeks of play to earn. **OPEN TECH:** can we recolour the oryx
-class sprites programmatically (palette-swap)? — needs a feasibility spike (gates
-this phase). Classes are cosmetic-only today, so this is the first customization.
+**Phase 1 — Cosmetics: character color customization ✅ IMPLEMENTED.** All nine
+classes, both genders, and both animation frames use approved per-pixel slot
+maps. Three sequential permanent Wardrobe upgrades cost 1.5M, 2M, and 2.5M gold
+(6M total), exposing each class/gender's approved basic, detail, and
+weapon/shield channels. The picker includes hue, black/white Tone, material
+presets, atomic saves, and the locally approved animated review surface.
 
-**Phase 2 — Consumables: timed boosts.** Cheaper, self-consuming (a couple hours):
-damage boost, gold-gain multiplier. **Data-driven balance** so relative value is
-tuned (a gold-gain boost should out-earn a damage boost's derived gold, which
-out-earns doing nothing — measure with real DB data like the steal tuning).
-**DECISION (recommended): NO token boosts** — keep tokens the pure earned-from-work
-metric; letting gold buy tokens would corrupt the leaderboard / the game's premise.
+**Phase 2 — Consumables: timed boosts ⏳ TIER 1 IMPLEMENTED.** Beginner Gold and
+Damage Potions are sold from personal daily stock, stored in Inventory, and
+manually activated for two hours of combat-active time. Gold rewards effective
+token work through a capped base/stretch mini-quest; Damage raises personal base
+hit by 25%. Purchases and uses are limited to three per type per office day, and
+the admin-only Potion Lab records real costs and yields for later tuning. Higher
+strengths wait for the approved evidence threshold. **NO token boosts** — tokens
+remain the pure earned-from-work metric.
 
 **Phase 3 — Loot boxes + equipment progression (the addicting endgame sink).** Loot
 boxes output random parts (some gold, weapon/armor parts, gems). **Doubling upgrade
@@ -419,9 +426,13 @@ boxes (Phase 3). Design later.
 **Fairness guardrail throughout:** whales hold the most gold, so avoid permanent
 pay-to-win runaway — favour self-consuming (Phase 2), diminishing returns, and
 catch-up. Prices scaled to the inflated economy (millions, not hundreds).
-- [ ] Confirm decomposition + build order; brainstorm **Phase 0 (+ first product)**
-- [ ] Recoloring feasibility spike (gates Phase 1)
-- [ ] Per-phase spec→plan→build as we get to each
+- [x] Confirm decomposition + build order; build Phase 0 with the first cosmetic product.
+- [x] Complete recoloring feasibility, slot-map authoring, and male/female pixel approval.
+- [x] Build Phase 1 cosmetics and the Tier 1 launch of Phase 2 consumables.
+- [ ] Use Potion Lab evidence to design higher potion strengths after at least 14
+      combat-active days, 30 completed activations per launch product, and five
+      participating players.
+- [ ] Spec→plan→build Phase 3 loot boxes/equipment and Phase 4 pets when prioritized.
 
 ## 23. Heroes face the monster (flip sprite by side)
 On the TV a hero sprite always faces the same direction regardless of which side
@@ -454,9 +465,9 @@ density + interaction. Needs a design pass.
 - [ ] Denser layout: smaller dungeon + expanded stats/leaderboard panes
 - [ ] Reuse the SSE stream + `dungeon.css` shell; do NOT regress the TV kiosk
 
-## 26. Bound delayed potion-clock credit at the idle deadline
-A delayed engine tick that crosses the office-idle deadline can currently credit
-post-idle elapsed time as combat-active potion time. A future fix should intersect
-the tick's elapsed interval with the eligible active-time window, then add a
-delayed-tick regression test proving no potion duration is credited after the
-idle cutoff.
+## 26. Bound delayed potion-clock credit at the idle deadline ✅ DONE (2026-07-30)
+The engine now clips a delayed tick's elapsed interval and accounting timestamp
+to the office-idle deadline before advancing combat-active potion time. If new
+activity resumes after an idle gap but before the delayed tick runs, the engine
+credits the old and resumed active windows without filling the gap. Regression
+tests cover both cases across the 15-minute boundary.

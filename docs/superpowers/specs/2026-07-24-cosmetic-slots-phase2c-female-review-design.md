@@ -1,7 +1,7 @@
 # Cosmetic Slot System — Phase 2C Complete Roster Maps and Review Design
 
 **Date:** 2026-07-24  
-**Status:** Approved design  
+**Status:** Implemented and locally approved; Pi release gate pending
 **Track:** Character cosmetics, after Phase 2B.2 and before tiered shop entitlements
 
 ## 1. Outcome

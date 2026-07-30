@@ -5,7 +5,7 @@ import {
   encounterRewardGoldPool,
   type EngineConfig,
 } from './encounters';
-import { isIdle, setPaused, getGameState } from './gamestate';
+import { isIdle, lastActivityAt, setPaused, getGameState } from './gamestate';
 import { levelForXp } from './leveling';
 import { tokenModifier, attackDamage } from './combat';
 import { activityScore } from './activity';
@@ -196,6 +196,7 @@ export class GameEngine {
   private officeTimeZone: string;
   private previousTickAt: number | null = null;
   private previousClockRunning = false;
+  private previousIdleDeadline: number | null = null;
 
   constructor(private db: Database.Database, deps: EngineDeps = {}) {
     this.rng = deps.rng ?? Math.random;
@@ -378,6 +379,9 @@ export class GameEngine {
       now,
       pauseAfterMinutes,
     );
+    this.previousIdleDeadline = this.previousClockRunning
+      ? lastActivityAt(this.db) + pauseAfterMinutes * 60_000
+      : null;
   }
 
   /** Advance the game by one tick. `now` is epoch ms. */
@@ -389,12 +393,39 @@ export class GameEngine {
         && this.previousClockRunning
         && now >= this.previousTickAt
       ) {
-        advanceCombatClock(
-          this.db,
-          now - this.previousTickAt,
-          now,
-          this.officeTimeZone,
-        );
+        const intervalStart = this.previousTickAt;
+        const pauseWindowMs = cfg.pauseAfterMinutes * 60_000;
+        const currentActivityAt = lastActivityAt(this.db);
+        const candidates = [
+          {
+            start: intervalStart,
+            end: Math.min(now, this.previousIdleDeadline ?? intervalStart),
+          },
+          {
+            start: Math.max(intervalStart, currentActivityAt),
+            end: Math.min(now, currentActivityAt + pauseWindowMs),
+          },
+        ].filter((segment) => segment.end > segment.start)
+          .sort((a, b) => a.start - b.start);
+
+        const activeSegments: Array<{ start: number; end: number }> = [];
+        for (const segment of candidates) {
+          const previous = activeSegments.at(-1);
+          if (previous && segment.start <= previous.end) {
+            previous.end = Math.max(previous.end, segment.end);
+          } else {
+            activeSegments.push({ ...segment });
+          }
+        }
+
+        for (const segment of activeSegments) {
+          advanceCombatClock(
+            this.db,
+            segment.end - segment.start,
+            segment.end,
+            this.officeTimeZone,
+          );
+        }
       }
       this.previousTickAt = now;
       completeExpiredPotions(this.db, now);

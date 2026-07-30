@@ -69,7 +69,7 @@ Keep `DB_PATH` set to the configured production database path for this command; 
 - Begin an unsaved Wardrobe edit, change tabs, wait through the five-second hub refresh, and return. The draft must remain intact.
 - Hover, keyboard-focus, click, and tap the character to open Active Effects. Verify each potion icon, remaining active time, short effect copy, Gold progress, and monster debuff appear together without overflowing the card.
 - Verify click-away and Escape close the popover and return focus to the trigger.
-- [ ] Confirm Inventory uses the snapped Duskstone room with plain floor, two five-tile Thornwind corner patches, the top-row TV floor shadow, 28 fixed item cells, and no door or additional decorations.
+- [x] Confirm Inventory uses the snapped Duskstone room with plain floor, two five-tile Thornwind corner patches, the top-row TV floor shadow, 28 fixed item cells, and no door or additional decorations. Approved 2026-07-30.
 - Confirm the compact renderer has no TV backdrop: only the centered monster name/rounded HP strip and the complete rounded 20×15 dungeon are visible.
 - At desktop width, confirm the 480×400 dungeon sits beside Fight Leaders and Today spans the full row beneath both.
 - Confirm the dungeon has only a restrained bottom-right shadow; there is no four-sided halo or ambient glow.

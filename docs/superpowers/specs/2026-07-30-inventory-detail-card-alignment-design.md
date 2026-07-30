@@ -1,7 +1,7 @@
 # Inventory Detail Card Alignment Design
 
 **Date:** 2026-07-30  
-**Status:** Approved direction, pending implementation  
+**Status:** Implemented and locally approved; Pi release gate pending
 **Scope:** Player Hub Inventory presentation only
 
 ## Goal

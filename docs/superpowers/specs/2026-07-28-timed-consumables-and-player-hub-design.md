@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-28
 
-**Status:** Approved for implementation planning
+**Status:** Implemented and locally approved; Pi release gate pending
 
 **Branch:** `feat/player-shop-cosmetics`
 

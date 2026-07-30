@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-29
 
-**Status:** Approved for implementation planning
+**Status:** Implemented and locally approved; Pi release gate pending
 
 **Scope:** Bazaar exhaustion, local-demo boss animation, potion-mote scale, and player-hub Inventory/Live Dungeon presentation
 

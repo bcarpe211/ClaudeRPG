@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-30
 
-**Status:** Approved for implementation planning
+**Status:** Implemented and locally approved; Pi release gate pending
 
 **Scope:** Player-hub Live Dungeon presentation and the compact TV renderer used by `/tv/embed`
 

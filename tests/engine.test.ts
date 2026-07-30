@@ -104,6 +104,36 @@ describe('engine combat-active clock', () => {
     expect(combatActiveMs(db)).toBe(pausedAt);
   });
 
+  it('stops a delayed active tick at the office idle deadline', () => {
+    wakeOffice(100_000);
+    const eng = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+
+    eng.tick(100_000);
+    eng.tick(999_000);
+    expect(combatActiveMs(db)).toBe(899_000);
+
+    eng.tick(1_002_000);
+    expect(combatActiveMs(db)).toBe(900_000);
+  });
+
+  it('does not fill an idle gap when activity resumes before a delayed tick', () => {
+    wakeOffice(100_000);
+    const eng = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+
+    eng.tick(100_000);
+    eng.tick(999_000);
+
+    db.prepare('UPDATE players SET last_token_at=?').run(1_001_000);
+    eng.tick(1_002_000);
+    expect(combatActiveMs(db)).toBe(901_000);
+  });
+
   it('counts the interval ending in a kill and pauses the defeat window', () => {
     setSetting(db, 'gold_factor', '0');
     wakeOffice(100_000);
