@@ -16,12 +16,20 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-inventory-layout[\s\S]*grid-template-columns:\s*1fr/);
   });
 
-  it('gives the compact dungeon a full-width row and splits summaries beneath it', () => {
-    expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-columns:\s*1fr/);
-    expect(css).toMatch(/\.hub-dungeon\{[^}]*padding:\s*0/);
-    expect(css).toMatch(/\.hub-dungeon\{[^}]*overflow:\s*hidden/);
-    expect(css).toMatch(/\.hub-live-side\{[^}]*grid-template-columns:\s*repeat\(2,minmax\(0,1fr\)\)/);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-live-side[^}]*grid-template-columns:\s*1fr/);
+  it('lays out the tight dungeon beside leaders with Today across the bottom', () => {
+    expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-columns:\s*minmax\(0,480px\) minmax\(240px,1fr\)/);
+    expect(css).toMatch(/\.hub-live-grid\{[^}]*grid-template-areas:\s*"dungeon leaders" "today today"/);
+    expect(css).toMatch(/\.hub-dungeon\{[^}]*aspect-ratio:\s*6\/5/);
+    expect(css).toMatch(/\.hub-dungeon\{[^}]*overflow:\s*visible/);
+    expect(css).toMatch(/\.hub-dungeon::before\{[^}]*top:\s*10%/);
+    expect(css).toMatch(/\.hub-dungeon::before\{[^}]*8px 10px 20px -11px/);
+    expect(css).toMatch(/\.hub-fight-leaders\{[^}]*grid-area:\s*leaders/);
+    expect(css).toMatch(/\.hub-today-panel\{[^}]*grid-area:\s*today/);
+    expect(css).toMatch(/\.hub-today\{[^}]*grid-template-columns:\s*repeat\(6,minmax\(0,1fr\)\)/);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*grid-template-areas:\s*"dungeon" "leaders" "today"/);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.hub-today\{[^}]*repeat\(3,minmax\(0,1fr\)\)/);
+    expect(css).toMatch(/@media \(max-width:\s*480px\)[\s\S]*\.hub-today\{[^}]*repeat\(2,minmax\(0,1fr\)\)/);
+    expect(css).not.toContain('.hub-live-side');
   });
 
   it('builds a two-thirds dungeon-room inventory from existing pixel assets', () => {
