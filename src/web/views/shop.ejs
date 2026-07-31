@@ -45,8 +45,8 @@
           <% if (purchaseResult === 'price_changed') { %><p class="err">This offer was repriced. Review the current offer; no gold was spent.</p><% } %>
           <% if (purchaseResult === 'stale') { %><p class="err">Your Wardrobe already advanced. This is your current offer.</p><% } %>
           <% if (purchaseResult === 'out_of_sequence' || purchaseResult === 'invalid') { %><p class="err">That ledger entry is not available. No gold was spent.</p><% } %>
-          <% if (!purchaseResult && offer.missingGold > 0) { %><p class="bazaar-affordability">Gather <%= offer.missingGold.toLocaleString() %>g more to unlock this ledger page.</p><% } %>
-          <% if (!purchaseResult && offer.missingGold === 0) { %><p class="bazaar-affordability is-ready">Your purse is ready for this permanent upgrade.</p><% } %>
+          <% if ((!purchaseResult || purchaseResult.startsWith('potion_')) && offer.missingGold > 0) { %><p class="bazaar-affordability">Gather <%= offer.missingGold.toLocaleString() %>g more to unlock this ledger page.</p><% } %>
+          <% if ((!purchaseResult || purchaseResult.startsWith('potion_')) && offer.missingGold === 0) { %><p class="bazaar-affordability is-ready">Your purse is ready for this permanent upgrade.</p><% } %>
 
           <div class="bazaar-buy-row">
             <p class="bazaar-price"><span>Permanent unlock</span><strong><%= offer.price.toLocaleString() %>g</strong></p>

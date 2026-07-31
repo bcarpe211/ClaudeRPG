@@ -422,6 +422,18 @@ describe('Bazaar', () => {
     expect(response.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
   });
 
+  it('keeps the Wardrobe affordability visible after a potion purchase result', async () => {
+    const { app, player } = ctx(250_000);
+
+    const response = await request(app).get('/shop').query({
+      token: player.auth_token,
+      result: 'potion_success',
+    });
+
+    expect(response.text).toContain('Potion stock added to your inventory.');
+    expect(response.text).toContain('Gather 1,250,000g more to unlock this ledger page.');
+  });
+
   it('buys a selected potion quantity and redirects with an allow-listed success result', async () => {
     const { db, app, player } = ctx(500_000);
     const post = await request(app).post('/shop/consumables/purchase').type('form').send({
