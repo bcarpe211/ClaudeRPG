@@ -64,6 +64,9 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(
       /#hub-leaders\{[^}]*flex:1 1 auto[^}]*min-height:0[^}]*overflow-y:auto[^}]*overscroll-behavior:contain[^}]*scrollbar-gutter:stable/,
     );
+    expect(css).toMatch(
+      /#hub-leaders:focus-visible\{[^}]*outline:2px solid var\(--gold\)[^}]*outline-offset:3px/,
+    );
     expect(css).toMatch(/\.hub-today-panel\{[^}]*grid-area:\s*today/);
     expect(css).toMatch(/\.hub-today\{[^}]*grid-template-columns:\s*repeat\(6,minmax\(0,1fr\)\)/);
     expect(css).toMatch(/@container \(max-width:\s*739px\)[\s\S]*grid-template-areas:\s*"dungeon" "leaders" "today"/);

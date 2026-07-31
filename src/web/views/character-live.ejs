@@ -9,7 +9,7 @@
 
   <section class="hub-subpanel hub-fight-leaders" aria-labelledby="hub-leaders-title">
     <h3 id="hub-leaders-title">Fight Leaders</h3>
-    <div id="hub-leaders">
+    <div id="hub-leaders" tabindex="0" aria-labelledby="hub-leaders-title">
       <% if (currentFight.leaders.length > 0) { %>
         <ol class="hub-leaders">
           <% currentFight.leaders.forEach(function (leader, index) { %>

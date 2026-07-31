@@ -268,20 +268,22 @@
 
     const leaders = byId('hub-leaders');
     if (!leaders) return;
+    const previousScrollTop = leaders.scrollTop;
     clear(leaders);
     if (state.currentFight.leaders.length === 0) {
       leaders.append(element('p', 'hub-empty-line', 'The damage ledger is waiting for its first mark.'));
-      return;
+    } else {
+      const list = element('ol', 'hub-leaders');
+      state.currentFight.leaders.forEach((leader, index) => {
+        const row = element('li');
+        row.append(element('span', 'hub-leaders-rank', `#${index + 1}`));
+        row.append(element('span', 'hub-leaders-name', leader.name));
+        row.append(element('span', 'hub-leaders-damage', `${number.format(leader.damage)} dmg`));
+        list.append(row);
+      });
+      leaders.append(list);
     }
-    const list = element('ol', 'hub-leaders');
-    state.currentFight.leaders.forEach((leader, index) => {
-      const row = element('li');
-      row.append(element('span', 'hub-leaders-rank', `#${index + 1}`));
-      row.append(element('span', 'hub-leaders-name', leader.name));
-      row.append(element('span', 'hub-leaders-damage', `${number.format(leader.damage)} dmg`));
-      list.append(row);
-    });
-    leaders.append(list);
+    leaders.scrollTop = Math.min(previousScrollTop, Math.max(0, leaders.scrollHeight - leaders.clientHeight));
   }
 
   function renderState(nextState) {

@@ -87,6 +87,9 @@ class FakeElement {
   src = '';
   alt = '';
   offsetWidth = 42;
+  scrollTop = 0;
+  scrollHeight = 0;
+  clientHeight = 0;
   width = 0;
   height = 0;
   canvasContext: Record<string, any> | null = null;
@@ -124,6 +127,7 @@ class FakeElement {
   removeChild(child: FakeElement): FakeElement {
     const index = this.children.indexOf(child);
     if (index >= 0) this.children.splice(index, 1);
+    if (this.children.length === 0) this.scrollTop = 0;
     child.parentElement = null;
     return child;
   }
@@ -701,5 +705,19 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(h.fetchCalls[0].url).toContain('/character/state');
+  });
+
+  it('preserves the fight ledger scroll position across a polling refresh', async () => {
+    const h = interactionHarness({ responses: [] });
+    const leaders = h.document.getElementById('hub-leaders')!;
+    leaders.scrollHeight = 220;
+    leaders.clientHeight = 100;
+    leaders.scrollTop = 260;
+    h.responses.push({ ok: true, json: async () => h.refreshed });
+
+    await h.intervals[0].callback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(leaders.scrollTop).toBe(120);
   });
 });

@@ -43,6 +43,7 @@ describe('character sheet', () => {
     expect(res.text).toContain('<iframe class="hub-dungeon-frame" src="/tv/embed"');
     expect(res.text.match(/class="hub-dungeon"/g)).toHaveLength(1);
     expect(res.text.match(/class="hub-subpanel hub-fight-leaders"/g)).toHaveLength(1);
+    expect(res.text).toContain('id="hub-leaders" tabindex="0" aria-labelledby="hub-leaders-title"');
     expect(res.text.match(/class="hub-today-panel"/g)).toHaveLength(1);
     const dungeonIndex = res.text.indexOf('class="hub-dungeon"');
     const leadersIndex = res.text.indexOf('class="hub-subpanel hub-fight-leaders"');
