@@ -47,6 +47,7 @@
   const effectsClose = byId('hub-effects-close');
   const avatarTrigger = documentRef.querySelector('.hub-avatar-trigger');
   const avatarWrap = byId('hub-avatar-wrap');
+  const fightLeaders = byId('hub-leaders');
   const potionCanvas = byId('hub-potion-fx');
   const potionContext = potionCanvas?.getContext?.('2d') ?? null;
   const reducedMotion = root.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
@@ -581,6 +582,18 @@
     effectsPinned = false;
     closeEffects();
     returnFocusToAvatar();
+  });
+  fightLeaders?.addEventListener('keydown', (event) => {
+    const maxScrollTop = Math.max(0, fightLeaders.scrollHeight - fightLeaders.clientHeight);
+    const lineStep = 40;
+    let nextScrollTop = null;
+    if (event.key === 'ArrowDown') nextScrollTop = fightLeaders.scrollTop + lineStep;
+    if (event.key === 'ArrowUp') nextScrollTop = fightLeaders.scrollTop - lineStep;
+    if (event.key === 'PageDown') nextScrollTop = fightLeaders.scrollTop + fightLeaders.clientHeight;
+    if (event.key === 'PageUp') nextScrollTop = fightLeaders.scrollTop - fightLeaders.clientHeight;
+    if (nextScrollTop === null) return;
+    event.preventDefault();
+    fightLeaders.scrollTop = Math.min(maxScrollTop, Math.max(0, nextScrollTop));
   });
   documentRef.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;

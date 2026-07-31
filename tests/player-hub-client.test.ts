@@ -720,4 +720,22 @@ describe('player hub inventory, effects, and refresh behavior', () => {
 
     expect(leaders.scrollTop).toBe(120);
   });
+
+  it('scrolls the focused overflowing fight ledger with keyboard commands and prevents page defaults', () => {
+    const h = interactionHarness();
+    const leaders = h.document.getElementById('hub-leaders')!;
+    leaders.scrollHeight = 230;
+    leaders.clientHeight = 100;
+    leaders.scrollTop = 20;
+    leaders.focus();
+
+    expect(leaders.dispatch('keydown', new FakeEvent('ArrowDown')).defaultPrevented).toBe(true);
+    expect(leaders.scrollTop).toBe(60);
+    expect(leaders.dispatch('keydown', new FakeEvent('PageDown')).defaultPrevented).toBe(true);
+    expect(leaders.scrollTop).toBe(130);
+    expect(leaders.dispatch('keydown', new FakeEvent('ArrowUp')).defaultPrevented).toBe(true);
+    expect(leaders.scrollTop).toBe(90);
+    expect(leaders.dispatch('keydown', new FakeEvent('PageUp')).defaultPrevented).toBe(true);
+    expect(leaders.scrollTop).toBe(0);
+  });
 });
