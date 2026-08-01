@@ -20,6 +20,7 @@
 - Monday is the earliest target, not a deadline. Any failed gate reschedules the launch without a partial cutover.
 - Existing history is preserved; no progression reset is permitted.
 - The single cutover timestamp rejects Runs that began earlier and divides legacy OTLP scoring from Runtime Raiders scoring.
+- The initial release enables exactly `codex_desktop,codex_cli`. Omp and Claude Code remain disabled and are not deployment gates until a later activation release.
 - Old Claude OTel configuration is removed manually; the companion may diagnose it but never edits provider/shell configuration.
 - Do not push, SSH, change DNS, restart services, change the Pi hostname, or touch production until the user explicitly authorizes that exact stage.
 - Source plans: collector/scoring and product rebrand dated 2026-08-01.
@@ -45,7 +46,7 @@
 
 **Interfaces:**
 - Produces Caddy sites: `raiders.redlattice.com` and `clauderpg.redlattice.com` to the same `localhost:8080` app.
-- Produces env keys: `PUBLIC_URL`, `SCORING_MODE`, `RUN_SCORING_CUTOVER_AT`, `RAID_POWER_POLICY_PATH`.
+- Produces env keys: `PUBLIC_URL`, `SCORING_MODE`, `RUN_SCORING_CUTOVER_AT`, `RAID_POWER_POLICY_PATH`, `RUN_ENABLED_SURFACES`.
 - Preserves: `PORT`, `DB_PATH`, `SPRITES_DIR`, admin/session config, compatibility filenames, and service name.
 
 - [ ] **Step 1: Write deployment-file tests**
@@ -58,6 +59,7 @@ expect(env).toContain('PUBLIC_URL=https://raiders.redlattice.com');
 expect(env).toContain('SCORING_MODE=runtime-raiders');
 expect(env).toContain('RUN_SCORING_CUTOVER_AT=');
 expect(env).toContain('RAID_POWER_POLICY_PATH=');
+expect(env).toContain('RUN_ENABLED_SURFACES=codex_desktop,codex_cli');
 ```
 
 Also assert there is no `0.0.0.0`, public tunnel, Cloudflare Tunnel, port-forward,
@@ -197,7 +199,8 @@ git commit -m "ops(raiders): add fail-closed cutover preflight"
 
 Assert the document contains exact gates for IT DNS, Caddy/TLS, mDNS, paused
 state, backup verification, migration rehearsal, auto-updater hold, old OTel
-cleanup, three-provider canaries, scoring-mode exclusivity, kiosk validation,
+cleanup, enabled-provider canaries, the exact Codex surface allowlist,
+scoring-mode exclusivity, disabled-provider rejection, kiosk validation,
 rollback triggers, and explicit no-go wording.
 
 - [ ] **Step 2: Draft the preparation section**
@@ -226,7 +229,7 @@ install the reviewed env with one cutover timestamp and Runtime Raiders mode
 start the service and wait for /health
 verify schema, retained Raider totals, policy version, and old OTLP no-op
 verify landing, Raider Hub, TV, Leaderboard, new/old HTTPS, mDNS, and SSE version
-enable canary companions, run Codex/Claude/Omp, then enable the office
+enable canary companions, run Codex Desktop and CLI, then enable the office
 restore the auto-update timer only after acceptance
 ```
 
@@ -258,9 +261,9 @@ from Mac outboxes.
 
 Copy a production-shaped fixture to a new `/private/tmp` directory, apply the
 release migration, compare every retained player/progression/economy table,
-simulate the three provider events, then restore the untouched backup and prove
-its checksum and rows match the start. Never point rehearsal commands at
-`data/claude-rpg.db`.
+simulate Codex Desktop/CLI events plus rejected Claude/Omp events, then restore
+the untouched backup and prove its checksum and rows match the start. Never
+point rehearsal commands at `data/claude-rpg.db`.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -342,11 +345,12 @@ The player or administrator edits the exact old block manually, starts a fresh
 shell, and confirms the old variables are absent. The Runtime Raiders installer
 and companion do not perform this edit.
 
-- [ ] **Step 4: Verify providers still operate normally with Raiders off**
+- [ ] **Step 4: Verify Codex still operates normally with Raiders off**
 
-Run a harmless canary in Codex, Claude Code, and Omp. Confirm no old OTLP metric
-changes production, no Runtime Raiders event uploads, and each tool behaves
-normally.
+Run a harmless canary in Codex Desktop and CLI. Confirm no old OTLP metric
+changes production, no Runtime Raiders event uploads, and both enabled surfaces
+behave normally. Confirm `raiders status` labels Omp and Claude Code unavailable
+without probing their local roots.
 
 - [ ] **Step 5: Record readiness without enabling scoring**
 
@@ -363,7 +367,7 @@ Do not turn companions on. Commit only the content-free canary matrix.
 
 - [ ] **Step 1: Stop and request explicit push/deployment authorization**
 
-Present the release SHA, automated results, visual approval, provider canaries,
+Present the release SHA, automated results, visual approval, enabled-provider canaries,
 policy report, DNS/TLS/mDNS status, current `game_state.paused`, backup target,
 cutover timestamp, and rollback SHA. No authorization means no push or Pi action.
 
@@ -381,9 +385,10 @@ old OTLP no-op are verified.
 
 - [ ] **Step 4: Enable canaries, then the office**
 
-Run one controlled Codex, Claude Code, and Omp Run. Verify expected Run Details,
-Raid Power, additive concurrency, no duplicate score, `total_tokens` unchanged,
-and content-free payload evidence. Only then have all players run `raiders on`.
+Run one controlled Codex Desktop Run and one Codex CLI Run. Verify expected Run
+Details, Raid Power, additive concurrency, no duplicate score, `total_tokens`
+unchanged, content-free payload evidence, and server rejection of synthetic
+Claude/Omp events. Only then have all players run `raiders on`.
 
 - [ ] **Step 5: Observe and close or roll back**
 

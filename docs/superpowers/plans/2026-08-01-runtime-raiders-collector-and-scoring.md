@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a passive macOS companion and a provider-neutral server ingestion path that convert safe local Codex, Claude Code, and Omp Run facts into idempotent Raid Power without enabling provider telemetry or disturbing AI work.
+**Goal:** Build a passive Codex-first macOS companion and a provider-neutral server ingestion path that convert safe local Run facts into idempotent Raid Power without enabling provider telemetry or disturbing AI work.
 
 **Architecture:** A dependency-free Swift companion observes verified append-only provider records, normalizes only allowlisted facts, and delivers cumulative Run events through a durable outbox. The existing TypeScript server authenticates enrolled devices, computes versioned Raid Power, stores provider-neutral Runs, and projects each positive delta into the existing `token_events`/`effective_tokens` path so combat and progression remain compatible.
 
@@ -13,7 +13,10 @@
 - Do not enable OTel or any provider analytics and do not change provider configuration.
 - Never send prompts, responses, commands, tool arguments/results, files, paths, workspace names, repository data, or shell history.
 - The companion is read-only, outside every provider execution path, and must fail without affecting the provider.
-- The only supported launch surfaces are Codex Desktop/CLI, Claude Code, and Omp; Composer and Claude desktop/web remain unsupported.
+- The initial enabled launch surfaces are Codex Desktop and Codex CLI.
+- Omp is the next activation candidate; Claude Code is planned but remains disabled and unverified until a credentialed canary succeeds. Neither blocks the Codex-first launch.
+- The shared contract may reserve `claude` and `omp`, but disabled surfaces are rejected by the server, are not observed by the companion, and are never advertised as supported.
+- Activating Omp or Claude Code is a separate follow-up project with its own controlled canary, fixtures, adapter, privacy corpus, matched-provider policy version, allowlist change, and release review; do not implement those adapters in this plan.
 - Model and effort are display-only and must never enter a scoring calculation.
 - `raiders off` excludes all activity created during the off interval.
 - Distinct concurrent Runs score additively; duplicate observations of the same Run score once.
@@ -49,17 +52,17 @@
 
 ---
 
-### Task 1: Prove the three provider record contracts without collecting content
+### Task 1: Prove the Codex launch record contract without collecting content
 
 **Files:**
 - Create: `tools/runtime-raiders/provider-shape-audit.ts`
 - Create: `tests/provider-shape-audit.test.ts`
 - Create: `docs/runtime-raiders/provider-record-evidence.md`
-- Create: `companion/Fixtures/{codex,claude,omp}/`
+- Create: `companion/Fixtures/codex/`
 
 **Interfaces:**
 - Produces: `auditJsonlShape(lines: Iterable<string>): Record<string, string[]>`
-- Produces: a checked-in evidence matrix fixing the supported provider versions, roots, Run identity, usage fields, lifecycle fields, and unsupported fallbacks.
+- Produces: a checked-in evidence matrix fixing the verified Codex versions, roots, Run identity, usage fields, lifecycle fields, and unsupported fallbacks; Claude Code and Omp are recorded as disabled/unverified.
 - Consumes: actual local records only during an explicit controlled canary; it writes keys and types, never values.
 
 - [ ] **Step 1: Write the privacy-first audit test**
@@ -96,42 +99,43 @@ export function auditJsonlShape(lines: Iterable<string>): Record<string, string[
 }
 ```
 
-- [ ] **Step 4: Run one controlled, non-sensitive canary in each tool**
+- [ ] **Step 4: Run controlled, non-sensitive Codex canaries**
 
 Use a temporary empty directory and the prompt `Reply with the word ready.`.
 Record the installed version and run the audit against only the newly written
 record. Do not copy the original record into the repository.
 
-Verify these minimum facts:
+Verify one Codex CLI Run and one Codex Desktop Run. A freshly written record
+from the current approved Codex Desktop implementation session may satisfy the
+Desktop canary; compare only allowlisted discriminator values and never print or
+store scalar values. Verify these minimum facts:
 
 - Codex: `session_meta`, `turn_context`, `event_msg.task_started`,
   `event_msg.token_count`, and `event_msg.task_complete`; `turn_id` is the Run
-  identity and `last_token_usage` is the per-Run cumulative usage.
-- Claude Code: a real user entry starts the Run, assistant entries contribute
-  `message.usage`, and `system/turn_duration` closes the Run; the top-level user
-  UUID/prompt identity is stable across tool churn.
-- Omp: `~/.omp/agent/sessions/**/*.jsonl` contains a `session` header and
-  append-only `message` entries whose assistant messages include usage and a
-  terminal stop reason. Ignore parent `task` tool-result aggregate usage when
-  child session files are counted.
+  identity, `last_token_usage` is the per-Run cumulative usage, and session
+  metadata distinguishes Desktop from CLI without using a local path as
+  identity.
 
-For Omp, compare the canary shape to the official `SessionManager` and
-`SessionEntry` sources:
-
-- <https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/session-manager.ts>
-- <https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/session-entries.ts>
-
-If any minimum fact is absent, stop this plan and report that launch is blocked.
-Do not substitute history databases, shell history, process watching, window
-focus, or provider hooks.
+If any Codex minimum fact is absent from either launch surface, stop this plan
+and report that launch is blocked. Do not substitute history databases, shell
+history, process watching, window focus, or provider hooks. Do not run Claude
+Code without credentials and do not claim Omp or Claude Code support from source
+code or synthetic data alone.
 
 - [ ] **Step 5: Hand-author minimal synthetic fixtures**
 
-Each fixture contains only fake IDs/timestamps/counts plus content traps such as
+The Codex fixture set contains only fake IDs/timestamps/counts plus content traps such as
 `DO_NOT_EXPORT_PROMPT`, `DO_NOT_EXPORT_PATH`, and `DO_NOT_EXPORT_TOOL_ARGUMENT`.
 Include completed, failed/cancelled, partial-line, duplicated, reordered, and
-parallel Run cases. Document the exact canary version and fields in
-`provider-record-evidence.md`.
+parallel Run cases for both Codex surfaces. Document the exact canary version and
+fields in `provider-record-evidence.md`, plus this activation table:
+
+```text
+codex_desktop  enabled   verified by controlled canary
+codex_cli      enabled   verified by controlled canary
+omp            disabled  separate canary, adapter, privacy, and policy gate required
+claude_code    disabled  credentialed canary, adapter, privacy, and policy gate required
+```
 
 - [ ] **Step 6: Verify and commit the evidence gate**
 
@@ -141,7 +145,7 @@ Expected: PASS; `rg -n 'Reply with the word ready' companion/Fixtures docs/runti
 
 ```bash
 git add tools/runtime-raiders/provider-shape-audit.ts tests/provider-shape-audit.test.ts docs/runtime-raiders/provider-record-evidence.md companion/Fixtures
-git commit -m "test(raiders): prove provider record contracts"
+git commit -m "test(raiders): prove Codex record contract"
 ```
 
 ### Task 2: Define the strict provider-neutral Run event
@@ -151,7 +155,8 @@ git commit -m "test(raiders): prove provider record contracts"
 - Create: `tests/run-events.test.ts`
 
 **Interfaces:**
-- Produces: `RunEventV1`, `UsageCountersV1`, `parseRunEventBatch(input, now)`.
+- Produces: `RunProvider`, `RunSurface`, `RunEventV1`, `UsageCountersV1`, `parseRunEventBatch(input, now)`.
+- Produces: `providerForSurface(surface: RunSurface): RunProvider` with the fixed mappings `codex_desktop|codex_cli -> codex`, `claude_code -> claude`, and `omp -> omp`.
 - Consumes: no provider-native object; adapters must construct this allowlisted shape.
 
 - [ ] **Step 1: Write schema tests for allowed and forbidden fields**
@@ -183,7 +188,10 @@ states `open|completed|failed|cancelled`, providers `codex|claude|omp`, surfaces
 `codex_desktop|codex_cli|claude_code|omp`, nullable model/effort strings of at
 most 100 characters, duration of at most seven days, and timestamps within seven
 days of server receipt. `sequence` is the provider record's stable ordinal within
-the Run, never a local upload or observation counter.
+the Run, never a local upload or observation counter. The Claude and Omp enum
+members are reserved contract values only; Task 7's enabled-surface allowlist
+must reject them in the Codex-first release. Export one canonical
+`providerForSurface` mapping for configuration and route validation.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -302,10 +310,10 @@ git commit -m "feat(raiders): add one-time companion enrollment"
 
 - [ ] **Step 1: Write pure scoring tests**
 
-Tests prove cumulative scoring is monotonic, cache-read is excluded, provider
-multipliers apply, duration uses a square-root curve with a hard cap, completion
-is fixed, and changing model/effort cannot affect any function signature or
-result.
+Tests prove cumulative scoring is monotonic, cache-read is excluded, the Codex
+multiplier is exactly `1.0`, an event for a provider absent from the policy is
+rejected, duration uses a square-root curve with a hard cap, completion is
+fixed, and changing model/effort cannot affect any function signature or result.
 
 - [ ] **Step 2: Verify the tests fail**
 
@@ -315,9 +323,11 @@ Run: `npm test -- tests/raid-power-policy.test.ts`
 
 The versioned file contains non-overlapping category weights (`input`, `output`,
 `cache_write`, and `reasoning_output` weight 1; `cache_read` weights 0), one
-positive multiplier per provider, a non-negative completion credit, and duration
-`scale`/`cap`. Scoring uses cumulative target credit so fractional provider
-multipliers cannot drift across event boundaries.
+positive multiplier per provider enabled under that policy, a non-negative
+completion credit, and duration `scale`/`cap`. The v1 provider map is exactly
+`{ "codex": 1.0 }`; `usageCredit` throws for `claude` or `omp` under v1.
+Scoring uses cumulative target credit so fractional multipliers in later policy
+versions cannot drift across event boundaries.
 
 ```ts
 export function durationCredit(p: RaidPowerPolicy, durationMs: number): number {
@@ -328,27 +338,31 @@ export function durationCredit(p: RaidPowerPolicy, durationMs: number): number {
 
 - [ ] **Step 4: Collect content-free calibration samples**
 
-Run at least three samples per provider for the same four canary workloads:
-short explanation, small code edit, medium repository task, and long-running
-reverse-engineering analysis. Store only provider, workload key, counters, and
-duration—never prompt, response, file, or project metadata.
+Run at least three samples on Codex Desktop and three on Codex CLI for each of
+the same four canary workloads: short explanation, small code edit, medium
+repository task, and long-running reverse-engineering analysis. Store only
+provider (`codex`), surface, workload key, counters, and duration—never prompt,
+response, file, or project metadata.
 
 - [ ] **Step 5: Generate the policy deterministically**
 
-For each workload, compute the median weighted usage per provider and the median
-of those provider medians as its target. Each provider multiplier is the median
-of `target/providerMedian` across workloads, rounded to six decimals. Let the
-overall baseline be the median workload target; generate completion credit as
-`max(1, round(baseline * 0.02))`, duration scale as
+For each workload, compute the median weighted usage across all Codex Desktop
+and CLI samples. Let the overall baseline be the median of those four workload
+medians. Emit the Codex multiplier as exactly `1.0`; generate completion credit
+as `max(1, round(baseline * 0.02))`, duration scale as
 `completionCredit / sqrt(10)`, and duration cap as `completionCredit * 4`.
-The tool writes both JSON policy and a Markdown table of inputs/results.
+The tool writes both JSON policy and a Markdown table broken down by workload
+and surface. The JSON records `enabled_providers: ["codex"]`.
 
 - [ ] **Step 6: Review the generated policy before continuing**
 
-Confirm no provider's median Raid Power for a matched workload differs from the
-cross-provider median by more than 25%. If it does, add more matched samples and
-regenerate; never add a model- or effort-specific multiplier. Obtain user
-approval of the generated report before treating v1 as launchable.
+Confirm the Codex Desktop and CLI median Raid Power for each matched workload
+differ by no more than 25%. If they do, add more matched samples and regenerate;
+never add a surface-, model-, or effort-specific multiplier. The report must say
+that cross-provider comparison is inapplicable to v1. Obtain user approval of
+the generated report before treating v1 as launchable. Enabling Omp or Claude
+Code requires a new immutable policy version and a separate matched-provider
+calibration review; do not edit v1.
 
 - [ ] **Step 7: Verify and commit**
 
@@ -429,7 +443,8 @@ git commit -m "feat(raiders): score runs through compatibility activity"
 - Modify: `tests/web-metrics.test.ts`
 
 **Interfaces:**
-- Produces configuration: `scoringMode: 'legacy-otlp'|'runtime-raiders'|'disabled'`, `runCutoverAt`, `raidPowerPolicyPath`.
+- Consumes: `RunSurface` and `providerForSurface` from Task 2.
+- Produces configuration: `scoringMode: 'legacy-otlp'|'runtime-raiders'|'disabled'`, `runCutoverAt`, `raidPowerPolicyPath`, `enabledRunSurfaces: RunSurface[]`.
 - Produces routes: `POST /api/raiders/enrollments`, `POST /api/raiders/enroll`, `POST /api/runs/events`, `POST /api/runs/heartbeat`.
 
 - [ ] **Step 1: Write route and scoring-mode tests**
@@ -438,7 +453,10 @@ Assert strict JSON, 256 KiB compressed/body limits, 100 events per request,
 Bearer authentication, rate limiting, one-time enrollment, idempotent retry
 responses, and no secrets in logs/responses. In `runtime-raiders` mode the old
 `/v1/metrics` returns `200 {}` without changing data. In `legacy-otlp` mode the
-new event endpoint returns `503 { reason: 'scoring_disabled' }`.
+new event endpoint returns `503 { reason: 'scoring_disabled' }`. In Runtime
+Raiders mode with `codex_desktop,codex_cli`, Codex events are accepted, while a
+Claude, Omp, mismatched provider/surface, or mixed enabled/disabled batch is
+rejected atomically with `422 { reason: 'surface_disabled' }` and no Run rows.
 
 - [ ] **Step 2: Verify the tests fail**
 
@@ -447,9 +465,14 @@ Run: `npm test -- tests/web-runs.test.ts tests/config.test.ts tests/web-metrics.
 - [ ] **Step 3: Implement configuration and routes**
 
 `SCORING_MODE` defaults to `legacy-otlp`. Runtime mode requires a valid
-`RUN_SCORING_CUTOVER_AT` epoch and a loadable immutable policy at startup.
-Register scoped `express.json({ limit: '256kb' })` only on the new JSON routes.
-Never register both scoring handlers as active.
+`RUN_SCORING_CUTOVER_AT` epoch, a loadable immutable policy, and a nonempty
+comma-separated `RUN_ENABLED_SURFACES` at startup. Parse only
+`codex_desktop|codex_cli|claude_code|omp`, reject duplicates and whitespace-only
+entries, require each enabled surface's provider to exist in the loaded policy,
+and configure the Codex-first release as `codex_desktop,codex_cli`. Register
+scoped `express.json({ limit: '256kb' })` only on the new JSON routes. Validate
+the entire batch against the allowlist and the canonical provider/surface map
+before ingestion. Never register both scoring handlers as active.
 
 Use these exact JSON/auth contracts:
 
@@ -460,7 +483,7 @@ POST /api/raiders/enrollments
 
 POST /api/raiders/enroll
   body: { code, device_id, companion_version }
-  201:  { device_token, dedupe_secret, server_url, cutover_at }
+  201:  { device_token, dedupe_secret, server_url, cutover_at, enabled_surfaces }
 
 POST /api/runs/events
   Authorization: Bearer <device_token>
@@ -548,60 +571,50 @@ git add companion/Package.swift companion/Sources/RuntimeRaidersCore companion/T
 git commit -m "feat(agent): add private run event core"
 ```
 
-### Task 10: Implement and verify each provider adapter
+### Task 10: Implement and verify the Codex launch adapter
 
 **Files:**
-- Create: `companion/Sources/RuntimeRaidersCore/{ProviderAdapter,CodexAdapter,ClaudeCodeAdapter,OmpAdapter}.swift`
-- Create: `companion/Tests/RuntimeRaidersCoreTests/{CodexAdapterTests,ClaudeCodeAdapterTests,OmpAdapterTests}.swift`
+- Create: `companion/Sources/RuntimeRaidersCore/{ProviderAdapter,CodexAdapter,AdapterRegistry}.swift`
+- Create: `companion/Tests/RuntimeRaidersCoreTests/{CodexAdapterTests,AdapterRegistryTests}.swift`
 
 **Interfaces:**
 - Consumes: `ProviderAdapter.consume(line:source:observedAt:) -> [NativeRunObservation]`.
-- Produces: normalized cumulative observations with a stable provider-record
-  ordinal; the registry assigns only privacy-safe Run/event keys.
+- Produces: normalized cumulative Codex observations with a stable provider-
+  record ordinal; the registry assigns only privacy-safe Run/event keys.
+- Produces: `AdapterRegistry.enabled(surfaces:)` that fails closed unless every
+  requested surface has a compiled, verified adapter.
 
 - [ ] **Step 1: Write Codex fixture tests**
 
 Group by `turn_id`; start on `task_started`; use `last_token_usage` rather than
 thread totals; take model/effort from matching turn context; close on
 `task_complete`; distinguish Desktop/CLI from session metadata; ignore every
-message/tool field. Test duplicated and reordered token snapshots.
+message/tool field. Test completed, failed/cancelled, partial-line, duplicated,
+reordered, and parallel Run fixtures from Task 1.
 
-- [ ] **Step 2: Implement Codex and verify**
+- [ ] **Step 2: Write the adapter-registry gate tests**
+
+Assert `codex_desktop` and `codex_cli` resolve to the Codex adapter. Assert
+`claude_code`, `omp`, unknown, or a mixed Codex/disabled request fails before any
+watcher starts. Assert the registry never creates or probes a disabled provider
+root.
+
+- [ ] **Step 3: Implement Codex and the registry**
 
 Run: `cd companion && swift test --filter CodexAdapterTests`
 
-- [ ] **Step 3: Write Claude Code fixture tests**
+Run: `cd companion && swift test --filter AdapterRegistryTests`
 
-Start only on a non-meta top-level user entry; group its assistant/tool churn by
-the stable top-level prompt identity; sum non-overlapping assistant usage; close
-on `system` subtype `turn_duration`; include nested subagent session files as
-distinct Runs; ignore message content, cwd, git branch, and tool payloads.
-
-- [ ] **Step 4: Implement Claude Code and verify**
-
-Run: `cd companion && swift test --filter ClaudeCodeAdapterTests`
-
-- [ ] **Step 5: Write Omp fixture tests**
-
-Use the v3 `session` header and user-entry ID as the turn identity. Accumulate
-assistant usage until the terminal assistant stop reason. Follow
-`thinking_level_change` and `model_change` only for display. Count child session
-files as distinct Runs and exclude parent task-result aggregate usage so it
-cannot double-count. Reject unknown session versions.
-
-- [ ] **Step 6: Implement Omp and verify**
-
-Run: `cd companion && swift test --filter OmpAdapterTests`
-
-- [ ] **Step 7: Run the privacy corpus and commit**
+- [ ] **Step 4: Run the privacy corpus and commit**
 
 Run: `cd companion && swift test`
 
-Expected: all fixtures normalize to events containing no `DO_NOT_EXPORT` value.
+Expected: every Codex fixture normalizes to events containing no
+`DO_NOT_EXPORT` value, and every deferred surface fails closed.
 
 ```bash
 git add companion/Sources/RuntimeRaidersCore companion/Tests/RuntimeRaidersCoreTests
-git commit -m "feat(agent): observe Codex Claude and Omp runs"
+git commit -m "feat(agent): observe Codex runs"
 ```
 
 ### Task 11: Add watching, durable outbox, upload, and control commands
@@ -630,9 +643,11 @@ Run: `cd companion && swift test --filter AgentControllerTests`
 
 - [ ] **Step 3: Implement watcher and bounded registry**
 
-Use FSEvents for the three verified record roots. Re-open changed files read-only
-and consume no more than 1 MiB per callback. The registry holds at most 256 open
-Runs and derives stalled status locally after 15 minutes without awarding score.
+Use FSEvents only for roots returned by `AdapterRegistry`; the Codex-first build
+watches the verified Codex session root and never probes Claude or Omp roots.
+Re-open changed files read-only and consume no more than 1 MiB per callback. The
+registry holds at most 256 open Runs and derives stalled status locally after 15
+minutes without awarding score.
 
 - [ ] **Step 4: Implement outbox and uploader**
 
@@ -643,10 +658,13 @@ origin is accepted outside tests.
 
 - [ ] **Step 5: Implement commands and diagnostics**
 
-`status` reports enabled/off, daemon state, provider adapter health, queued event
-count, last successful upload, and active Run count. `doctor` checks permissions,
-record roots, server health, signing, and whether the invoking environment still
-sets known Claude OTel variables; it does not read shell history or edit config.
+`status` reports enabled/off, daemon state, server-enabled surfaces, compiled
+adapter health, queued event count, last successful upload, and active Run
+count. It labels Omp and Claude Code as unavailable rather than probing them.
+`doctor` checks Codex record-root permissions, server health, signing, agreement
+between the enrollment allowlist and compiled adapters, and whether the invoking
+environment still sets known Claude OTel variables; it does not read shell
+history or edit config.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -705,7 +723,7 @@ git add companion/packaging tests/companion-installer.test.ts scripts/release/bu
 git commit -m "feat(agent): package signed companion installer"
 ```
 
-### Task 13: Complete local integration, privacy, and performance gates
+### Task 13: Complete Codex-first integration, privacy, and performance gates
 
 **Files:**
 - Create: `tests/runtime-raiders-e2e.test.ts`
@@ -719,9 +737,11 @@ git commit -m "feat(agent): package signed companion installer"
 - [ ] **Step 1: Add an end-to-end test**
 
 Start the app against a temporary database in Runtime Raiders mode, enroll a
-test Raider/device, post synthetic Codex/Claude/Omp events including parallel
-and duplicate cases, and assert Runs, event audit, Raid Power, `total_delta=0`,
-potions, wake behavior, and recent Run queries.
+test Raider/device with `codex_desktop,codex_cli`, post synthetic Codex events
+including parallel and duplicate cases, and assert Runs, event audit, Raid
+Power, `total_delta=0`, potions, wake behavior, and recent Run queries. Then
+post reserved Claude/Omp and mixed batches, assert `surface_disabled`, and prove
+they created no Runs, token events, or progression changes.
 
 - [ ] **Step 2: Run all automated checks**
 
@@ -737,10 +757,11 @@ Expected: all pass.
 
 - [ ] **Step 3: Perform network and privacy inspection**
 
-Run the companion against a local fake server while all three synthetic fixtures
+Run the companion against a local fake server while the Codex synthetic fixtures
 contain content traps. Capture outbound requests and prove the only destination
-is the configured server and no trap value appears. Then deny the server and
-confirm all three AI tools continue normally while the outbox banks events.
+is the configured server and no trap value appears. Confirm no Claude or Omp
+root is opened. Then deny the server and confirm Codex continues normally while
+the outbox banks events.
 
 - [ ] **Step 4: Measure resource budgets**
 
@@ -749,17 +770,19 @@ Over ten minutes, record idle average CPU below 0.25%, active average CPU below
 below 50 MiB, and upload timeout/retry bounds. A miss blocks release and must be
 fixed without weakening provider isolation.
 
-- [ ] **Step 5: Run controlled provider canaries**
+- [ ] **Step 5: Run controlled Codex canaries**
 
 On a test Raider, verify short, long, failed/cancelled, parallel, duplicate-
-surface, collector restart, server outage, `off`, and `on` behavior for Codex,
-Claude Code, and Omp. Record only counts/status/timestamps in the checklist.
+surface, collector restart, server outage, `off`, and `on` behavior for Codex
+Desktop and CLI. Confirm status lists only those enabled surfaces and that
+synthetic Claude/Omp submissions remain rejected. Record only
+counts/status/timestamps in the checklist.
 
 - [ ] **Step 6: Commit the verified candidate**
 
 ```bash
 git add tests/runtime-raiders-e2e.test.ts docs/runtime-raiders/canary-checklist.md README.md
-git commit -m "test(raiders): verify private multi-provider scoring"
+git commit -m "test(raiders): verify private Codex scoring"
 ```
 
 Stop here. Do not push, publish the installer, enable office companions, change

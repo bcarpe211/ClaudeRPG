@@ -16,6 +16,7 @@
 - Player-facing terms are Raider, Run, Raid, Fight, Raid Power, Momentum, Run Details, Create Your Raider, and Raider Key.
 - Keep the word **Leaderboard**.
 - Model, effort, and provider are display-only; do not rank or score them.
+- Player-facing support claims are derived from `enabledRunSurfaces`. The initial release names only Codex Desktop and Codex CLI; Omp and Claude Code remain absent until separately enabled.
 - Keep classic fantasy; add no robots, circuitry, terminals, neon, or cyberpunk art.
 - Extend the existing palette; do not replace it. Keep `#e8c96a` gold and use `#54282b` wine sparingly.
 - Preserve all routes, database columns, domain IDs, package/service names, levels, gold, combat, shop, wardrobe, potions, cosmetics, inventory, and history.
@@ -149,14 +150,15 @@ git commit -m "feat(brand): rebrand the dungeon shell"
 - Modify: `tests/web-registration.test.ts`
 
 **Interfaces:**
-- Consumes: `createEnrollment(db, playerId, now)` and `config.publicUrl` from the collector plan.
+- Consumes: `createEnrollment(db, playerId, now)`, `config.publicUrl`, and `config.enabledRunSurfaces` from the collector plan.
 - Produces: `installCommand` containing a short-lived one-time code, never the persistent Raider Key.
 
 - [ ] **Step 1: Write landing and enrollment tests**
 
-Assert exact approved lines, `Create Your Raider`, the three Run steps, and the
-privacy lists below. Assert the old OTel snippet and `Claude Code only` copy are
-absent.
+Assert exact approved lines, `Create Your Raider`, the three Run steps, the
+Codex Desktop/CLI enabled-surface line, and the privacy lists below. Assert the
+old OTel snippet, `Claude Code only`, and claims that Omp or Claude Code are
+currently supported are absent.
 
 ```text
 It sees: provider, supported surface, usage counts, model, effort, timestamps, Run state
@@ -178,9 +180,11 @@ assets. Change hero copy to the approved lines. The literal explanation is:
 
 1. Create your Raider.
 2. Install the private local companion.
-3. Use Codex, Claude Code, or Omp; your Runs generate Raid Power.
+3. Use Codex Desktop or CLI; your Runs generate Raid Power.
 
 Clarify next to the primary line that “Get paid” means in-game gold and rewards.
+Render the supported-surface line from `config.enabledRunSurfaces`; fail closed
+instead of inventing copy for an unknown or disabled surface.
 
 - [ ] **Step 4: Implement registration and one-time enrollment copy**
 
@@ -336,8 +340,10 @@ Replace literal token units in potion/reward descriptions with Raid Power where
 the value now comes from `effective_delta`. Clearly mark cache-read weight and
 legacy OTLP settings as legacy-only and inactive in Runtime Raiders mode. Update
 README product overview, local developer commands, architecture, privacy, and
-the three provider surfaces; leave package, DB, service, and historical document
-names unchanged.
+the Codex Desktop/CLI launch surfaces. List Omp and Claude Code only in a clearly
+marked planned-provider section with their separate canary, privacy, adapter,
+calibration, and allowlist gates; leave package, DB, service, and historical
+document names unchanged.
 
 - [ ] **Step 4: Run the stale-copy guard and fix every active hit**
 
@@ -380,9 +386,11 @@ Expected: all pass.
 - [ ] **Step 2: Seed a disposable review database**
 
 Create local-only Raiders covering male/female class sprites, zero/one/multiple
-active Runs, Codex/Claude/Omp Latest Run states, Unknown model/effort, long model
-duration, inventory, wardrobe tiers, potions, active Fight, defeat, and resting
-states. Do not copy or alter `data/claude-rpg.db`.
+active Runs, Codex Desktop/CLI Latest Run states, Unknown model/effort, long
+model duration, inventory, wardrobe tiers, potions, active Fight, defeat, and
+resting states. Add a config-state fixture proving disabled Omp/Claude surfaces
+do not appear in onboarding or status. Do not copy or alter
+`data/claude-rpg.db`.
 
 - [ ] **Step 3: Review every active surface in the browser**
 
