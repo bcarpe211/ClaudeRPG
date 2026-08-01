@@ -76,6 +76,13 @@ const runEventSchema = z.object({
       path: ['event_time_ms'],
     });
   }
+  if (event.observed_at_ms < event.event_time_ms) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'observed_at_ms must not predate event_time_ms',
+      path: ['observed_at_ms'],
+    });
+  }
 });
 
 const runEventBatchSchema = z.object({
