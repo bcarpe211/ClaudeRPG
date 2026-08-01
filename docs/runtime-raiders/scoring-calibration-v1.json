@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "samples": [
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "short_explanation",
+      "usage": {
+        "input": 23815,
+        "output": 291,
+        "cache_read": 11008,
+        "cache_write": 0,
+        "reasoning_output": 102
+      },
+      "duration_ms": 11038
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "short_explanation",
+      "usage": {
+        "input": 23851,
+        "output": 340,
+        "cache_read": 11008,
+        "cache_write": 0,
+        "reasoning_output": 167
+      },
+      "duration_ms": 12423
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "short_explanation",
+      "usage": {
+        "input": 23839,
+        "output": 216,
+        "cache_read": 11008,
+        "cache_write": 0,
+        "reasoning_output": 46
+      },
+      "duration_ms": 13189
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "short_explanation",
+      "usage": {
+        "input": 20833,
+        "output": 228,
+        "cache_read": 11008,
+        "cache_write": 0,
+        "reasoning_output": 60
+      },
+      "duration_ms": 8602
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "short_explanation",
+      "usage": {
+        "input": 20833,
+        "output": 276,
+        "cache_read": 11008,
+        "cache_write": 0,
+        "reasoning_output": 83
+      },
+      "duration_ms": 10354
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "short_explanation",
+      "usage": {
+        "input": 20833,
+        "output": 256,
+        "cache_read": 11008,
+        "cache_write": 0,
+        "reasoning_output": 80
+      },
+      "duration_ms": 11881
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "small_code_edit",
+      "usage": {
+        "input": 33037,
+        "output": 110,
+        "cache_read": 31488,
+        "cache_write": 0,
+        "reasoning_output": 31
+      },
+      "duration_ms": 48544
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "small_code_edit",
+      "usage": {
+        "input": 34188,
+        "output": 166,
+        "cache_read": 33536,
+        "cache_write": 0,
+        "reasoning_output": 109
+      },
+      "duration_ms": 57141
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "small_code_edit",
+      "usage": {
+        "input": 33734,
+        "output": 169,
+        "cache_read": 32512,
+        "cache_write": 0,
+        "reasoning_output": 117
+      },
+      "duration_ms": 62361
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "small_code_edit",
+      "usage": {
+        "input": 30467,
+        "output": 132,
+        "cache_read": 29440,
+        "cache_write": 0,
+        "reasoning_output": 71
+      },
+      "duration_ms": 58251
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "small_code_edit",
+      "usage": {
+        "input": 35219,
+        "output": 274,
+        "cache_read": 34560,
+        "cache_write": 0,
+        "reasoning_output": 203
+      },
+      "duration_ms": 65856
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "small_code_edit",
+      "usage": {
+        "input": 33653,
+        "output": 238,
+        "cache_read": 32512,
+        "cache_write": 0,
+        "reasoning_output": 165
+      },
+      "duration_ms": 76030
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "medium_repository_task",
+      "usage": {
+        "input": 47238,
+        "output": 93,
+        "cache_read": 42752,
+        "cache_write": 0,
+        "reasoning_output": 0
+      },
+      "duration_ms": 183066
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "medium_repository_task",
+      "usage": {
+        "input": 46935,
+        "output": 424,
+        "cache_read": 45824,
+        "cache_write": 0,
+        "reasoning_output": 315
+      },
+      "duration_ms": 196067
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "medium_repository_task",
+      "usage": {
+        "input": 52280,
+        "output": 234,
+        "cache_read": 50944,
+        "cache_write": 0,
+        "reasoning_output": 143
+      },
+      "duration_ms": 275339
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "medium_repository_task",
+      "usage": {
+        "input": 49738,
+        "output": 275,
+        "cache_read": 48896,
+        "cache_write": 0,
+        "reasoning_output": 114
+      },
+      "duration_ms": 198772
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "medium_repository_task",
+      "usage": {
+        "input": 52957,
+        "output": 222,
+        "cache_read": 49920,
+        "cache_write": 0,
+        "reasoning_output": 64
+      },
+      "duration_ms": 245543
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "medium_repository_task",
+      "usage": {
+        "input": 63335,
+        "output": 247,
+        "cache_read": 62208,
+        "cache_write": 0,
+        "reasoning_output": 78
+      },
+      "duration_ms": 492537
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "long_reverse_engineering_analysis",
+      "usage": {
+        "input": 48348,
+        "output": 124,
+        "cache_read": 46848,
+        "cache_write": 0,
+        "reasoning_output": 46
+      },
+      "duration_ms": 386157
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "long_reverse_engineering_analysis",
+      "usage": {
+        "input": 60478,
+        "output": 1622,
+        "cache_read": 58112,
+        "cache_write": 0,
+        "reasoning_output": 1554
+      },
+      "duration_ms": 388353
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_desktop",
+      "workload": "long_reverse_engineering_analysis",
+      "usage": {
+        "input": 59515,
+        "output": 690,
+        "cache_read": 58112,
+        "cache_write": 0,
+        "reasoning_output": 160
+      },
+      "duration_ms": 426536
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "long_reverse_engineering_analysis",
+      "usage": {
+        "input": 47819,
+        "output": 135,
+        "cache_read": 44800,
+        "cache_write": 0,
+        "reasoning_output": 41
+      },
+      "duration_ms": 415421
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "long_reverse_engineering_analysis",
+      "usage": {
+        "input": 68069,
+        "output": 276,
+        "cache_read": 67328,
+        "cache_write": 0,
+        "reasoning_output": 152
+      },
+      "duration_ms": 496591
+    },
+    {
+      "provider": "codex",
+      "surface": "codex_cli",
+      "workload": "long_reverse_engineering_analysis",
+      "usage": {
+        "input": 78158,
+        "output": 188,
+        "cache_read": 77568,
+        "cache_write": 0,
+        "reasoning_output": 87
+      },
+      "duration_ms": 520221
+    }
+  ]
+}
