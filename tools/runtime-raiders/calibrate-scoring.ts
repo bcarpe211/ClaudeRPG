@@ -110,6 +110,26 @@ function checkedSafeIntegerSum(values: readonly number[], message: string): numb
   return total;
 }
 
+function safeIntegerMidpoint(lower: number, upper: number): number {
+  if (!Number.isSafeInteger(lower)
+    || !Number.isSafeInteger(upper)
+    || lower < 0
+    || upper < lower) {
+    throw new RangeError('calibration median sum exceeds the safe integer range');
+  }
+
+  const delta = upper - lower;
+  if (delta % 2 === 0) {
+    return lower + delta / 2;
+  }
+
+  const integerPart = lower + (delta - 1) / 2;
+  if (integerPart > Math.floor(Number.MAX_SAFE_INTEGER / 2)) {
+    throw new RangeError('calibration median sum exceeds the safe integer range');
+  }
+  return integerPart + 0.5;
+}
+
 function median(values: number[]): number {
   if (values.length === 0) {
     throw new Error('cannot compute a median without samples');
@@ -120,14 +140,13 @@ function median(values: number[]): number {
 
   const lower = sorted[middle - 1];
   const upper = sorted[middle];
-  const scale = Number.isSafeInteger(lower) && Number.isSafeInteger(upper) ? 1 : 2;
-  const scaledLower = lower * scale;
-  const scaledUpper = upper * scale;
-  const scaledSum = checkedSafeIntegerSum(
-    [scaledLower, scaledUpper],
-    'calibration median sum exceeds the safe integer range',
-  );
-  return scaledSum / (scale * 2);
+  if (Number.isSafeInteger(lower) && Number.isSafeInteger(upper)) {
+    return safeIntegerMidpoint(lower, upper);
+  }
+
+  const doubledLower = lower * 2;
+  const doubledUpper = upper * 2;
+  return safeIntegerMidpoint(doubledLower, doubledUpper) / 2;
 }
 
 function sampleTotal(policy: RaidPowerPolicy, sample: CalibrationSample): number {

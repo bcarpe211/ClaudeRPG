@@ -290,6 +290,49 @@ describe('Raid Power calibration generator', () => {
     );
   });
 
+  it('accepts a large safe integer midpoint without adding the operands', () => {
+    const weightedUsage = 6_000_000_000_000_000;
+    const samples = completeSamples().map((sample) => ({
+      ...sample,
+      usage: {
+        input: weightedUsage,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning_output: 0,
+      },
+      duration_ms: 0,
+    }));
+
+    const calibration = generateCalibration(samples);
+
+    expect(calibration.baseline).toBe(weightedUsage);
+    expect(calibration.policy.completion_credit).toBe(120_000_000_000_000);
+    expect(calibration.rows.every((row) => (
+      row.median_weighted_usage === weightedUsage
+      && row.median_raid_power === 6_120_000_000_000_000
+    ))).toBe(true);
+  });
+
+  it('preserves an exactly representable half midpoint', () => {
+    const samples = completeSamples().map((sample) => ({
+      ...sample,
+      usage: {
+        input: sample.surface === 'codex_desktop' ? 100 : 101,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning_output: 0,
+      },
+      duration_ms: 0,
+    }));
+
+    const calibration = generateCalibration(samples);
+
+    expect(calibration.baseline).toBe(100.5);
+    expect(calibration.policy.completion_credit).toBe(2);
+  });
+
   it('renders a content-free report with the required v1 review statements', () => {
     const report = renderCalibrationReport(generateCalibration(completeSamples()));
 
