@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-31
 
-**Status:** Approved for implementation planning
+**Status:** Approved for implementation planning; staged provider activation
+amended 2026-08-01
 
 **Scope:** Runtime Raiders product language and visual direction, passive local
 Run collection, provider-neutral Raid Power scoring, compatibility migration,
@@ -169,11 +170,17 @@ and removal of old Claude OTel settings.
 
 ## 6. Supported provider surfaces
 
-Launch priority is:
+Provider activation is staged:
 
-1. **OpenAI Codex Desktop and CLI**
-2. **Claude Code**
-3. **Omp**
+1. **OpenAI Codex Desktop and CLI** are the required initial launch surfaces.
+2. **Omp** is the next activation candidate. It may join the initial release if
+   its controlled canary, fixtures, privacy checks, and scoring calibration are
+   complete before release freeze; otherwise it remains disabled without
+   blocking Codex launch.
+3. **Claude Code** remains a planned provider, but it is disabled and explicitly
+   unverified until a credentialed machine can complete the controlled local-
+   record canary. Missing credentials are not evidence that Claude Code lacks a
+   safe record contract, and they do not block a Codex launch.
 
 Composer is deferred. Claude desktop and web are unsupported unless a later
 investigation proves that they expose stable, content-free local records that
@@ -184,6 +191,13 @@ after its actual local record format and lifecycle have been verified. A format
 that does not provide stable Run identity, trustworthy usage facts, or safe
 incremental observation is unsupported rather than approximated through general
 computer activity.
+
+Every release has an explicit server-side allowlist of enabled provider
+surfaces. The shared event contract may reserve identifiers for planned
+providers, but the server rejects events from disabled surfaces and the
+companion does not observe them. Player-facing setup and status UI names only
+the surfaces enabled in that release; planned or unverified support is never
+presented as live.
 
 ## 7. Local companion architecture
 
@@ -359,11 +373,17 @@ The rules are:
 
 Provider normalization coefficients, the fixed completion credit, duration
 curve, and caps are server-owned configuration under an immutable policy
-version. Before cutover, the implementation must calibrate and lock the initial
-policy against a shared set of representative office workloads run through each
-supported surface. The launch is blocked unless that policy and its fixtures are
-committed, reproducible, and pass the cross-provider review. Later tuning creates
-a new policy version; it never silently re-scores historical events.
+version. For the Codex-only initial policy, the Codex multiplier is `1.0` and
+the completion and duration values are generated from the representative Codex
+workload set; a cross-provider comparison is inapplicable and must not be
+fabricated. The launch is blocked unless that policy and its content-free
+fixtures are committed, reproducible, and reviewed.
+
+Activating Omp, Claude Code, or another provider requires a new immutable policy
+version calibrated against matched workloads across every provider that will be
+enabled under that version. The new provider remains disabled until its adapter
+and policy review pass. A later policy applies only to new Run scoring and never
+silently re-scores historical events.
 
 This produces a fair game approximation of AI activity, not a scientifically
 exact equivalence between providers and not an evaluation of work quality.
@@ -410,10 +430,12 @@ installer and agent may detect and explain likely legacy settings through
 The old OTLP endpoint must not remain an alternate scoring path after cutover.
 
 The earliest desired deployment day is Monday, but there is no hard deadline.
-If internal DNS, Caddy/TLS, IT coordination, adapter verification, signing,
-migration rehearsal, or another gate is incomplete, ClaudeRPG remains unchanged
-and the cutover is rescheduled. A partial rebrand or mixed scoring period is not
-acceptable.
+If internal DNS, Caddy/TLS, IT coordination, verification of every enabled
+adapter, signing, migration rehearsal, or another launch gate is incomplete,
+ClaudeRPG remains unchanged and the cutover is rescheduled. A partial rebrand or
+mixed legacy/new scoring period is not acceptable. Staged provider activation is
+acceptable: a disabled provider contributes no activity and is not advertised
+as supported until its own release gate passes.
 
 ## 14. Internal network and service naming
 
@@ -455,7 +477,8 @@ Before cutover:
 2. Rehearse the additive migration against a copy of production data.
 3. Install the companion on canary Macs and verify `status` and `doctor`.
 4. Verify retained progression and the legacy Raid Power baseline.
-5. Run one controlled Run through each launch provider surface.
+5. Run one controlled Run through each provider surface enabled for this
+   release.
 6. Remove or disable legacy Claude OTel configuration and prove there is no
    double-scoring path.
 
@@ -472,7 +495,9 @@ incident.
 
 ### 16.1 Adapter and privacy tests
 
-- Sanitized fixtures cover every supported provider surface and lifecycle.
+- Sanitized fixtures cover every enabled provider surface and lifecycle.
+- Synthetic work for a planned provider may be retained for development, but it
+  does not establish production support or permit that provider to be enabled.
 - Truncated, malformed, unknown-version, and format-changed fixtures fail closed.
 - Negative privacy fixtures include prompts, responses, commands, tool data,
   filenames, and paths and prove none can enter the outbound payload.
@@ -488,7 +513,8 @@ incident.
 - Distinct concurrent Run identities score additively; the same Run observed
   twice does not.
 - Model and effort changes never alter Raid Power for otherwise identical facts.
-- Provider normalization fixtures and policy versions are deterministic.
+- Normalization fixtures and policy versions are deterministic for every
+  provider enabled under that policy. A Codex-only policy uses multiplier `1.0`.
 - A migration rehearsal preserves all current progression and history.
 - The compatibility projection drives Momentum, level progression, damage,
   potion attribution, rewards, pause/wake, and Leaderboards correctly.
@@ -515,8 +541,11 @@ incident.
   use the approved vocabulary consistently.
 - Internal DNS, Caddy/TLS, Pi mDNS, kiosk, old-host compatibility, and
   internal-only reachability are verified on the real deployment path.
-- A short canary with a test Raider passes for Codex, Claude Code, and Omp before
-  office-wide cutover.
+- A short canary with a test Raider passes for every provider enabled in the
+  release before office-wide cutover.
+- Omp and Claude Code each require their own credentialed controlled canary,
+  privacy corpus, adapter verification, matched-workload calibration, and
+  allowlist change before later activation.
 
 ## 17. Explicit non-goals
 
