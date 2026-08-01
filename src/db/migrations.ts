@@ -681,7 +681,8 @@ export const migrations: Migration[] = [
         player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
         dedupe_secret TEXT NOT NULL UNIQUE
           CHECK (
-            length(dedupe_secret) = 64
+            typeof(dedupe_secret) = 'text'
+            AND length(dedupe_secret) = 64
             AND dedupe_secret NOT GLOB '*[^0-9a-f]*'
           ),
         created_at INTEGER NOT NULL
@@ -692,9 +693,10 @@ export const migrations: Migration[] = [
       );
 
       CREATE TABLE raider_enrollments (
-        code_hash TEXT PRIMARY KEY
+        code_hash TEXT NOT NULL PRIMARY KEY
           CHECK (
-            length(code_hash) = 64
+            typeof(code_hash) = 'text'
+            AND length(code_hash) = 64
             AND code_hash NOT GLOB '*[^0-9a-f]*'
           ),
         player_id INTEGER NOT NULL
@@ -724,12 +726,17 @@ export const migrations: Migration[] = [
         ON raider_enrollments (player_id, expires_at);
 
       CREATE TABLE raider_devices (
-        device_id TEXT PRIMARY KEY CHECK (length(device_id) BETWEEN 1 AND 100),
+        device_id TEXT NOT NULL PRIMARY KEY
+          CHECK (
+            typeof(device_id) = 'text'
+            AND length(device_id) BETWEEN 1 AND 100
+          ),
         player_id INTEGER NOT NULL
           REFERENCES raider_identities(player_id) ON DELETE CASCADE,
         token_hash TEXT NOT NULL UNIQUE
           CHECK (
-            length(token_hash) = 64
+            typeof(token_hash) = 'text'
+            AND length(token_hash) = 64
             AND token_hash NOT GLOB '*[^0-9a-f]*'
           ),
         companion_version TEXT NOT NULL
@@ -773,7 +780,8 @@ export const migrations: Migration[] = [
           ),
         run_key TEXT NOT NULL
           CHECK (
-            length(run_key) = 64
+            typeof(run_key) = 'text'
+            AND length(run_key) = 64
             AND run_key NOT GLOB '*[^0-9a-f]*'
           ),
         state TEXT NOT NULL
@@ -870,9 +878,10 @@ export const migrations: Migration[] = [
         ON runs (player_id, updated_at DESC, id DESC);
 
       CREATE TABLE run_events (
-        event_key TEXT PRIMARY KEY
+        event_key TEXT NOT NULL PRIMARY KEY
           CHECK (
-            length(event_key) = 64
+            typeof(event_key) = 'text'
+            AND length(event_key) = 64
             AND event_key NOT GLOB '*[^0-9a-f]*'
           ),
         run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -897,7 +906,8 @@ export const migrations: Migration[] = [
           ),
         run_key TEXT NOT NULL
           CHECK (
-            length(run_key) = 64
+            typeof(run_key) = 'text'
+            AND length(run_key) = 64
             AND run_key NOT GLOB '*[^0-9a-f]*'
           ),
         event_time_ms INTEGER NOT NULL

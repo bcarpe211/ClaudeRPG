@@ -73,7 +73,10 @@ function foreignKeys(db: Database.Database, table: string): string[] {
     .sort();
 }
 
-function insertRunFixture(db: Database.Database): number {
+function insertRunFixture(
+  db: Database.Database,
+  runKey: string | Buffer = 'a'.repeat(64),
+): number {
   return Number(db.prepare(`
     INSERT INTO runs
       (player_id, provider, surface, run_key, state, started_at_ms,
@@ -81,20 +84,55 @@ function insertRunFixture(db: Database.Database): number {
     VALUES
       (1, 'codex', 'codex_desktop', ?, 'open', 1000, 1100, 1200,
        'raid-power-v1', 1200, 1200)
-  `).run('a'.repeat(64)).lastInsertRowid);
+  `).run(runKey).lastInsertRowid);
 }
 
-function insertEventFixture(db: Database.Database, runId: number): void {
+function insertEventFixture(
+  db: Database.Database,
+  runId: number,
+  eventKey: string | Buffer | null = 'b'.repeat(64),
+  sequence = 1,
+  runKey: string | Buffer = 'a'.repeat(64),
+): void {
   db.prepare(`
     INSERT INTO run_events
       (event_key, run_id, device_id, sequence, schema_version, companion_version,
        provider, surface, run_key, event_time_ms, observed_at_ms, started_at_ms,
        state, policy_version, received_at)
     VALUES
-      (?, ?, '11111111-1111-4111-8111-111111111111', 1, 1, '0.1.0',
+      (?, ?, '11111111-1111-4111-8111-111111111111', ?, 1, '0.1.0',
        'codex', 'codex_desktop', ?, 1100, 1200, 1000, 'open',
        'raid-power-v1', 1200)
-  `).run('b'.repeat(64), runId, 'a'.repeat(64));
+  `).run(eventKey, runId, sequence, runKey);
+}
+
+function constraintDb(): { db: Database.Database; runId: number } {
+  const db = openDb(':memory:');
+  db.prepare(`
+    INSERT INTO players (id, name, class_key, gender, auth_token, created_at)
+    VALUES (1, 'Run Hero', 'wizard', 'F', 'run-token', 1)
+  `).run();
+  db.prepare(`
+    INSERT INTO players (id, name, class_key, gender, auth_token, created_at)
+    VALUES (2, 'Second Hero', 'wizard', 'M', 'second-run-token', 1)
+  `).run();
+  db.prepare(`
+    INSERT INTO raider_identities (player_id, dedupe_secret, created_at)
+    VALUES (1, ?, 100)
+  `).run('c'.repeat(64));
+  db.prepare(`
+    INSERT INTO raider_enrollments
+      (code_hash, player_id, created_at, expires_at)
+    VALUES (?, 1, 100, 200)
+  `).run('e'.repeat(64));
+  db.prepare(`
+    INSERT INTO raider_devices
+      (device_id, player_id, token_hash, companion_version, created_at)
+    VALUES ('11111111-1111-4111-8111-111111111111', 1, ?, '0.1.0', 100)
+  `).run('d'.repeat(64));
+  const runId = insertRunFixture(db);
+  insertEventFixture(db, runId);
+  return { db, runId };
 }
 
 describe('019_runtime_raiders_runs migration', () => {
@@ -164,25 +202,208 @@ describe('019_runtime_raiders_runs migration', () => {
     }
   });
 
-  it('enforces enum, identity, and non-negative safe-integer constraints', () => {
-    const db = openDb(':memory:');
+  it.each([
+    ['enrollment code hash', (db: Database.Database) => db.prepare(`
+      INSERT INTO raider_enrollments (code_hash, player_id, created_at, expires_at)
+      VALUES (NULL, 1, 101, 201)
+    `).run()],
+    ['device id', (db: Database.Database) => db.prepare(`
+      INSERT INTO raider_devices
+        (device_id, player_id, token_hash, companion_version, created_at)
+      VALUES (NULL, 1, ?, '0.1.0', 101)
+    `).run('f'.repeat(64))],
+  ])('rejects a NULL %s despite SQLite nullable text primary keys', (_label, insert) => {
+    const { db } = constraintDb();
     try {
-      db.prepare(`
-        INSERT INTO players (id, name, class_key, gender, auth_token, created_at)
-        VALUES (1, 'Run Hero', 'wizard', 'F', 'run-token', 1)
-      `).run();
-      db.prepare(`
-        INSERT INTO raider_identities (player_id, dedupe_secret, created_at)
-        VALUES (1, ?, 1)
-      `).run('c'.repeat(64));
-      db.prepare(`
-        INSERT INTO raider_devices
-          (device_id, player_id, token_hash, companion_version, created_at)
-        VALUES ('11111111-1111-4111-8111-111111111111', 1, ?, '0.1.0', 1)
-      `).run('d'.repeat(64));
+      expect(() => insert(db)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
 
-      const runId = insertRunFixture(db);
-      insertEventFixture(db, runId);
+  it('rejects multiple NULL event keys instead of treating them as distinct identities', () => {
+    const { db, runId } = constraintDb();
+    try {
+      const insertTwoNullKeys = db.transaction(() => {
+        insertEventFixture(db, runId, null, 2);
+        insertEventFixture(db, runId, null, 3);
+      });
+
+      expect(() => insertTwoNullKeys()).toThrow();
+      expect(db.prepare('SELECT COUNT(*) AS count FROM run_events WHERE event_key IS NULL').get())
+        .toEqual({ count: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    ['Raider dedupe secret', (db: Database.Database) => db.prepare(`
+      INSERT INTO raider_identities (player_id, dedupe_secret, created_at)
+      VALUES (2, ?, 100)
+    `).run(Buffer.from('f'.repeat(64)))],
+    ['enrollment code hash', (db: Database.Database) => db.prepare(`
+      INSERT INTO raider_enrollments (code_hash, player_id, created_at, expires_at)
+      VALUES (?, 1, 101, 201)
+    `).run(Buffer.from('f'.repeat(64)))],
+    ['device id', (db: Database.Database) => db.prepare(`
+      INSERT INTO raider_devices
+        (device_id, player_id, token_hash, companion_version, created_at)
+      VALUES (?, 1, ?, '0.1.0', 101)
+    `).run(Buffer.from('22222222-2222-4222-8222-222222222222'), 'f'.repeat(64))],
+    ['device token hash', (db: Database.Database) => db.prepare(`
+      INSERT INTO raider_devices
+        (device_id, player_id, token_hash, companion_version, created_at)
+      VALUES ('22222222-2222-4222-8222-222222222222', 1, ?, '0.1.0', 101)
+    `).run(Buffer.from('f'.repeat(64)))],
+    ['Run key', (db: Database.Database) => insertRunFixture(
+      db, Buffer.from('f'.repeat(64)),
+    )],
+    ['event key matching an existing text key', (db: Database.Database, runId: number) =>
+      insertEventFixture(db, runId, Buffer.from('b'.repeat(64)), 2)],
+    ['event Run key', (db: Database.Database, runId: number) =>
+      insertEventFixture(db, runId, 'f'.repeat(64), 2, Buffer.from('a'.repeat(64)))],
+  ])('rejects a BLOB in the %s text identity', (_label, insert) => {
+    const { db, runId } = constraintDb();
+    try {
+      expect(() => insert(db, runId)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('does not allow TEXT and byte-identical BLOB event keys to bypass idempotency', () => {
+    const { db, runId } = constraintDb();
+    try {
+      expect(() => insertEventFixture(db, runId, Buffer.from('b'.repeat(64)), 2)).toThrow();
+      expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('enforces lowercase-hex identity and key formats', () => {
+    const { db, runId } = constraintDb();
+    const mutations: [string, () => unknown][] = [
+      ['dedupe-secret length', () => db.prepare(
+        'UPDATE raider_identities SET dedupe_secret = ? WHERE player_id = 1',
+      ).run('c'.repeat(63))],
+      ['dedupe-secret alphabet', () => db.prepare(
+        'UPDATE raider_identities SET dedupe_secret = ? WHERE player_id = 1',
+      ).run('C'.repeat(64))],
+      ['enrollment-code alphabet', () => db.prepare(
+        'UPDATE raider_enrollments SET code_hash = ?',
+      ).run('z'.repeat(64))],
+      ['token-hash length', () => db.prepare(
+        'UPDATE raider_devices SET token_hash = ?',
+      ).run('d'.repeat(65))],
+      ['Run-key alphabet', () => db.prepare(
+        'UPDATE runs SET run_key = ? WHERE id = ?',
+      ).run('G'.repeat(64), runId)],
+      ['event-key length', () => db.prepare(
+        'UPDATE run_events SET event_key = ? WHERE event_key = ?',
+      ).run('b'.repeat(63), 'b'.repeat(64))],
+      ['event Run-key alphabet', () => db.prepare(
+        'UPDATE run_events SET run_key = ? WHERE event_key = ?',
+      ).run('z'.repeat(64), 'b'.repeat(64))],
+    ];
+    try {
+      for (const [label, mutate] of mutations) {
+        expect(() => mutate(), label).toThrow();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('enforces safe timestamps and their ordering relationships', () => {
+    const { db, runId } = constraintDb();
+    const mutations: [string, string, unknown[]][] = [
+      ['identity timestamp storage', 'UPDATE raider_identities SET created_at = ? WHERE player_id = 1', [1.5]],
+      ['enrollment expiry ordering', 'UPDATE raider_enrollments SET expires_at = ?', [99]],
+      ['enrollment consumption ordering', 'UPDATE raider_enrollments SET consumed_at = ?', [99]],
+      ['device last-seen lower bound', 'UPDATE raider_devices SET last_seen_at = ?', [-1]],
+      ['device revocation upper bound', 'UPDATE raider_devices SET revoked_at = ?', [Number.MAX_SAFE_INTEGER + 1]],
+      ['Run start lower bound', 'UPDATE runs SET started_at_ms = ? WHERE id = ?', [-1, runId]],
+      ['Run terminal ordering', "UPDATE runs SET state = 'completed', terminal_at_ms = ? WHERE id = ?", [999, runId]],
+      ['Run event ordering', 'UPDATE runs SET last_event_at_ms = ? WHERE id = ?', [999, runId]],
+      ['Run observation ordering', 'UPDATE runs SET last_observed_at_ms = ? WHERE id = ?', [1099, runId]],
+      ['Run update ordering', 'UPDATE runs SET updated_at = ? WHERE id = ?', [1199, runId]],
+      ['event time lower bound', 'UPDATE run_events SET event_time_ms = ? WHERE event_key = ?', [-1, 'b'.repeat(64)]],
+      ['event observation ordering', 'UPDATE run_events SET observed_at_ms = ? WHERE event_key = ?', [1099, 'b'.repeat(64)]],
+      ['event start ordering', 'UPDATE run_events SET started_at_ms = ? WHERE event_key = ?', [1101, 'b'.repeat(64)]],
+      ['event duration cap', 'UPDATE run_events SET started_at_ms = ? WHERE event_key = ?', [1100 - 604800001, 'b'.repeat(64)]],
+      ['server receipt upper bound', 'UPDATE run_events SET received_at = ? WHERE event_key = ?', [Number.MAX_SAFE_INTEGER + 1, 'b'.repeat(64)]],
+    ];
+    try {
+      for (const [label, sql, parameters] of mutations) {
+        expect(() => db.prepare(sql).run(...parameters), label).toThrow();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('couples a Run terminal state to its terminal time', () => {
+    const { db, runId } = constraintDb();
+    try {
+      expect(() => db.prepare("UPDATE runs SET state = 'completed' WHERE id = ?").run(runId))
+        .toThrow();
+      expect(() => db.prepare('UPDATE runs SET terminal_at_ms = 1200 WHERE id = ?').run(runId))
+        .toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('enforces schema version, provider/surface pairs, and lifecycle states', () => {
+    const { db, runId } = constraintDb();
+    const mutations: [string, string, unknown[]][] = [
+      ['Run provider', "UPDATE runs SET provider = 'openai' WHERE id = ?", [runId]],
+      ['Run surface/provider pairing', "UPDATE runs SET surface = 'claude_code' WHERE id = ?", [runId]],
+      ['Run state', "UPDATE runs SET state = 'stalled' WHERE id = ?", [runId]],
+      ['event schema version', 'UPDATE run_events SET schema_version = 2 WHERE event_key = ?', ['b'.repeat(64)]],
+      ['event schema storage class', 'UPDATE run_events SET schema_version = 1.5 WHERE event_key = ?', ['b'.repeat(64)]],
+      ['event provider', "UPDATE run_events SET provider = 'openai' WHERE event_key = ?", ['b'.repeat(64)]],
+      ['event surface/provider pairing', "UPDATE run_events SET surface = 'omp' WHERE event_key = ?", ['b'.repeat(64)]],
+      ['event state', "UPDATE run_events SET state = 'stalled' WHERE event_key = ?", ['b'.repeat(64)]],
+    ];
+    try {
+      for (const [label, sql, parameters] of mutations) {
+        expect(() => db.prepare(sql).run(...parameters), label).toThrow();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('enforces bounded text fields', () => {
+    const { db, runId } = constraintDb();
+    const mutations: [string, string, unknown[]][] = [
+      ['device id empty', 'UPDATE raider_devices SET device_id = ?', ['']],
+      ['device id long', 'UPDATE raider_devices SET device_id = ?', ['x'.repeat(101)]],
+      ['device companion version empty', 'UPDATE raider_devices SET companion_version = ?', ['']],
+      ['device companion version long', 'UPDATE raider_devices SET companion_version = ?', ['x'.repeat(101)]],
+      ['Run model', 'UPDATE runs SET latest_model = ? WHERE id = ?', ['x'.repeat(101), runId]],
+      ['Run effort', 'UPDATE runs SET latest_effort = ? WHERE id = ?', ['x'.repeat(101), runId]],
+      ['Run policy version', 'UPDATE runs SET policy_version = ? WHERE id = ?', ['', runId]],
+      ['event companion version', 'UPDATE run_events SET companion_version = ? WHERE event_key = ?', ['', 'b'.repeat(64)]],
+      ['event model', 'UPDATE run_events SET model = ? WHERE event_key = ?', ['x'.repeat(101), 'b'.repeat(64)]],
+      ['event effort', 'UPDATE run_events SET effort = ? WHERE event_key = ?', ['x'.repeat(101), 'b'.repeat(64)]],
+      ['event policy version', 'UPDATE run_events SET policy_version = ? WHERE event_key = ?', ['', 'b'.repeat(64)]],
+    ];
+    try {
+      for (const [label, sql, parameters] of mutations) {
+        expect(() => db.prepare(sql).run(...parameters), label).toThrow();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('enforces non-negative safe-integer usage, score, and sequence values', () => {
+    const { db, runId } = constraintDb();
+    try {
 
       for (const column of RUN_SAFE_COLUMNS) {
         for (const invalid of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
@@ -197,14 +418,18 @@ describe('019_runtime_raiders_runs migration', () => {
         }
       }
 
-      expect(() => db.prepare("UPDATE runs SET state = 'stalled' WHERE id = ?").run(runId))
-        .toThrow();
-      expect(() => db.prepare("UPDATE runs SET surface = 'claude_code' WHERE id = ?").run(runId))
-        .toThrow();
-      expect(() => db.prepare("UPDATE run_events SET provider = 'openai' WHERE event_key = ?")
-        .run('b'.repeat(64))).toThrow();
-      expect(() => db.prepare("UPDATE run_events SET surface = 'omp' WHERE event_key = ?")
-        .run('b'.repeat(64))).toThrow();
+      for (const invalid of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => db.prepare('UPDATE run_events SET sequence = ? WHERE event_key = ?')
+          .run(invalid, 'b'.repeat(64)), `sequence accepted ${invalid}`).toThrow();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('enforces device-token, Run, event-key, and Run-sequence uniqueness', () => {
+    const { db, runId } = constraintDb();
+    try {
 
       expect(() => db.prepare(`
         INSERT INTO raider_devices
