@@ -119,6 +119,7 @@ describe('Raid Power policy v1', () => {
   it('rounds the cumulative target once so fractional future multipliers do not drift', () => {
     const policy = {
       ...loadDocument(policyDocument()),
+      policy_version: 2,
       provider_multipliers: { codex: 0.5 },
     } as RaidPowerPolicy;
 
@@ -136,6 +137,34 @@ describe('Raid Power policy v1', () => {
   it.each(['claude', 'omp'] as const)('rejects disabled provider %s', (provider) => {
     expect(() => usageCredit(loadDocument(policyDocument()), provider, usage)).toThrow(
       `provider ${provider} is not enabled by Raid Power policy v1`,
+    );
+  });
+
+  it.each(['claude', 'omp'] as const)(
+    'rejects forged v1 multiplier and allowlist entries for %s',
+    (provider) => {
+      const forgedPolicy = {
+        ...loadDocument(policyDocument()),
+        enabled_providers: ['codex', provider],
+        provider_multipliers: { codex: 1, [provider]: 1 },
+      } as RaidPowerPolicy;
+
+      expect(() => usageCredit(forgedPolicy, provider, usage)).toThrow(
+        `provider ${provider} is not enabled by Raid Power policy v1`,
+      );
+    },
+  );
+
+  it('requires a provider to be present in the enabled provider allowlist', () => {
+    const laterPolicy = {
+      ...loadDocument(policyDocument()),
+      policy_version: 2,
+      enabled_providers: [],
+      provider_multipliers: { codex: 0.5 },
+    } as RaidPowerPolicy;
+
+    expect(() => usageCredit(laterPolicy, 'codex', usage)).toThrow(
+      'provider codex is not enabled by Raid Power policy v2',
     );
   });
 
@@ -221,6 +250,46 @@ describe('Raid Power calibration generator', () => {
       .toBe(true);
   });
 
+  it('rejects a sample total that exceeds the safe integer range', () => {
+    const samples = completeSamples();
+    samples[0] = {
+      ...samples[0],
+      usage: {
+        input: Number.MAX_SAFE_INTEGER,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning_output: 0,
+      },
+    };
+
+    expect(() => generateCalibration(samples)).toThrow(
+      'calibration sample total exceeds the safe integer range',
+    );
+  });
+
+  it('rejects an even median whose exact sum exceeds the safe integer range', () => {
+    const samples = completeSamples().map((sample) => {
+      if (sample.workload !== 'short_explanation') return sample;
+      return {
+        ...sample,
+        usage: {
+          input: sample.surface === 'codex_desktop'
+            ? Number.MAX_SAFE_INTEGER
+            : Number.MAX_SAFE_INTEGER - 1,
+          output: 0,
+          cache_read: 0,
+          cache_write: 0,
+          reasoning_output: 0,
+        },
+      };
+    });
+
+    expect(() => generateCalibration(samples)).toThrow(
+      'calibration median sum exceeds the safe integer range',
+    );
+  });
+
   it('renders a content-free report with the required v1 review statements', () => {
     const report = renderCalibrationReport(generateCalibration(completeSamples()));
 
@@ -248,5 +317,60 @@ describe('Raid Power calibration generator', () => {
 
     expect(readFileSync(policyA, 'utf8')).toBe(readFileSync(policyB, 'utf8'));
     expect(readFileSync(reportA, 'utf8')).toBe(readFileSync(reportB, 'utf8'));
+  });
+
+  it('pins the approved 24-sample matrix and committed generated artifacts', () => {
+    const samplesPath = join(process.cwd(), 'docs/runtime-raiders/scoring-calibration-v1.json');
+    const policyPath = join(process.cwd(), 'config/raid-power-policy-v1.json');
+    const reportPath = join(process.cwd(), 'docs/runtime-raiders/scoring-calibration-v1.md');
+    const samples = parseCalibrationSamples(JSON.parse(readFileSync(samplesPath, 'utf8')));
+    const counts = Object.fromEntries(workloads.flatMap((workload) => (
+      (['codex_desktop', 'codex_cli'] as const).map((surface) => [
+        `${workload}/${surface}`,
+        samples.filter((sample) => (
+          sample.workload === workload && sample.surface === surface
+        )).length,
+      ])
+    )));
+
+    expect(samples).toHaveLength(24);
+    expect(counts).toEqual(Object.fromEntries(workloads.flatMap((workload) => (
+      (['codex_desktop', 'codex_cli'] as const).map((surface) => [
+        `${workload}/${surface}`,
+        3,
+      ])
+    ))));
+
+    const calibration = generateCalibration(samples);
+    expect(calibration.baseline).toBe(42_715);
+    expect(calibration.policy).toEqual({
+      policy_version: 1,
+      enabled_providers: ['codex'],
+      usage_weights: {
+        input: 1,
+        output: 1,
+        cache_read: 0,
+        cache_write: 1,
+        reasoning_output: 1,
+      },
+      provider_multipliers: { codex: 1.0 },
+      completion_credit: 854,
+      duration: {
+        scale: 270.0585121783796,
+        cap: 3_416,
+      },
+    });
+    expect(calibration.comparisons.map((comparison) => (
+      Number(comparison.difference_percent.toFixed(2))
+    ))).toEqual([12.05, 0.18, 10.30, 11.68]);
+    expect(calibration.comparisons.every((comparison) => comparison.within_25_percent)).toBe(true);
+
+    const directory = mkdtempSync(join(tmpdir(), 'raid-power-golden-'));
+    const regeneratedPolicy = join(directory, 'policy.json');
+    const regeneratedReport = join(directory, 'report.md');
+    writeCalibrationArtifacts(samplesPath, regeneratedPolicy, regeneratedReport);
+
+    expect(readFileSync(regeneratedPolicy)).toEqual(readFileSync(policyPath));
+    expect(readFileSync(regeneratedReport)).toEqual(readFileSync(reportPath));
   });
 });

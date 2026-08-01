@@ -39,6 +39,12 @@ export interface RaidPowerPolicy {
   }>;
 }
 
+export interface RaidPowerPolicyV1 extends RaidPowerPolicy {
+  readonly policy_version: 1;
+  readonly enabled_providers: readonly ['codex'];
+  readonly provider_multipliers: Readonly<{ codex: 1 }>;
+}
+
 function deepFreeze<T extends object>(value: T): T {
   for (const child of Object.values(value)) {
     if (child !== null && typeof child === 'object') {
@@ -48,7 +54,7 @@ function deepFreeze<T extends object>(value: T): T {
   return Object.freeze(value);
 }
 
-export function loadRaidPowerPolicy(path: string): RaidPowerPolicy {
+export function loadRaidPowerPolicy(path: string): RaidPowerPolicyV1 {
   const document: unknown = JSON.parse(readFileSync(path, 'utf8'));
   return deepFreeze(raidPowerPolicyV1Schema.parse(document));
 }
@@ -66,7 +72,10 @@ export function usageCredit(
   cumulative: UsageCountersV1,
 ): number {
   const multiplier = policy.provider_multipliers[provider];
-  if (!Number.isFinite(multiplier) || multiplier <= 0) {
+  if ((policy.policy_version === 1 && provider !== 'codex')
+    || !policy.enabled_providers.includes(provider)
+    || !Number.isFinite(multiplier)
+    || multiplier <= 0) {
     throw new Error(
       `provider ${provider} is not enabled by Raid Power policy v${policy.policy_version}`,
     );

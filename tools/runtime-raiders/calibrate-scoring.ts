@@ -99,21 +99,46 @@ function weightedUsage(sample: CalibrationSample): number {
   return total;
 }
 
+function checkedSafeIntegerSum(values: readonly number[], message: string): number {
+  let total = 0;
+  for (const value of values) {
+    if (!Number.isSafeInteger(value) || !Number.isSafeInteger(total + value)) {
+      throw new RangeError(message);
+    }
+    total += value;
+  }
+  return total;
+}
+
 function median(values: number[]): number {
   if (values.length === 0) {
     throw new Error('cannot compute a median without samples');
   }
   const sorted = [...values].sort((left, right) => left - right);
   const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1
-    ? sorted[middle]
-    : (sorted[middle - 1] + sorted[middle]) / 2;
+  if (sorted.length % 2 === 1) return sorted[middle];
+
+  const lower = sorted[middle - 1];
+  const upper = sorted[middle];
+  const scale = Number.isSafeInteger(lower) && Number.isSafeInteger(upper) ? 1 : 2;
+  const scaledLower = lower * scale;
+  const scaledUpper = upper * scale;
+  const scaledSum = checkedSafeIntegerSum(
+    [scaledLower, scaledUpper],
+    'calibration median sum exceeds the safe integer range',
+  );
+  return scaledSum / (scale * 2);
 }
 
 function sampleTotal(policy: RaidPowerPolicy, sample: CalibrationSample): number {
-  return weightedUsage(sample)
-    + policy.completion_credit
-    + durationCredit(policy, sample.duration_ms);
+  return checkedSafeIntegerSum(
+    [
+      weightedUsage(sample),
+      policy.completion_credit,
+      durationCredit(policy, sample.duration_ms),
+    ],
+    'calibration sample total exceeds the safe integer range',
+  );
 }
 
 export function generateCalibration(samples: readonly CalibrationSample[]): CalibrationResult {
