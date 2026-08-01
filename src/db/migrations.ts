@@ -674,4 +674,290 @@ export const migrations: Migration[] = [
         ON gold_ledger (player_id, created_at, id);
     `,
   },
+  {
+    id: '019_runtime_raiders_runs',
+    sql: `
+      CREATE TABLE raider_identities (
+        player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+        dedupe_secret TEXT NOT NULL UNIQUE
+          CHECK (
+            length(dedupe_secret) = 64
+            AND dedupe_secret NOT GLOB '*[^0-9a-f]*'
+          ),
+        created_at INTEGER NOT NULL
+          CHECK (
+            typeof(created_at) = 'integer'
+            AND created_at BETWEEN 0 AND 9007199254740991
+          )
+      );
+
+      CREATE TABLE raider_enrollments (
+        code_hash TEXT PRIMARY KEY
+          CHECK (
+            length(code_hash) = 64
+            AND code_hash NOT GLOB '*[^0-9a-f]*'
+          ),
+        player_id INTEGER NOT NULL
+          REFERENCES raider_identities(player_id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL
+          CHECK (
+            typeof(created_at) = 'integer'
+            AND created_at BETWEEN 0 AND 9007199254740991
+          ),
+        expires_at INTEGER NOT NULL
+          CHECK (
+            typeof(expires_at) = 'integer'
+            AND expires_at BETWEEN 0 AND 9007199254740991
+            AND expires_at >= created_at
+          ),
+        consumed_at INTEGER
+          CHECK (
+            consumed_at IS NULL
+            OR (
+              typeof(consumed_at) = 'integer'
+              AND consumed_at BETWEEN 0 AND 9007199254740991
+              AND consumed_at >= created_at
+            )
+          )
+      );
+      CREATE INDEX idx_raider_enrollments_player
+        ON raider_enrollments (player_id, expires_at);
+
+      CREATE TABLE raider_devices (
+        device_id TEXT PRIMARY KEY CHECK (length(device_id) BETWEEN 1 AND 100),
+        player_id INTEGER NOT NULL
+          REFERENCES raider_identities(player_id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE
+          CHECK (
+            length(token_hash) = 64
+            AND token_hash NOT GLOB '*[^0-9a-f]*'
+          ),
+        companion_version TEXT NOT NULL
+          CHECK (length(companion_version) BETWEEN 1 AND 100),
+        created_at INTEGER NOT NULL
+          CHECK (
+            typeof(created_at) = 'integer'
+            AND created_at BETWEEN 0 AND 9007199254740991
+          ),
+        last_seen_at INTEGER
+          CHECK (
+            last_seen_at IS NULL
+            OR (
+              typeof(last_seen_at) = 'integer'
+              AND last_seen_at BETWEEN 0 AND 9007199254740991
+            )
+          ),
+        revoked_at INTEGER
+          CHECK (
+            revoked_at IS NULL
+            OR (
+              typeof(revoked_at) = 'integer'
+              AND revoked_at BETWEEN 0 AND 9007199254740991
+            )
+          )
+      );
+      CREATE INDEX idx_raider_devices_player
+        ON raider_devices (player_id, revoked_at, last_seen_at);
+
+      CREATE TABLE runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL
+          REFERENCES raider_identities(player_id) ON DELETE CASCADE,
+        provider TEXT NOT NULL
+          CHECK (provider IN ('codex','claude','omp')),
+        surface TEXT NOT NULL
+          CHECK (
+            (provider = 'codex' AND surface IN ('codex_desktop','codex_cli'))
+            OR (provider = 'claude' AND surface = 'claude_code')
+            OR (provider = 'omp' AND surface = 'omp')
+          ),
+        run_key TEXT NOT NULL
+          CHECK (
+            length(run_key) = 64
+            AND run_key NOT GLOB '*[^0-9a-f]*'
+          ),
+        state TEXT NOT NULL
+          CHECK (state IN ('open','completed','failed','cancelled')),
+        started_at_ms INTEGER NOT NULL
+          CHECK (
+            typeof(started_at_ms) = 'integer'
+            AND started_at_ms BETWEEN 0 AND 9007199254740991
+          ),
+        terminal_at_ms INTEGER
+          CHECK (
+            terminal_at_ms IS NULL
+            OR (
+              typeof(terminal_at_ms) = 'integer'
+              AND terminal_at_ms BETWEEN 0 AND 9007199254740991
+              AND terminal_at_ms >= started_at_ms
+            )
+          ),
+        last_event_at_ms INTEGER NOT NULL
+          CHECK (
+            typeof(last_event_at_ms) = 'integer'
+            AND last_event_at_ms BETWEEN started_at_ms AND 9007199254740991
+          ),
+        last_observed_at_ms INTEGER NOT NULL
+          CHECK (
+            typeof(last_observed_at_ms) = 'integer'
+            AND last_observed_at_ms BETWEEN last_event_at_ms AND 9007199254740991
+          ),
+        usage_input INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_input) = 'integer'
+            AND usage_input BETWEEN 0 AND 9007199254740991
+          ),
+        usage_output INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_output) = 'integer'
+            AND usage_output BETWEEN 0 AND 9007199254740991
+          ),
+        usage_cache_read INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_cache_read) = 'integer'
+            AND usage_cache_read BETWEEN 0 AND 9007199254740991
+          ),
+        usage_cache_write INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_cache_write) = 'integer'
+            AND usage_cache_write BETWEEN 0 AND 9007199254740991
+          ),
+        usage_reasoning_output INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_reasoning_output) = 'integer'
+            AND usage_reasoning_output BETWEEN 0 AND 9007199254740991
+          ),
+        latest_model TEXT CHECK (latest_model IS NULL OR length(latest_model) <= 100),
+        latest_effort TEXT CHECK (latest_effort IS NULL OR length(latest_effort) <= 100),
+        policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+        awarded_usage_credit INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(awarded_usage_credit) = 'integer'
+            AND awarded_usage_credit BETWEEN 0 AND 9007199254740991
+          ),
+        awarded_completion_credit INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(awarded_completion_credit) = 'integer'
+            AND awarded_completion_credit BETWEEN 0 AND 9007199254740991
+          ),
+        awarded_duration_credit INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(awarded_duration_credit) = 'integer'
+            AND awarded_duration_credit BETWEEN 0 AND 9007199254740991
+          ),
+        raid_power INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(raid_power) = 'integer'
+            AND raid_power BETWEEN 0 AND 9007199254740991
+          ),
+        created_at INTEGER NOT NULL
+          CHECK (
+            typeof(created_at) = 'integer'
+            AND created_at BETWEEN 0 AND 9007199254740991
+          ),
+        updated_at INTEGER NOT NULL
+          CHECK (
+            typeof(updated_at) = 'integer'
+            AND updated_at BETWEEN created_at AND 9007199254740991
+          ),
+        CHECK (
+          (state = 'open' AND terminal_at_ms IS NULL)
+          OR (state <> 'open' AND terminal_at_ms IS NOT NULL)
+        ),
+        UNIQUE (player_id, provider, run_key)
+      );
+      CREATE INDEX idx_runs_player_updated
+        ON runs (player_id, updated_at DESC, id DESC);
+
+      CREATE TABLE run_events (
+        event_key TEXT PRIMARY KEY
+          CHECK (
+            length(event_key) = 64
+            AND event_key NOT GLOB '*[^0-9a-f]*'
+          ),
+        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        device_id TEXT NOT NULL
+          REFERENCES raider_devices(device_id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL
+          CHECK (
+            typeof(sequence) = 'integer'
+            AND sequence BETWEEN 0 AND 9007199254740991
+          ),
+        schema_version INTEGER NOT NULL
+          CHECK (typeof(schema_version) = 'integer' AND schema_version = 1),
+        companion_version TEXT NOT NULL
+          CHECK (length(companion_version) BETWEEN 1 AND 100),
+        provider TEXT NOT NULL
+          CHECK (provider IN ('codex','claude','omp')),
+        surface TEXT NOT NULL
+          CHECK (
+            (provider = 'codex' AND surface IN ('codex_desktop','codex_cli'))
+            OR (provider = 'claude' AND surface = 'claude_code')
+            OR (provider = 'omp' AND surface = 'omp')
+          ),
+        run_key TEXT NOT NULL
+          CHECK (
+            length(run_key) = 64
+            AND run_key NOT GLOB '*[^0-9a-f]*'
+          ),
+        event_time_ms INTEGER NOT NULL
+          CHECK (
+            typeof(event_time_ms) = 'integer'
+            AND event_time_ms BETWEEN 0 AND 9007199254740991
+          ),
+        observed_at_ms INTEGER NOT NULL
+          CHECK (
+            typeof(observed_at_ms) = 'integer'
+            AND observed_at_ms BETWEEN event_time_ms AND 9007199254740991
+          ),
+        started_at_ms INTEGER NOT NULL
+          CHECK (
+            typeof(started_at_ms) = 'integer'
+            AND started_at_ms BETWEEN 0 AND event_time_ms
+            AND event_time_ms - started_at_ms <= 604800000
+          ),
+        state TEXT NOT NULL
+          CHECK (state IN ('open','completed','failed','cancelled')),
+        usage_input INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_input) = 'integer'
+            AND usage_input BETWEEN 0 AND 9007199254740991
+          ),
+        usage_output INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_output) = 'integer'
+            AND usage_output BETWEEN 0 AND 9007199254740991
+          ),
+        usage_cache_read INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_cache_read) = 'integer'
+            AND usage_cache_read BETWEEN 0 AND 9007199254740991
+          ),
+        usage_cache_write INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_cache_write) = 'integer'
+            AND usage_cache_write BETWEEN 0 AND 9007199254740991
+          ),
+        usage_reasoning_output INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(usage_reasoning_output) = 'integer'
+            AND usage_reasoning_output BETWEEN 0 AND 9007199254740991
+          ),
+        model TEXT CHECK (model IS NULL OR length(model) <= 100),
+        effort TEXT CHECK (effort IS NULL OR length(effort) <= 100),
+        policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+        awarded_delta INTEGER NOT NULL DEFAULT 0
+          CHECK (
+            typeof(awarded_delta) = 'integer'
+            AND awarded_delta BETWEEN 0 AND 9007199254740991
+          ),
+        received_at INTEGER NOT NULL
+          CHECK (
+            typeof(received_at) = 'integer'
+            AND received_at BETWEEN 0 AND 9007199254740991
+          ),
+        UNIQUE (run_id, sequence)
+      );
+    `,
+  },
 ];
