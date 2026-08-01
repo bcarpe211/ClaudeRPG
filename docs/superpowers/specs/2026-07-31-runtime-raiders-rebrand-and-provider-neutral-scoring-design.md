@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-31
 
-**Status:** Design approved; implementation planning is gated on review of this written specification
+**Status:** Approved for implementation planning
 
 **Scope:** Runtime Raiders product language and visual direction, passive local
 Run collection, provider-neutral Raid Power scoring, compatibility migration,
