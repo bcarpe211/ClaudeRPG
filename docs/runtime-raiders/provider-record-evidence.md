@@ -30,7 +30,7 @@ Disabled means unsupported. Runtime Raiders must not scan those providers' roots
 - `last_token_usage` is a cumulative per-Run observation. Keep the newest valid observation for a Run; never sum repeated observations.
 - A Run is complete only after `task_complete`. A partial final line, cancellation, failure-like terminal, or missing completion remains incomplete and must not be promoted to a completed Run.
 - Duplicate records are idempotent. Reordered records remain pending until their required identity and lifecycle facts are available.
-- Parallel Runs are isolated by record plus `turn_id`; observations from different fixture pairs must never be merged.
+- Parallel Runs are isolated by launch surface plus `turn_id`; observations from different fixture pairs must never be merged.
 - Launch provenance comes from the verified `session_meta` shape/runtime marker, never from `cwd`, a project name, or a path.
 
 ## Privacy audit contract
