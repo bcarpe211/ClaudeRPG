@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
@@ -23,11 +23,16 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function newDeviceId(): string {
+  return randomUUID();
+}
+
 describe('raider enrollment', () => {
   it('hashes a one-time ten-minute enrollment code and device token', () => {
     const db = enrollmentDb();
     try {
       const enrollment = createEnrollment(db, 1, NOW);
+      const deviceId = newDeviceId();
 
       expect(enrollment.expiresAt).toBe(NOW + 10 * 60_000);
       expect(enrollment.code).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -40,7 +45,7 @@ describe('raider enrollment', () => {
       const exchanged = exchangeEnrollment(
         db,
         enrollment.code,
-        'device-one',
+        deviceId,
         '0.1.0',
         enrollment.expiresAt - 1,
       );
@@ -64,9 +69,11 @@ describe('raider enrollment', () => {
     try {
       const firstEnrollment = createEnrollment(db, 1, NOW);
       const secondEnrollment = createEnrollment(db, 1, NOW + 1);
+      const firstDeviceId = newDeviceId();
+      const secondDeviceId = newDeviceId();
 
-      const first = exchangeEnrollment(db, firstEnrollment.code, 'device-one', '0.1.0', NOW + 2);
-      const second = exchangeEnrollment(db, secondEnrollment.code, 'device-two', '0.1.0', NOW + 3);
+      const first = exchangeEnrollment(db, firstEnrollment.code, firstDeviceId, '0.1.0', NOW + 2);
+      const second = exchangeEnrollment(db, secondEnrollment.code, secondDeviceId, '0.1.0', NOW + 3);
 
       expect(first).not.toBeNull();
       expect(second).not.toBeNull();
@@ -84,13 +91,13 @@ describe('raider enrollment', () => {
     const db = enrollmentDb();
     try {
       const expired = createEnrollment(db, 1, NOW);
-      expect(exchangeEnrollment(db, expired.code, 'expired-device', '0.1.0', expired.expiresAt))
+      expect(exchangeEnrollment(db, expired.code, newDeviceId(), '0.1.0', expired.expiresAt))
         .toBeNull();
 
       const active = createEnrollment(db, 1, NOW + 1);
-      expect(exchangeEnrollment(db, active.code, 'live-device', '0.1.0', NOW + 2))
+      expect(exchangeEnrollment(db, active.code, newDeviceId(), '0.1.0', NOW + 2))
         .not.toBeNull();
-      expect(exchangeEnrollment(db, active.code, 'other-device', '0.1.0', NOW + 3))
+      expect(exchangeEnrollment(db, active.code, newDeviceId(), '0.1.0', NOW + 3))
         .toBeNull();
     } finally {
       db.close();
@@ -101,14 +108,15 @@ describe('raider enrollment', () => {
     const db = enrollmentDb();
     try {
       const firstEnrollment = createEnrollment(db, 1, NOW);
-      expect(exchangeEnrollment(db, firstEnrollment.code, 'device-one', '0.1.0', NOW + 1))
+      const existingDeviceId = newDeviceId();
+      expect(exchangeEnrollment(db, firstEnrollment.code, existingDeviceId, '0.1.0', NOW + 1))
         .not.toBeNull();
 
       const retryableEnrollment = createEnrollment(db, 1, NOW + 2);
       expect(() => exchangeEnrollment(
         db,
         retryableEnrollment.code,
-        'device-one',
+        existingDeviceId,
         '0.1.0',
         NOW + 3,
       )).toThrow();
@@ -117,7 +125,7 @@ describe('raider enrollment', () => {
       expect(exchangeEnrollment(
         db,
         retryableEnrollment.code,
-        'device-two',
+        newDeviceId(),
         '0.1.0',
         NOW + 4,
       )).not.toBeNull();
@@ -126,26 +134,52 @@ describe('raider enrollment', () => {
     }
   });
 
-  it('authenticates active devices and rejects revoked or malformed credentials', () => {
+  it('authenticates active devices without reducing their last seen timestamp', () => {
     const db = enrollmentDb();
     try {
       const enrollment = createEnrollment(db, 1, NOW);
-      const exchanged = exchangeEnrollment(db, enrollment.code, 'device-one', '0.1.0', NOW + 1);
+      const deviceId = newDeviceId();
+      const exchanged = exchangeEnrollment(db, enrollment.code, deviceId, '0.1.0', NOW + 1);
       expect(exchanged).not.toBeNull();
 
       expect(authenticateDevice(db, exchanged!.deviceToken, NOW + 2)).toEqual({
-        deviceId: 'device-one',
+        deviceId,
         playerId: 1,
         companionVersion: '0.1.0',
       });
       expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
-        .get('device-one')).toEqual({ last_seen_at: NOW + 2 });
+        .get(deviceId)).toEqual({ last_seen_at: NOW + 2 });
+      expect(authenticateDevice(db, exchanged!.deviceToken, NOW + 1)).toEqual({
+        deviceId,
+        playerId: 1,
+        companionVersion: '0.1.0',
+      });
+      expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
+        .get(deviceId)).toEqual({ last_seen_at: NOW + 2 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rejects revoked and malformed credentials without touching device state', () => {
+    const db = enrollmentDb();
+    try {
+      const enrollment = createEnrollment(db, 1, NOW);
+      const deviceId = newDeviceId();
+      const exchanged = exchangeEnrollment(db, enrollment.code, deviceId, '0.1.0', NOW + 1);
+      expect(exchanged).not.toBeNull();
+
+      for (const credential of [[], {}, Symbol('token'), null, 'x'.repeat(44)]) {
+        expect(authenticateDevice(db, credential as unknown as string, NOW + 2)).toBeNull();
+      }
+      expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
+        .get(deviceId)).toEqual({ last_seen_at: null });
 
       db.prepare('UPDATE raider_devices SET revoked_at = ? WHERE device_id = ?')
-        .run(NOW + 3, 'device-one');
+        .run(NOW + 3, deviceId);
       expect(authenticateDevice(db, exchanged!.deviceToken, NOW + 4)).toBeNull();
-      expect(authenticateDevice(db, '', NOW + 4)).toBeNull();
-      expect(authenticateDevice(db, 'x'.repeat(44), NOW + 4)).toBeNull();
+      expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
+        .get(deviceId)).toEqual({ last_seen_at: null });
     } finally {
       db.close();
     }
@@ -157,9 +191,10 @@ describe('raider enrollment', () => {
       expect(() => createEnrollment(db, 0, NOW)).toThrow(RangeError);
       expect(() => createEnrollment(db, 1, -1)).toThrow(RangeError);
       const enrollment = createEnrollment(db, 1, NOW);
-      expect(exchangeEnrollment(db, enrollment.code, '', '0.1.0', NOW + 1)).toBeNull();
-      expect(exchangeEnrollment(db, enrollment.code, 'device-one', '', NOW + 1)).toBeNull();
-      expect(exchangeEnrollment(db, enrollment.code, 'x'.repeat(101), '0.1.0', NOW + 1))
+      const deviceId = newDeviceId();
+      expect(exchangeEnrollment(db, enrollment.code, 'not-a-uuid', '0.1.0', NOW + 1)).toBeNull();
+      expect(exchangeEnrollment(db, enrollment.code, deviceId, '', NOW + 1)).toBeNull();
+      expect(exchangeEnrollment(db, enrollment.code, deviceId, 'x'.repeat(101), NOW + 1))
         .toBeNull();
       expect(exchangeEnrollment(
         db,
@@ -168,6 +203,15 @@ describe('raider enrollment', () => {
         '0.1.0',
         NOW + 1,
       )).toBeNull();
+      for (const credential of [[], {}, Symbol('code'), null, 'x'.repeat(44)]) {
+        expect(exchangeEnrollment(
+          db,
+          credential as unknown as string,
+          deviceId,
+          '0.1.0',
+          NOW + 1,
+        )).toBeNull();
+      }
       expect(db.prepare('SELECT consumed_at FROM raider_enrollments').get())
         .toEqual({ consumed_at: null });
     } finally {

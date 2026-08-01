@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { z } from 'zod';
 
 const ENROLLMENT_LIFETIME_MS = 10 * 60_000;
 const MAX_TIMESTAMP = Number.MAX_SAFE_INTEGER;
 const CREDENTIAL_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const deviceIdSchema = z.string().uuid();
 
 export interface EnrollmentResult {
   deviceToken: string;
@@ -41,6 +43,14 @@ function validBoundedText(value: unknown): value is string {
     && value.length >= 1
     && value.length <= 100
     && !value.includes('\0');
+}
+
+function validCredential(value: unknown): value is string {
+  return typeof value === 'string' && CREDENTIAL_PATTERN.test(value);
+}
+
+function validDeviceId(value: unknown): value is string {
+  return deviceIdSchema.safeParse(value).success;
 }
 
 function requireTimestamp(now: number): void {
@@ -93,8 +103,8 @@ export function exchangeEnrollment(
 ): EnrollmentResult | null {
   requireTimestamp(now);
   if (
-    !CREDENTIAL_PATTERN.test(code)
-    || !validBoundedText(deviceId)
+    !validCredential(code)
+    || !validDeviceId(deviceId)
     || !validBoundedText(companionVersion)
   ) {
     return null;
@@ -138,7 +148,7 @@ export function authenticateDevice(
   now: number,
 ): AuthenticatedDevice | null {
   requireTimestamp(now);
-  if (!CREDENTIAL_PATTERN.test(bearerToken)) return null;
+  if (!validCredential(bearerToken)) return null;
 
   const authenticate = db.transaction((): AuthenticatedDevice | null => {
     const device = db.prepare(`
@@ -154,9 +164,12 @@ export function authenticateDevice(
 
     const updated = db.prepare(`
       UPDATE raider_devices
-      SET last_seen_at = ?
+      SET last_seen_at = CASE
+        WHEN last_seen_at IS NULL OR last_seen_at < ? THEN ?
+        ELSE last_seen_at
+      END
       WHERE device_id = ? AND revoked_at IS NULL
-    `).run(now, device.device_id);
+    `).run(now, now, device.device_id);
     if (updated.changes !== 1) return null;
 
     return {
