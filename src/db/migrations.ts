@@ -740,7 +740,10 @@ export const migrations: Migration[] = [
             AND token_hash NOT GLOB '*[^0-9a-f]*'
           ),
         companion_version TEXT NOT NULL
-          CHECK (length(companion_version) BETWEEN 1 AND 100),
+          CHECK (
+            typeof(companion_version) = 'text'
+            AND length(companion_version) BETWEEN 1 AND 100
+          ),
         created_at INTEGER NOT NULL
           CHECK (
             typeof(created_at) = 'integer'
@@ -835,9 +838,21 @@ export const migrations: Migration[] = [
             typeof(usage_reasoning_output) = 'integer'
             AND usage_reasoning_output BETWEEN 0 AND 9007199254740991
           ),
-        latest_model TEXT CHECK (latest_model IS NULL OR length(latest_model) <= 100),
-        latest_effort TEXT CHECK (latest_effort IS NULL OR length(latest_effort) <= 100),
-        policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+        latest_model TEXT
+          CHECK (
+            latest_model IS NULL
+            OR (typeof(latest_model) = 'text' AND length(latest_model) <= 100)
+          ),
+        latest_effort TEXT
+          CHECK (
+            latest_effort IS NULL
+            OR (typeof(latest_effort) = 'text' AND length(latest_effort) <= 100)
+          ),
+        policy_version TEXT NOT NULL
+          CHECK (
+            typeof(policy_version) = 'text'
+            AND length(policy_version) BETWEEN 1 AND 100
+          ),
         awarded_usage_credit INTEGER NOT NULL DEFAULT 0
           CHECK (
             typeof(awarded_usage_credit) = 'integer'
@@ -895,7 +910,10 @@ export const migrations: Migration[] = [
         schema_version INTEGER NOT NULL
           CHECK (typeof(schema_version) = 'integer' AND schema_version = 1),
         companion_version TEXT NOT NULL
-          CHECK (length(companion_version) BETWEEN 1 AND 100),
+          CHECK (
+            typeof(companion_version) = 'text'
+            AND length(companion_version) BETWEEN 1 AND 100
+          ),
         provider TEXT NOT NULL
           CHECK (provider IN ('codex','claude','omp')),
         surface TEXT NOT NULL
@@ -953,9 +971,21 @@ export const migrations: Migration[] = [
             typeof(usage_reasoning_output) = 'integer'
             AND usage_reasoning_output BETWEEN 0 AND 9007199254740991
           ),
-        model TEXT CHECK (model IS NULL OR length(model) <= 100),
-        effort TEXT CHECK (effort IS NULL OR length(effort) <= 100),
-        policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+        model TEXT
+          CHECK (
+            model IS NULL
+            OR (typeof(model) = 'text' AND length(model) <= 100)
+          ),
+        effort TEXT
+          CHECK (
+            effort IS NULL
+            OR (typeof(effort) = 'text' AND length(effort) <= 100)
+          ),
+        policy_version TEXT NOT NULL
+          CHECK (
+            typeof(policy_version) = 'text'
+            AND length(policy_version) BETWEEN 1 AND 100
+          ),
         awarded_delta INTEGER NOT NULL DEFAULT 0
           CHECK (
             typeof(awarded_delta) = 'integer'

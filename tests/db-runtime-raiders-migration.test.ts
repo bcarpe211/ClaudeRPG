@@ -401,6 +401,54 @@ describe('019_runtime_raiders_runs migration', () => {
     }
   });
 
+  it.each([
+    ['device companion version', (db: Database.Database, _runId: number) => db.prepare(
+      'UPDATE raider_devices SET companion_version = ?',
+    ).run(Buffer.from('0.1.0'))],
+    ['Run model', (db: Database.Database, runId: number) => db.prepare(
+      'UPDATE runs SET latest_model = ? WHERE id = ?',
+    ).run(Buffer.from('gpt-test'), runId)],
+    ['Run effort', (db: Database.Database, runId: number) => db.prepare(
+      'UPDATE runs SET latest_effort = ? WHERE id = ?',
+    ).run(Buffer.from('high'), runId)],
+    ['Run policy version', (db: Database.Database, runId: number) => db.prepare(
+      'UPDATE runs SET policy_version = ? WHERE id = ?',
+    ).run(Buffer.from('raid-power-v1'), runId)],
+    ['event companion version', (db: Database.Database, _runId: number) => db.prepare(
+      'UPDATE run_events SET companion_version = ? WHERE event_key = ?',
+    ).run(Buffer.from('0.1.0'), 'b'.repeat(64))],
+    ['event model', (db: Database.Database, _runId: number) => db.prepare(
+      'UPDATE run_events SET model = ? WHERE event_key = ?',
+    ).run(Buffer.from('gpt-test'), 'b'.repeat(64))],
+    ['event effort', (db: Database.Database, _runId: number) => db.prepare(
+      'UPDATE run_events SET effort = ? WHERE event_key = ?',
+    ).run(Buffer.from('high'), 'b'.repeat(64))],
+    ['event policy version', (db: Database.Database, _runId: number) => db.prepare(
+      'UPDATE run_events SET policy_version = ? WHERE event_key = ?',
+    ).run(Buffer.from('raid-power-v1'), 'b'.repeat(64))],
+  ])('rejects BLOB storage for the bounded %s text field', (_label, mutate) => {
+    const { db, runId } = constraintDb();
+    try {
+      expect(() => mutate(db, runId)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('continues to accept NULL for optional Run and event model metadata', () => {
+    const { db, runId } = constraintDb();
+    try {
+      expect(() => db.prepare(`
+        UPDATE runs SET latest_model = NULL, latest_effort = NULL WHERE id = ?
+      `).run(runId)).not.toThrow();
+      expect(() => db.prepare(`
+        UPDATE run_events SET model = NULL, effort = NULL WHERE event_key = ?
+      `).run('b'.repeat(64))).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
   it('enforces non-negative safe-integer usage, score, and sequence values', () => {
     const { db, runId } = constraintDb();
     try {
