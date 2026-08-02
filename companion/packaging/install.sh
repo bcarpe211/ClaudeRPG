@@ -86,6 +86,7 @@ if [ -z "$command_path" ]; then
   old_ifs="$IFS"
   IFS=:
   for candidate in $PATH; do
+    case "$candidate" in /*) ;; *) continue ;; esac
     [ -n "$candidate" ] && [ -d "$candidate" ] && [ -w "$candidate" ] || continue
     [ ! -L "$candidate" ] || continue
     [ "$(stat -f %u "$candidate")" = "$(id -u)" ] || continue
@@ -307,11 +308,12 @@ EOF
 chmod 600 "$STAGED_PLIST"
 
 if [ "$fallback_path" -eq 1 ]; then
+  profile="$HOME/.zprofile"
+  profile_touched=1
   mkdir -p "$command_dir"
   [ -e "$HOME/.local" ] || chmod 700 "$HOME/.local"
   [ -e "$command_dir" ] || chmod 700 "$command_dir"
-  profile="$HOME/.zprofile"
-  [ -e "$profile" ] || { : > "$profile"; chmod 600 "$profile"; profile_touched=1; }
+  [ -e "$profile" ] || { : > "$profile"; chmod 600 "$profile"; }
   grep -F -x "$MARKER" "$profile" >/dev/null 2>&1 || {
     temporary="$(mktemp "$profile.runtime-raiders.XXXXXX")"
     cat "$profile" > "$temporary"
@@ -319,7 +321,6 @@ if [ "$fallback_path" -eq 1 ]; then
     mv "$temporary" "$profile"
     : > "$MARKER_FLAG"
     chmod 600 "$MARKER_FLAG"
-    profile_touched=1
     echo "Added Runtime Raiders to PATH in $profile; open a new shell to use raiders."
   }
 fi

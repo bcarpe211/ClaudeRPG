@@ -31,6 +31,7 @@ fi
 TEMP_ROOT=/tmp
 [ -n "$TMPDIR" ] && TEMP_ROOT="$TMPDIR"
 WORK="$(mktemp -d "$TEMP_ROOT/runtime-raiders-release.XXXXXX")"
+TRANSACTION=''
 release_transaction_active=0
 release_transaction_committed=0
 old_zip=0
@@ -45,14 +46,14 @@ rollback_release() {
   [ "$placed_zip" -eq 0 ] || rm -f "$OUTPUT/runtime-raiders-agent.zip"
   [ "$placed_checksum" -eq 0 ] || rm -f "$OUTPUT/runtime-raiders-agent.zip.sha256"
   [ "$placed_install" -eq 0 ] || rm -f "$OUTPUT/install.sh"
-  [ "$old_zip" -eq 0 ] || /bin/mv "$WORK/old-runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
-  [ "$old_checksum" -eq 0 ] || /bin/mv "$WORK/old-runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
-  [ "$old_install" -eq 0 ] || /bin/mv "$WORK/old-install.sh" "$OUTPUT/install.sh"
+  [ "$old_zip" -eq 0 ] || [ ! -f "$TRANSACTION/old-runtime-raiders-agent.zip" ] || /bin/mv "$TRANSACTION/old-runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
+  [ "$old_checksum" -eq 0 ] || [ ! -f "$TRANSACTION/old-runtime-raiders-agent.zip.sha256" ] || /bin/mv "$TRANSACTION/old-runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
+  [ "$old_install" -eq 0 ] || [ ! -f "$TRANSACTION/old-install.sh" ] || /bin/mv "$TRANSACTION/old-install.sh" "$OUTPUT/install.sh"
 }
 cleanup() {
   status=$?
   rollback_release
-  rm -rf "$WORK"
+  rm -rf "$WORK" "$TRANSACTION"
   trap - EXIT HUP INT TERM
   exit "$status"
 }
@@ -98,28 +99,40 @@ grep -F '__RUNTIME_RAIDERS_TEAM_ID__' "$STAGED_OUTPUT/install.sh" >/dev/null && 
   exit 1
 }
 mkdir -p "$OUTPUT"
+for target in "$OUTPUT/runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip.sha256" "$OUTPUT/install.sh"; do
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    [ -f "$target" ] && [ ! -L "$target" ] || {
+      echo "refusing unsafe existing release target: $target" >&2
+      exit 1
+    }
+  fi
+done
 if [ -e "$OUTPUT/runtime-raiders-agent.zip" ] || [ -e "$OUTPUT/runtime-raiders-agent.zip.sha256" ]; then
   [ -f "$OUTPUT/runtime-raiders-agent.zip" ] && [ -f "$OUTPUT/runtime-raiders-agent.zip.sha256" ] || {
     echo "refusing to replace an unmatched existing release pair" >&2
     exit 1
   }
 fi
+TRANSACTION="$(mktemp -d "$OUTPUT/.runtime-raiders-transaction.XXXXXX")"
+cp "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$TRANSACTION/new-runtime-raiders-agent.zip"
+cp "$STAGED_OUTPUT/runtime-raiders-agent.zip.sha256" "$TRANSACTION/new-runtime-raiders-agent.zip.sha256"
+cp "$STAGED_OUTPUT/install.sh" "$TRANSACTION/new-install.sh"
 release_transaction_active=1
 if [ -f "$OUTPUT/runtime-raiders-agent.zip" ]; then
-  mv "$OUTPUT/runtime-raiders-agent.zip" "$WORK/old-runtime-raiders-agent.zip"
   old_zip=1
-  mv "$OUTPUT/runtime-raiders-agent.zip.sha256" "$WORK/old-runtime-raiders-agent.zip.sha256"
+  mv "$OUTPUT/runtime-raiders-agent.zip" "$TRANSACTION/old-runtime-raiders-agent.zip"
   old_checksum=1
+  mv "$OUTPUT/runtime-raiders-agent.zip.sha256" "$TRANSACTION/old-runtime-raiders-agent.zip.sha256"
 fi
 if [ -f "$OUTPUT/install.sh" ]; then
-  mv "$OUTPUT/install.sh" "$WORK/old-install.sh"
   old_install=1
+  mv "$OUTPUT/install.sh" "$TRANSACTION/old-install.sh"
 fi
-mv "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
 placed_zip=1
-mv "$STAGED_OUTPUT/runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
+mv "$TRANSACTION/new-runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
 placed_checksum=1
-mv "$STAGED_OUTPUT/install.sh" "$OUTPUT/install.sh"
+mv "$TRANSACTION/new-runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
 placed_install=1
+mv "$TRANSACTION/new-install.sh" "$OUTPUT/install.sh"
 release_transaction_committed=1
 echo "Built notarized artifact at $OUTPUT/runtime-raiders-agent.zip (publication is manual)."

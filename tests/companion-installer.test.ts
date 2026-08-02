@@ -76,6 +76,10 @@ function fakes(root: string): string {
     '[ "$FAKE_LN_FAIL" != 1 ] || exit 76',
     'exec /bin/ln "$@"',
   ]);
+  executable(join(bin, 'chmod'), [
+    'case "$2" in */path-marker-owned) [ "$FAKE_CHMOD_FAIL_MARKER" != 1 ] || exit 75;; esac',
+    'exec /bin/chmod "$@"',
+  ]);
   executable(join(bin, 'launchctl'), [
     'if [ "$1" = print ]; then',
     '  [ "$FAKE_LAUNCH_PRINT_PRESENT" = 1 ] && exit 0',
@@ -113,6 +117,7 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     FAKE_SHASUM_FAIL: '0',
     FAKE_CODESIGN_FAIL: '0',
     FAKE_LN_FAIL: '0',
+    FAKE_CHMOD_FAIL_MARKER: '0',
     FAKE_LAUNCH_PRINT_PRESENT: '0',
     FAKE_LAUNCH_PRINT_ABSENT: '1',
     FAKE_LAUNCH_BOOTOUT_FAIL: '0',
@@ -533,6 +538,49 @@ describe('Runtime Raiders companion installer', () => {
     }
   });
 
+  it('restores a fallback shell profile exactly when a post-marker link step fails', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-profile-rollback-'));
+    try {
+      const home = join(root, 'home');
+      mkdirSync(home, { recursive: true });
+      const fake = fakes(root);
+      chmodSync(fake, 0o555);
+      const profile = join(home, '.zprofile');
+      writeFileSync(profile, '# user profile\nexport KEEP=1\n');
+      const environment = { ...env(home, fake, artifact(root)), FAKE_CHMOD_FAIL_MARKER: '1' };
+      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      expect(result.status).not.toBe(0);
+      expect(readFileSync(profile, 'utf8')).toBe('# user profile\nexport KEEP=1\n');
+      expect(existsSync(join(home, 'Library/Application Support/Runtime Raiders/state/path-marker-owned'))).toBe(false);
+    } finally {
+      chmodSync(join(root, 'fakes'), 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('skips a relative writable PATH entry and records an absolute command link', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-relative-path-'));
+    try {
+      const home = join(root, 'home');
+      const relative = join(root, 'relative');
+      const commandDir = join(root, 'absolute-bin');
+      mkdirSync(relative, { recursive: true });
+      mkdirSync(commandDir, { recursive: true });
+      const fake = fakes(root);
+      const environment = env(home, fake, artifact(root), 'relative:' + commandDir);
+      const result = spawnSync('bash', [renderedInstaller(root), '--code', enrollmentCode], {
+        cwd: root, env: environment, encoding: 'utf8',
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(join(relative, 'raiders'))).toBe(false);
+      const record = readFileSync(join(home, 'Library/Application Support/Runtime Raiders/state/command-link'), 'utf8').trim();
+      expect(record).toBe(join(commandDir, 'raiders'));
+      expect(record.startsWith('/')).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a symlinked owned-path component without changing its unrelated target', () => {
     // Catches a recursive installer write through an attacker-controlled support symlink.
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-symlink-'));
@@ -710,7 +758,8 @@ describe('Runtime Raiders release build', () => {
       executable(join(fake, 'xcrun'), ['exit 0']);
       executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
       executable(join(fake, 'mv'), [
-        '[ "$2" = "$RUNTIME_RAIDERS_TEST_OUTPUT/runtime-raiders-agent.zip.sha256" ] && exit 79',
+        'printf "%s -> %s\\n" "$1" "$2" >> "$RUNTIME_RAIDERS_TEST_MV_LOG"',
+        '[ "$FAKE_MV_FAIL" = 1 ] && [ "$2" = "$RUNTIME_RAIDERS_TEST_OUTPUT/runtime-raiders-agent.zip.sha256" ] && exit 79',
         'exec /bin/mv "$@"',
       ]);
       const common = {
@@ -724,18 +773,46 @@ describe('Runtime Raiders release build', () => {
       writeFileSync(join(output, 'runtime-raiders-agent.zip'), 'old zip');
       writeFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'old checksum');
       writeFileSync(join(output, 'install.sh'), 'old installer');
-      const failed = invoke(build, ['--output', output], { ...common, RUNTIME_RAIDERS_TEST_OUTPUT: output });
+      const moved = join(root, 'moves.log');
+      const failed = invoke(build, ['--output', output], {
+        ...common, RUNTIME_RAIDERS_TEST_OUTPUT: output, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '1',
+      });
       expect(failed.status).not.toBe(0);
       expect(readFileSync(join(output, 'runtime-raiders-agent.zip'), 'utf8')).toBe('old zip');
       expect(readFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'utf8')).toBe('old checksum');
       expect(readFileSync(join(output, 'install.sh'), 'utf8')).toBe('old installer');
+      const finalZipMove = readFileSync(moved, 'utf8').split('\n')
+        .find((line) => line.endsWith(' -> ' + join(output, 'runtime-raiders-agent.zip')));
+      expect(finalZipMove?.startsWith(output + '/.runtime-raiders-transaction.')).toBe(true);
       const orphan = join(root, 'orphan');
       mkdirSync(orphan, { recursive: true });
       writeFileSync(join(orphan, 'install.sh'), 'user installer');
-      const orphanFailed = invoke(build, ['--output', orphan], { ...common, RUNTIME_RAIDERS_TEST_OUTPUT: orphan });
+      const orphanFailed = invoke(build, ['--output', orphan], {
+        ...common, RUNTIME_RAIDERS_TEST_OUTPUT: orphan, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '1',
+      });
       expect(orphanFailed.status).not.toBe(0);
       expect(readFileSync(join(orphan, 'install.sh'), 'utf8')).toBe('user installer');
       expect(existsSync(join(orphan, 'runtime-raiders-agent.zip'))).toBe(false);
+      const directoryTarget = join(root, 'directory-target');
+      mkdirSync(join(directoryTarget, 'install.sh'), { recursive: true });
+      writeFileSync(join(directoryTarget, 'install.sh', 'sentinel'), 'keep');
+      const directoryResult = invoke(build, ['--output', directoryTarget], {
+        ...common, RUNTIME_RAIDERS_TEST_OUTPUT: directoryTarget, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '0',
+      });
+      expect(directoryResult.status).not.toBe(0);
+      expect(readFileSync(join(directoryTarget, 'install.sh', 'sentinel'), 'utf8')).toBe('keep');
+      expect(existsSync(join(directoryTarget, 'runtime-raiders-agent.zip'))).toBe(false);
+      const symlinkTarget = join(root, 'symlink-target');
+      const outsideInstaller = join(root, 'outside-installer');
+      mkdirSync(symlinkTarget, { recursive: true });
+      writeFileSync(outsideInstaller, 'outside');
+      symlinkSync(outsideInstaller, join(symlinkTarget, 'install.sh'));
+      const symlinkResult = invoke(build, ['--output', symlinkTarget], {
+        ...common, RUNTIME_RAIDERS_TEST_OUTPUT: symlinkTarget, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '0',
+      });
+      expect(symlinkResult.status).not.toBe(0);
+      expect(lstatSync(join(symlinkTarget, 'install.sh')).isSymbolicLink()).toBe(true);
+      expect(readFileSync(outsideInstaller, 'utf8')).toBe('outside');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
