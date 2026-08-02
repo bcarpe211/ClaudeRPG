@@ -7,6 +7,7 @@ ENROLL_URL='https://raiders.redlattice.com/api/raiders/enroll'
 VERSION='0.1.0'
 LABEL='com.redlattice.runtime-raiders-agent'
 MARKER='export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path'
+TEAM_ID='__RUNTIME_RAIDERS_TEAM_ID__'
 
 usage() {
   echo "usage: install.sh --code <one-time-code>" >&2
@@ -23,6 +24,11 @@ done
 case "$code" in *[!A-Za-z0-9_-]*|'') usage ;; esac
 code_length="$(printf '%s' "$code" | wc -c | tr -d ' ')"
 [ "$code_length" -eq 43 ] || usage
+UNRENDERED_TEAM_ID='__RUNTIME_RAIDERS_''TEAM_ID__'
+[ "$TEAM_ID" != "$UNRENDERED_TEAM_ID" ] || { echo "Runtime Raiders installer has no rendered signing Team ID" >&2; exit 1; }
+case "$TEAM_ID" in *[!A-Z0-9]*|'') echo "Runtime Raiders installer has no rendered signing Team ID" >&2; exit 1 ;; esac
+[ "$(printf '%s' "$TEAM_ID" | wc -c | tr -d ' ')" -eq 10 ] || { echo "Runtime Raiders installer has an invalid signing Team ID" >&2; exit 1; }
+REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
 
 umask 077
 SUPPORT="$HOME/Library/Application Support/Runtime Raiders"
@@ -33,8 +39,63 @@ EXECUTABLE="$APP/Contents/MacOS/runtime-raiders-agent"
 SHIM="$SUPPORT/raiders"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 COMMAND_LINK_FILE="$STATE/command-link"
+MARKER_FLAG="$STATE/path-marker-owned"
+for path in "$HOME/Library" "$HOME/Library/Application Support" "$HOME/Library/LaunchAgents" "$SUPPORT" "$STATE" "$OUTBOX" "$APP" "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG"; do
+  [ ! -L "$path" ] || { echo "Runtime Raiders refuses symlinked path: $path" >&2; exit 1; }
+done
+if [ -e "$APP" ] && { [ ! -d "$APP" ] || [ "$(stat -f %u "$APP")" != "$(id -u)" ]; }; then
+  echo "Runtime Raiders refuses unsafe app target" >&2
+  exit 1
+fi
+for path in "$SUPPORT" "$STATE" "$OUTBOX"; do
+  if [ -e "$path" ] && { [ ! -d "$path" ] || [ "$(stat -f %u "$path")" != "$(id -u)" ]; }; then
+    echo "Runtime Raiders refuses unsafe directory: $path" >&2
+    exit 1
+  fi
+done
+if [ -e "$HOME/Library/LaunchAgents" ] && { [ ! -d "$HOME/Library/LaunchAgents" ] || [ "$(stat -f %u "$HOME/Library/LaunchAgents")" != "$(id -u)" ]; }; then
+  echo "Runtime Raiders refuses unsafe LaunchAgents directory" >&2
+  exit 1
+fi
+for path in "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG"; do
+  if [ -e "$path" ] && { [ ! -f "$path" ] || [ "$(stat -f %u "$path")" != "$(id -u)" ]; }; then
+    echo "Runtime Raiders refuses unsafe file target: $path" >&2
+    exit 1
+  fi
+done
 mkdir -p "$STATE" "$OUTBOX" "$HOME/Library/LaunchAgents"
-chmod 700 "$SUPPORT" "$STATE" "$OUTBOX" "$HOME/Library/LaunchAgents"
+chmod 700 "$SUPPORT" "$STATE" "$OUTBOX"
+command_dir=''
+old_ifs="$IFS"
+IFS=:
+for candidate in $PATH; do
+  [ -n "$candidate" ] && [ -d "$candidate" ] && [ -w "$candidate" ] || continue
+  [ ! -L "$candidate" ] || continue
+  command_dir="$candidate"
+  break
+done
+IFS="$old_ifs"
+fallback_path=0
+if [ -z "$command_dir" ]; then
+  command_dir="$HOME/.local/bin"
+  fallback_path=1
+  [ ! -L "$HOME/.local" ] && [ ! -L "$command_dir" ] || { echo "Runtime Raiders refuses symlinked PATH destination" >&2; exit 1; }
+fi
+command_path="$command_dir/raiders"
+if [ -e "$command_path" ] || [ -L "$command_path" ]; then
+  [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$SHIM" ] || {
+    echo "refusing to replace existing $command_path" >&2
+    exit 1
+  }
+fi
+if [ "$fallback_path" -eq 1 ] && { [ -L "$HOME/.zprofile" ] || { [ -e "$HOME/.zprofile" ] && [ ! -f "$HOME/.zprofile" ]; }; }; then
+  echo "Runtime Raiders refuses unsafe shell profile" >&2
+  exit 1
+fi
+if [ "$fallback_path" -eq 1 ] && [ -e "$HOME/.zprofile" ] && [ "$(stat -f %u "$HOME/.zprofile")" != "$(id -u)" ]; then
+  echo "Runtime Raiders refuses unowned shell profile" >&2
+  exit 1
+fi
 WORK="$(mktemp -d "$SUPPORT/.install.XXXXXX")"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT HUP INT TERM
@@ -57,10 +118,17 @@ CANDIDATE="$WORK/unpacked/Runtime Raiders Agent.app"
   echo "Runtime Raiders archive is missing its app executable" >&2
   exit 1
 }
-codesign --verify --strict --verbose=2 "$CANDIDATE"
+codesign --verify --strict -R "$REQUIREMENT" "$CANDIDATE"
 
 ENROLLMENT="$STATE/enrollment.json"
+[ ! -L "$ENROLLMENT" ] || { echo "Runtime Raiders refuses symlinked enrollment" >&2; exit 1; }
+if [ -e "$ENROLLMENT" ] && { [ ! -f "$ENROLLMENT" ] || [ "$(stat -f %u "$ENROLLMENT")" != "$(id -u)" ]; }; then
+  echo "Runtime Raiders refuses unsafe enrollment" >&2
+  exit 1
+fi
+new_enrollment=0
 if [ ! -f "$ENROLLMENT" ]; then
+  new_enrollment=1
   device_id="$(uuidgen)"
   response="$WORK/enrollment-response.json"
   request="$(printf '{"code":"%s","device_id":"%s","companion_version":"%s"}' "$code" "$device_id" "$VERSION")"
@@ -91,19 +159,36 @@ if [ ! -f "$ENROLLMENT" ]; then
     echo "invalid Runtime Raiders enrollment surfaces" >&2
     exit 1
   }
+  STAGED_ENROLLMENT="$(mktemp "$WORK/enrollment.XXXXXX")"
   printf '{"version":1,"device_id":"%s","device_token":"%s","dedupe_secret":"%s","server_url":"%s","cutover_at":%s,"enabled_surfaces":%s}\n' \
-    "$device_id" "$device_token" "$dedupe_secret" "$server_url" "$cutover_at" "$enabled_surfaces" > "$WORK/enrollment.json"
-  chmod 600 "$WORK/enrollment.json"
+    "$device_id" "$device_token" "$dedupe_secret" "$server_url" "$cutover_at" "$enabled_surfaces" > "$STAGED_ENROLLMENT"
+  chmod 600 "$STAGED_ENROLLMENT"
 fi
 
-rm -rf "$APP"
+had_app=0
+had_plist=0
+had_shim=0
+if [ -e "$APP" ]; then
+  codesign --verify --strict -R "$REQUIREMENT" "$APP"
+  mv "$APP" "$WORK/old.app"
+  had_app=1
+fi
+if [ -e "$PLIST" ]; then
+  mv "$PLIST" "$WORK/old.plist"
+  had_plist=1
+fi
+if [ -e "$SHIM" ]; then
+  mv "$SHIM" "$WORK/old.shim"
+  had_shim=1
+fi
 mv "$CANDIDATE" "$APP"
 chmod 700 "$EXECUTABLE"
 if [ ! -f "$ENROLLMENT" ]; then
-  mv "$WORK/enrollment.json" "$ENROLLMENT"
+  mv "$STAGED_ENROLLMENT" "$ENROLLMENT"
   chmod 600 "$ENROLLMENT"
 fi
-cat > "$PLIST" <<EOF
+STAGED_PLIST="$(mktemp "$WORK/plist.XXXXXX")"
+cat > "$STAGED_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -117,62 +202,75 @@ cat > "$PLIST" <<EOF
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <true/>
   <key>ProcessType</key>
   <string>Background</string>
 </dict>
 </plist>
 EOF
-chmod 600 "$PLIST"
+chmod 600 "$STAGED_PLIST"
 
-command_dir=''
-old_ifs="$IFS"
-IFS=:
-for candidate in $PATH; do
-  [ -n "$candidate" ] && [ -d "$candidate" ] && [ -w "$candidate" ] || continue
-  command_dir="$candidate"
-  break
-done
-IFS="$old_ifs"
-if [ -z "$command_dir" ]; then
-  command_dir="$HOME/.local/bin"
+if [ "$fallback_path" -eq 1 ]; then
   mkdir -p "$command_dir"
-  chmod 700 "$HOME/.local" "$command_dir"
+  [ -e "$HOME/.local" ] || chmod 700 "$HOME/.local"
+  [ -e "$command_dir" ] || chmod 700 "$command_dir"
   profile="$HOME/.zprofile"
-  touch "$profile"
+  [ -e "$profile" ] || { : > "$profile"; chmod 600 "$profile"; }
   grep -F -x "$MARKER" "$profile" >/dev/null 2>&1 || {
-    printf '%s\n' "$MARKER" >> "$profile"
+    temporary="$(mktemp "$profile.runtime-raiders.XXXXXX")"
+    cat "$profile" > "$temporary"
+    printf '%s\n' "$MARKER" >> "$temporary"
+    mv "$temporary" "$profile"
+    : > "$MARKER_FLAG"
+    chmod 600 "$MARKER_FLAG"
     echo "Added Runtime Raiders to PATH in $profile; open a new shell to use raiders."
   }
 fi
-command_path="$command_dir/raiders"
-if [ -e "$command_path" ] || [ -L "$command_path" ]; then
-  [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$SHIM" ] || {
-    echo "refusing to replace existing $command_path" >&2
-    exit 1
-  }
-fi
-cat > "$SHIM" <<EOF
+STAGED_SHIM="$(mktemp "$WORK/shim.XXXXXX")"
+cat > "$STAGED_SHIM" <<EOF
 #!/bin/sh
 set -eu
 SUPPORT='$SUPPORT'
 PLIST='$PLIST'
 SHIM='$SHIM'
 COMMAND_LINK_FILE='$COMMAND_LINK_FILE'
+MARKER_FLAG='$MARKER_FLAG'
 MARKER='$MARKER'
 LABEL='$LABEL'
 binary='$EXECUTABLE'
+job_absent() {
+  output="\$(mktemp /tmp/runtime-raiders-launchctl.XXXXXX)"
+  if launchctl print "gui/\$(id -u)/\$LABEL" >"\$output" 2>&1; then
+    rm -f "\$output"
+    return 1
+  else
+    print_status=\$?
+  fi
+  [ "\$print_status" -eq 113 ] || { rm -f "\$output"; return 1; }
+  grep -F 'Could not find service' "\$output" >/dev/null 2>&1
+  status=\$?
+  rm -f "\$output"
+  return \$status
+}
 if [ "\$#" -eq 0 ] || [ "\$1" != uninstall ]; then
   exec "\$binary" "\$@"
 fi
 if "\$binary" uninstall; then
-  :
-elif [ ! -S "\$SUPPORT/agent.sock" ] && ! launchctl print "gui/\$(id -u)/\$LABEL" >/dev/null 2>&1; then
+  launchctl bootout "gui/\$(id -u)" "\$PLIST" || {
+    echo "Runtime Raiders bootout failed; refusing cleanup" >&2
+    exit 1
+  }
+  job_absent || {
+    echo "Runtime Raiders launchd job still present; refusing cleanup" >&2
+    exit 1
+  }
+elif [ ! -S "\$SUPPORT/agent.sock" ] && job_absent; then
   :
 else
   echo "Runtime Raiders daemon did not safely stop; refusing cleanup" >&2
   exit 1
 fi
-launchctl bootout "gui/\$(id -u)" "\$PLIST" >/dev/null 2>&1 || true
 if [ -f "\$COMMAND_LINK_FILE" ]; then
   command_path="\$(cat "\$COMMAND_LINK_FILE")"
   if [ -L "\$command_path" ] && [ "\$(readlink "\$command_path")" = "\$SHIM" ]; then
@@ -180,18 +278,31 @@ if [ -f "\$COMMAND_LINK_FILE" ]; then
   fi
 fi
 profile="\$HOME/.zprofile"
-if [ -f "\$profile" ]; then
-  temporary="\$profile.runtime-raiders-tmp"
-  awk -v marker="\$MARKER" '\$0 != marker { print }' "\$profile" > "\$temporary"
+if [ -f "\$MARKER_FLAG" ] && [ -f "\$profile" ]; then
+  temporary="\$(mktemp "\$profile.runtime-raiders.XXXXXX")"
+  awk -v marker="\$MARKER" 'seen == 0 && \$0 == marker { seen = 1; next } { print }' "\$profile" > "\$temporary"
   mv "\$temporary" "\$profile"
 fi
 rm -f "\$PLIST"
 rm -rf "\$SUPPORT"
 EOF
-chmod 700 "$SHIM"
+chmod 700 "$STAGED_SHIM"
+mv "$STAGED_PLIST" "$PLIST"
+mv "$STAGED_SHIM" "$SHIM"
 printf '%s\n' "$command_path" > "$COMMAND_LINK_FILE"
 chmod 600 "$COMMAND_LINK_FILE"
 ln -sfn "$SHIM" "$command_path"
 launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+if ! launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
+  launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
+  rm -rf "$APP"
+  rm -f "$PLIST" "$SHIM"
+  [ "$had_app" -eq 1 ] && mv "$WORK/old.app" "$APP"
+  [ "$had_plist" -eq 1 ] && mv "$WORK/old.plist" "$PLIST"
+  [ "$had_shim" -eq 1 ] && mv "$WORK/old.shim" "$SHIM"
+  [ "$new_enrollment" -eq 1 ] && rm -f "$ENROLLMENT"
+  [ "$had_plist" -eq 1 ] && launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
+  echo "Runtime Raiders launchd bootstrap failed; prior installation restored" >&2
+  exit 1
+fi
 echo "Runtime Raiders installed. Run 'raiders status' to check it."

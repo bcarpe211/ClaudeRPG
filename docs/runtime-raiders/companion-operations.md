@@ -28,12 +28,16 @@ and exact PATH marker without affecting neighboring profile content or a
 user-replaced command link. It never uses sudo, package managers, provider
 directories, provider configuration, telemetry, or environment edits.
 
-For a release host, require both `RUNTIME_RAIDERS_CODESIGN_IDENTITY` and
-`RUNTIME_RAIDERS_NOTARY_PROFILE`, then run
+For a release host, require `RUNTIME_RAIDERS_CODESIGN_IDENTITY`,
+`RUNTIME_RAIDERS_NOTARY_PROFILE`, and the validated
+`RUNTIME_RAIDERS_TEAM_ID`, then run
 `scripts/release/build-runtime-raiders-agent.sh`. The build creates arm64 and
 x86_64 binaries, combines a universal executable in a minimal app, signs with
 hardened runtime and secure timestamp, strictly verifies, notarizes with
 `notarytool --wait`, staples and validates the app, recreates the ZIP, and
 writes its SHA-256. Standalone binaries cannot be stapled. The script does not
 publish; a separate approved operation may later place the ZIP and checksum at
-the documented downloads URL.
+the documented downloads URL. The checked-in installer is fail-closed until the
+release build renders its literal Team ID; installed artifacts verify the exact
+bundle identifier, Apple Developer ID chain, Developer ID Application
+extensions, and leaf certificate Team ID.
