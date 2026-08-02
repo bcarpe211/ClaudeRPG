@@ -34,9 +34,12 @@ describe('responsive dungeon shell safe area', () => {
     expect(css).toMatch(
       /@media \(max-width:1431px\)\{[\s\S]*?\.loot-rail\{[^}]*opacity:0[^}]*visibility:hidden[^}]*visibility 0s linear 260ms/,
     );
-    expect(css).not.toMatch(
-      /@media \(max-width:1431px\)\{[\s\S]*?\.loot-rail\{[^}]*display:none/,
-    );
+    const narrowRailRules = css.match(
+      /@media \(max-width:1431px\)\{([\s\S]*?)\n\}(?=\n@media \(max-width:760px\))/,
+    )?.[1];
+    expect(narrowRailRules).toBeDefined();
+    expect(narrowRailRules).not.toMatch(/\.loot-rail\{[^}]*display:none/);
+    expect(css).toMatch(/body\.frame-lite \.loot-rail\{display:none\}/);
     expect(css).toMatch(
       /@media \(prefers-reduced-motion:reduce\)\{[^}]*animation:none!important[\s\S]*?\.loot-rail\{transition:none!important\}/,
     );

@@ -73,7 +73,7 @@ body.frame-lite .sconce{filter:drop-shadow(0 0 16px rgba(255,150,60,.4))}
 @media (max-width:480px){
   :root{--wall:36px;--shell-gap:8px}
 }
-body.frame-lite .loot-rail{visibility:hidden}
+body.frame-lite .loot-rail{display:none}
 
 /* shell chrome: header bar + content + footer */
 .bar,main,.foot{position:relative;z-index:2}
