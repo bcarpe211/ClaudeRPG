@@ -92,11 +92,11 @@ describe('registration', () => {
 
     expect(res.status).toBe(200);
     expect(res.text).toContain('Raider Key');
-    expect(res.text).toContain('raiders on');
-    expect(res.text).toContain('raiders off');
-    expect(res.text).toContain('raiders status');
-    expect(res.text).toContain('raiders doctor');
-    expect(res.text).toContain('raiders uninstall');
+    expect(res.text).toContain('<code>raiders on</code> resumes collection.');
+    expect(res.text).toContain('<code>raiders off</code> pauses collection.');
+    expect(res.text).toContain('<code>raiders status</code> reports your current state and supported surfaces.');
+    expect(res.text).toContain('<code>raiders doctor</code> diagnoses setup without exporting secrets or content.');
+    expect(res.text).toContain('<code>raiders uninstall</code> stops and removes only Runtime Raiders-owned companion files.');
     const players = listPlayers(db);
     expect(players.length).toBe(1);
     expect(players[0].name).toBe('Sir Reginald');
@@ -117,6 +117,42 @@ describe('registration', () => {
     expect(installCommand).toBeDefined();
     expect(oneTimeCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(installCommand).not.toContain(players[0].auth_token);
+  });
+
+  it('POST /register rolls back a forced enrollment failure before a retry creates its first Raider', async () => {
+    // Catches a player committed before its Raider identity and enrollment can be created.
+    db.exec(`
+      CREATE TRIGGER reject_raider_enrollment
+      BEFORE INSERT ON raider_enrollments
+      BEGIN
+        SELECT RAISE(ABORT, 'forced enrollment failure');
+      END;
+    `);
+
+    const failed = await request(app)
+      .post('/register')
+      .type('form')
+      .send({ name: 'Atomic Raider', class_key: 'knight', gender: 'M' });
+
+    expect(failed.status).toBe(500);
+    expect(listPlayers(db)).toHaveLength(0);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM raider_identities').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM raider_enrollments').get())
+      .toEqual({ count: 0 });
+
+    db.exec('DROP TRIGGER reject_raider_enrollment');
+    const retried = await request(app)
+      .post('/register')
+      .type('form')
+      .send({ name: 'Atomic Raider', class_key: 'knight', gender: 'M' });
+
+    expect(retried.status).toBe(200);
+    expect(listPlayers(db)).toHaveLength(1);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM raider_identities').get())
+      .toEqual({ count: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM raider_enrollments').get())
+      .toEqual({ count: 1 });
   });
 
   it('POST /register rejects bad input', async () => {

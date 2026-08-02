@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
+import { createPlayer, type NewPlayer, type Player } from './players';
 
 const ENROLLMENT_LIFETIME_MS = 10 * 60_000;
 const MAX_TIMESTAMP = Number.MAX_SAFE_INTEGER;
@@ -59,12 +60,7 @@ function requireTimestamp(now: number): void {
   }
 }
 
-/** Create a one-time enrollment code, creating the Raider identity if needed. */
-export function createEnrollment(
-  db: Database.Database,
-  playerId: number,
-  now: number,
-): { code: string; expiresAt: number } {
+function enrollmentExpiry(playerId: number, now: number): number {
   requireTimestamp(now);
   if (!validPlayerId(playerId)) {
     throw new RangeError('playerId must be a positive safe integer');
@@ -73,24 +69,60 @@ export function createEnrollment(
   if (!validTimestamp(expiresAt)) {
     throw new RangeError('enrollment expiry exceeds the safe timestamp range');
   }
+  return expiresAt;
+}
 
+function insertEnrollment(
+  db: Database.Database,
+  playerId: number,
+  now: number,
+  expiresAt: number,
+  code: string,
+): void {
+  const player = db.prepare('SELECT 1 FROM players WHERE id = ?').get(playerId);
+  if (!player) throw new RangeError('player does not exist');
+
+  db.prepare(`
+    INSERT INTO raider_identities (player_id, dedupe_secret, created_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(player_id) DO NOTHING
+  `).run(playerId, randomDedupeSecret(), now);
+  db.prepare(`
+    INSERT INTO raider_enrollments (code_hash, player_id, created_at, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).run(sha256(code), playerId, now, expiresAt);
+}
+
+/** Create a one-time enrollment code, creating the Raider identity if needed. */
+export function createEnrollment(
+  db: Database.Database,
+  playerId: number,
+  now: number,
+): { code: string; expiresAt: number } {
+  const expiresAt = enrollmentExpiry(playerId, now);
   const code = randomCredential();
   const create = db.transaction(() => {
-    const player = db.prepare('SELECT 1 FROM players WHERE id = ?').get(playerId);
-    if (!player) throw new RangeError('player does not exist');
-
-    db.prepare(`
-      INSERT INTO raider_identities (player_id, dedupe_secret, created_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(player_id) DO NOTHING
-    `).run(playerId, randomDedupeSecret(), now);
-    db.prepare(`
-      INSERT INTO raider_enrollments (code_hash, player_id, created_at, expires_at)
-      VALUES (?, ?, ?, ?)
-    `).run(sha256(code), playerId, now, expiresAt);
+    insertEnrollment(db, playerId, now, expiresAt, code);
   });
   create();
   return { code, expiresAt };
+}
+
+/** Create a player, Raider identity, and one-time enrollment as one SQLite transaction. */
+export function createPlayerWithEnrollment(
+  db: Database.Database,
+  input: NewPlayer,
+  now: number,
+): { player: Player; enrollment: { code: string; expiresAt: number } } {
+  requireTimestamp(now);
+  const code = randomCredential();
+  const create = db.transaction(() => {
+    const player = createPlayer(db, input, now);
+    const expiresAt = enrollmentExpiry(player.id, now);
+    insertEnrollment(db, player.id, now, expiresAt, code);
+    return { player, enrollment: { code, expiresAt } };
+  });
+  return create();
 }
 
 /** Consume an unexpired enrollment code and create a device in the same transaction. */

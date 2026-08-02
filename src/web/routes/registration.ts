@@ -4,8 +4,7 @@ import type { AppDeps } from '../app';
 import { renderPage } from '../app';
 import { asyncHandler } from '../async';
 import { CLASSES, getClass, classSpriteUrl } from '../../domain/classes';
-import { createPlayer } from '../../domain/players';
-import { createEnrollment } from '../../domain/raider-enrollment';
+import { createPlayerWithEnrollment } from '../../domain/raider-enrollment';
 import { buildTvState } from '../tvview';
 import { formatCompact } from '../../domain/format';
 import type { RunSurface } from '../../domain/run-events';
@@ -127,8 +126,7 @@ export function registerRegistrationRoutes(
       return;
     }
     const now = Date.now();
-    const player = createPlayer(db, parsed.data, now);
-    const enrollment = createEnrollment(db, player.id, now);
+    const { player, enrollment } = createPlayerWithEnrollment(db, parsed.data, now);
     res.send(
       await renderPage('registered', {
         title: 'Your Raider',

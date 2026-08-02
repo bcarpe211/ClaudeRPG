@@ -9,7 +9,13 @@
   <pre class="install-command"><%= installCommand %></pre>
   <p class="fine">This command contains a one-time enrollment code that expires in 10 minutes. It is not your Raider Key.</p>
 
-  <p class="flash" style="border-color:var(--gold-dim);background:linear-gradient(180deg,#26200f,#1b1712);color:#efe4c9">After installation, use <code>raiders on</code>, <code>raiders off</code>, <code>raiders status</code>, <code>raiders doctor</code>, or <code>raiders uninstall</code> to control and check your companion.</p>
+  <div class="flash" style="border-color:var(--gold-dim);background:linear-gradient(180deg,#26200f,#1b1712);color:#efe4c9">
+    <p><code>raiders on</code> resumes collection.</p>
+    <p><code>raiders off</code> pauses collection.</p>
+    <p><code>raiders status</code> reports your current state and supported surfaces.</p>
+    <p><code>raiders doctor</code> diagnoses setup without exporting secrets or content.</p>
+    <p><code>raiders uninstall</code> stops and removes only Runtime Raiders-owned companion files.</p>
+  </div>
 
   <a class="btn" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Open your Raider sheet →</a>
 </div>
