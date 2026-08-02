@@ -6,7 +6,7 @@ const css = readFileSync('src/web/public/dungeon.css', 'utf8');
 describe('responsive dungeon shell safe area', () => {
   it('drifts gutter treasure beneath foreground moss walls without an inner-edge crop', () => {
     expect(css).toMatch(/\.wall\{[^}]*z-index:3/);
-    expect(css).toMatch(/\.loot-rail\{[^}]*width:calc\(\(100vw - 1120px\)\/2 \+ 18px\)[^}]*z-index:1[^}]*overflow:hidden/);
+    expect(css).toMatch(/\.loot-rail\{[^}]*z-index:1[^}]*overflow:hidden/);
     expect(css).toMatch(/\.loot-rail\.left\{left:0\} \.loot-rail\.right\{right:0\}/);
     expect(css).toMatch(/\.loot\.l\{left:calc\(var\(--wall\) \+ var\(--x\)\)\}/);
     expect(css).toMatch(/\.loot\.r\{right:calc\(var\(--wall\) \+ var\(--x\)\)\}/);
@@ -22,8 +22,16 @@ describe('responsive dungeon shell safe area', () => {
     expect(css).toMatch(/\.foot\{[^}]*padding:20px var\(--shell-inline\) 0/);
   });
 
-  it('hides gutter loot before it can meet the shell and narrows walls on small screens', () => {
-    expect(css).toMatch(/@media \(max-width:1252px\)\{[\s\S]*?\.loot-rail\{display:none\}/);
+  it('hides gutter loot through 1431px so the first active viewport has no inner-edge clip', () => {
+    const hiddenThrough = css.match(/@media \(max-width:(\d+)px\)\{\s*\.loot-rail\{display:none\}/)?.[1];
+
+    expect(hiddenThrough).toBe('1431');
+    expect(1431 <= Number(hiddenThrough)).toBe(true);
+    expect(1432 <= Number(hiddenThrough)).toBe(false);
+    expect(css).not.toMatch(/@media \(max-width:1432px\)\{[\s\S]*?\.loot-rail\{display:none\}/);
+  });
+
+  it('keeps the 1252px shell inset and narrows walls on small screens', () => {
     expect(css).toMatch(/@media \(max-width:1252px\)\{[\s\S]*?--shell-inline:clamp\(/);
     expect(css).toMatch(/@media \(max-width:760px\)\{[\s\S]*?:root\{--wall:48px/);
     expect(css).toMatch(/@media \(max-width:480px\)\{[\s\S]*?:root\{--wall:36px;--shell-gap:8px/);

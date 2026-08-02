@@ -57,6 +57,8 @@ body.frame-lite .sconce{filter:drop-shadow(0 0 16px rgba(255,150,60,.4))}
   :root{--shell-inline:clamp(34px,
     calc(var(--wall) + var(--shell-gap) + 560px - 50vw),
     calc(var(--wall) + var(--shell-gap)))}
+}
+@media (max-width:1431px){
   .loot-rail{display:none}
 }
 @media (max-width:760px){
