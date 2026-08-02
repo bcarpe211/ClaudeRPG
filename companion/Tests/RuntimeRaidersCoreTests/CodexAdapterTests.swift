@@ -151,6 +151,7 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(tail.last?.state, .completed)
         XCTAssertEqual(tail.last?.usage.input, 20)
         XCTAssertEqual(tail.last?.nativeID, "FAKE_DESKTOP_TURN_COMPLETE")
+        XCTAssertNoThrow(try CodexAdapter(snapshot: restored.snapshot()))
         XCTAssertThrowsError(try CodexAdapter(snapshot: Data("{}".utf8)))
         XCTAssertThrowsError(try CodexAdapter(snapshot: Data(repeating: 0x20, count: 65_537)))
 
@@ -160,6 +161,31 @@ final class CodexAdapterTests: XCTestCase {
         object["verifiedSurface"] = NSNull()
         let inconsistent = try JSONSerialization.data(withJSONObject: object)
         XCTAssertThrowsError(try CodexAdapter(snapshot: inconsistent))
+
+        object = try XCTUnwrap(JSONSerialization.jsonObject(with: snapshot) as? [String: Any])
+        object["activeContextOrdinal"] = 0
+        let impossibleOrdinal = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertThrowsError(try CodexAdapter(snapshot: impossibleOrdinal))
+    }
+
+    func testReachableRejectedSurfaceSnapshotRestoresFailClosed() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let lines = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"session_meta","payload":{"source":{"desktop":true}}}"#,
+        ]
+        for (index, line) in lines.enumerated() {
+            _ = adapter.consume(
+                line: Data(line.utf8), source: .init(ordinal: Int64(index)), observedAt: observedAt
+            )
+        }
+        var restored = try CodexAdapter(snapshot: adapter.snapshot())
+        let completion = Data(#"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#.utf8)
+        XCTAssertTrue(
+            restored.consume(line: completion, source: .init(ordinal: 4), observedAt: observedAt).isEmpty
+        )
     }
 
     func testDuplicateCompletionCannotRepeatOrStealTheNextTurn() {

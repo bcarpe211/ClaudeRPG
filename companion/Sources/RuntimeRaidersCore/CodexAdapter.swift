@@ -34,6 +34,7 @@ public struct CodexAdapter: ProviderAdapter {
     private var pendingCompletion: PendingCompletion?
     private var activeNativeID: String?
     private var activeStartedAt: Int64?
+    private var activeStartedOrdinal: Int64?
     private var activeContextOrdinal: Int64?
     private var activeCompletedOrdinal: Int64?
     private var activeUsage = zeroUsage
@@ -59,6 +60,7 @@ public struct CodexAdapter: ProviderAdapter {
               Self.validOptionalInteger(state.pendingStartedAt),
               Self.validOptionalInteger(state.pendingStartedOrdinal),
               Self.validOptionalInteger(state.activeStartedAt),
+              Self.validOptionalInteger(state.activeStartedOrdinal),
               Self.validOptionalInteger(state.activeContextOrdinal),
               Self.validOptionalInteger(state.activeCompletedOrdinal),
               Self.validOptionalInteger(state.pendingContext?.eventTime),
@@ -81,6 +83,7 @@ public struct CodexAdapter: ProviderAdapter {
         pendingCompletion = state.pendingCompletion
         activeNativeID = state.activeNativeID
         activeStartedAt = state.activeStartedAt
+        activeStartedOrdinal = state.activeStartedOrdinal
         activeContextOrdinal = state.activeContextOrdinal
         activeCompletedOrdinal = state.activeCompletedOrdinal
         activeUsage = state.activeUsage
@@ -101,6 +104,7 @@ public struct CodexAdapter: ProviderAdapter {
             pendingCompletion: pendingCompletion,
             activeNativeID: activeNativeID,
             activeStartedAt: activeStartedAt,
+            activeStartedOrdinal: activeStartedOrdinal,
             activeContextOrdinal: activeContextOrdinal,
             activeCompletedOrdinal: activeCompletedOrdinal,
             activeUsage: activeUsage,
@@ -142,6 +146,7 @@ public struct CodexAdapter: ProviderAdapter {
             } else {
                 rejectedSurface = true
                 verifiedSurface = nil
+                clearLifecycle()
             }
             return []
         }
@@ -171,6 +176,7 @@ public struct CodexAdapter: ProviderAdapter {
             pendingStartedOrdinal = source.ordinal
             activeNativeID = nil
             activeStartedAt = nil
+            activeStartedOrdinal = nil
             activeContextOrdinal = nil
             activeCompletedOrdinal = nil
             activeUsage = Self.zeroUsage
@@ -213,6 +219,7 @@ public struct CodexAdapter: ProviderAdapter {
               context.ordinal > startedOrdinal else { return [] }
         activeNativeID = context.nativeID
         activeStartedAt = startedAt
+        activeStartedOrdinal = startedOrdinal
         activeContextOrdinal = context.ordinal
         activeCompletedOrdinal = nil
         activeUsage = pendingUsage ?? Self.zeroUsage
@@ -251,6 +258,22 @@ public struct CodexAdapter: ProviderAdapter {
             startedAt: startedAt,
             state: .completed
         )]
+    }
+
+    private mutating func clearLifecycle() {
+        pendingStartedAt = nil
+        pendingStartedOrdinal = nil
+        pendingUsage = nil
+        pendingContext = nil
+        pendingCompletion = nil
+        activeNativeID = nil
+        activeStartedAt = nil
+        activeStartedOrdinal = nil
+        activeContextOrdinal = nil
+        activeCompletedOrdinal = nil
+        activeUsage = Self.zeroUsage
+        activeModel = nil
+        activeEffort = nil
     }
 
     private func observation(
@@ -344,6 +367,7 @@ public struct CodexAdapter: ProviderAdapter {
         let activeValues: [Any?] = [
             state.activeNativeID,
             state.activeStartedAt,
+            state.activeStartedOrdinal,
             state.activeContextOrdinal,
         ]
         let activeCount = activeValues.reduce(0) { $0 + ($1 == nil ? 0 : 1) }
@@ -351,6 +375,9 @@ public struct CodexAdapter: ProviderAdapter {
         guard (state.pendingStartedAt == nil) == (state.pendingStartedOrdinal == nil) else {
             return false
         }
+        if let start = state.activeStartedOrdinal,
+           let context = state.activeContextOrdinal,
+           start >= context { return false }
         if let completed = state.activeCompletedOrdinal,
            let context = state.activeContextOrdinal,
            completed <= context { return false }
@@ -400,6 +427,7 @@ public struct CodexAdapter: ProviderAdapter {
         let pendingCompletion: PendingCompletion?
         let activeNativeID: String?
         let activeStartedAt: Int64?
+        let activeStartedOrdinal: Int64?
         let activeContextOrdinal: Int64?
         let activeCompletedOrdinal: Int64?
         let activeUsage: UsageCountersV1
