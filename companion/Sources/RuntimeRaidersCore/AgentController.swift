@@ -257,6 +257,44 @@ public final class AgentController: @unchecked Sendable {
         var version: Int
         var enabled: Bool
         var files: [String: PersistedFileState]
+        var deferredSeedPaths: Set<String>
+
+        private enum CodingKeys: String, CodingKey {
+            case version, enabled, files, deferredSeedPaths
+        }
+
+        init(
+            version: Int,
+            enabled: Bool,
+            files: [String: PersistedFileState],
+            deferredSeedPaths: Set<String> = []
+        ) {
+            self.version = version
+            self.enabled = enabled
+            self.files = files
+            self.deferredSeedPaths = deferredSeedPaths
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decode(Int.self, forKey: .version)
+            enabled = try container.decode(Bool.self, forKey: .enabled)
+            files = try container.decode([String: PersistedFileState].self, forKey: .files)
+            deferredSeedPaths = try container.decodeIfPresent(
+                Set<String>.self,
+                forKey: .deferredSeedPaths
+            ) ?? []
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(version, forKey: .version)
+            try container.encode(enabled, forKey: .enabled)
+            try container.encode(files, forKey: .files)
+            if !deferredSeedPaths.isEmpty {
+                try container.encode(deferredSeedPaths, forKey: .deferredSeedPaths)
+            }
+        }
     }
 
     public typealias Clock = () -> Int64
@@ -363,9 +401,11 @@ public final class AgentController: @unchecked Sendable {
             let existingPaths = Set(files.map(\.path))
             for path in Array(state.files.keys)
                 where state.files[path]?.seeding == true && !existingPaths.contains(path) {
+                state.deferredSeedPaths.insert(path)
                 state.files.removeValue(forKey: path)
                 pendingPaths.remove(path)
             }
+            state.deferredSeedPaths.subtract(existingPaths)
             for file in files where state.files[file.path] == nil {
                 state.files[file.path] = initialFileState(seeding: true)
             }
@@ -423,8 +463,10 @@ public final class AgentController: @unchecked Sendable {
             let files = normalized(existingFiles)
             let existingPaths = Set(files.map(\.path))
             for path in Array(state.files.keys) where !existingPaths.contains(path) {
+                state.deferredSeedPaths.insert(path)
                 state.files.removeValue(forKey: path)
             }
+            state.deferredSeedPaths.subtract(existingPaths)
             for file in files {
                 if var fileState = state.files[file.path] {
                     fileState.seeding = true
@@ -456,7 +498,10 @@ public final class AgentController: @unchecked Sendable {
             }
             let files = normalized(files)
             for file in files where state.files[file.path] == nil {
-                state.files[file.path] = initialFileState(seeding: true)
+                let deferred = state.deferredSeedPaths.remove(file.path) != nil
+                state.files[file.path] = initialFileState(
+                    seeding: deferred || !isAcceptingCollection
+                )
             }
             if !isAcceptingCollection {
                 pendingPaths.formUnion(files.map(\.path))
@@ -990,7 +1035,12 @@ public final class AgentController: @unchecked Sendable {
     }
 
     private static func valid(_ state: PersistedState, surfaces: [RunSurface]) -> Bool {
-        guard state.version == 1, state.files.count <= 16_384 else { return false }
+        guard state.version == 1,
+              state.files.count + state.deferredSeedPaths.count <= 16_384,
+              state.deferredSeedPaths.isDisjoint(with: state.files.keys),
+              state.deferredSeedPaths.allSatisfy({ $0.utf8.count <= 16_384 }) else {
+            return false
+        }
         let expected = Set(surfaces.map(\.rawValue))
         return state.files.allSatisfy { path, file in
             path.utf8.count <= 16_384

@@ -21,8 +21,8 @@ It is not a claim that an installer is signed, published, deployed, or active.
 1. A person creates a Raider and receives a Raider Key.
 2. A one-time enrollment command installs the local companion for that Raider.
 3. The companion observes Run lifecycle and cumulative usage while each Run is
-   open, derives approved metadata locally, and sends signed Run events to the
-   trusted Runtime Raiders server.
+   open, derives approved metadata locally, and sends authenticated Run events to
+   the trusted Runtime Raiders server.
 4. The server deduplicates each event, applies the versioned Raid Power policy,
    and awards usage-based Raid Power as the Run unfolds.
 

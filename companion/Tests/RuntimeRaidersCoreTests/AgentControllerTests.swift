@@ -6,7 +6,7 @@ import XCTest
 final class AgentControllerTests: XCTestCase {
     private let now: Int64 = 1_800_000_000_000
 
-    func testFirstInstallAndNewFilesSeedEOFBeforeObservingFutureAppends() throws {
+    func testFirstInstallSeedsEOFBeforeObservingFutureAppends() throws {
         try withHarness { harness in
             let existing = try harness.makeFile("existing.jsonl", contents: completedRun(nativeID: "DO_NOT_EXPORT_OLD"))
             try harness.controller.install(existingFiles: [existing])
@@ -15,14 +15,37 @@ final class AgentControllerTests: XCTestCase {
             try append(completedRun(nativeID: "future-1"), to: existing)
             try harness.controller.processChangedFiles([existing])
             XCTAssertGreaterThan(try harness.outbox.queuedCount(), 0)
+        }
+    }
 
-            let newFile = try harness.makeFile("new.jsonl", contents: completedRun(nativeID: "DO_NOT_EXPORT_NEW_OLD"))
-            let before = try harness.outbox.queuedCount()
+    func testLiveCreatedFileRetainsPreCallbackLifecycleForLaterCompletion() throws {
+        try withHarness { harness in
+            let boundaryFile = try harness.makeFile("boundary.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [boundaryFile])
+
+            let newFile = try harness.makeFile(
+                "new-live.jsonl",
+                contents: runPrefix(nativeID: "live-created-run")
+            )
             try harness.controller.processChangedFiles([newFile])
-            XCTAssertEqual(try harness.outbox.queuedCount(), before)
-            try append(completedRun(nativeID: "future-2"), to: newFile)
+            try append(runSuffix(), to: newFile)
             try harness.controller.processChangedFiles([newFile])
-            XCTAssertGreaterThan(try harness.outbox.queuedCount(), before)
+
+            let completed = try XCTUnwrap(
+                try harness.outbox.records(limit: 100).map(\.event).last {
+                    $0.state == .completed
+                }
+            )
+            XCTAssertEqual(
+                completed.usage,
+                UsageCountersV1(
+                    input: 3,
+                    output: 1,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    reasoningOutput: 0
+                )
+            )
         }
     }
 
@@ -674,15 +697,17 @@ final class AgentControllerTests: XCTestCase {
             try FileManager.default.moveItem(at: file, to: parked)
 
             try harness.controller.turnOn(existingFiles: [])
+            let restarted = try harness.makeController()
+            try restarted.install(existingFiles: [])
             try FileManager.default.moveItem(at: parked, to: file)
-            try harness.controller.processChangedFiles([file])
-            while harness.controller.hasPendingReadWork {
-                try harness.controller.continuePendingWork()
+            try restarted.processChangedFiles([file])
+            while restarted.hasPendingReadWork {
+                try restarted.continuePendingWork()
             }
             XCTAssertEqual(try harness.outbox.queuedCount(), 0)
 
             try append(completedRun(nativeID: "future-after-reappear"), to: file)
-            try harness.controller.processChangedFiles([file])
+            try restarted.processChangedFiles([file])
             XCTAssertGreaterThan(try harness.outbox.queuedCount(), 0)
         }
     }
@@ -895,7 +920,7 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
-    func testWatcherStartRescanClosesStartupAndOnScanGaps() throws {
+    func testWatcherStartRescanCollectsFilesCreatedAfterAcceptedBoundaries() throws {
         for startsEnabled in [true, false] {
             try withHarness { harness in
                 let existing = try harness.makeFile("existing.jsonl", contents: Data())
@@ -910,7 +935,7 @@ final class AgentControllerTests: XCTestCase {
 
                 let newFile = harness.providerRoot.appendingPathComponent("created-in-gap.jsonl")
                 let existingFuture = completedRun(nativeID: "existing-created-in-gap")
-                let newHistory = completedRun(nativeID: "DO_NOT_EXPORT_NEW_FILE_BOUNDARY")
+                let newLiveRun = completedRun(nativeID: "new-file-after-boundary")
                 let callbackFinished = DispatchSemaphore(value: 0)
                 let controller = harness.controller
                 let queue = DispatchQueue(
@@ -921,7 +946,7 @@ final class AgentControllerTests: XCTestCase {
                     processingQueue: queue,
                     afterStreamStarted: {
                         try! appendProviderData(existingFuture, to: existing)
-                        try! newHistory.write(to: newFile)
+                        try! newLiveRun.write(to: newFile)
                     }
                 ) { files in
                     try? controller.processChangedFiles(files)
@@ -944,7 +969,7 @@ final class AgentControllerTests: XCTestCase {
                 XCTAssertEqual(
                     try harness.outbox.records(limit: 100)
                         .filter { $0.event.state == .completed }.count,
-                    1
+                    2
                 )
 
                 try append(
@@ -958,7 +983,7 @@ final class AgentControllerTests: XCTestCase {
                 XCTAssertEqual(
                     try harness.outbox.records(limit: 100)
                         .filter { $0.event.state == .completed }.count,
-                    2
+                    3
                 )
             }
         }
