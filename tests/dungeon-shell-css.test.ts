@@ -64,4 +64,9 @@ describe('Runtime Raiders dungeon-shell palette', () => {
     expect(css).toMatch(/\.brand-companion\{[^}]*font-weight:700/);
     expect(css).toMatch(/@media \(max-width:480px\)\{[\s\S]*?\.brand\{[^}]*font-size:18px/);
   });
+
+  it('stacks the header and lays out direct navigation labels in two columns at 320px', () => {
+    expect(css).toMatch(/@media \(max-width:360px\)\{[\s\S]*?\.bar\{[^}]*flex-direction:column[^}]*align-items:flex-start/);
+    expect(css).toMatch(/@media \(max-width:360px\)\{[\s\S]*?\.bar nav\{[^}]*display:grid[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)[^}]*width:100%/);
+  });
 });

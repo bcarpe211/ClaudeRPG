@@ -67,11 +67,12 @@ describe('Runtime Raiders brand copy', () => {
   it('renders the Runtime Raiders title suffix and global wordmark', async () => {
     const app = createApp({ db: openDb(':memory:'), config: loadConfig({}) });
     const res = await request(app).get('/register');
-    const wordmark = res.text.match(/<a class="brand" href="\/">([\s\S]*?)<\/a>/)?.[1];
+    const wordmark = res.text.match(/<a\b(?=[^>]*\bclass="brand")(?=[^>]*\baria-label="Runtime Raiders")[^>]*>([\s\S]*?)<\/a>/)?.[1] ?? '';
 
     expect(res.status).toBe(200);
     expect(res.text).toContain('<title>Register — Runtime Raiders</title>');
-    expect(wordmark).toContain('Runtime Raiders');
+    expect(wordmark).toContain('<strong class="brand-primary">RUNTIME</strong>');
+    expect(wordmark).toContain('<span class="brand-companion">RAIDERS</span>');
     expect(wordmark).not.toContain('CLAUDE');
   });
 
