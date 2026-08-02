@@ -18,10 +18,10 @@
   <% if (!player || !shop) { %>
     <section class="bazaar-login">
       <p class="dye-kicker">The merchant needs a name</p>
-      <h2>Choose your character</h2>
+      <h2>Choose your Raider</h2>
       <% if (error) { %><p class="err"><%= error %></p><% } %>
-      <p>The ledger only opens for a character whose dyes it can keep safe.</p>
-      <a class="btn btn-gold" href="/character">Open character login</a>
+      <p>The ledger only opens for a Raider whose dyes it can keep safe.</p>
+      <a class="btn btn-gold" href="/character">Open Raider login</a>
     </section>
   <% } else { %>
     <% if (shop.nextOffer) { const offer = shop.nextOffer; %>
@@ -169,14 +169,14 @@
             <span aria-hidden="true">⚠</span>
             <p>Please do not feed, pet, or attempt to purchase the treasure chest. It has already eaten one inventory ledger.</p>
           </div>
-          <p class="bazaar-wardrobe">Your completed Dye Wheel still lives in the <b>Wardrobe</b> on your character page.</p>
+          <p class="bazaar-wardrobe">Your completed Dye Wheel still lives in the <b>Wardrobe</b> on your Raider page.</p>
         </div>
       </section>
     <% } %>
   <% } %>
 
   <% if (player && shop) { %>
-    <aside class="adventurer-ledger" aria-label="Adventurer Ledger">
+    <aside class="adventurer-ledger" aria-label="Raider Ledger">
       <div class="ledger-stats">
         <div class="ledger-stat ledger-gold">
           <span>Current gold</span>
@@ -195,7 +195,7 @@
           <strong>Loot Boxes · Pets · Equipment</strong>
         </div>
       </div>
-      <a class="btn btn-ghost ledger-return" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Return to Character</a>
+      <a class="btn btn-ghost ledger-return" href="/character?token=<%= encodeURIComponent(player.auth_token) %>">Return to Raider Hub</a>
     </aside>
   <% } %>
 </div>

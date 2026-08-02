@@ -139,7 +139,7 @@ export function registerShopRoutes(app: Express, { db, config, slotmapsDir }: Ap
       ? req.query.result as PurchaseResultCode
       : undefined;
     const player = token ? getPlayerByToken(db, token) : undefined;
-    const error = token && !player ? 'No character found for that token.' : undefined;
+    const error = token && !player ? 'No Raider found.' : undefined;
     const shop = player
       ? buildShopViewModel(
         db,

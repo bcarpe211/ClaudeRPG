@@ -19,11 +19,16 @@ function ctx(gold = 0) {
 }
 
 describe('Bazaar', () => {
-  it('prompts for character login without a token', async () => {
+  it('prompts for Raider login without a token', async () => {
     const { app } = ctx();
     const res = await request(app).get('/shop');
     expect(res.status).toBe(200);
-    expect(res.text).toContain('Choose your character');
+    expect(res.text).toContain('Choose your Raider');
+    expect(res.text).toContain('The ledger only opens for a Raider whose dyes it can keep safe.');
+    expect(res.text).toContain('Open Raider login');
+    expect(res.text).not.toContain('Choose your character');
+    expect(res.text).not.toContain('for a character whose dyes');
+    expect(res.text).not.toContain('Open character login');
     expect(res.text).not.toContain('name="sku"');
   });
 
@@ -32,8 +37,10 @@ describe('Bazaar', () => {
     const res = await request(app).get('/shop').query({ token: 'not-a-character' });
 
     expect(res.status).toBe(404);
-    expect(res.text).toContain('Choose your character');
-    expect(res.text).toContain('No character found for that token.');
+    expect(res.text).toContain('Choose your Raider');
+    expect(res.text).toContain('No Raider found.');
+    expect(res.text).not.toContain('Choose your character');
+    expect(res.text).not.toContain('No character found for that token.');
     expect(res.text).not.toContain('name="sku"');
   });
 
@@ -121,7 +128,7 @@ describe('Bazaar', () => {
     expect(loginPage.text).not.toContain('data-purchase-effect');
   });
 
-  it('renders the compact Gilded Mimic offer and keeps navigation in the Adventurer Ledger', async () => {
+  it('renders the compact Gilded Mimic offer and keeps navigation in the Raider Ledger', async () => {
     const { db, app, player } = ctx(7_000_000);
     purchase(db, player.id, 'cosmetic_wheel_t1', 1_500_000, 10);
 
@@ -133,6 +140,7 @@ describe('Bazaar', () => {
     expect(res.text).toContain('Permanent Wardrobe Upgrade — Tier 2');
     expect(res.text.match(/class="bazaar-product"/g)).toHaveLength(1);
     expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
+    expect(ledger).toContain('aria-label="Raider Ledger"');
     expect(res.text).toContain('5,500,000g');
     expect(res.text).toContain('Wardrobe Tier 1');
     expect(ledger).toContain('Inventory');
@@ -140,9 +148,11 @@ describe('Bazaar', () => {
     expect(ledger).toContain('Potions');
     expect(ledger).toContain('Loot Boxes');
     expect(ledger).toContain('Pets');
-    expect(product).not.toContain('Return to Character');
-    expect(ledger.match(/Return to Character/g)).toHaveLength(1);
-    expect(res.text.match(/Return to Character/g)).toHaveLength(1);
+    expect(product).not.toContain('Return to Raider Hub');
+    expect(ledger.match(/Return to Raider Hub/g)).toHaveLength(1);
+    expect(res.text.match(/Return to Raider Hub/g)).toHaveLength(1);
+    expect(res.text).not.toContain('Adventurer Ledger');
+    expect(res.text).not.toContain('Return to Character');
     for (const asset of ['potion.png', 'sword.png', 'shield.png', 'coins.png', 'gem_purple.png']) {
       expect(res.text).toContain(`/static/landing/${asset}`);
     }
@@ -362,7 +372,8 @@ describe('Bazaar', () => {
     expect(res.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
     expect(res.text).toContain('Wardrobe Tier 3');
     expect(res.text).toContain('Mastered');
-    expect(res.text.match(/Return to Character/g)).toHaveLength(1);
+    expect(res.text.match(/Return to Raider Hub/g)).toHaveLength(1);
+    expect(res.text).not.toContain('Return to Character');
   });
 
   it('keeps a sold-out potion visible and disables its buy action until midnight', async () => {
@@ -418,6 +429,8 @@ describe('Bazaar', () => {
     expect(response.text).toContain('Potion stock added to your inventory.');
     expect(response.text).toContain('class="bazaar-closed"');
     expect(response.text).toContain('The Bazaar is Closed');
+    expect(response.text).toContain('on your Raider page.');
+    expect(response.text).not.toContain('on your character page.');
     expect(response.text).not.toContain('id="daily-potions-title"');
     expect(response.text.match(/class="adventurer-ledger"/g)).toHaveLength(1);
   });
