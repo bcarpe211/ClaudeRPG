@@ -94,8 +94,8 @@ private final class DaemonRuntime: @unchecked Sendable {
     }
 
     func run() throws {
-        try control.start { [weak self] command in
-            self?.handle(command) ?? ControlResponse(ok: false, message: "daemon unavailable")
+        try control.startRequests { [weak self] request in
+            self?.handle(request) ?? ControlResponse(ok: false, message: "daemon unavailable")
         }
         do {
             let files = try watcher.discoverProviderFiles()
@@ -157,8 +157,8 @@ private final class DaemonRuntime: @unchecked Sendable {
         }
     }
 
-    private func handle(_ command: ControlCommand) -> ControlResponse {
-        switch command {
+    private func handle(_ request: ControlRequest) -> ControlResponse {
+        switch request.command {
         case .daemon:
             return ControlResponse(ok: false, message: "daemon is already running")
         case .on:
@@ -211,7 +211,10 @@ private final class DaemonRuntime: @unchecked Sendable {
                 serverHealthy: Self.serverHealthy(),
                 signingValid: Self.processSigningValid(),
                 enrollmentAllowedSurfaces: inputs.surfaces,
-                environment: ProcessInfo.processInfo.environment
+                claudeOTelEnvironmentPresent: DoctorEnvironment.combinedPresence(
+                    invocationPresent: request.claudeOTelEnvironmentPresent == true,
+                    daemonEnvironment: ProcessInfo.processInfo.environment
+                )
             )
             return ControlResponse(ok: true, message: report.description)
         case .uninstall:
@@ -273,7 +276,14 @@ private func run() throws {
     }
     let paths = AgentPaths()
     do {
-        let response = try ControlSocketClient.send(command, to: paths.controlSocket)
+        let request = ControlRequest.invocation(
+            command: command,
+            environment: ProcessInfo.processInfo.environment
+        )
+        let response = try ControlSocketClient.send(
+            request: request,
+            to: paths.controlSocket
+        )
         print(response.message)
         if !response.ok { Foundation.exit(EXIT_FAILURE) }
     } catch {
@@ -332,13 +342,6 @@ private func localDoctor(paths: AgentPaths) -> DoctorReport {
     let enrollment = try? EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
-    let knownClaudeOTelVariables: Set<String> = [
-        "CLAUDE_CODE_ENABLE_TELEMETRY",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_HEADERS",
-        "OTEL_METRICS_EXPORTER",
-        "OTEL_LOGS_EXPORTER",
-    ]
     let environment = ProcessInfo.processInfo.environment
     let codexRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex/sessions", isDirectory: true)
@@ -347,8 +350,8 @@ private func localDoctor(paths: AgentPaths) -> DoctorReport {
         serverHealthy: DaemonRuntime.serverHealthy(),
         signingValid: DaemonRuntime.processSigningValid(),
         enrollmentMatchesCompiledAdapters: enrollment != nil,
-        claudeOTelEnvironmentPresent: !knownClaudeOTelVariables.isDisjoint(
-            with: environment.keys
+        claudeOTelEnvironmentPresent: DoctorEnvironment.claudeOTelPresent(
+            in: environment
         )
     )
 }

@@ -13,6 +13,36 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
     case uninstall
 }
 
+public struct ControlRequest: Codable, Equatable, Sendable {
+    public let command: ControlCommand
+    public let claudeOTelEnvironmentPresent: Bool?
+
+    public init(
+        command: ControlCommand,
+        claudeOTelEnvironmentPresent: Bool? = nil
+    ) {
+        self.command = command
+        self.claudeOTelEnvironmentPresent = claudeOTelEnvironmentPresent
+    }
+
+    public static func invocation(
+        command: ControlCommand,
+        environment: [String: String]
+    ) -> ControlRequest {
+        ControlRequest(
+            command: command,
+            claudeOTelEnvironmentPresent: command == .doctor
+                ? DoctorEnvironment.claudeOTelPresent(in: environment)
+                : nil
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case claudeOTelEnvironmentPresent = "claude_otel_environment_present"
+    }
+}
+
 public struct ControlResponse: Codable, Equatable, Sendable {
     public let ok: Bool
     public let message: String
@@ -33,12 +63,28 @@ public enum ControlSocketError: Error, Equatable {
 
 public enum ControlSocketProtocol {
     public static func encode(_ command: ControlCommand, maximumFrameBytes: Int) throws -> Data {
-        let data = Data((command.rawValue + "\n").utf8)
+        try encode(
+            ControlRequest(
+                command: command,
+                claudeOTelEnvironmentPresent: command == .doctor ? false : nil
+            ),
+            maximumFrameBytes: maximumFrameBytes
+        )
+    }
+
+    public static func encode(_ request: ControlRequest, maximumFrameBytes: Int) throws -> Data {
+        guard valid(request) else { throw ControlSocketError.invalidFrame }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard var data = try? encoder.encode(request) else {
+            throw ControlSocketError.invalidFrame
+        }
+        data.append(0x0A)
         guard data.count <= maximumFrameBytes else { throw ControlSocketError.frameTooLarge }
         return data
     }
 
-    public static func decode(_ frame: Data, maximumFrameBytes: Int) throws -> ControlCommand {
+    public static func decode(_ frame: Data, maximumFrameBytes: Int) throws -> ControlRequest {
         guard !frame.isEmpty, frame.count <= maximumFrameBytes else {
             throw frame.count > maximumFrameBytes
                 ? ControlSocketError.frameTooLarge : ControlSocketError.invalidFrame
@@ -47,16 +93,31 @@ public enum ControlSocketProtocol {
         if body.last == 0x0A { body.removeLast() }
         guard !body.isEmpty,
               !body.contains(0x0A),
-              let value = String(data: body, encoding: .utf8),
-              let command = ControlCommand(rawValue: value) else {
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let fields = object as? [String: Any],
+              let request = try? JSONDecoder().decode(ControlRequest.self, from: body),
+              valid(request) else {
             throw ControlSocketError.invalidFrame
         }
-        return command
+        let expectedFields: Set<String> = request.command == .doctor
+            ? ["command", "claude_otel_environment_present"]
+            : ["command"]
+        guard Set(fields.keys) == expectedFields else {
+            throw ControlSocketError.invalidFrame
+        }
+        return request
+    }
+
+    private static func valid(_ request: ControlRequest) -> Bool {
+        request.command == .doctor
+            ? request.claudeOTelEnvironmentPresent != nil
+            : request.claudeOTelEnvironmentPresent == nil
     }
 }
 
 public final class ControlSocketServer: @unchecked Sendable {
     public typealias Handler = @Sendable (ControlCommand) -> ControlResponse
+    public typealias RequestHandler = @Sendable (ControlRequest) -> ControlResponse
 
     private let socketURL: URL
     private let maximumFrameBytes: Int
@@ -64,7 +125,7 @@ public final class ControlSocketServer: @unchecked Sendable {
     private let lock = NSLock()
     private var descriptor: Int32 = -1
     private var lifetimeLockDescriptor: Int32 = -1
-    private var handler: Handler?
+    private var handler: RequestHandler?
 
     public init(socketURL: URL, maximumFrameBytes: Int = 4_096) {
         self.socketURL = socketURL.standardizedFileURL
@@ -72,6 +133,10 @@ public final class ControlSocketServer: @unchecked Sendable {
     }
 
     public func start(handler: @escaping Handler) throws {
+        try startRequests { request in handler(request.command) }
+    }
+
+    public func startRequests(handler: @escaping RequestHandler) throws {
         let parent = socketURL.deletingLastPathComponent()
         try Self.createPrivateDirectory(parent)
         let lifetimeLock = try Self.acquireLifetimeLock(
@@ -158,14 +223,14 @@ public final class ControlSocketServer: @unchecked Sendable {
         let response: ControlResponse
         do {
             let frame = try Self.readFrame(client, maximumFrameBytes: maximumFrameBytes)
-            let command = try ControlSocketProtocol.decode(
+            let request = try ControlSocketProtocol.decode(
                 frame,
                 maximumFrameBytes: maximumFrameBytes
             )
             guard let handler = lock.withLock({ self.handler }) else {
                 throw ControlSocketError.connectionClosed
             }
-            response = handler(command)
+            response = handler(request)
         } catch {
             response = ControlResponse(ok: false, message: "invalid control request")
         }
@@ -328,6 +393,21 @@ public enum ControlSocketClient {
         to socketURL: URL,
         maximumFrameBytes: Int = 4_096
     ) throws -> ControlResponse {
+        try send(
+            request: ControlRequest(
+                command: command,
+                claudeOTelEnvironmentPresent: command == .doctor ? false : nil
+            ),
+            to: socketURL,
+            maximumFrameBytes: maximumFrameBytes
+        )
+    }
+
+    public static func send(
+        request: ControlRequest,
+        to socketURL: URL,
+        maximumFrameBytes: Int = 4_096
+    ) throws -> ControlResponse {
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ControlSocketServer.currentPOSIXError() }
         try ControlSocketServer.disableSIGPIPE(descriptor)
@@ -339,7 +419,7 @@ public enum ControlSocketClient {
             }
         }
         try ControlSocketServer.writeAll(
-            ControlSocketProtocol.encode(command, maximumFrameBytes: maximumFrameBytes),
+            ControlSocketProtocol.encode(request, maximumFrameBytes: maximumFrameBytes),
             to: descriptor
         )
         let data = try ControlSocketServer.readFrame(

@@ -494,19 +494,30 @@ public final class AgentController: @unchecked Sendable {
         enrollmentAllowedSurfaces: [RunSurface],
         environment: [String: String]
     ) -> DoctorReport {
-        let knownClaudeOTelVariables: Set<String> = [
-            "CLAUDE_CODE_ENABLE_TELEMETRY",
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
-            "OTEL_EXPORTER_OTLP_HEADERS",
-            "OTEL_METRICS_EXPORTER",
-            "OTEL_LOGS_EXPORTER",
-        ]
+        doctor(
+            codexRootReadable: codexRootReadable,
+            serverHealthy: serverHealthy,
+            signingValid: signingValid,
+            enrollmentAllowedSurfaces: enrollmentAllowedSurfaces,
+            claudeOTelEnvironmentPresent: DoctorEnvironment.claudeOTelPresent(
+                in: environment
+            )
+        )
+    }
+
+    public func doctor(
+        codexRootReadable: Bool,
+        serverHealthy: Bool,
+        signingValid: Bool,
+        enrollmentAllowedSurfaces: [RunSurface],
+        claudeOTelEnvironmentPresent: Bool
+    ) -> DoctorReport {
         return DoctorReport(
             codexRootReadable: codexRootReadable,
             serverHealthy: serverHealthy,
             signingValid: signingValid,
             enrollmentMatchesCompiledAdapters: Set(enrollmentAllowedSurfaces) == Set(registry.surfaces),
-            claudeOTelEnvironmentPresent: !knownClaudeOTelVariables.isDisjoint(with: environment.keys)
+            claudeOTelEnvironmentPresent: claudeOTelEnvironmentPresent
         )
     }
 
