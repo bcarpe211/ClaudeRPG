@@ -51,20 +51,22 @@ ADMIN_PASSWORD=yourpassword npm run dev    # auto-reload
 ADMIN_PASSWORD=yourpassword npm start
 ```
 
-To run the undeployed Runtime Raiders candidate locally, use an explicit
-cutover timestamp and the Codex-only surface allowlist:
+To run the **server-only synthetic candidate** locally, use a past cutover
+timestamp and the Codex-only surface allowlist:
 
 ```bash
 SCORING_MODE=runtime-raiders \
-RUN_SCORING_CUTOVER_AT=1800000000000 \
+RUN_SCORING_CUTOVER_AT=1700000000000 \
 RUN_ENABLED_SURFACES=codex_desktop,codex_cli \
 RAID_POWER_POLICY_PATH=config/raid-power-policy-v1.json \
 PUBLIC_URL=http://localhost:8080 \
 ADMIN_PASSWORD=yourpassword npm start
 ```
 
-This is a local candidate command, not a production cutover. The legacy OTLP
-default remains in effect until explicit approval.
+This starts only the local server candidate for synthetic route testing; it is
+not a companion enrollment command or a production cutover. The companion
+enforces its production-origin guard and therefore must not be pointed at this
+local URL. The legacy OTLP default remains in effect until explicit approval.
 Then open:
 - `http://localhost:8080/` — register a character
 - `http://localhost:8080/character` — log in with your token

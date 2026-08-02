@@ -40,7 +40,7 @@ must remain absent and rejected.
 | --- | --- | --- | --- |
 | short | 1 / server fixture verified | 1 / server fixture verified | 2026-08-02T07:08:34Z |
 | long | 1 / server fixture verified | 1 / server fixture verified | 2026-08-02T07:08:34Z |
-| failed or cancelled | 2 / fixture verified | 2 / fixture verified | 2026-08-02T06:37:20Z |
+| failed or cancelled | 2 / observed open; no terminal support | 2 / observed open; no terminal support | 2026-08-02T06:37:20Z |
 | parallel | 2 / fixture verified | 2 / fixture verified | 2026-08-02T06:37:20Z |
 | duplicate surface | 1 / fixture verified | 1 / fixture verified | 2026-08-02T06:37:20Z |
 | collector restart | 1 / shared controller verified | 1 / shared controller verified | 2026-08-02T06:37:20Z |
@@ -49,6 +49,11 @@ must remain absent and rejected.
 | on | 1 / shared controller verified | 1 / shared controller verified | 2026-08-02T06:37:20Z |
 | status: enabled surfaces only | 1 / registry verified | 1 / registry verified | 2026-08-02T06:37:20Z |
 | reserved Claude/Omp rejection | 0 accepted / server verified | 0 accepted / server verified | 2026-08-02T07:08:34Z |
+
+Synthetic failed/cancelled labels are recorded only as conservative open Runs:
+the current Codex contract has no verified terminal record for either outcome.
+They are not evidence of failed/cancelled completion support or completion
+credit.
 
 ## Release blockers and non-automated gates
 
