@@ -340,9 +340,14 @@ describe('ingestRunEvents', () => {
     expect(eventRows().map((row) => row.awarded_delta)).toEqual([100, 14, 0]);
   });
 
-  it('does not award completion for a completed Run without positive normalized usage', () => {
+  it('does not award completion or duration for a completed Run without positive normalized usage', () => {
+    activateGoldPotion(NOW - 1_000);
+    const startedAt = CUTOVER + 1;
     const completed = event({
       state: 'completed',
+      started_at_ms: startedAt,
+      event_time_ms: startedAt + 7 * 24 * 60 * 60_000,
+      observed_at_ms: startedAt + 7 * 24 * 60 * 60_000,
       usage: { input: 0, cache_read: 10_000 },
     });
 
@@ -352,7 +357,16 @@ describe('ingestRunEvents', () => {
       state: 'completed',
       awarded_usage_credit: 0,
       awarded_completion_credit: 0,
+      awarded_duration_credit: 0,
+      raid_power: 0,
     });
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+    expect(tokenRows()).toEqual([]);
+    expect(db.prepare('SELECT * FROM potion_work_events').all()).toEqual([]);
   });
 
   it.each(['failed', 'cancelled'] as const)(
@@ -497,9 +511,13 @@ describe('ingestRunEvents', () => {
 
   it('permanently suppresses completion observed while disabled before later usage', () => {
     updatePlayer(db, player.id, { disabled: 1 });
+    const startedAt = CUTOVER + 1;
     const disabledCompletion = event({
       sequence: 1,
       state: 'completed',
+      started_at_ms: startedAt,
+      event_time_ms: startedAt + 7 * 24 * 60 * 60_000,
+      observed_at_ms: startedAt + 7 * 24 * 60 * 60_000,
       usage: { input: 0, cache_read: 10_000 },
     });
 
@@ -509,6 +527,7 @@ describe('ingestRunEvents', () => {
       state: 'completed',
       awarded_usage_credit: 0,
       awarded_completion_credit: 10,
+      awarded_duration_credit: 50,
       raid_power: 0,
     });
     expect(tokenRows()).toEqual([]);
@@ -525,6 +544,7 @@ describe('ingestRunEvents', () => {
     expect(runRow()).toMatchObject({
       awarded_usage_credit: 10,
       awarded_completion_credit: 10,
+      awarded_duration_credit: 50,
       raid_power: 10,
     });
     expect(eventRows().map((row) => row.awarded_delta)).toEqual([0, 10]);

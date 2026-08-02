@@ -260,7 +260,9 @@ export function ingestRunEvents(
       const completionDelta = targetCompletionCredit - run.awarded_completion_credit;
 
       let targetDurationCredit = run.awarded_duration_credit;
-      if (state === 'completed' && terminalAt !== null) {
+      if (state === 'completed'
+        && terminalAt !== null
+        && (targetUsageCredit > 0 || player.disabled)) {
         targetDurationCredit = Math.max(
           targetDurationCredit,
           safeNonNegativeInteger(
