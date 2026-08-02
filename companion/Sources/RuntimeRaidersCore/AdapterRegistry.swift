@@ -30,6 +30,23 @@ public final class ApprovedProviderFile: @unchecked Sendable {
             maxBytes: maxBytes
         )
     }
+
+    func snapshot() throws -> (identity: JSONLFileIdentity, size: Int64) {
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard metadata.st_mode & S_IFMT == S_IFREG, metadata.st_size >= 0 else {
+            throw JSONLReaderError.unsupportedFile
+        }
+        return (
+            JSONLFileIdentity(
+                device: UInt64(metadata.st_dev),
+                inode: UInt64(metadata.st_ino)
+            ),
+            Int64(metadata.st_size)
+        )
+    }
 }
 
 public final class AdapterRegistry: @unchecked Sendable {

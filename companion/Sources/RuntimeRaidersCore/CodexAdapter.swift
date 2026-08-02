@@ -116,6 +116,19 @@ public struct CodexAdapter: ProviderAdapter {
         return try encoder.encode(state)
     }
 
+    mutating func prepareForSeeding() {
+        clearLifecycle()
+    }
+
+    mutating func consumeDuringSeeding(
+        line: Data,
+        source: ProviderRecordSource,
+        observedAt: Int64
+    ) {
+        _ = consume(line: line, source: source, observedAt: observedAt)
+        clearLifecycle()
+    }
+
     public mutating func consume(
         line: Data,
         source: ProviderRecordSource,

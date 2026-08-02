@@ -7,9 +7,14 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "RuntimeRaidersCore", targets: ["RuntimeRaidersCore"]),
+        .executable(name: "raiders", targets: ["RuntimeRaidersCLI"]),
     ],
     targets: [
         .target(name: "RuntimeRaidersCore"),
+        .executableTarget(
+            name: "RuntimeRaidersCLI",
+            dependencies: ["RuntimeRaidersCore"]
+        ),
         .testTarget(
             name: "RuntimeRaidersCoreTests",
             dependencies: ["RuntimeRaidersCore"]
