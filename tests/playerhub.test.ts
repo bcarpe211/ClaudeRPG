@@ -97,6 +97,62 @@ function seedRun(playerId: number, input: {
 }
 
 describe('player hub state', () => {
+  it.each([
+    {
+      label: 'empty metadata',
+      model: '',
+      effort: '',
+      expectedModel: 'Unknown',
+      expectedEffort: 'Unknown',
+    },
+    {
+      label: 'whitespace-only metadata',
+      model: ' \t ',
+      effort: ' \n ',
+      expectedModel: 'Unknown',
+      expectedEffort: 'Unknown',
+    },
+    {
+      label: 'nonempty literal metadata',
+      model: ' gpt-literal ',
+      effort: ' high ',
+      expectedModel: ' gpt-literal ',
+      expectedEffort: ' high ',
+    },
+  ])('normalizes missing Run model and effort while preserving $label', ({
+    model,
+    effort,
+    expectedModel,
+    expectedEffort,
+  }) => {
+    const player = createPlayer(
+      db,
+      { name: 'Metadata Reader', class_key: 'wizard', gender: 'M' },
+      now - 20_000,
+    );
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'e'.repeat(64), now - 20_000);
+    seedRun(player.id, {
+      runKey: 'f'.repeat(64),
+      updatedAt: now - 1_000,
+      model,
+      effort,
+      raidPower: 1,
+    });
+
+    const hub = buildPlayerHubViewModel(
+      db,
+      getPlayerById(db, player.id)!,
+      now,
+      timeZone,
+      { spritesDir: '/sprites', slotmapsDir: '/slotmaps', publicUrl: 'https://example.test' },
+    );
+
+    expect(hub.latestRun?.model).toBe(expectedModel);
+    expect(hub.latestRun?.effort).toBe(expectedEffort);
+  });
+
   it('exposes parallel Runs, newest safe details, collector status, and Today Raid Power', () => {
     const player = createPlayer(
       db,

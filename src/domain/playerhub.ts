@@ -115,6 +115,10 @@ function configuredNumber(
   return Number.isFinite(value) ? value : fallback;
 }
 
+function displayRunMetadata(value: string | null | undefined): string {
+  return value?.trim() ? value : 'Unknown';
+}
+
 function productEffectCopy(
   config: PotionConfiguration,
   product: ConsumableProduct,
@@ -331,8 +335,8 @@ export function buildPlayerHubViewModel(
     latestRun: run ? {
       provider: run.provider,
       surface: run.surface,
-      model: run.model ?? 'Unknown',
-      effort: run.effort ?? 'Unknown',
+      model: displayRunMetadata(run.model),
+      effort: displayRunMetadata(run.effort),
       state: run.state,
       elapsedMs: Math.max(0, (run.terminalAt ?? run.lastEventAt) - run.startedAt),
       nativeUsage: {

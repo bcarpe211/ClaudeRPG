@@ -156,6 +156,71 @@ describe('character sheet', () => {
     expect(response.text).not.toMatch(/effort[^<]*(rank|rarity|multiplier)/i);
   });
 
+  it.each([
+    {
+      label: 'empty metadata',
+      model: '',
+      effort: '',
+      expectedModel: 'Unknown',
+      expectedEffort: 'Unknown',
+    },
+    {
+      label: 'whitespace-only metadata',
+      model: ' \t ',
+      effort: ' \n ',
+      expectedModel: 'Unknown',
+      expectedEffort: 'Unknown',
+    },
+    {
+      label: 'nonempty literal metadata',
+      model: ' gpt-literal ',
+      effort: ' high ',
+      expectedModel: ' gpt-literal ',
+      expectedEffort: ' high ',
+    },
+  ])('renders safe Run Details fallbacks while preserving $label', async ({
+    model,
+    effort,
+    expectedModel,
+    expectedEffort,
+  }) => {
+    const observedAt = Date.now() - 100;
+    const player = createPlayer(
+      db,
+      { name: 'Metadata Raider', class_key: 'ranger', gender: 'F' },
+      observedAt - 20_000,
+    );
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'd'.repeat(64), observedAt - 20_000);
+    db.prepare(
+      `INSERT INTO runs
+        (player_id, provider, surface, run_key, state, started_at_ms,
+         terminal_at_ms, last_event_at_ms, last_observed_at_ms, usage_input,
+         usage_output, usage_cache_read, usage_cache_write,
+         usage_reasoning_output, latest_model, latest_effort, policy_version,
+         raid_power, created_at, updated_at)
+       VALUES (?, 'codex', 'codex_desktop', ?, 'open', ?, NULL, ?, ?,
+         1, 2, 3, 4, 5, ?, ?, 'raid-power-v1', 1, ?, ?)`,
+    ).run(
+      player.id,
+      'e'.repeat(64),
+      observedAt - 5_000,
+      observedAt,
+      observedAt,
+      model,
+      effort,
+      observedAt - 5_000,
+      observedAt,
+    );
+
+    const response = await request(app).get('/character').query({ token: player.auth_token });
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain(`<dt>Model</dt><dd>${expectedModel}</dd>`);
+    expect(response.text).toContain(`<dt>Effort</dt><dd>${expectedEffort}</dd>`);
+  });
+
   it('renders owned potion quantity as unavailable when current tuning is invalid', async () => {
     const player = createPlayer(
       db,
