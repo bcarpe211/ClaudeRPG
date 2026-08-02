@@ -477,6 +477,114 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testCapturedTailRewriteRepinsCurrentEOFBeforeScoringExtensions() throws {
+        try withHarness(readLimitBytes: 64) { harness in
+            let metadata = lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ])
+            var original = metadata
+            original.append(completedRun(nativeID: "old-history"))
+            let file = try harness.makeFile("captured-tail-rewrite.jsonl", contents: original)
+
+            try harness.controller.install(existingFiles: [file])
+            XCTAssertTrue(harness.controller.hasPendingSeedWork)
+
+            var rewritten = metadata
+            rewritten.append(completedRun(nativeID: "new-history"))
+            rewritten.append(completedRun(nativeID: "extension-run"))
+            XCTAssertEqual(original.prefix(64), rewritten.prefix(64))
+            XCTAssertGreaterThan(rewritten.count, original.count)
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: rewritten)
+            try handle.close()
+
+            var callbacks = 0
+            while harness.controller.hasPendingReadWork, callbacks < 100 {
+                try harness.controller.continuePendingWork()
+                callbacks += 1
+            }
+            XCTAssertLessThan(callbacks, 100)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+
+            try append(
+                turnWithoutSessionMeta(nativeID: "future-after-tail-repin"),
+                to: file
+            )
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+            try harness.controller.processChangedFiles([file])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+        }
+    }
+
+    func testCapturedTailAllowsAppendOnlyGrowthAfterBoundaryCapture() throws {
+        try withHarness(readLimitBytes: 64) { harness in
+            let file = try harness.makeFile(
+                "captured-tail-append.jsonl",
+                contents: completedRun(nativeID: "old-history")
+            )
+            try harness.controller.install(existingFiles: [file])
+            XCTAssertTrue(harness.controller.hasPendingSeedWork)
+
+            try append(
+                completedRun(nativeID: "append-only-future"),
+                to: file
+            )
+            var callbacks = 0
+            while harness.controller.hasPendingReadWork, callbacks < 100 {
+                try harness.controller.continuePendingWork()
+                callbacks += 1
+            }
+
+            XCTAssertLessThan(callbacks, 100)
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+        }
+    }
+
+    func testPersistedPositiveSeedTargetRequiresCapturedCheckpoint() throws {
+        try withHarness(readLimitBytes: 64) { harness in
+            let file = try harness.makeFile(
+                "missing-target-checkpoint.jsonl",
+                contents: completedRun(nativeID: "old-history")
+            )
+            try harness.controller.install(existingFiles: [file])
+
+            let stateFile = harness.paths.stateDirectory
+                .appendingPathComponent("collector-state.json")
+            var root = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: stateFile))
+                    as? [String: Any]
+            )
+            var files = try XCTUnwrap(root["files"] as? [String: Any])
+            var fileState = try XCTUnwrap(files[file.path] as? [String: Any])
+            fileState.removeValue(forKey: "seedTargetCheckpoint")
+            files[file.path] = fileState
+            root["files"] = files
+            let corrupted = try JSONSerialization.data(withJSONObject: root)
+            let handle = try FileHandle(forWritingTo: stateFile)
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: corrupted)
+            try handle.close()
+
+            XCTAssertThrowsError(try harness.makeController()) { error in
+                XCTAssertEqual(error as? AgentControllerError, .invalidState)
+            }
+        }
+    }
+
     func testSnapshottedSeedEOFSurvivesRestartBeforeFutureAppendIsCollected() throws {
         try withHarness(readLimitBytes: 128) { harness in
             let file = try harness.makeFile(

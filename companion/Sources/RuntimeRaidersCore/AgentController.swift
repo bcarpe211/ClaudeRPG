@@ -250,6 +250,7 @@ public final class AgentController: @unchecked Sendable {
         var seeding: Bool
         var seedTargetOffset: Int64?
         var seedFileIdentity: JSONLFileIdentity?
+        var seedTargetCheckpoint: JSONLContinuityCheckpoint?
     }
 
     private struct PersistedState: Codable {
@@ -401,6 +402,7 @@ public final class AgentController: @unchecked Sendable {
                 fileState.nextOrdinal = 0
                 fileState.seedTargetOffset = nil
                 fileState.seedFileIdentity = nil
+                fileState.seedTargetCheckpoint = nil
                 state.files[path] = fileState
             }
             lastCallbackBytesRead = 0
@@ -433,6 +435,7 @@ public final class AgentController: @unchecked Sendable {
                     fileState.nextOrdinal = 0
                     fileState.seedTargetOffset = nil
                     fileState.seedFileIdentity = nil
+                    fileState.seedTargetCheckpoint = nil
                     state.files[file.path] = fileState
                 } else {
                     state.files[file.path] = initialFileState(seeding: true)
@@ -590,21 +593,29 @@ public final class AgentController: @unchecked Sendable {
             if fileState.seeding {
                 if fileState.seedTargetOffset == nil
                     || fileState.seedFileIdentity != snapshot.identity {
-                    if fileState.seedFileIdentity != nil
-                        || (trackedIdentity != nil && trackedIdentity != snapshot.identity) {
-                        fileState.cursor = JSONLCursor()
-                        fileState.nextOrdinal = 0
-                        fileState.adapterSnapshots = initialSnapshots()
+                    do {
+                        try pinSeedBoundary(
+                            &fileState,
+                            approved: approved,
+                            snapshot: snapshot
+                        )
+                    } catch {
+                        if boundaryOnly { try discardBoundaryFile(file.path) }
+                        continue
                     }
-                    fileState.seedTargetOffset = snapshot.size
-                    fileState.seedFileIdentity = snapshot.identity
                     state.files[file.path] = fileState
                     try persist()
                 }
             } else if let trackedIdentity, trackedIdentity != snapshot.identity {
-                fileState = initialFileState(seeding: true)
-                fileState.seedTargetOffset = snapshot.size
-                fileState.seedFileIdentity = snapshot.identity
+                do {
+                    try pinSeedBoundary(
+                        &fileState,
+                        approved: approved,
+                        snapshot: snapshot
+                    )
+                } catch {
+                    continue
+                }
                 state.files[file.path] = fileState
                 try persist()
             }
@@ -616,10 +627,14 @@ public final class AgentController: @unchecked Sendable {
                 }
                 if seedTarget == 0 {
                     do {
-                        fileState.cursor = try approved.cursor(
-                            atOffset: 0,
-                            expectedIdentity: seedIdentity
-                        )
+                        guard try validateCapturedBoundaryOrRepin(
+                            &fileState,
+                            approved: approved
+                        ) else {
+                            state.files[file.path] = fileState
+                            try persist()
+                            continue
+                        }
                     } catch {
                         if boundaryOnly { try discardBoundaryFile(file.path) }
                         continue
@@ -636,10 +651,14 @@ public final class AgentController: @unchecked Sendable {
                 )
                 if fileState.cursor.offset >= provenanceTarget {
                     do {
-                        fileState.cursor = try approved.cursor(
-                            atOffset: seedTarget,
-                            expectedIdentity: seedIdentity
-                        )
+                        guard try validateCapturedBoundaryOrRepin(
+                            &fileState,
+                            approved: approved
+                        ) else {
+                            state.files[file.path] = fileState
+                            try persist()
+                            continue
+                        }
                     } catch {
                         if boundaryOnly { try discardBoundaryFile(file.path) }
                         continue
@@ -687,9 +706,16 @@ public final class AgentController: @unchecked Sendable {
                         if boundaryOnly { try discardBoundaryFile(file.path) }
                         continue
                     }
-                    fileState = initialFileState(seeding: true)
-                    fileState.seedTargetOffset = latest.size
-                    fileState.seedFileIdentity = latest.identity
+                    do {
+                        try pinSeedBoundary(
+                            &fileState,
+                            approved: approved,
+                            snapshot: latest
+                        )
+                    } catch {
+                        if boundaryOnly { try discardBoundaryFile(file.path) }
+                        continue
+                    }
                     state.files[file.path] = fileState
                     try persist()
                     continue
@@ -714,10 +740,14 @@ public final class AgentController: @unchecked Sendable {
                 fileState.adapterSnapshots = try snapshots(of: adapters)
                 if provenance.cursor.offset >= provenanceTarget {
                     do {
-                        fileState.cursor = try approved.cursor(
-                            atOffset: seedTarget,
-                            expectedIdentity: seedIdentity
-                        )
+                        guard try validateCapturedBoundaryOrRepin(
+                            &fileState,
+                            approved: approved
+                        ) else {
+                            state.files[file.path] = fileState
+                            try persist()
+                            continue
+                        }
                     } catch {
                         if boundaryOnly { try discardBoundaryFile(file.path) }
                         continue
@@ -731,9 +761,16 @@ public final class AgentController: @unchecked Sendable {
                         if boundaryOnly { try discardBoundaryFile(file.path) }
                         continue
                     }
-                    fileState = initialFileState(seeding: true)
-                    fileState.seedTargetOffset = latest.size
-                    fileState.seedFileIdentity = latest.identity
+                    do {
+                        try pinSeedBoundary(
+                            &fileState,
+                            approved: approved,
+                            snapshot: latest
+                        )
+                    } catch {
+                        if boundaryOnly { try discardBoundaryFile(file.path) }
+                        continue
+                    }
                 }
                 state.files[file.path] = fileState
                 try persist()
@@ -806,12 +843,57 @@ public final class AgentController: @unchecked Sendable {
         try persist()
     }
 
+    private func pinSeedBoundary(
+        _ fileState: inout PersistedFileState,
+        approved: ApprovedProviderFile,
+        snapshot: (identity: JSONLFileIdentity, size: Int64)
+    ) throws {
+        let targetCursor = try approved.cursor(
+            atOffset: snapshot.size,
+            expectedIdentity: snapshot.identity
+        )
+        fileState = initialFileState(seeding: true)
+        fileState.seedTargetOffset = snapshot.size
+        fileState.seedFileIdentity = snapshot.identity
+        fileState.seedTargetCheckpoint = targetCursor.continuityCheckpoint
+    }
+
+    private func capturedSeedCursor(_ fileState: PersistedFileState) -> JSONLCursor? {
+        guard let offset = fileState.seedTargetOffset,
+              let identity = fileState.seedFileIdentity else { return nil }
+        return JSONLCursor(
+            offset: offset,
+            fileIdentity: identity,
+            continuityCheckpoint: fileState.seedTargetCheckpoint
+        )
+    }
+
+    private func validateCapturedBoundaryOrRepin(
+        _ fileState: inout PersistedFileState,
+        approved: ApprovedProviderFile
+    ) throws -> Bool {
+        guard let capturedCursor = capturedSeedCursor(fileState) else { return false }
+        if try approved.isCurrent(capturedCursor) {
+            fileState.cursor = capturedCursor
+            return true
+        }
+        let latest = try approved.snapshot()
+        try pinSeedBoundary(
+            &fileState,
+            approved: approved,
+            snapshot: latest
+        )
+        return false
+    }
+
     private func captureSeedBoundaries(_ files: [URL]) throws {
         for file in files {
             guard var fileState = state.files[file.path], fileState.seeding else { continue }
+            let approved: ApprovedProviderFile
             let snapshot: (identity: JSONLFileIdentity, size: Int64)
             do {
-                snapshot = try registry.approveProviderFile(file).snapshot()
+                approved = try registry.approveProviderFile(file)
+                snapshot = try approved.snapshot()
             } catch {
                 state.files.removeValue(forKey: file.path)
                 pendingPaths.remove(file.path)
@@ -819,9 +901,17 @@ public final class AgentController: @unchecked Sendable {
             }
             if fileState.seedTargetOffset == nil
                 || fileState.seedFileIdentity != snapshot.identity {
-                fileState = initialFileState(seeding: true)
-                fileState.seedTargetOffset = snapshot.size
-                fileState.seedFileIdentity = snapshot.identity
+                do {
+                    try pinSeedBoundary(
+                        &fileState,
+                        approved: approved,
+                        snapshot: snapshot
+                    )
+                } catch {
+                    state.files.removeValue(forKey: file.path)
+                    pendingPaths.remove(file.path)
+                    continue
+                }
                 state.files[file.path] = fileState
             }
         }
@@ -840,7 +930,8 @@ public final class AgentController: @unchecked Sendable {
             adapterSnapshots: initialSnapshots(),
             seeding: seeding,
             seedTargetOffset: nil,
-            seedFileIdentity: nil
+            seedFileIdentity: nil,
+            seedTargetCheckpoint: nil
         )
     }
 
@@ -849,6 +940,7 @@ public final class AgentController: @unchecked Sendable {
         fileState.seeding = false
         fileState.seedTargetOffset = nil
         fileState.seedFileIdentity = nil
+        fileState.seedTargetCheckpoint = nil
     }
 
     private func freshAdapters() -> [CodexAdapter] {
@@ -903,13 +995,22 @@ public final class AgentController: @unchecked Sendable {
         return state.files.allSatisfy { path, file in
             path.utf8.count <= 16_384
                 && file.nextOrdinal >= 0
-                && ((file.seedTargetOffset == nil && file.seedFileIdentity == nil)
-                    || (file.seeding
-                        && file.seedFileIdentity != nil
-                        && file.seedTargetOffset.map { $0 >= 0 } == true))
+                && validSeedBoundary(file)
                 && Set(file.adapterSnapshots.keys) == expected
                 && file.adapterSnapshots.values.allSatisfy { $0.count <= 65_536 }
         }
+    }
+
+    private static func validSeedBoundary(_ file: PersistedFileState) -> Bool {
+        guard let offset = file.seedTargetOffset else {
+            return file.seedFileIdentity == nil && file.seedTargetCheckpoint == nil
+        }
+        guard file.seeding, offset >= 0, file.seedFileIdentity != nil else { return false }
+        if offset == 0 { return file.seedTargetCheckpoint == nil }
+        guard let checkpoint = file.seedTargetCheckpoint else { return false }
+        return checkpoint.byteCount == Int(
+            min(offset, Int64(JSONLReader.continuityWindowBytes))
+        ) && checkpoint.digest.count == 32
     }
 
     private static func createPrivateDirectory(_ directory: URL) throws {
