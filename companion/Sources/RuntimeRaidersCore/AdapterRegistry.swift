@@ -159,10 +159,9 @@ public final class AdapterRegistry: @unchecked Sendable {
               observation.surface == .codexDesktop || observation.surface == .codexCLI else {
             throw AdapterRegistryError.invalidObservation
         }
-        let nativeIdentity = observation.surface.rawValue + "\0" + observation.nativeID
         let runKey = try RunIdentity.key(
             provider: .codex,
-            nativeID: nativeIdentity,
+            nativeID: observation.nativeID,
             dedupeSecret: dedupeSecret
         )
         let idempotencyKey = try RunIdentity.eventKey(

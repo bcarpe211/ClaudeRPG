@@ -45,7 +45,7 @@ final class AdapterRegistryTests: XCTestCase {
         }
     }
 
-    func testRunKeysAreStableAndSurfaceSeparated() throws {
+    func testSameProviderNativeRunDeduplicatesAcrossCodexSurfaces() throws {
         let root = try temporaryDirectory()
         let registry = try AdapterRegistry.enabled(
             surfaceNames: ["codex_cli", "codex_desktop"],
@@ -61,12 +61,35 @@ final class AdapterRegistryTests: XCTestCase {
             )
         }
         let arguments = (Data("shared-secret".utf8), "0.1.0", "00000000-0000-4000-8000-000000000001")
-        let first = try registry.event(from: observation(.codexCLI), dedupeSecret: arguments.0, companionVersion: arguments.1, deviceID: arguments.2)
-        let replay = try registry.event(from: observation(.codexCLI), dedupeSecret: arguments.0, companionVersion: arguments.1, deviceID: arguments.2)
+        let cli = try registry.event(from: observation(.codexCLI), dedupeSecret: arguments.0, companionVersion: arguments.1, deviceID: arguments.2)
         let desktop = try registry.event(from: observation(.codexDesktop), dedupeSecret: arguments.0, companionVersion: arguments.1, deviceID: arguments.2)
-        XCTAssertEqual(first, replay)
-        XCTAssertNotEqual(first.runKey, desktop.runKey)
-        XCTAssertNotEqual(first.idempotencyKey, desktop.idempotencyKey)
+        XCTAssertEqual(cli.runKey, desktop.runKey)
+        XCTAssertEqual(cli.idempotencyKey, desktop.idempotencyKey)
+    }
+
+    func testDistinctProviderNativeRunsRemainSeparateAndStable() throws {
+        let root = try temporaryDirectory()
+        let registry = try AdapterRegistry.enabled(
+            surfaceNames: ["codex_cli", "codex_desktop"],
+            codexRoot: root
+        )
+        func observation(_ nativeID: String, _ surface: RunSurface) -> NativeRunObservation {
+            NativeRunObservation(
+                nativeID: nativeID, provider: .codex, surface: surface,
+                sequence: 2, eventTimeMS: 2, observedAtMS: 2, startedAtMS: 1,
+                state: .open,
+                usage: .init(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0),
+                model: nil, effort: nil
+            )
+        }
+        let arguments = (Data("shared-secret".utf8), "0.1.0", "00000000-0000-4000-8000-000000000001")
+        let first = try registry.event(from: observation("first-native-id", .codexCLI), dedupeSecret: arguments.0, companionVersion: arguments.1, deviceID: arguments.2)
+        let replay = try registry.event(from: observation("first-native-id", .codexCLI), dedupeSecret: arguments.0, companionVersion: arguments.1, deviceID: arguments.2)
+        let second = try registry.event(from: observation("second-native-id", .codexDesktop), dedupeSecret: arguments.0, companionVersion: arguments.1, deviceID: arguments.2)
+        XCTAssertEqual(first.runKey, replay.runKey)
+        XCTAssertEqual(first.idempotencyKey, replay.idempotencyKey)
+        XCTAssertNotEqual(first.runKey, second.runKey)
+        XCTAssertNotEqual(first.idempotencyKey, second.idempotencyKey)
     }
 
     func testCodexRootMustBeRealDirectoryAndRejectSymlinkComponents() throws {

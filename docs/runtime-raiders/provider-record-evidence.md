@@ -26,11 +26,11 @@ Disabled means unsupported. Runtime Raiders must not scan those providers' roots
 
 ## Collector contract fixed by this evidence
 
-- A Run is keyed by the Codex launch surface plus `turn_id`. Session ID and local path are container/provenance data, not Run identity.
+- A stable Codex `turn_id` is the provider-native Run identity. The opaque Run key is derived from the provider plus `turn_id`; launch surface is display/provenance only and is not key material. The same underlying `turn_id` observed through Desktop and CLI therefore deduplicates to one Run.
 - `last_token_usage` is a cumulative per-Run observation. Keep the newest valid observation for a Run; never sum repeated observations.
 - A Run is complete only after `task_complete`. A partial final line, cancellation, failure-like terminal, or missing completion remains incomplete and must not be promoted to a completed Run.
 - Duplicate records are idempotent. Reordered records remain pending until their required identity and lifecycle facts are available.
-- Parallel Runs are isolated by launch surface plus `turn_id`; observations from different fixture pairs must never be merged.
+- Distinct `turn_id` values remain separate Runs, including the paired parallel fixtures, and must never be merged.
 - Launch provenance comes from the verified `session_meta` shape/runtime marker, never from `cwd`, a project name, or a path.
 
 ## Privacy audit contract

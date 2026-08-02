@@ -41,6 +41,22 @@ final class OutboxTests: XCTestCase {
         }
     }
 
+    func testSameIdempotencyKeyAcrossCodexSurfacesRetainsOneStableFile() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            let first = makeEvent(sequence: 7, observedAtMS: 1_700_000_001_500)
+            var crossSurfaceReplay = first
+            crossSurfaceReplay.surface = .codexDesktop
+            crossSurfaceReplay.observedAtMS += 5_000
+
+            try outbox.enqueue(first)
+            try outbox.enqueue(crossSurfaceReplay)
+
+            XCTAssertEqual(try outbox.records(limit: 100).map(\.event), [first])
+            XCTAssertEqual(try directoryNames(directory).count, 1)
+        }
+    }
+
     func testPruneExpiresSevenDayRecordsThenDropsOldestUntilWithinByteLimit() throws {
         try withTemporaryDirectory { directory in
             let now: Int64 = 1_800_000_000_000

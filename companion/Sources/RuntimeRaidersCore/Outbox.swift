@@ -77,6 +77,7 @@ public final class Outbox: @unchecked Sendable {
                 }
                 var replayed = event
                 replayed.observedAtMS = existing.event.observedAtMS
+                replayed.surface = existing.event.surface
                 guard replayed == existing.event else { throw OutboxError.invalidRecord }
                 return
             } else if errno != ENOENT {
