@@ -95,6 +95,72 @@ function addIncrement(
 }
 
 /**
+ * Project one positive activity credit through the legacy player/token-event
+ * compatibility path. Callers may wrap this in a larger transaction; nested
+ * better-sqlite3 transactions use a savepoint and preserve all-or-nothing
+ * behavior through potion attribution.
+ */
+export function applyActivityCredit(
+  db: Database.Database,
+  playerId: number,
+  effectiveDelta: number,
+  totalDelta: number,
+  now: number,
+): number {
+  if (!Number.isSafeInteger(playerId) || playerId <= 0) {
+    throw new RangeError('playerId must be a positive safe integer');
+  }
+  for (const [label, value] of [
+    ['effectiveDelta', effectiveDelta],
+    ['totalDelta', totalDelta],
+    ['now', now],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`${label} must be a non-negative safe integer`);
+    }
+  }
+  if (effectiveDelta <= 0 && totalDelta <= 0) {
+    throw new RangeError('activity credit must contain a positive delta');
+  }
+
+  const apply = db.transaction((): number => {
+    const player = db.prepare(`
+      SELECT effective_tokens, total_tokens FROM players WHERE id = ?
+    `).get(playerId) as {
+      effective_tokens: number;
+      total_tokens: number;
+    } | undefined;
+    if (!player) throw new RangeError('player does not exist');
+    if (!Number.isSafeInteger(player.effective_tokens + effectiveDelta)
+      || !Number.isSafeInteger(player.total_tokens + totalDelta)) {
+      throw new RangeError('persisted token totals must remain safe integers');
+    }
+
+    const updated = db.prepare(
+      `UPDATE players
+       SET total_tokens = total_tokens + ?,
+           effective_tokens = effective_tokens + ?,
+           last_token_at = ?
+       WHERE id = ?`,
+    ).run(totalDelta, effectiveDelta, now, playerId);
+    if (updated.changes !== 1) throw new Error('activity player update was not applied');
+
+    const tokenEvent = db.prepare(
+      `INSERT INTO token_events (player_id, ts, effective_delta, total_delta)
+       VALUES (?, ?, ?, ?)`,
+    ).run(playerId, now, effectiveDelta, totalDelta);
+    const tokenEventId = Number(tokenEvent.lastInsertRowid);
+    if (!Number.isSafeInteger(tokenEventId) || tokenEventId <= 0) {
+      throw new RangeError('token event id must be a positive safe integer');
+    }
+
+    applyGoldPotionWork(db, playerId, tokenEventId, effectiveDelta, now);
+    return tokenEventId;
+  });
+  return apply();
+}
+
+/**
  * Parse an OTLP body, recover per-data-point increments, aggregate per token,
  * and apply to players: bump total_tokens, effective_tokens, last_token_at, and
  * append a token_events row. Unknown tokens and disabled players are ignored.
@@ -153,35 +219,11 @@ export function ingestTokenUsage(
         Math.round(agg.cacheRead * opts.cacheReadWeight);
       const total = agg.input + agg.output + agg.cacheCreation + agg.cacheRead;
       if (effective <= 0 && total <= 0) continue;
-      if (
-        !Number.isSafeInteger(effective)
-        || !Number.isSafeInteger(total)
-        || !Number.isSafeInteger(player.effective_tokens + effective)
-        || !Number.isSafeInteger(player.total_tokens + total)
-      ) {
+      if (!Number.isSafeInteger(effective) || !Number.isSafeInteger(total)) {
         throw new RangeError('persisted token totals must remain safe integers');
       }
 
-      db.prepare(
-        `UPDATE players
-         SET total_tokens = total_tokens + ?,
-             effective_tokens = effective_tokens + ?,
-             last_token_at = ?
-         WHERE id = ?`,
-      ).run(total, effective, now, player.id);
-
-      const tokenEvent = db.prepare(
-        `INSERT INTO token_events (player_id, ts, effective_delta, total_delta)
-         VALUES (?, ?, ?, ?)`,
-      ).run(player.id, now, effective, total);
-
-      applyGoldPotionWork(
-        db,
-        player.id,
-        Number(tokenEvent.lastInsertRowid),
-        effective,
-        now,
-      );
+      applyActivityCredit(db, player.id, effective, total, now);
 
       appliedPlayers++;
     }
