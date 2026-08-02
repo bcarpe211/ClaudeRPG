@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -53,6 +54,37 @@ function runCopyCheck(root: string): { status: number; output: string } {
 }
 
 describe('Runtime Raiders brand copy', () => {
+  it('documents the collector path boundary without claiming local paths are absent', () => {
+    const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
+      .replace(/\s+/g, ' ');
+
+    expect(readme).toContain(
+      'Local absolute provider-record paths and read cursors are retained only in owner-only collector operational state',
+    );
+    expect(readme).toContain('They are never transmitted to the Runtime Raiders server.');
+    expect(readme).toContain(
+      'The Run metadata pipeline does **not** extract or transmit prompt text, response text, tool content or arguments',
+    );
+    expect(readme).not.toContain('does **not** collect or send prompt text, response text, tool');
+    expect(readme).not.toContain('or provider-record paths.');
+  });
+
+  it('documents Raid Power while Runs are open and bounded credit at completion', () => {
+    const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
+      .replace(/\s+/g, ' ');
+
+    expect(readme).toContain('powered by AI Runs as they unfold');
+    expect(readme).toContain('observes Run lifecycle and cumulative usage while each Run is open');
+    expect(readme).toContain(
+      "Completion adds only the policy's bounded completion and duration credit.",
+    );
+    expect(readme).toContain(
+      'Elapsed wall time does not create a sustained or recurring Momentum bonus.',
+    );
+    expect(readme).not.toContain('powered by completed AI Runs');
+    expect(readme).not.toContain('observes completed Runs');
+  });
+
   it('exposes the player-facing Runtime Raiders brand contract', () => {
     expect(BRAND).toEqual(expect.objectContaining({
       name: 'Runtime Raiders',

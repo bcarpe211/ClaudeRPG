@@ -82,4 +82,12 @@ describe('settings metadata', () => {
     expect(items.find((item) => item.key === 'cache_read_weight')?.label)
       .toBe('Legacy cache-read weight');
   });
+
+  it('describes Damage Potion ordering with the Momentum multiplier', () => {
+    expect(SETTINGS_META.potion_damage_t1_base_hit_pct.description).toContain(
+      'before level, Momentum, and debuff multipliers',
+    );
+    expect(SETTINGS_META.potion_damage_t1_base_hit_pct.description)
+      .not.toContain('activity');
+  });
 });

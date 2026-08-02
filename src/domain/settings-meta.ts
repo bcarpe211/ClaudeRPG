@@ -101,7 +101,7 @@ export const SETTINGS_META: Record<string, SettingMeta> = {
   potion_damage_t1_duration_s: { group: 'Potions', label: 'Damage Potion (T1) duration', unit: 's', min: 1, step: 60,
     description: 'Combat-active seconds for future Beginner Damage Potion activations. Higher = its damage window lasts longer.' },
   potion_damage_t1_base_hit_pct: { group: 'Potions', label: 'Damage Potion base-hit bonus', unit: '%', min: 0, step: 1,
-    description: 'Percent added to personal base hit for future Damage Potion activations before level, activity, and debuff multipliers. Higher = stronger potion hits.' },
+    description: 'Percent added to personal base hit for future Damage Potion activations before level, Momentum, and debuff multipliers. Higher = stronger potion hits.' },
   potion_daily_stock_per_sku: { group: 'Potions', label: 'Daily potion stock per SKU', unit: 'count', min: 0, step: 1,
     description: 'How many units of each future potion SKU a Raider may buy per local office day. Higher = more daily purchases.' },
   potion_daily_uses_per_type: { group: 'Potions', label: 'Daily potion uses per type', unit: 'count', min: 0, step: 1,

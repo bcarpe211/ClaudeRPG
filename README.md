@@ -2,7 +2,7 @@
 
 **Clock in. Clear dungeons. Get paid.**
 
-Runtime Raiders is an office co-op dungeon RPG powered by completed AI Runs.
+Runtime Raiders is an office co-op dungeon RPG powered by AI Runs as they unfold.
 Each person creates a Raider, keeps working in an enabled AI surface, and earns
 Raid Power that drives leveling, Momentum, Fights, gold, potions, cosmetics, and
 the Leaderboard. Your AI keeps running. Your Raider keeps raiding.
@@ -20,11 +20,14 @@ It is not a claim that an installer is signed, published, deployed, or active.
 
 1. A person creates a Raider and receives a Raider Key.
 2. A one-time enrollment command installs the local companion for that Raider.
-3. The companion observes completed Runs from an enabled local provider record,
-   derives metadata and usage counters locally, and sends signed Run events to
-   the trusted Runtime Raiders server.
-4. The server deduplicates the Run, applies the versioned Raid Power policy, and
-   updates the Raider, Momentum, active Fight, rewards, and Run Details.
+3. The companion observes Run lifecycle and cumulative usage while each Run is
+   open, derives approved metadata locally, and sends signed Run events to the
+   trusted Runtime Raiders server.
+4. The server deduplicates each event, applies the versioned Raid Power policy,
+   and awards usage-based Raid Power as the Run unfolds.
+
+Completion adds only the policy's bounded completion and duration credit.
+Elapsed wall time does not create a sustained or recurring Momentum bonus.
 
 The server is Node.js/TypeScript with Express, EJS, SQLite, and a Canvas 2D TV
 renderer. The companion is a separately tested local collector. The immutable
@@ -36,9 +39,15 @@ evidence and calibration records live under `docs/runtime-raiders/`.
 The companion performs **local, metadata-only collection**. For enabled Runs it
 may derive the provider, launch surface, opaque Run identity, lifecycle state,
 timestamps, model/effort display metadata, and numeric usage counters needed for
-Raid Power. It does **not** collect or send prompt text, response text, tool
-content or arguments, commands, source files, credentials, project names, or
-provider-record paths.
+Raid Power. The Run metadata pipeline does **not** extract or transmit prompt
+text, response text, tool content or arguments, commands, source-code contents,
+provider credentials, or project names.
+
+Local absolute provider-record paths and read cursors are retained only in
+owner-only collector operational state so incremental collection can resume
+safely. They are never transmitted to the Runtime Raiders server. A cursor can
+include a bounded incomplete-line buffer; that buffer is operational state, not
+Run metadata.
 
 The companion does not watch processes, windows, shell history, hooks, or
 history databases, and it does not change provider configuration. AI traffic
