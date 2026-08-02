@@ -10,7 +10,9 @@ describe('responsive dungeon shell safe area', () => {
     expect(css).toMatch(/\.loot-rail\.left\{left:0\} \.loot-rail\.right\{right:0\}/);
     expect(css).toMatch(/\.loot\.l\{left:calc\(var\(--wall\) \+ var\(--x\)\)\}/);
     expect(css).toMatch(/\.loot\.r\{right:calc\(var\(--wall\) \+ var\(--x\)\)\}/);
-    expect(css).toMatch(/\.loot\{[^}]*animation:rail-bob var\(--d\) ease-in-out infinite/);
+    expect(css).toMatch(
+      /\.loot\{[^}]*animation:rail-bob var\(--d\) ease-in-out var\(--delay\) infinite/,
+    );
     expect(css).toMatch(/@keyframes rail-bob\{[^}]*translate\(var\(--drift\),-16px\)/);
     expect(css).toMatch(/@media \(prefers-reduced-motion:reduce\)\{[^}]*animation:none!important[\s\S]*?\.loot\{opacity:\.5\}/);
   });
@@ -22,13 +24,22 @@ describe('responsive dungeon shell safe area', () => {
     expect(css).toMatch(/\.foot\{[^}]*padding:20px var\(--shell-inline\) 0/);
   });
 
-  it('hides gutter loot through 1431px so the first active viewport has no inner-edge clip', () => {
-    const hiddenThrough = css.match(/@media \(max-width:(\d+)px\)\{\s*\.loot-rail\{display:none\}/)?.[1];
-
-    expect(hiddenThrough).toBe('1431');
-    expect(1431 <= Number(hiddenThrough)).toBe(true);
-    expect(1432 <= Number(hiddenThrough)).toBe(false);
-    expect(css).not.toMatch(/@media \(max-width:1432px\)\{[\s\S]*?\.loot-rail\{display:none\}/);
+  it('parks gutter loot behind the walls and reverses without display none', () => {
+    expect(css).toMatch(
+      /\.loot-rail\{[^}]*width:max\(var\(--wall\),calc\(\(100vw - 1120px\)\/2 \+ 18px\)\)[^}]*transform:translateX\(0\)[^}]*opacity:1[^}]*visibility:visible/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width:1431px\)\{[\s\S]*?\.loot-rail\.left\{transform:translateX\(-100%\)\}[\s\S]*?\.loot-rail\.right\{transform:translateX\(100%\)\}/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width:1431px\)\{[\s\S]*?\.loot-rail\{[^}]*opacity:0[^}]*visibility:hidden[^}]*visibility 0s linear 260ms/,
+    );
+    expect(css).not.toMatch(
+      /@media \(max-width:1431px\)\{[\s\S]*?\.loot-rail\{[^}]*display:none/,
+    );
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion:reduce\)\{[^}]*animation:none!important[\s\S]*?\.loot-rail\{transition:none!important\}/,
+    );
   });
 
   it('keeps the 1252px shell inset and narrows walls on small screens', () => {
