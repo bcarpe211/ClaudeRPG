@@ -29,7 +29,7 @@ a{color:inherit;text-decoration:none}
 pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 
 /* frame: walls + torches */
-.wall{position:fixed;top:0;bottom:0;width:var(--wall);z-index:1;
+.wall{position:fixed;top:0;bottom:0;width:var(--wall);z-index:3;
   background:url('/static/landing/moss_wall.png');background-size:var(--wall) var(--wall);
   image-rendering:pixelated;pointer-events:none}
 .wall-l{left:0;box-shadow:inset -20px 0 28px -10px #000,10px 0 34px -6px #000b}
@@ -43,14 +43,15 @@ pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 @keyframes flick{50%{opacity:1}} @keyframes flickA{50%{opacity:0}}
 body.frame-lite .sconce{filter:drop-shadow(0 0 16px rgba(255,150,60,.4))}
 
-/* gutter loot rails — between wall and centered content, never behind content */
-.loot-rail{position:fixed;top:0;bottom:0;width:calc((100vw - 1120px)/2 - var(--wall));
+/* gutter loot rails include the wall region; walls at z-index 3 provide the visible occlusion */
+.loot-rail{position:fixed;top:0;bottom:0;width:calc((100vw - 1120px)/2 + 18px);
   z-index:1;pointer-events:none;overflow:hidden}
-.loot-rail.left{left:var(--wall)} .loot-rail.right{right:var(--wall)}
+.loot-rail.left{left:0} .loot-rail.right{right:0}
 .loot{position:absolute;top:var(--t);width:calc(30px*var(--s));height:calc(30px*var(--s));
-  opacity:.6;animation:bob var(--d) ease-in-out infinite}
-.loot.l{left:var(--x)} .loot.r{right:var(--x)}
+  opacity:.6;animation:rail-bob var(--d) ease-in-out infinite}
+.loot.l{left:calc(var(--wall) + var(--x))} .loot.r{right:calc(var(--wall) + var(--x))}
 .loot img{width:100%;height:100%;filter:drop-shadow(0 4px 7px rgba(0,0,0,.55))}
+@keyframes rail-bob{50%{transform:translate(var(--drift),-16px) rotate(2deg)}0%,100%{transform:translate(0,0) rotate(-2deg)}}
 @keyframes bob{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-16px) rotate(2deg)}}
 @media (max-width:1252px){
   :root{--shell-inline:clamp(34px,

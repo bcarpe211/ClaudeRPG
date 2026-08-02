@@ -4,6 +4,17 @@ import { describe, expect, it } from 'vitest';
 const css = readFileSync('src/web/public/dungeon.css', 'utf8');
 
 describe('responsive dungeon shell safe area', () => {
+  it('drifts gutter treasure beneath foreground moss walls without an inner-edge crop', () => {
+    expect(css).toMatch(/\.wall\{[^}]*z-index:3/);
+    expect(css).toMatch(/\.loot-rail\{[^}]*width:calc\(\(100vw - 1120px\)\/2 \+ 18px\)[^}]*z-index:1[^}]*overflow:hidden/);
+    expect(css).toMatch(/\.loot-rail\.left\{left:0\} \.loot-rail\.right\{right:0\}/);
+    expect(css).toMatch(/\.loot\.l\{left:calc\(var\(--wall\) \+ var\(--x\)\)\}/);
+    expect(css).toMatch(/\.loot\.r\{right:calc\(var\(--wall\) \+ var\(--x\)\)\}/);
+    expect(css).toMatch(/\.loot\{[^}]*animation:rail-bob var\(--d\) ease-in-out infinite/);
+    expect(css).toMatch(/@keyframes rail-bob\{[^}]*translate\(var\(--drift\),-16px\)/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion:reduce\)\{[^}]*animation:none!important[\s\S]*?\.loot\{opacity:\.5\}/);
+  });
+
   it('drives header, content, and footer from one wall-aware inline inset', () => {
     expect(css).toMatch(/:root\{[^}]*--shell-gap:12px[^}]*--shell-inline:34px/);
     expect(css).toMatch(/\.bar\{[^}]*padding:22px var\(--shell-inline\)/);

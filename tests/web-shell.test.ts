@@ -24,6 +24,8 @@ describe('dungeon shell', () => {
     const res = await request(app).get('/register');
     expect(res.text).toContain('class="loot-rail left"');
     expect(res.text).toContain('class="loot-rail right"');
+    expect(res.text).toContain('--drift:-22px');
+    expect(res.text).toContain('--drift:24px');
     expect(res.text).not.toContain('frame-lite');
   });
 
