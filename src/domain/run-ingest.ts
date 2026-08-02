@@ -251,7 +251,7 @@ export function ingestRunEvents(
       const terminalAt = acceptsTerminal ? event.event_time_ms : run.terminal_at_ms;
 
       let targetCompletionCredit = run.awarded_completion_credit;
-      if (state === 'completed' && targetUsageCredit > 0) {
+      if (state === 'completed' && (targetUsageCredit > 0 || player.disabled)) {
         targetCompletionCredit = Math.max(
           targetCompletionCredit,
           safeNonNegativeInteger(policy.completion_credit, 'completion credit'),

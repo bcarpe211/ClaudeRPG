@@ -495,6 +495,45 @@ describe('ingestRunEvents', () => {
     expect(tokenRows().map((row) => row.effective_delta)).toEqual([10]);
   });
 
+  it('permanently suppresses completion observed while disabled before later usage', () => {
+    updatePlayer(db, player.id, { disabled: 1 });
+    const disabledCompletion = event({
+      sequence: 1,
+      state: 'completed',
+      usage: { input: 0, cache_read: 10_000 },
+    });
+
+    ingestRunEvents(db, device, [disabledCompletion], POLICY, CUTOVER, NOW);
+
+    expect(runRow()).toMatchObject({
+      state: 'completed',
+      awarded_usage_credit: 0,
+      awarded_completion_credit: 10,
+      raid_power: 0,
+    });
+    expect(tokenRows()).toEqual([]);
+
+    updatePlayer(db, player.id, { disabled: 0 });
+    const laterUsage = event({
+      sequence: 2,
+      event_time_ms: disabledCompletion.event_time_ms + 1,
+      observed_at_ms: disabledCompletion.observed_at_ms + 1,
+      usage: { input: 10, cache_read: 10_000 },
+    });
+    ingestRunEvents(db, device, [laterUsage], POLICY, CUTOVER, NOW + 1);
+
+    expect(runRow()).toMatchObject({
+      awarded_usage_credit: 10,
+      awarded_completion_credit: 10,
+      raid_power: 10,
+    });
+    expect(eventRows().map((row) => row.awarded_delta)).toEqual([0, 10]);
+    expect(tokenRows().map((row) => ({
+      effective_delta: row.effective_delta,
+      total_delta: row.total_delta,
+    }))).toEqual([{ effective_delta: 10, total_delta: 0 }]);
+  });
+
   it('ignores a Run whose recorded start precedes the explicit cutover', () => {
     const preCutover = event({
       started_at_ms: CUTOVER - 1,
