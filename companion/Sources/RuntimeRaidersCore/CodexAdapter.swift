@@ -28,11 +28,14 @@ public struct CodexAdapter: ProviderAdapter {
     private var verifiedSurface: RunSurface?
     private var rejectedSurface = false
     private var pendingStartedAt: Int64?
+    private var pendingStartedOrdinal: Int64?
     private var pendingUsage: UsageCountersV1?
     private var pendingContext: PendingContext?
     private var pendingCompletion: PendingCompletion?
     private var activeNativeID: String?
     private var activeStartedAt: Int64?
+    private var activeContextOrdinal: Int64?
+    private var activeCompletedOrdinal: Int64?
     private var activeUsage = zeroUsage
     private var activeModel: String?
     private var activeEffort: String?
@@ -42,7 +45,8 @@ public struct CodexAdapter: ProviderAdapter {
     }
 
     public init(snapshot: Data) throws {
-        guard let state = try? JSONDecoder().decode(PersistedState.self, from: snapshot),
+        guard snapshot.count <= 65_536,
+              let state = try? JSONDecoder().decode(PersistedState.self, from: snapshot),
               state.version == 1,
               state.expectedSurface == .codexCLI || state.expectedSurface == .codexDesktop,
               state.verifiedSurface == nil || state.verifiedSurface == state.expectedSurface,
@@ -53,25 +57,32 @@ public struct CodexAdapter: ProviderAdapter {
               Self.validOptionalDisplay(state.pendingContext?.model),
               Self.validOptionalDisplay(state.pendingContext?.effort),
               Self.validOptionalInteger(state.pendingStartedAt),
+              Self.validOptionalInteger(state.pendingStartedOrdinal),
               Self.validOptionalInteger(state.activeStartedAt),
+              Self.validOptionalInteger(state.activeContextOrdinal),
+              Self.validOptionalInteger(state.activeCompletedOrdinal),
               Self.validOptionalInteger(state.pendingContext?.eventTime),
               Self.validOptionalInteger(state.pendingContext?.ordinal),
               Self.validOptionalInteger(state.pendingCompletion?.eventTime),
               Self.validOptionalInteger(state.pendingCompletion?.ordinal),
               Self.validOptionalInteger(state.pendingCompletion?.observedAt),
               Self.validUsage(state.activeUsage),
-              state.pendingUsage.map(Self.validUsage) ?? true else {
+              state.pendingUsage.map(Self.validUsage) ?? true,
+              Self.consistent(state) else {
             throw CodexAdapterSnapshotError.invalidSnapshot
         }
         expectedSurface = state.expectedSurface
         verifiedSurface = state.verifiedSurface
         rejectedSurface = state.rejectedSurface
         pendingStartedAt = state.pendingStartedAt
+        pendingStartedOrdinal = state.pendingStartedOrdinal
         pendingUsage = state.pendingUsage
         pendingContext = state.pendingContext
         pendingCompletion = state.pendingCompletion
         activeNativeID = state.activeNativeID
         activeStartedAt = state.activeStartedAt
+        activeContextOrdinal = state.activeContextOrdinal
+        activeCompletedOrdinal = state.activeCompletedOrdinal
         activeUsage = state.activeUsage
         activeModel = state.activeModel
         activeEffort = state.activeEffort
@@ -84,11 +95,14 @@ public struct CodexAdapter: ProviderAdapter {
             verifiedSurface: verifiedSurface,
             rejectedSurface: rejectedSurface,
             pendingStartedAt: pendingStartedAt,
+            pendingStartedOrdinal: pendingStartedOrdinal,
             pendingUsage: pendingUsage,
             pendingContext: pendingContext,
             pendingCompletion: pendingCompletion,
             activeNativeID: activeNativeID,
             activeStartedAt: activeStartedAt,
+            activeContextOrdinal: activeContextOrdinal,
+            activeCompletedOrdinal: activeCompletedOrdinal,
             activeUsage: activeUsage,
             activeModel: activeModel,
             activeEffort: activeEffort
@@ -154,8 +168,11 @@ public struct CodexAdapter: ProviderAdapter {
         switch eventType {
         case "task_started":
             pendingStartedAt = eventTime
+            pendingStartedOrdinal = source.ordinal
             activeNativeID = nil
             activeStartedAt = nil
+            activeContextOrdinal = nil
+            activeCompletedOrdinal = nil
             activeUsage = Self.zeroUsage
             activeModel = nil
             activeEffort = nil
@@ -191,14 +208,19 @@ public struct CodexAdapter: ProviderAdapter {
     private mutating func activatePendingRun(observedAt: Int64) -> [NativeRunObservation] {
         guard activeNativeID == nil,
               let context = pendingContext,
-              let startedAt = pendingStartedAt else { return [] }
+              let startedAt = pendingStartedAt,
+              let startedOrdinal = pendingStartedOrdinal,
+              context.ordinal > startedOrdinal else { return [] }
         activeNativeID = context.nativeID
         activeStartedAt = startedAt
+        activeContextOrdinal = context.ordinal
+        activeCompletedOrdinal = nil
         activeUsage = pendingUsage ?? Self.zeroUsage
         activeModel = context.model
         activeEffort = context.effort
         pendingContext = nil
         pendingStartedAt = nil
+        pendingStartedOrdinal = nil
         pendingUsage = nil
         var output = [observation(
             nativeID: context.nativeID,
@@ -215,8 +237,12 @@ public struct CodexAdapter: ProviderAdapter {
     private mutating func emitPendingCompletion() -> [NativeRunObservation] {
         guard let completion = pendingCompletion,
               let nativeID = activeNativeID,
-              let startedAt = activeStartedAt else { return [] }
+              let startedAt = activeStartedAt,
+              let contextOrdinal = activeContextOrdinal else { return [] }
+        guard activeCompletedOrdinal == nil else { return [] }
         pendingCompletion = nil
+        guard completion.ordinal > contextOrdinal else { return [] }
+        activeCompletedOrdinal = completion.ordinal
         return [observation(
             nativeID: nativeID,
             sequence: completion.ordinal,
@@ -313,6 +339,43 @@ public struct CodexAdapter: ProviderAdapter {
             .allSatisfy { (0...maximumSafeInteger).contains($0) }
     }
 
+    private static func consistent(_ state: PersistedState) -> Bool {
+        if state.rejectedSurface && state.verifiedSurface != nil { return false }
+        let activeValues: [Any?] = [
+            state.activeNativeID,
+            state.activeStartedAt,
+            state.activeContextOrdinal,
+        ]
+        let activeCount = activeValues.reduce(0) { $0 + ($1 == nil ? 0 : 1) }
+        guard activeCount == 0 || activeCount == activeValues.count else { return false }
+        guard (state.pendingStartedAt == nil) == (state.pendingStartedOrdinal == nil) else {
+            return false
+        }
+        if let completed = state.activeCompletedOrdinal,
+           let context = state.activeContextOrdinal,
+           completed <= context { return false }
+        if state.activeCompletedOrdinal != nil && activeCount == 0 { return false }
+
+        let zero = zeroUsage
+        let hasLifecycle = state.pendingStartedAt != nil
+            || state.pendingUsage != nil
+            || state.pendingContext != nil
+            || state.pendingCompletion != nil
+            || activeCount > 0
+            || state.activeModel != nil
+            || state.activeEffort != nil
+            || state.activeUsage != zero
+        if hasLifecycle && (state.rejectedSurface || state.verifiedSurface != state.expectedSurface) {
+            return false
+        }
+        if activeCount == 0 && (
+            state.activeModel != nil || state.activeEffort != nil || state.activeUsage != zero
+        ) {
+            return false
+        }
+        return true
+    }
+
     private static func timestampMS(_ value: String?) -> Int64? {
         guard let value else { return nil }
         let formatter = ISO8601DateFormatter()
@@ -331,11 +394,14 @@ public struct CodexAdapter: ProviderAdapter {
         let verifiedSurface: RunSurface?
         let rejectedSurface: Bool
         let pendingStartedAt: Int64?
+        let pendingStartedOrdinal: Int64?
         let pendingUsage: UsageCountersV1?
         let pendingContext: PendingContext?
         let pendingCompletion: PendingCompletion?
         let activeNativeID: String?
         let activeStartedAt: Int64?
+        let activeContextOrdinal: Int64?
+        let activeCompletedOrdinal: Int64?
         let activeUsage: UsageCountersV1
         let activeModel: String?
         let activeEffort: String?

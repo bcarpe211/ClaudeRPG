@@ -44,7 +44,7 @@ final class CodexAdapterTests: XCTestCase {
             XCTAssertEqual(observations, replayed)
             XCTAssertEqual(observations.last?.state, .completed)
             XCTAssertEqual(observations.last?.usage.input, expectedInput)
-            XCTAssertEqual(observations.last?.sequence, 7)
+            XCTAssertEqual(observations.last?.sequence, 6)
         }
     }
 
@@ -152,6 +152,37 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(tail.last?.usage.input, 20)
         XCTAssertEqual(tail.last?.nativeID, "FAKE_DESKTOP_TURN_COMPLETE")
         XCTAssertThrowsError(try CodexAdapter(snapshot: Data("{}".utf8)))
+        XCTAssertThrowsError(try CodexAdapter(snapshot: Data(repeating: 0x20, count: 65_537)))
+
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: snapshot) as? [String: Any]
+        )
+        object["verifiedSurface"] = NSNull()
+        let inconsistent = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertThrowsError(try CodexAdapter(snapshot: inconsistent))
+    }
+
+    func testDuplicateCompletionCannotRepeatOrStealTheNextTurn() {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let lines = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn-1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"turn-2"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        let output = lines.enumerated().flatMap { index, line in
+            adapter.consume(
+                line: Data(line.utf8), source: .init(ordinal: Int64(index)), observedAt: observedAt
+            )
+        }
+        let terminals = output.filter { $0.state == .completed }
+        XCTAssertEqual(terminals.map(\.nativeID), ["turn-1", "turn-2"])
+        XCTAssertEqual(terminals.map(\.sequence), [4, 8])
     }
 
     func testEveryFixtureObservationPassesTheOutboundPrivacyGate() throws {
