@@ -35,6 +35,8 @@ const pathScopedRules = [
   { path: 'src/web/views/character-wardrobe.ejs', pattern: /Live character dye preview/i, label: 'character dye aria' },
   { path: 'src/web/public/dye.js', pattern: /Character session expired/i, label: 'character session error' },
   { path: 'src/web/views/landing.ejs', pattern: /\badventurers?\b/i, label: 'adventurer landing count' },
+  { path: 'src/web/views/character-sheet.ejs', pattern: /dungeon is not accepting work/i, label: 'work-based potion timing' },
+  { path: 'src/web/public/player-hub.js', pattern: /dungeon is not accepting work/i, label: 'work-based potion timing' },
 ];
 
 function filesUnder(target) {

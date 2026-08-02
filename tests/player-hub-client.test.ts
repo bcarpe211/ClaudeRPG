@@ -616,7 +616,10 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     const dialog = h.document.getElementById('potion-confirm')!;
     expect(dialog.open).toBe(true);
     expect(h.document.getElementById('potion-confirm-inventory')!.textContent).toBe('1 → 0 owned');
-    expect(h.document.getElementById('potion-confirm-copy')!.textContent).toContain('Starts now');
+    const confirmationCopy = h.document.getElementById('potion-confirm-copy')!.textContent;
+    expect(confirmationCopy).toContain('Starts now');
+    expect(confirmationCopy).toContain('The timer advances only during an active Fight.');
+    expect(confirmationCopy).not.toContain('dungeon is not accepting work');
     expect(h.fetchCalls).toHaveLength(1);
 
     await h.document.getElementById('potion-confirm-drink')!.dispatchAsync('click');

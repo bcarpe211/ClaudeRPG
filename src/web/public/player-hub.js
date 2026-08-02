@@ -418,7 +418,7 @@
       ? 'Starts now.'
       : 'Waits for battle.';
     setText('potion-confirm-title', `Drink ${item.name}?`);
-    setText('potion-confirm-copy', `${timing} Drinking is irreversible. ${item.effectCopy} for ${durationLabel(item.durationMs)}. The timer pauses whenever the dungeon is not accepting work.`);
+    setText('potion-confirm-copy', `${timing} Drinking is irreversible. ${item.effectCopy} for ${durationLabel(item.durationMs)}. The timer advances only during an active Fight.`);
     setText('potion-confirm-inventory', `${item.quantity} → ${Math.max(0, item.quantity - 1)} owned`);
     setText('potion-confirm-doses', `${item.usesRemaining} → ${Math.max(0, item.usesRemaining - 1)} remaining`);
     if (typeof confirmDialog.showModal === 'function') {

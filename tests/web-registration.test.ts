@@ -29,10 +29,14 @@ describe('registration', () => {
     expect(res.text).toContain('Use Codex Desktop or CLI; your Runs generate Raid Power.');
     expect(res.text).toContain('Supported Run surfaces: Codex Desktop and Codex CLI.');
     expect(res.text).toContain(
-      'It reads local Run metadata and usage counters, never work content.',
+      'It scans local provider records for approved Run metadata and usage counters. Work content is not extracted into Run metadata or transmitted.',
     );
-    expect(res.text).toContain('It sees:</strong> provider, supported surface, usage counts, model, effort, timestamps, Run state');
+    expect(res.text).toContain('Run metadata:</strong> provider, supported surface, usage counts, model, effort, timestamps, Run state');
     expect(res.text).toContain('It never sends:</strong> prompts, responses, commands, tool details, code, files, paths, workspaces, shell history');
+    expect(res.text).not.toContain('It reads local Run metadata and usage counters, never work content.');
+    expect(res.text).not.toContain('It reads usage numbers, nothing else.');
+    expect(res.text).not.toMatch(/never (?:reads|scans)[^<.]*work content/i);
+    expect(res.text).not.toContain('It sees:</strong>');
     expect(res.text).not.toContain('OTEL_RESOURCE_ATTRIBUTES');
     expect(res.text).not.toContain('CLAUDE_CODE_ENABLE_TELEMETRY');
     expect(res.text).not.toContain('Claude Code only');

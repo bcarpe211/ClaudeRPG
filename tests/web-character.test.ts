@@ -82,6 +82,8 @@ describe('character sheet', () => {
     expect(res.text).toContain('id="hub-effects-close"');
     expect(res.text.match(/id="hub-item-detail"/g)).toHaveLength(1);
     expect(res.text).toContain('<dialog id="potion-confirm"');
+    expect(res.text).toContain('The timer advances only during an active Fight.');
+    expect(res.text).not.toContain('dungeon is not accepting work');
     expect(res.text).toContain('id="potion-confirm-drink"');
     expect(res.text).toContain('id="potion-confirm-keep"');
     expect(res.text).toContain('id="hub-potion-feedback"');

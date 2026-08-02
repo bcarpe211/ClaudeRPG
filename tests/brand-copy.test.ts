@@ -229,4 +229,24 @@ describe('Runtime Raiders brand copy', () => {
     expect(result.status).toBe(0);
     expect(result.output).toBe('');
   });
+
+  it.each([
+    [
+      'src/web/views/character-sheet.ejs',
+      '<p>The timer pauses whenever the dungeon is not accepting work.</p>\n',
+    ],
+    [
+      'src/web/public/player-hub.js',
+      "setText('potion-confirm-copy', 'The timer pauses whenever the dungeon is not accepting work.');\n",
+    ],
+  ])('rejects work-based potion timing copy in %s', (path, contents) => {
+    const root = copyFixture();
+    writeFileSync(join(root, path), contents);
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain(`${path}:1`);
+    expect(result.output).toContain('stale player copy: work-based potion timing');
+  });
 });
