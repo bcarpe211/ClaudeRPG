@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import RuntimeRaidersCore
@@ -87,18 +88,57 @@ final class AdapterRegistryTests: XCTestCase {
         let file = root.appendingPathComponent("rollout.jsonl")
         try Data().write(to: file)
         let registry = try AdapterRegistry.enabled(surfaceNames: ["codex_cli"], codexRoot: root)
-        XCTAssertNoThrow(try registry.approveProviderFile(file))
+        let approved = try registry.approveProviderFile(file)
+        XCTAssertEqual(try approved.readAppended(cursor: JSONLCursor(), maxBytes: 16).bytesRead, 0)
         XCTAssertThrowsError(try registry.approveProviderFile(parent.appendingPathComponent("outside.jsonl")))
         let link = root.appendingPathComponent("escape.jsonl")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
         XCTAssertThrowsError(try registry.approveProviderFile(link))
     }
 
+    func testApprovedDescriptorCannotBeRedirectedAfterParentSwap() throws {
+        let parent = try temporaryDirectory()
+        let root = parent.appendingPathComponent("codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let file = root.appendingPathComponent("rollout.jsonl")
+        try Data("original\n".utf8).write(to: file)
+        let registry = try AdapterRegistry.enabled(surfaceNames: ["codex_cli"], codexRoot: root)
+        let approved = try registry.approveProviderFile(file)
+
+        let moved = parent.appendingPathComponent("moved", isDirectory: true)
+        try FileManager.default.moveItem(at: root, to: moved)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let outside = parent.appendingPathComponent("outside.jsonl")
+        try Data("DO_NOT_EXPORT_REDIRECT\n".utf8).write(to: outside)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("rollout.jsonl"),
+            withDestinationURL: outside
+        )
+
+        let result = try approved.readAppended(cursor: JSONLCursor(), maxBytes: 64)
+        XCTAssertEqual(result.lines, [Data("original".utf8)])
+    }
+
+    func testUnreadableCodexRootFailsClosed() throws {
+        let root = try temporaryDirectory()
+        XCTAssertEqual(Darwin.chmod(root.path, 0), 0)
+        defer { _ = Darwin.chmod(root.path, 0o700) }
+        XCTAssertThrowsError(
+            try AdapterRegistry.enabled(surfaceNames: ["codex_cli"], codexRoot: root)
+        )
+    }
+
     private func temporaryDirectory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
+        let basePath = FileManager.default.temporaryDirectory.path
+        let canonicalBase = URL(fileURLWithPath:
+            basePath == "/var" || basePath.hasPrefix("/var/")
+                ? "/private" + basePath
+                : basePath
+        )
+        let url = canonicalBase
             .appendingPathComponent("runtime-raiders-registry-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        return url.resolvingSymlinksInPath()
+        return url
     }
 }

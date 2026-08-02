@@ -1,6 +1,24 @@
 import Foundation
 
+public enum CodexAdapterSnapshotError: Error, Equatable {
+    case invalidSnapshot
+}
+
 public struct CodexAdapter: ProviderAdapter {
+    private struct PendingContext: Codable {
+        let nativeID: String
+        let model: String?
+        let effort: String?
+        let eventTime: Int64
+        let ordinal: Int64
+    }
+
+    private struct PendingCompletion: Codable {
+        let eventTime: Int64
+        let ordinal: Int64
+        let observedAt: Int64
+    }
+
     private static let maximumSafeInteger: Int64 = 9_007_199_254_740_991
     private static let zeroUsage = UsageCountersV1(
         input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0
@@ -11,6 +29,8 @@ public struct CodexAdapter: ProviderAdapter {
     private var rejectedSurface = false
     private var pendingStartedAt: Int64?
     private var pendingUsage: UsageCountersV1?
+    private var pendingContext: PendingContext?
+    private var pendingCompletion: PendingCompletion?
     private var activeNativeID: String?
     private var activeStartedAt: Int64?
     private var activeUsage = zeroUsage
@@ -19,6 +39,63 @@ public struct CodexAdapter: ProviderAdapter {
 
     public init(expectedSurface: RunSurface) {
         self.expectedSurface = expectedSurface
+    }
+
+    public init(snapshot: Data) throws {
+        guard let state = try? JSONDecoder().decode(PersistedState.self, from: snapshot),
+              state.version == 1,
+              state.expectedSurface == .codexCLI || state.expectedSurface == .codexDesktop,
+              state.verifiedSurface == nil || state.verifiedSurface == state.expectedSurface,
+              Self.validOptionalIdentity(state.activeNativeID),
+              Self.validOptionalIdentity(state.pendingContext?.nativeID),
+              Self.validOptionalDisplay(state.activeModel),
+              Self.validOptionalDisplay(state.activeEffort),
+              Self.validOptionalDisplay(state.pendingContext?.model),
+              Self.validOptionalDisplay(state.pendingContext?.effort),
+              Self.validOptionalInteger(state.pendingStartedAt),
+              Self.validOptionalInteger(state.activeStartedAt),
+              Self.validOptionalInteger(state.pendingContext?.eventTime),
+              Self.validOptionalInteger(state.pendingContext?.ordinal),
+              Self.validOptionalInteger(state.pendingCompletion?.eventTime),
+              Self.validOptionalInteger(state.pendingCompletion?.ordinal),
+              Self.validOptionalInteger(state.pendingCompletion?.observedAt),
+              Self.validUsage(state.activeUsage),
+              state.pendingUsage.map(Self.validUsage) ?? true else {
+            throw CodexAdapterSnapshotError.invalidSnapshot
+        }
+        expectedSurface = state.expectedSurface
+        verifiedSurface = state.verifiedSurface
+        rejectedSurface = state.rejectedSurface
+        pendingStartedAt = state.pendingStartedAt
+        pendingUsage = state.pendingUsage
+        pendingContext = state.pendingContext
+        pendingCompletion = state.pendingCompletion
+        activeNativeID = state.activeNativeID
+        activeStartedAt = state.activeStartedAt
+        activeUsage = state.activeUsage
+        activeModel = state.activeModel
+        activeEffort = state.activeEffort
+    }
+
+    public func snapshot() throws -> Data {
+        let state = PersistedState(
+            version: 1,
+            expectedSurface: expectedSurface,
+            verifiedSurface: verifiedSurface,
+            rejectedSurface: rejectedSurface,
+            pendingStartedAt: pendingStartedAt,
+            pendingUsage: pendingUsage,
+            pendingContext: pendingContext,
+            pendingCompletion: pendingCompletion,
+            activeNativeID: activeNativeID,
+            activeStartedAt: activeStartedAt,
+            activeUsage: activeUsage,
+            activeModel: activeModel,
+            activeEffort: activeEffort
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(state)
     }
 
     public mutating func consume(
@@ -60,23 +137,15 @@ public struct CodexAdapter: ProviderAdapter {
         if type == "turn_context" {
             guard let nativeID = payload["turn_id"] as? String,
                   !nativeID.isEmpty,
-                  nativeID.utf8.count <= 4_096,
-                  let startedAt = pendingStartedAt else { return [] }
-            activeNativeID = nativeID
-            activeStartedAt = startedAt
-            pendingStartedAt = nil
-            activeUsage = pendingUsage ?? Self.zeroUsage
-            pendingUsage = nil
-            activeModel = Self.displayValue(payload["model"])
-            activeEffort = Self.displayValue(payload["effort"])
-            return [observation(
+                  nativeID.utf8.count <= 4_096 else { return [] }
+            pendingContext = PendingContext(
                 nativeID: nativeID,
-                sequence: source.ordinal,
+                model: Self.displayValue(payload["model"]),
+                effort: Self.displayValue(payload["effort"]),
                 eventTime: eventTime,
-                observedAt: observedAt,
-                startedAt: startedAt,
-                state: .open
-            )]
+                ordinal: source.ordinal
+            )
+            return activatePendingRun(observedAt: observedAt)
         }
 
         guard type == "event_msg", let eventType = payload["type"] as? String else {
@@ -90,7 +159,7 @@ public struct CodexAdapter: ProviderAdapter {
             activeUsage = Self.zeroUsage
             activeModel = nil
             activeEffort = nil
-            return []
+            return activatePendingRun(observedAt: observedAt)
         case "token_count":
             guard let usage = Self.usage(from: payload) else { return [] }
             if let nativeID = activeNativeID, let startedAt = activeStartedAt {
@@ -107,20 +176,55 @@ public struct CodexAdapter: ProviderAdapter {
             pendingUsage = pendingUsage.map { Self.maximum($0, usage) } ?? usage
             return []
         case "task_complete":
-            guard let nativeID = activeNativeID, let startedAt = activeStartedAt else { return [] }
-            let terminal = observation(
-                nativeID: nativeID,
-                sequence: source.ordinal,
+            pendingCompletion = PendingCompletion(
                 eventTime: eventTime,
-                observedAt: observedAt,
-                startedAt: startedAt,
-                state: .completed
+                ordinal: source.ordinal,
+                observedAt: observedAt
             )
-            return [terminal]
+            return emitPendingCompletion()
         default:
             // Failure-like labels are deliberately unverified and stay open.
             return []
         }
+    }
+
+    private mutating func activatePendingRun(observedAt: Int64) -> [NativeRunObservation] {
+        guard activeNativeID == nil,
+              let context = pendingContext,
+              let startedAt = pendingStartedAt else { return [] }
+        activeNativeID = context.nativeID
+        activeStartedAt = startedAt
+        activeUsage = pendingUsage ?? Self.zeroUsage
+        activeModel = context.model
+        activeEffort = context.effort
+        pendingContext = nil
+        pendingStartedAt = nil
+        pendingUsage = nil
+        var output = [observation(
+            nativeID: context.nativeID,
+            sequence: context.ordinal,
+            eventTime: context.eventTime,
+            observedAt: observedAt,
+            startedAt: startedAt,
+            state: .open
+        )]
+        output += emitPendingCompletion()
+        return output
+    }
+
+    private mutating func emitPendingCompletion() -> [NativeRunObservation] {
+        guard let completion = pendingCompletion,
+              let nativeID = activeNativeID,
+              let startedAt = activeStartedAt else { return [] }
+        pendingCompletion = nil
+        return [observation(
+            nativeID: nativeID,
+            sequence: completion.ordinal,
+            eventTime: completion.eventTime,
+            observedAt: completion.observedAt,
+            startedAt: startedAt,
+            state: .completed
+        )]
     }
 
     private func observation(
@@ -191,6 +295,24 @@ public struct CodexAdapter: ProviderAdapter {
         return string
     }
 
+    private static func validOptionalIdentity(_ value: String?) -> Bool {
+        guard let value else { return true }
+        return !value.isEmpty && value.utf8.count <= 4_096
+    }
+
+    private static func validOptionalDisplay(_ value: String?) -> Bool {
+        value.map { $0.utf8.count <= 100 } ?? true
+    }
+
+    private static func validOptionalInteger(_ value: Int64?) -> Bool {
+        value.map { (0...maximumSafeInteger).contains($0) } ?? true
+    }
+
+    private static func validUsage(_ usage: UsageCountersV1) -> Bool {
+        [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.reasoningOutput]
+            .allSatisfy { (0...maximumSafeInteger).contains($0) }
+    }
+
     private static func timestampMS(_ value: String?) -> Int64? {
         guard let value else { return nil }
         let formatter = ISO8601DateFormatter()
@@ -201,5 +323,21 @@ public struct CodexAdapter: ProviderAdapter {
         guard milliseconds >= 0,
               milliseconds <= Double(Self.maximumSafeInteger) else { return nil }
         return Int64(milliseconds.rounded(.towardZero))
+    }
+
+    private struct PersistedState: Codable {
+        let version: Int
+        let expectedSurface: RunSurface
+        let verifiedSurface: RunSurface?
+        let rejectedSurface: Bool
+        let pendingStartedAt: Int64?
+        let pendingUsage: UsageCountersV1?
+        let pendingContext: PendingContext?
+        let pendingCompletion: PendingCompletion?
+        let activeNativeID: String?
+        let activeStartedAt: Int64?
+        let activeUsage: UsageCountersV1
+        let activeModel: String?
+        let activeEffort: String?
     }
 }

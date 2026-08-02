@@ -9,9 +9,43 @@ public enum AdapterRegistryError: Error, Equatable {
     case invalidObservation
 }
 
-public struct AdapterRegistry: Sendable {
+public final class ApprovedProviderFile: @unchecked Sendable {
+    private let descriptor: Int32
+
+    fileprivate init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    deinit {
+        Darwin.close(descriptor)
+    }
+
+    public func readAppended(
+        cursor: JSONLCursor,
+        maxBytes: Int
+    ) throws -> JSONLReadResult {
+        try JSONLReader.readAppended(
+            file: URL(fileURLWithPath: "/dev/fd/\(descriptor)"),
+            cursor: cursor,
+            maxBytes: maxBytes
+        )
+    }
+}
+
+public final class AdapterRegistry: @unchecked Sendable {
     public let surfaces: [RunSurface]
     public let codexRoot: URL
+    private let rootDescriptor: Int32
+
+    private init(surfaces: [RunSurface], codexRoot: URL, rootDescriptor: Int32) {
+        self.surfaces = surfaces
+        self.codexRoot = codexRoot
+        self.rootDescriptor = rootDescriptor
+    }
+
+    deinit {
+        Darwin.close(rootDescriptor)
+    }
 
     public static func enabled(surfaceNames: [String], codexRoot: URL) throws -> AdapterRegistry {
         var surfaces: [RunSurface] = []
@@ -26,12 +60,24 @@ public struct AdapterRegistry: Sendable {
             }
             surfaces.append(surface)
         }
-        guard !surfaces.isEmpty, try isRealDirectoryWithoutSymlink(codexRoot) else {
+        guard !surfaces.isEmpty else {
+            throw AdapterRegistryError.invalidCodexRoot
+        }
+        let standardizedRoot = URL(fileURLWithPath: codexRoot.path, isDirectory: true)
+        guard !standardizedRoot.pathComponents.contains("."),
+              !standardizedRoot.pathComponents.contains("..") else {
+            throw AdapterRegistryError.invalidCodexRoot
+        }
+        let descriptor: Int32
+        do {
+            descriptor = try openDirectoryTree(standardizedRoot)
+        } catch {
             throw AdapterRegistryError.invalidCodexRoot
         }
         return AdapterRegistry(
             surfaces: surfaces,
-            codexRoot: codexRoot.standardizedFileURL
+            codexRoot: standardizedRoot,
+            rootDescriptor: descriptor
         )
     }
 
@@ -45,14 +91,44 @@ public struct AdapterRegistry: Sendable {
     }
 
     @discardableResult
-    public func approveProviderFile(_ file: URL) throws -> URL {
-        let standardized = file.standardizedFileURL
+    public func approveProviderFile(_ file: URL) throws -> ApprovedProviderFile {
+        let standardized = URL(fileURLWithPath: file.path, isDirectory: false)
         let prefix = codexRoot.path.hasSuffix("/") ? codexRoot.path : codexRoot.path + "/"
-        guard standardized.path.hasPrefix(prefix),
-              try Self.isRegularFileWithoutSymlink(standardized) else {
+        guard standardized.path.hasPrefix(prefix) else {
             throw AdapterRegistryError.providerFileOutsideRoot
         }
-        return standardized
+        let relative = String(standardized.path.dropFirst(prefix.count))
+        let components = relative.split(separator: "/").map(String.init)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw AdapterRegistryError.providerFileOutsideRoot
+        }
+        var directory = Darwin.dup(rootDescriptor)
+        guard directory >= 0 else { throw AdapterRegistryError.providerFileOutsideRoot }
+        defer { if directory >= 0 { Darwin.close(directory) } }
+        for component in components.dropLast() {
+            let next = Darwin.openat(
+                directory,
+                component,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard next >= 0 else { throw AdapterRegistryError.providerFileOutsideRoot }
+            Darwin.close(directory)
+            directory = next
+        }
+        let descriptor = Darwin.openat(
+            directory,
+            components.last!,
+            O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else { throw AdapterRegistryError.providerFileOutsideRoot }
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG else {
+            Darwin.close(descriptor)
+            throw AdapterRegistryError.providerFileOutsideRoot
+        }
+        return ApprovedProviderFile(descriptor: descriptor)
     }
 
     public func event(
@@ -95,23 +171,29 @@ public struct AdapterRegistry: Sendable {
         )
     }
 
-    private static func isRealDirectoryWithoutSymlink(_ url: URL) throws -> Bool {
-        guard try pathHasNoSymlink(url.standardizedFileURL) else { return false }
-        var status = stat()
-        guard Darwin.lstat(url.standardizedFileURL.path, &status) == 0 else { return false }
-        return status.st_mode & S_IFMT == S_IFDIR
-    }
-
-    private static func isRegularFileWithoutSymlink(_ url: URL) throws -> Bool {
-        guard try pathHasNoSymlink(url) else { return false }
-        var status = stat()
-        guard Darwin.lstat(url.path, &status) == 0 else { return false }
-        return status.st_mode & S_IFMT == S_IFREG
-    }
-
-    private static func pathHasNoSymlink(_ url: URL) throws -> Bool {
-        guard url.isFileURL else { return false }
-        let standardized = url.standardizedFileURL
-        return standardized.resolvingSymlinksInPath().path == standardized.path
+    private static func openDirectoryTree(_ url: URL) throws -> Int32 {
+        guard url.isFileURL, url.path.hasPrefix("/") else {
+            throw AdapterRegistryError.invalidCodexRoot
+        }
+        var descriptor = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else { throw AdapterRegistryError.invalidCodexRoot }
+        for component in url.pathComponents where component != "/" {
+            let next = Darwin.openat(
+                descriptor,
+                component,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard next >= 0 else {
+                Darwin.close(descriptor)
+                throw AdapterRegistryError.invalidCodexRoot
+            }
+            Darwin.close(descriptor)
+            descriptor = next
+        }
+        guard Darwin.faccessat(descriptor, ".", R_OK | X_OK, 0) == 0 else {
+            Darwin.close(descriptor)
+            throw AdapterRegistryError.invalidCodexRoot
+        }
+        return descriptor
     }
 }

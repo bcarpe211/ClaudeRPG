@@ -108,6 +108,97 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(output.last?.effort, "high")
     }
 
+    func testReorderedLifecycleFactsRemainPendingUntilStartAndIdentityResolve() throws {
+        let data = try Data(contentsOf: fixtureURL("cli-completed"))
+        let lines = data
+            .split(separator: UInt8(0x0A), omittingEmptySubsequences: true)
+            .map { Data($0) }
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        var output: [NativeRunObservation] = []
+        for index in [0, 3, 6, 5, 1] {
+            output += adapter.consume(
+                line: lines[index],
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+        XCTAssertEqual(output.map(\.state), [.open, .completed])
+        XCTAssertEqual(output.map(\.sequence), [3, 6])
+        XCTAssertEqual(output.last?.usage.input, 10)
+        XCTAssertEqual(output.last?.nativeID, "FAKE_CLI_TURN_COMPLETE")
+    }
+
+    func testSnapshotRestoresMidRunWithoutRescanningContent() throws {
+        let data = try Data(contentsOf: fixtureURL("desktop-completed"))
+        let lines = data
+            .split(separator: UInt8(0x0A), omittingEmptySubsequences: true)
+            .map { Data($0) }
+        var adapter = CodexAdapter(expectedSurface: .codexDesktop)
+        for index in 0...3 {
+            _ = adapter.consume(
+                line: lines[index], source: .init(ordinal: Int64(index)), observedAt: observedAt
+            )
+        }
+        let snapshot = try adapter.snapshot()
+        XCTAssertFalse(String(decoding: snapshot, as: UTF8.self).contains("DO_NOT_EXPORT"))
+        var restored = try CodexAdapter(snapshot: snapshot)
+        var tail: [NativeRunObservation] = []
+        for index in 4...6 {
+            tail += restored.consume(
+                line: lines[index], source: .init(ordinal: Int64(index)), observedAt: observedAt
+            )
+        }
+        XCTAssertEqual(tail.last?.state, .completed)
+        XCTAssertEqual(tail.last?.usage.input, 20)
+        XCTAssertEqual(tail.last?.nativeID, "FAKE_DESKTOP_TURN_COMPLETE")
+        XCTAssertThrowsError(try CodexAdapter(snapshot: Data("{}".utf8)))
+    }
+
+    func testEveryFixtureObservationPassesTheOutboundPrivacyGate() throws {
+        let basePath = FileManager.default.temporaryDirectory.path
+        let canonicalBase = URL(fileURLWithPath:
+            basePath == "/var" || basePath.hasPrefix("/var/")
+                ? "/private" + basePath
+                : basePath
+        )
+        let root = canonicalBase
+            .appendingPathComponent("runtime-raiders-fixture-privacy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let registry = try AdapterRegistry.enabled(
+            surfaceNames: ["codex_cli", "codex_desktop"], codexRoot: root
+        )
+        let fixtures = try FileManager.default.contentsOfDirectory(
+            at: fixtureURL(".").deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "jsonl" }
+        var encodedCount = 0
+        for fixture in fixtures {
+            let surface: RunSurface = fixture.lastPathComponent.hasPrefix("cli-")
+                ? .codexCLI : .codexDesktop
+            var adapter = CodexAdapter(expectedSurface: surface)
+            let data = try Data(contentsOf: fixture)
+            for (index, line) in data.split(separator: UInt8(0x0A), omittingEmptySubsequences: true).enumerated() {
+                for observation in adapter.consume(
+                    line: Data(line), source: .init(ordinal: Int64(index)), observedAt: observedAt
+                ) {
+                    let event = try registry.event(
+                        from: observation,
+                        dedupeSecret: Data("fixture-secret".utf8),
+                        companionVersion: "0.1.0",
+                        deviceID: "00000000-0000-4000-8000-000000000001"
+                    )
+                    let encoded = try PrivacyEncoder().encode(event)
+                    let text = String(decoding: encoded, as: UTF8.self)
+                    XCTAssertFalse(text.contains("DO_NOT_EXPORT"))
+                    XCTAssertFalse(text.contains(observation.nativeID))
+                    encodedCount += 1
+                }
+            }
+        }
+        XCTAssertGreaterThan(encodedCount, 0)
+    }
+
     private func consumeFixture(
         _ name: String,
         adapter: inout CodexAdapter
