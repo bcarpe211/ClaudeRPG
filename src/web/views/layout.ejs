@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title><%= title %> — ClaudeRPG</title>
+  <title><%= title %> — <%= brand.name %></title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%E2%9A%94%EF%B8%8F</text></svg>" />
   <link rel="stylesheet" href="/static/dungeon.css" />
   <% (typeof styles !== 'undefined' ? styles : []).forEach(function (s) { %><link rel="stylesheet" href="/static/<%= s %>" />
@@ -21,7 +21,7 @@
   <% } %>
 
   <header class="bar">
-    <a class="brand" href="/"><img class="px" src="/static/landing/sword.png" alt=""><span>CLAUDE<b>RPG</b></span></a>
+    <a class="brand" href="/"><img class="px" src="/static/landing/sword.png" alt=""><span><%= brand.name %></span></a>
     <nav><a href="/">Home</a><a href="/tv">Watch the TV</a><a href="/register">Register</a><a href="/character">Log in</a><a href="/admin">Admin</a></nav>
   </header>
 
