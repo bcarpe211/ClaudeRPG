@@ -18,6 +18,7 @@ case "$RUNTIME_RAIDERS_TEAM_ID" in *[!A-Z0-9]*|'') echo "RUNTIME_RAIDERS_TEAM_ID
   echo "RUNTIME_RAIDERS_TEAM_ID is invalid" >&2
   exit 64
 }
+REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RUNTIME_RAIDERS_TEAM_ID"'"'
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)"
 OUTPUT="$ROOT/dist"
 if [ "$#" -gt 0 ]; then
@@ -30,8 +31,33 @@ fi
 TEMP_ROOT=/tmp
 [ -n "$TMPDIR" ] && TEMP_ROOT="$TMPDIR"
 WORK="$(mktemp -d "$TEMP_ROOT/runtime-raiders-release.XXXXXX")"
-cleanup() { rm -rf "$WORK"; }
-trap cleanup EXIT HUP INT TERM
+release_transaction_active=0
+release_transaction_committed=0
+old_zip=0
+old_checksum=0
+old_install=0
+placed_zip=0
+placed_checksum=0
+placed_install=0
+rollback_release() {
+  [ "$release_transaction_active" -eq 1 ] && [ "$release_transaction_committed" -eq 0 ] || return 0
+  release_transaction_active=0
+  [ "$placed_zip" -eq 0 ] || rm -f "$OUTPUT/runtime-raiders-agent.zip"
+  [ "$placed_checksum" -eq 0 ] || rm -f "$OUTPUT/runtime-raiders-agent.zip.sha256"
+  [ "$placed_install" -eq 0 ] || rm -f "$OUTPUT/install.sh"
+  [ "$old_zip" -eq 0 ] || /bin/mv "$WORK/old-runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
+  [ "$old_checksum" -eq 0 ] || /bin/mv "$WORK/old-runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
+  [ "$old_install" -eq 0 ] || /bin/mv "$WORK/old-install.sh" "$OUTPUT/install.sh"
+}
+cleanup() {
+  status=$?
+  rollback_release
+  rm -rf "$WORK"
+  trap - EXIT HUP INT TERM
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 STAGED_OUTPUT="$(mktemp -d "$WORK/output.XXXXXX")"
 for arch in arm64 x86_64; do
   (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product raiders)
@@ -52,13 +78,13 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 </dict></plist>
 EOF
 codesign --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$APP"
-codesign --verify --strict --verbose=2 "$APP"
+codesign --verify --strict --verbose=2 -R="$REQUIREMENT" "$APP"
 NOTARY_ZIP="$WORK/notary.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
 xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$RUNTIME_RAIDERS_NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
-codesign --verify --strict --verbose=2 "$APP"
+codesign --verify --strict --verbose=2 -R="$REQUIREMENT" "$APP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$STAGED_OUTPUT/runtime-raiders-agent.zip"
 (cd "$STAGED_OUTPUT" && shasum -a 256 runtime-raiders-agent.zip > runtime-raiders-agent.zip.sha256)
 [ -s "$STAGED_OUTPUT/runtime-raiders-agent.zip" ] && [ -s "$STAGED_OUTPUT/runtime-raiders-agent.zip.sha256" ] || {
@@ -77,18 +103,23 @@ if [ -e "$OUTPUT/runtime-raiders-agent.zip" ] || [ -e "$OUTPUT/runtime-raiders-a
     echo "refusing to replace an unmatched existing release pair" >&2
     exit 1
   }
+fi
+release_transaction_active=1
+if [ -f "$OUTPUT/runtime-raiders-agent.zip" ]; then
   mv "$OUTPUT/runtime-raiders-agent.zip" "$WORK/old-runtime-raiders-agent.zip"
+  old_zip=1
   mv "$OUTPUT/runtime-raiders-agent.zip.sha256" "$WORK/old-runtime-raiders-agent.zip.sha256"
-  [ -f "$OUTPUT/install.sh" ] && mv "$OUTPUT/install.sh" "$WORK/old-install.sh"
+  old_checksum=1
 fi
-if ! mv "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip" ||
-   ! mv "$STAGED_OUTPUT/runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256" ||
-   ! mv "$STAGED_OUTPUT/install.sh" "$OUTPUT/install.sh"; then
-  rm -f "$OUTPUT/runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip.sha256" "$OUTPUT/install.sh"
-  [ -f "$WORK/old-runtime-raiders-agent.zip" ] && mv "$WORK/old-runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
-  [ -f "$WORK/old-runtime-raiders-agent.zip.sha256" ] && mv "$WORK/old-runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
-  [ -f "$WORK/old-install.sh" ] && mv "$WORK/old-install.sh" "$OUTPUT/install.sh"
-  echo "release output replacement failed; previous pair restored" >&2
-  exit 1
+if [ -f "$OUTPUT/install.sh" ]; then
+  mv "$OUTPUT/install.sh" "$WORK/old-install.sh"
+  old_install=1
 fi
+mv "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
+placed_zip=1
+mv "$STAGED_OUTPUT/runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
+placed_checksum=1
+mv "$STAGED_OUTPUT/install.sh" "$OUTPUT/install.sh"
+placed_install=1
+release_transaction_committed=1
 echo "Built notarized artifact at $OUTPUT/runtime-raiders-agent.zip (publication is manual)."

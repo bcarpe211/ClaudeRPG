@@ -16,10 +16,15 @@ support directory. The per-user LaunchAgent is exactly
 `com.redlattice.runtime-raiders-agent`, and calls the app's inner
 `runtime-raiders-agent` executable without placing credentials in launchd.
 
-The installer uses the first writable existing PATH directory. If none exists,
+The installer reuses its recorded, owner-owned command symlink across upgrades;
+if a user has replaced that link, it leaves the replacement alone and chooses
+the first writable, owner-owned existing PATH directory instead. If none exists,
 it creates `~/.local/bin` and appends exactly
 `export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path` to
-`~/.zprofile`. Upgrades preserve enrollment, cursors, and queued events.
+`~/.zprofile`. Upgrades preserve enrollment, cursors, and queued events. Any
+post-backup install failure restores the prior app, launch agent, shim, command
+state, and owned profile marker; a newly issued private enrollment is retained
+so a retry does not consume a second one-time code.
 
 Run `raiders uninstall` to remove the companion. Its owner-only shim asks a
 live daemon to persist off and stop; only a genuinely absent socket permits
@@ -34,8 +39,11 @@ For a release host, require `RUNTIME_RAIDERS_CODESIGN_IDENTITY`,
 `scripts/release/build-runtime-raiders-agent.sh`. The build creates arm64 and
 x86_64 binaries, combines a universal executable in a minimal app, signs with
 hardened runtime and secure timestamp, strictly verifies, notarizes with
-`notarytool --wait`, staples and validates the app, recreates the ZIP, and
-writes its SHA-256. Standalone binaries cannot be stapled. The script does not
+`notarytool --wait`, staples and validates the app, then repeats the same
+designated-requirement verification before recreating the ZIP and SHA-256.
+Its ZIP, checksum, and installer replacement is transactional, restoring any
+prior complete pair (and any prior standalone installer) if replacement fails.
+Standalone binaries cannot be stapled. The script does not
 publish; a separate approved operation may later place the ZIP and checksum at
 the documented downloads URL. The checked-in installer is fail-closed until the
 release build renders its literal Team ID; installed artifacts verify the exact

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -67,7 +67,14 @@ function fakes(root: string): string {
   ]);
   executable(join(bin, 'codesign'), [
     'printf "codesign %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+    'verify=0; requirement=0',
+    'for argument in "$@"; do [ "$argument" = "--verify" ] && verify=1; [ "$argument" = "-R" ] && exit 65; case "$argument" in -R=*) printf "%s\\n" "$argument" | grep -F "identifier \\"com.redlattice.runtime-raiders-agent\\"" >/dev/null && requirement=1;; esac; done',
+    '[ "$verify" = 0 ] || [ "$requirement" = 1 ]',
     '[ "$FAKE_CODESIGN_FAIL" != 1 ]',
+  ]);
+  executable(join(bin, 'ln'), [
+    '[ "$FAKE_LN_FAIL" != 1 ] || exit 76',
+    'exec /bin/ln "$@"',
   ]);
   executable(join(bin, 'launchctl'), [
     'if [ "$1" = print ]; then',
@@ -105,6 +112,7 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     PATH: (path ? path + ':' + fake : fake) + ':/usr/bin:/bin',
     FAKE_SHASUM_FAIL: '0',
     FAKE_CODESIGN_FAIL: '0',
+    FAKE_LN_FAIL: '0',
     FAKE_LAUNCH_PRINT_PRESENT: '0',
     FAKE_LAUNCH_PRINT_ABSENT: '1',
     FAKE_LAUNCH_BOOTOUT_FAIL: '0',
@@ -391,7 +399,7 @@ describe('Runtime Raiders companion installer', () => {
       const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
       expect(result.status, result.stderr).toBe(0);
       const log = readFileSync(join(home, 'commands.log'), 'utf8');
-      expect(log).toContain('codesign --verify --strict -R');
+      expect(log).toContain('codesign --verify --strict -R=identifier');
       expect(log).toContain('identifier "com.redlattice.runtime-raiders-agent"');
       expect(log).toContain('subject.OU] = "' + teamId + '"');
       expect(log).not.toContain('WRONGTEAM');
@@ -440,6 +448,86 @@ describe('Runtime Raiders companion installer', () => {
       expect(result.status).not.toBe(0);
       expect([readFileSync(appBinary, 'utf8'), readFileSync(plist, 'utf8'), readFileSync(shim, 'utf8'), readFileSync(config, 'utf8'), readFileSync(join(support, 'state/command-link'), 'utf8'), readFileSync(command)]).toEqual(before);
       expect(lstatSync(command).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back every replaced install surface when link creation fails after backup', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-link-rollback-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const base = env(home, fakes(root), artifact(root), commandDir);
+      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      const support = join(home, 'Library/Application Support/Runtime Raiders');
+      const plist = join(home, 'Library/LaunchAgents', label + '.plist');
+      const command = join(commandDir, 'raiders');
+      const files = [
+        join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'),
+        plist, join(support, 'raiders'), join(support, 'state/enrollment.json'), join(support, 'state/command-link'),
+      ];
+      const before = files.map((file) => readFileSync(file, 'utf8'));
+      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+        ...base, ...env(home, join(root, 'fakes'), artifact(root, 'replacement'), commandDir), FAKE_LN_FAIL: '1',
+      });
+      expect(result.status).not.toBe(0);
+      expect(files.map((file) => readFileSync(file, 'utf8'))).toEqual(before);
+      expect(readlinkSync(command)).toBe(join(support, 'raiders'));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a newly issued enrollment after bootstrap failure and reuses it on retry', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-fresh-bootstrap-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const base = env(home, fakes(root), artifact(root), commandDir);
+      const first = invoke(renderedInstaller(root), ['--code', enrollmentCode], { ...base, FAKE_LAUNCH_BOOTSTRAP_FAIL: '1' });
+      expect(first.status).not.toBe(0);
+      const support = join(home, 'Library/Application Support/Runtime Raiders');
+      expect(existsSync(join(support, 'state/enrollment.json'))).toBe(true);
+      expect(existsSync(join(support, 'Runtime Raiders Agent.app'))).toBe(false);
+      expect(existsSync(join(home, 'Library/LaunchAgents', label + '.plist'))).toBe(false);
+      expect(existsSync(join(support, 'raiders'))).toBe(false);
+      expect(existsSync(join(commandDir, 'raiders'))).toBe(false);
+      expect(existsSync(join(support, 'state/command-link'))).toBe(false);
+      const retry = invoke(renderedInstaller(root), ['--code', enrollmentCode], base);
+      expect(retry.status, retry.stderr).toBe(0);
+      expect(readFileSync(join(home, 'commands.log'), 'utf8').match(/api\/raiders\/enroll/g)).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates only an owned recorded command link and preserves user replacements on rollback', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-command-migration-'));
+    try {
+      const home = join(root, 'home');
+      const oldDir = join(home, 'old-bin');
+      const newDir = join(home, 'new-bin');
+      mkdirSync(oldDir, { recursive: true });
+      mkdirSync(newDir, { recursive: true });
+      const base = env(home, fakes(root), artifact(root), oldDir);
+      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      const support = join(home, 'Library/Application Support/Runtime Raiders');
+      const oldCommand = join(oldDir, 'raiders');
+      unlinkSync(oldCommand);
+      writeFileSync(oldCommand, 'user replacement');
+      const newEnvironment = env(home, join(root, 'fakes'), artifact(root, 'replacement'), newDir);
+      const failed = invoke(renderedInstaller(root), ['--code', enrollmentCode], { ...newEnvironment, FAKE_LAUNCH_BOOTSTRAP_FAIL: '1' });
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(oldCommand, 'utf8')).toBe('user replacement');
+      expect(readFileSync(join(support, 'state/command-link'), 'utf8')).toBe(oldCommand + '\n');
+      const upgraded = invoke(renderedInstaller(root), ['--code', enrollmentCode], newEnvironment);
+      expect(upgraded.status, upgraded.stderr).toBe(0);
+      expect(readFileSync(oldCommand, 'utf8')).toBe('user replacement');
+      expect(readFileSync(join(support, 'state/command-link'), 'utf8')).toBe(join(newDir, 'raiders') + '\n');
+      expect(readlinkSync(join(newDir, 'raiders'))).toBe(join(support, 'raiders'));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -522,7 +610,12 @@ describe('Runtime Raiders release build', () => {
         'printf "universal" > "$output"',
         'printf "lipo\\n" >> "$RUNTIME_RAIDERS_TEST_LOG"',
       ]);
-      executable(join(fake, 'codesign'), ['printf "codesign %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"']);
+      executable(join(fake, 'codesign'), [
+        'printf "codesign %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+        'verify=0; requirement=0',
+        'for argument in "$@"; do [ "$argument" = "--verify" ] && verify=1; [ "$argument" = "-R" ] && exit 65; case "$argument" in -R=*) printf "%s\\n" "$argument" | grep -F "identifier \\"com.redlattice.runtime-raiders-agent\\"" >/dev/null && requirement=1;; esac; done',
+        '[ "$verify" = 0 ] || [ "$requirement" = 1 ]',
+      ]);
       executable(join(fake, 'ditto'), [
         'last=""; for argument in "$@"; do last="$argument"; done',
         'printf x > "$last"',
@@ -553,6 +646,7 @@ describe('Runtime Raiders release build', () => {
       expect(commands).toContain('lipo');
       expect(commands).toContain('codesign --force --options runtime --timestamp');
       expect(commands).toContain('codesign --verify --strict');
+      expect(commands).toContain('codesign --verify --strict --verbose=2 -R=identifier "com.redlattice.runtime-raiders-agent"');
       expect(commands).toContain('xcrun notarytool submit');
       expect(commands).toContain('--wait');
       expect(commands).toContain('xcrun stapler staple');
@@ -596,6 +690,52 @@ describe('Runtime Raiders release build', () => {
       expect(readFileSync(join(output, 'runtime-raiders-agent.zip'), 'utf8')).toBe('old zip');
       expect(readFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'utf8')).toBe('old checksum');
       expect(readFileSync(join(output, 'install.sh'), 'utf8')).toBe('old installer');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('restores output files after an injected replacement failure and preserves an orphan installer', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-release-output-transaction-'));
+    try {
+      const fake = join(root, 'fakes');
+      mkdirSync(fake, { recursive: true });
+      executable(join(fake, 'swift'), [
+        'arch=""; while [ "$#" -gt 0 ]; do if [ "$1" = "--arch" ]; then arch="$2"; shift 2; else shift; fi; done',
+        'mkdir -p "$PWD/.build/$arch-apple-macosx/release"; printf "%s" "$arch" > "$PWD/.build/$arch-apple-macosx/release/raiders"',
+      ]);
+      executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
+      executable(join(fake, 'codesign'), ['exit 0']);
+      executable(join(fake, 'ditto'), ['last=""; for argument in "$@"; do last="$argument"; done; printf x > "$last"']);
+      executable(join(fake, 'xcrun'), ['exit 0']);
+      executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+      executable(join(fake, 'mv'), [
+        '[ "$2" = "$RUNTIME_RAIDERS_TEST_OUTPUT/runtime-raiders-agent.zip.sha256" ] && exit 79',
+        'exec /bin/mv "$@"',
+      ]);
+      const common = {
+        ...process.env, PATH: fake + ':/usr/bin:/bin',
+        RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+        RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+        RUNTIME_RAIDERS_TEAM_ID: teamId,
+      };
+      const output = join(root, 'output');
+      mkdirSync(output, { recursive: true });
+      writeFileSync(join(output, 'runtime-raiders-agent.zip'), 'old zip');
+      writeFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'old checksum');
+      writeFileSync(join(output, 'install.sh'), 'old installer');
+      const failed = invoke(build, ['--output', output], { ...common, RUNTIME_RAIDERS_TEST_OUTPUT: output });
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(join(output, 'runtime-raiders-agent.zip'), 'utf8')).toBe('old zip');
+      expect(readFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'utf8')).toBe('old checksum');
+      expect(readFileSync(join(output, 'install.sh'), 'utf8')).toBe('old installer');
+      const orphan = join(root, 'orphan');
+      mkdirSync(orphan, { recursive: true });
+      writeFileSync(join(orphan, 'install.sh'), 'user installer');
+      const orphanFailed = invoke(build, ['--output', orphan], { ...common, RUNTIME_RAIDERS_TEST_OUTPUT: orphan });
+      expect(orphanFailed.status).not.toBe(0);
+      expect(readFileSync(join(orphan, 'install.sh'), 'utf8')).toBe('user installer');
+      expect(existsSync(join(orphan, 'runtime-raiders-agent.zip'))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
