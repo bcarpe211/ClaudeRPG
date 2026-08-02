@@ -36,8 +36,9 @@ for (const target of scanTargets) {
     const lines = readFileSync(file, 'utf8').split(/\r?\n/);
     lines.forEach((line, index) => {
       if (line.includes(allowMarker)) return;
+      const normalizedLine = line.toLowerCase();
       for (const term of staleTerms) {
-        if (line.includes(term)) {
+        if (normalizedLine.includes(term.toLowerCase())) {
           violations.push(`${relative(repositoryRoot, file)}:${index + 1}: stale player copy: ${term}`);
         }
       }

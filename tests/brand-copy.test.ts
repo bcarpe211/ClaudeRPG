@@ -15,9 +15,11 @@ import { loadConfig } from '../src/config';
 import { createApp } from '../src/web/app';
 
 const fixtureRoots: string[] = [];
+const bodyProbe = join('src/web/views', 'brand-copy-probe.ejs');
 
 afterEach(() => {
   while (fixtureRoots.length > 0) rmSync(fixtureRoots.pop()!, { recursive: true, force: true });
+  rmSync(bodyProbe, { force: true });
 });
 
 function copyFixture(): string {
@@ -73,6 +75,19 @@ describe('Runtime Raiders brand copy', () => {
     expect(wordmark).not.toContain('CLAUDE');
   });
 
+  it('supplies protected brand and terms objects to body views', async () => {
+    writeFileSync(bodyProbe, '<%= brand.primaryLine %>|<%= terms.leaderboard %>');
+
+    const { renderPage } = await import('../src/web/app');
+    const page = await renderPage('brand-copy-probe', {
+      brand: { primaryLine: 'Caller-controlled brand' },
+      terms: { leaderboard: 'Caller-controlled term' },
+    });
+
+    expect(page).toContain('Clock in. Clear dungeons. Get paid.|Leaderboard');
+    expect(page).not.toContain('Caller-controlled');
+  });
+
   it('rejects stale player copy and permits same-line compatibility markers', () => {
     const root = copyFixture();
     writeFileSync(join(root, 'src/web/views/stale.ejs'), 'Welcome to ClaudeRPG\n');
@@ -95,5 +110,26 @@ describe('Runtime Raiders brand copy', () => {
 
     expect(result.status).toBe(0);
     expect(result.output).toBe('');
+  });
+
+  it('rejects case variants of every forbidden term', () => {
+    const root = copyFixture();
+    const variants = [
+      ['clauderpg', 'ClaudeRPG'],
+      ['claude code ONLY', 'Claude Code only'],
+      ['RPG_ON', 'rpg_on'],
+      ['RPG_OFF', 'rpg_off'],
+      ['Effective Tokens', 'effective tokens'],
+      ['total TOKENS', 'Total tokens'],
+    ];
+    writeFileSync(
+      join(root, 'src/web/views/case-variants.ejs'),
+      variants.map(([variant]) => variant).join('\n'),
+    );
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    for (const [, term] of variants) expect(result.output).toContain(`stale player copy: ${term}`);
   });
 });

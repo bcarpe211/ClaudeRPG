@@ -16,7 +16,7 @@ import { registerCatalogRoutes } from './routes/catalog';
 import { registerDungeonPreviewRoutes } from './routes/dungeon-preview';
 import { registerCosmeticsReviewRoutes } from './routes/cosmetics-review';
 import { registerRunRoutes } from './routes/runs';
-import { BRAND } from '../domain/brand';
+import { BRAND, TERMS } from '../domain/brand';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -32,10 +32,11 @@ export async function renderPage(
   view: string,
   data: Record<string, unknown>,
 ): Promise<string> {
-  const body = await ejs.renderFile(path.join(VIEWS, `${view}.ejs`), data);
+  const viewData = { ...data, brand: BRAND, terms: TERMS };
+  const body = await ejs.renderFile(path.join(VIEWS, `${view}.ejs`), viewData);
   return ejs.renderFile(path.join(VIEWS, 'layout.ejs'), {
+    ...viewData,
     title: data.title ?? BRAND.name,
-    brand: BRAND,
     body,
     frame: data.frame ?? 'full',
     styles: data.styles ?? [],
