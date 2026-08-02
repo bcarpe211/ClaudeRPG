@@ -1,7 +1,7 @@
 # Runtime Raiders Treasure Motion and Footer Cleanup Design
 
 **Date:** 2026-08-02  
-**Status:** Approved interaction design; awaiting written-spec review  
+**Status:** Approved
 **Scope:** Shared web shell motion and footer presentation only
 
 ## Goal
