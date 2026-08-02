@@ -76,7 +76,7 @@ final class CodexAdapterTests: XCTestCase {
     func testInvalidUsageAndThreadTotalsNeverBecomeUsage() {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
             #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":999},"last_token_usage":{"input_tokens":true,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
@@ -94,10 +94,75 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertTrue(observations.isEmpty)
     }
 
+    func testUnsupportedSessionMetadataVersionsRejectBothSurfacesPermanently() throws {
+        let unsupportedVersions: [(name: String, value: Any?)] = [
+            ("missing", nil),
+            ("wrong type", 146),
+            ("older", "0.146.0-alpha.3.0"),
+            ("newer", "0.146.0-alpha.3.2"),
+            ("unknown", "unknown-version"),
+        ]
+        for surface in [RunSurface.codexCLI, .codexDesktop] {
+            let source: Any = surface == .codexCLI ? "cli" : ["desktop": true]
+            for unsupported in unsupportedVersions {
+                var adapter = CodexAdapter(expectedSurface: surface)
+                var payload: [String: Any] = ["source": source]
+                if let version = unsupported.value {
+                    payload["cli_version"] = version
+                }
+                var output = adapter.consume(
+                    line: try sessionMetadata(payload: payload, timestampSecond: 0),
+                    source: .init(ordinal: 0),
+                    observedAt: observedAt
+                )
+                let lifecycle = [
+                    #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"rejected-turn"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+                ]
+                for (offset, line) in lifecycle.enumerated() {
+                    output += adapter.consume(
+                        line: Data(line.utf8),
+                        source: .init(ordinal: Int64(offset + 1)),
+                        observedAt: observedAt
+                    )
+                }
+
+                output += adapter.consume(
+                    line: try sessionMetadata(
+                        payload: ["source": source, "cli_version": "0.146.0-alpha.3.1"],
+                        timestampSecond: 5
+                    ),
+                    source: .init(ordinal: 5),
+                    observedAt: observedAt
+                )
+                for (offset, line) in lifecycle.enumerated() {
+                    output += adapter.consume(
+                        line: Data(line.utf8),
+                        source: .init(ordinal: Int64(offset + 6)),
+                        observedAt: observedAt
+                    )
+                }
+
+                XCTAssertTrue(
+                    output.isEmpty,
+                    "\(surface) accepted \(unsupported.name) cli_version"
+                )
+                var restored = try CodexAdapter(snapshot: adapter.snapshot())
+                XCTAssertTrue(restored.consume(
+                    line: Data(lifecycle[0].utf8),
+                    source: .init(ordinal: 10),
+                    observedAt: observedAt
+                ).isEmpty)
+            }
+        }
+    }
+
     func testMatchingTurnContextProvidesBoundedDisplayMetadataOnly() throws {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cwd":"DO_NOT_EXPORT_PATH"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1","cwd":"DO_NOT_EXPORT_PATH"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"gpt-test","effort":"high","content":"DO_NOT_EXPORT_PROMPT"}}"#,
         ]
@@ -171,10 +236,10 @@ final class CodexAdapterTests: XCTestCase {
     func testReachableRejectedSurfaceSnapshotRestoresFailClosed() throws {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
-            #"{"timestamp":"2026-01-01T00:00:03Z","type":"session_meta","payload":{"source":{"desktop":true}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"session_meta","payload":{"source":{"desktop":true},"cli_version":"0.146.0-alpha.3.1"}}"#,
         ]
         for (index, line) in lines.enumerated() {
             _ = adapter.consume(
@@ -191,7 +256,7 @@ final class CodexAdapterTests: XCTestCase {
     func testDuplicateCompletionCannotRepeatOrStealTheNextTurn() {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn-1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
@@ -270,6 +335,17 @@ final class CodexAdapterTests: XCTestCase {
             )
         }
         return output
+    }
+
+    private func sessionMetadata(
+        payload: [String: Any],
+        timestampSecond: Int
+    ) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "timestamp": String(format: "2026-01-01T00:00:%02dZ", timestampSecond),
+            "type": "session_meta",
+            "payload": payload,
+        ])
     }
 
     private func fixtureURL(_ name: String) -> URL {

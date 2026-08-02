@@ -20,6 +20,7 @@ public struct CodexAdapter: ProviderAdapter {
     }
 
     private static let maximumSafeInteger: Int64 = 9_007_199_254_740_991
+    private static let supportedRecordVersion = "0.146.0-alpha.3.1"
     private static let zeroUsage = UsageCountersV1(
         input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0
     )
@@ -145,6 +146,13 @@ public struct CodexAdapter: ProviderAdapter {
         }
 
         if type == "session_meta" {
+            guard !rejectedSurface else { return [] }
+            guard payload["cli_version"] as? String == Self.supportedRecordVersion else {
+                rejectedSurface = true
+                verifiedSurface = nil
+                clearLifecycle()
+                return []
+            }
             guard let sourceShape = payload["source"] else { return [] }
             let surface: RunSurface
             if sourceShape is String {
