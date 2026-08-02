@@ -36,6 +36,7 @@ const KNOWN_SURFACES = new Set<RunSurface>([
   'claude_code',
   'omp',
 ]);
+const rawBodyBytes = new WeakMap<Request, number>();
 
 const raiderKeyBody = z.object({
   raider_key: z.string().min(1).max(200),
@@ -79,9 +80,34 @@ function boundedWireBody(req: Request, res: Response, next: NextFunction): void 
   next();
 }
 
+function trackWireBody(req: Request, _res: Response, next: NextFunction): void {
+  rawBodyBytes.set(req, 0);
+  req.on('data', (chunk: Buffer | string) => {
+    const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
+    rawBodyBytes.set(req, (rawBodyBytes.get(req) ?? 0) + bytes);
+  });
+  next();
+}
+
+function rejectOversizedWireBody(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if ((rawBodyBytes.get(req) ?? 0) > MAX_BODY_BYTES) {
+    res.status(413).json({ reason: 'payload_too_large' });
+    return;
+  }
+  next();
+}
+
 function bearerToken(req: Request): string | null {
   const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.get('authorization') ?? '');
   return match?.[1] ?? null;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 function hasDisabledSurface(
@@ -114,7 +140,9 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
   const parseJson = [
     strictJson,
     boundedWireBody,
+    trackWireBody,
     express.json({ limit: '256kb' }),
+    rejectOversizedWireBody,
   ];
   const rateLimiter = createRunRateLimiter();
   const policy = config.scoringMode === 'runtime-raiders'
@@ -152,6 +180,18 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     return device;
   };
 
+  const requireRuntimeScoring = (
+    _req: Request,
+    res: Response,
+    next: NextFunction,
+  ): void => {
+    if (config.scoringMode !== 'runtime-raiders' || policy === null) {
+      res.status(503).json({ reason: 'scoring_disabled' });
+      return;
+    }
+    next();
+  };
+
   router.post('/raiders/enrollments', ...parseJson, (req, res) => {
     if (!applyRateLimit(req, res, 'enrollment-create', clientIp(req))) return;
     const parsed = raiderKeyBody.safeParse(req.body);
@@ -165,9 +205,9 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       return;
     }
     const enrollment = createEnrollment(db, player.id, Date.now());
-    const serverUrl = config.publicUrl.replace(/\/+$/, '');
+    const installUrl = `${config.publicUrl}/install.sh`;
     res.status(201).json({
-      install_command: `curl -fsSL ${serverUrl}/install.sh | sh -s -- --code ${enrollment.code}`,
+      install_command: `curl -fsSL ${shellQuote(installUrl)} | sh -s -- --code ${shellQuote(enrollment.code)}`,
       expires_at: enrollment.expiresAt,
     });
   });
@@ -199,11 +239,7 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     });
   });
 
-  router.post('/runs/events', ...parseJson, (req, res) => {
-    if (config.scoringMode !== 'runtime-raiders' || policy === null) {
-      res.status(503).json({ reason: 'scoring_disabled' });
-      return;
-    }
+  router.post('/runs/events', requireRuntimeScoring, ...parseJson, (req, res) => {
     const device = authenticate(
       req,
       res,
@@ -233,7 +269,7 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       db,
       device,
       parsed,
-      policy,
+      policy!,
       config.runCutoverAt,
       Date.now(),
     );
@@ -260,7 +296,11 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     res.status(204).end();
   });
 
-  const privateRouteErrors: ErrorRequestHandler = (error, _req, res, _next) => {
+  const privateRouteErrors: ErrorRequestHandler = (error, req, res, _next) => {
+    if ((rawBodyBytes.get(req) ?? 0) > MAX_BODY_BYTES) {
+      res.status(413).json({ reason: 'payload_too_large' });
+      return;
+    }
     const status = typeof error === 'object' && error !== null
       ? (error as { status?: unknown }).status
       : undefined;

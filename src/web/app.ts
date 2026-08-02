@@ -43,6 +43,9 @@ export async function renderPage(
 export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
   const app = express();
   const skinAssets = { spritesDir: config.spritesDir, slotmapsDir };
+  // Production Caddy is a same-host hop. Trust only loopback proxies so the
+  // rightmost forwarded address is the client; never trust arbitrary peers.
+  app.set('trust proxy', 'loopback');
   app.set('view engine', 'ejs');
   app.set('views', VIEWS);
   app.use(express.urlencoded({ extended: false }));

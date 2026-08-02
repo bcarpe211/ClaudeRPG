@@ -117,6 +117,36 @@ describe('loadConfig scoring mode', () => {
   });
 });
 
+describe('loadConfig publicUrl', () => {
+  it('normalizes an absolute HTTPS origin and preserves local HTTP compatibility', () => {
+    expect(loadConfig({ PUBLIC_URL: 'https://raiders.test/' }).publicUrl)
+      .toBe('https://raiders.test');
+    expect(loadConfig({ PUBLIC_URL: 'http://localhost:8080' }).publicUrl)
+      .toBe('http://localhost:8080');
+    expect(loadConfig({ PUBLIC_URL: 'http://raiders.local:8080/' }).publicUrl)
+      .toBe('http://raiders.local:8080');
+  });
+
+  it.each([
+    'raiders.test',
+    'ftp://raiders.test',
+    'https://user:password@raiders.test',
+    'https://raiders.test/install',
+    'https://raiders.test/?mode=install',
+    'https://raiders.test/#install',
+    'https://raiders.test/;touch /tmp/runtime-raiders-pwned',
+    'https://raiders.test/$(touch /tmp/runtime-raiders-pwned)',
+  ])('rejects unsafe PUBLIC_URL=%j', (publicUrl) => {
+    expect(() => loadConfig({ PUBLIC_URL: publicUrl })).toThrow(/PUBLIC_URL/);
+  });
+
+  it('validates the derived local URL when PUBLIC_URL is absent', () => {
+    expect(() => loadConfig({
+      OTEL_ENDPOINT_HOST: 'raiders.local;touch /tmp/runtime-raiders-pwned',
+    })).toThrow(/PUBLIC_URL/);
+  });
+});
+
 describe('loadConfig officeTimeZone', () => {
   it('reads a valid IANA office time zone', () => {
     expect(loadConfig({ OFFICE_TIME_ZONE: 'Europe/London' }).officeTimeZone)

@@ -93,9 +93,31 @@ function officeTimeZone(env: NodeJS.ProcessEnv): string {
   return value;
 }
 
+function publicUrl(env: NodeJS.ProcessEnv, otelHost: string, port: number): string {
+  const value = env.PUBLIC_URL ?? `http://${otelHost}:${port}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('PUBLIC_URL must be an absolute HTTP(S) origin');
+  }
+  if (
+    (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    || parsed.username !== ''
+    || parsed.password !== ''
+    || parsed.pathname !== '/'
+    || parsed.search !== ''
+    || parsed.hash !== ''
+  ) {
+    throw new Error('PUBLIC_URL must be an absolute HTTP(S) origin without credentials or a path');
+  }
+  return parsed.origin;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const port = env.PORT ? Number(env.PORT) : 8080;
   const otelHost = env.OTEL_ENDPOINT_HOST ?? 'claude-rpg.local';
+  const normalizedPublicUrl = publicUrl(env, otelHost, port);
   const mode = scoringMode(env);
   const cutoverAt = runCutoverAt(env, mode === 'runtime-raiders');
   const raidPowerPolicyPath = env.RAID_POWER_POLICY_PATH
@@ -125,7 +147,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     sessionSecret: env.SESSION_SECRET ?? randomBytes(24).toString('hex'),
     otelHost,
     // PUBLIC_URL wins; otherwise derive from host:port for local/dev.
-    publicUrl: env.PUBLIC_URL ?? `http://${otelHost}:${port}`,
+    publicUrl: normalizedPublicUrl,
     spritesDir:
       env.SPRITES_DIR ?? 'assets/oryx_16-bit_fantasy_1.1/Sliced',
     enableCatalog:

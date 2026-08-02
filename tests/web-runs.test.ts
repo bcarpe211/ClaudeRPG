@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import { request as httpRequest } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -80,12 +83,53 @@ function countRows(table: 'runs' | 'run_events'): number {
   return (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
 }
 
+async function postChunkedGzip(
+  path: string,
+  compressedBody: Buffer,
+): Promise<{ status: number; body: unknown }> {
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address() as AddressInfo;
+  try {
+    return await new Promise((resolveResponse, reject) => {
+      const outgoing = httpRequest({
+        hostname: '127.0.0.1',
+        port: address.port,
+        path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Encoding': 'gzip',
+          'Transfer-Encoding': 'chunked',
+        },
+      }, (incoming) => {
+        const chunks: Buffer[] = [];
+        incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
+        incoming.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolveResponse({
+            status: incoming.statusCode ?? 0,
+            body: text.length === 0 ? null : JSON.parse(text),
+          });
+        });
+      });
+      outgoing.on('error', reject);
+      for (let offset = 0; offset < compressedBody.length; offset += 4_096) {
+        outgoing.write(compressedBody.subarray(offset, offset + 4_096));
+      }
+      outgoing.end();
+    });
+  } finally {
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+}
+
 async function createEnrollment() {
   const response = await request(app)
     .post('/api/raiders/enrollments')
     .send({ raider_key: player.auth_token });
   expect(response.status).toBe(201);
-  const code = response.body.install_command.match(/--code ([A-Za-z0-9_-]{43})$/)?.[1];
+  const code = response.body.install_command.match(/--code '([A-Za-z0-9_-]{43})'$/)?.[1];
   expect(code).toBeDefined();
   return { response, code: code! };
 }
@@ -181,6 +225,22 @@ describe('private Run JSON boundaries', () => {
     expect(compressed.status).toBe(413);
   });
 
+  it('enforces the raw wire cap for oversized chunked gzip without Content-Length', async () => {
+    const prefix = '{"raider_key":"';
+    const suffix = '"}';
+    const raw = Buffer.from(
+      `${prefix}${'x'.repeat(256 * 1_024 - prefix.length - suffix.length)}${suffix}`,
+    );
+    const compressed = gzipSync(raw, { level: 0 });
+    expect(raw.length).toBe(256 * 1_024);
+    expect(compressed.length).toBeGreaterThan(256 * 1_024);
+
+    const response = await postChunkedGzip('/api/raiders/enrollments', compressed);
+
+    expect(response.status).toBe(413);
+    expect(response.body).toEqual({ reason: 'payload_too_large' });
+  });
+
   it('rejects more than 100 events before creating any Run state', async () => {
     const device = await enrollDevice();
     const events = Array.from({ length: 101 }, () => runEvent(device.deviceId));
@@ -199,7 +259,7 @@ describe('Raider enrollment routes', () => {
   it('creates a private one-time install command and exchanges it exactly once', async () => {
     const { response: created, code } = await createEnrollment();
     expect(created.body).toEqual({
-      install_command: `curl -fsSL https://raiders.test/install.sh | sh -s -- --code ${code}`,
+      install_command: `curl -fsSL 'https://raiders.test/install.sh' | sh -s -- --code '${code}'`,
       expires_at: NOW + 10 * 60_000,
     });
 
@@ -256,6 +316,34 @@ describe('Raider enrollment routes', () => {
     }
     expect(limitedStatus).toBe(429);
     expect(retryAfter).toBeDefined();
+  });
+
+  it('uses only Caddy\'s rightmost forwarded client for enrollment quotas', async () => {
+    let limited = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await request(app)
+        .post('/api/raiders/enrollments')
+        .set('X-Forwarded-For', '198.51.100.10')
+        .send({ raider_key: 'invalid' });
+      if (response.status === 429) {
+        limited = true;
+        break;
+      }
+      expect(response.status).toBe(401);
+    }
+    expect(limited).toBe(true);
+
+    const prependedSpoof = await request(app)
+      .post('/api/raiders/enrollments')
+      .set('X-Forwarded-For', '203.0.113.99, 198.51.100.10')
+      .send({ raider_key: 'invalid' });
+    expect(prependedSpoof.status).toBe(429);
+
+    const isolatedClient = await request(app)
+      .post('/api/raiders/enrollments')
+      .set('X-Forwarded-For', '198.51.100.11')
+      .send({ raider_key: 'invalid' });
+    expect(isolatedClient.status).toBe(401);
   });
 });
 
@@ -351,6 +439,34 @@ describe('mutually exclusive scoring and atomic surface allowlist', () => {
         .send({ events: [runEvent(randomUUID())] });
       expect(response.status).toBe(503);
       expect(response.body).toEqual({ reason: 'scoring_disabled' });
+      expect(countRows('runs')).toBe(0);
+    },
+  );
+
+  it.each(['legacy-otlp', 'disabled'] as const)(
+    'gates %s scoring before content type, parsing, decompression, and size checks',
+    async (scoringMode) => {
+      app = createApp({ db, config: loadConfig({ SCORING_MODE: scoringMode }) });
+      const calls = [
+        request(app)
+          .post('/api/runs/events')
+          .set('Content-Type', 'text/plain')
+          .send('not-json'),
+        request(app)
+          .post('/api/runs/events')
+          .set('Content-Type', 'application/json')
+          .send('{"events":'),
+        request(app)
+          .post('/api/runs/events')
+          .set('Content-Type', 'application/json')
+          .send(JSON.stringify({ events: 'x'.repeat(300 * 1_024) })),
+      ];
+
+      for (const call of calls) {
+        const response = await call;
+        expect(response.status).toBe(503);
+        expect(response.body).toEqual({ reason: 'scoring_disabled' });
+      }
       expect(countRows('runs')).toBe(0);
     },
   );
