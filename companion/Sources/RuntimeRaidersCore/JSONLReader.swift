@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 
 public struct JSONLFileIdentity: Codable, Equatable, Sendable {
@@ -15,15 +16,28 @@ public struct JSONLCursor: Codable, Equatable, Sendable {
     public var offset: Int64
     public var fileIdentity: JSONLFileIdentity?
     public var partialLine: Data
+    public var continuityCheckpoint: JSONLContinuityCheckpoint?
 
     public init(
         offset: Int64 = 0,
         fileIdentity: JSONLFileIdentity? = nil,
-        partialLine: Data = Data()
+        partialLine: Data = Data(),
+        continuityCheckpoint: JSONLContinuityCheckpoint? = nil
     ) {
         self.offset = offset
         self.fileIdentity = fileIdentity
         self.partialLine = partialLine
+        self.continuityCheckpoint = continuityCheckpoint
+    }
+}
+
+public struct JSONLContinuityCheckpoint: Codable, Equatable, Sendable {
+    public let byteCount: Int
+    public let digest: Data
+
+    public init(byteCount: Int, digest: Data) {
+        self.byteCount = byteCount
+        self.digest = digest
     }
 }
 
@@ -49,6 +63,7 @@ public enum JSONLReaderError: Error, Equatable {
 public enum JSONLReader {
     public static let maximumReadBytes = 1_048_576
     public static let maximumBufferedLineBytes = 1_048_576
+    public static let continuityWindowBytes = 4_096
 
     public static func readAppended(
         file: URL,
@@ -63,26 +78,49 @@ public enum JSONLReader {
               Int64(cursor.partialLine.count) <= cursor.offset else {
             throw JSONLReaderError.invalidCursor
         }
+        if let checkpoint = cursor.continuityCheckpoint {
+            let expectedByteCount = min(cursor.offset, Int64(continuityWindowBytes))
+            guard cursor.offset > 0,
+                  checkpoint.byteCount == Int(expectedByteCount),
+                  checkpoint.digest.count == SHA256.byteCount else {
+                throw JSONLReaderError.invalidCursor
+            }
+        }
         if cursor.fileIdentity == nil,
-           cursor.offset != 0 || !cursor.partialLine.isEmpty {
+           cursor.offset != 0
+            || !cursor.partialLine.isEmpty
+            || cursor.continuityCheckpoint != nil {
             throw JSONLReaderError.invalidCursor
         }
 
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
-        let metadata = try fileMetadata(handle: handle)
+        let descriptor = Darwin.open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw currentPOSIXError()
+        }
+        defer { closeDescriptor(descriptor) }
+        let metadata = try fileMetadata(descriptor: descriptor)
 
         var effectiveCursor = cursor
         if let priorIdentity = cursor.fileIdentity {
             if priorIdentity != metadata.identity || metadata.size < cursor.offset {
                 effectiveCursor = JSONLCursor(fileIdentity: metadata.identity)
+            } else if cursor.offset > 0 {
+                let matches = try cursor.continuityCheckpoint.map {
+                    try continuityMatches($0, before: cursor.offset, descriptor: descriptor)
+                } ?? false
+                if !matches {
+                    effectiveCursor = JSONLCursor(fileIdentity: metadata.identity)
+                }
             }
         } else {
             effectiveCursor.fileIdentity = metadata.identity
         }
 
-        try handle.seek(toOffset: UInt64(effectiveCursor.offset))
-        let appended = try handle.read(upToCount: maxBytes) ?? Data()
+        let appended = try readUpTo(
+            maxBytes,
+            from: descriptor,
+            offset: effectiveCursor.offset
+        )
         var buffered = effectiveCursor.partialLine
         buffered.append(appended)
 
@@ -106,18 +144,22 @@ public enum JSONLReader {
         let nextCursor = JSONLCursor(
             offset: newOffset,
             fileIdentity: metadata.identity,
-            partialLine: partial
+            partialLine: partial,
+            continuityCheckpoint: try continuityCheckpoint(
+                before: newOffset,
+                descriptor: descriptor
+            )
         )
         return JSONLReadResult(lines: lines, cursor: nextCursor, bytesRead: appended.count)
     }
 
-    private static func fileMetadata(handle: FileHandle) throws -> (
+    private static func fileMetadata(descriptor: Int32) throws -> (
         identity: JSONLFileIdentity,
         size: Int64
     ) {
         var information = stat()
-        guard Darwin.fstat(handle.fileDescriptor, &information) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        guard Darwin.fstat(descriptor, &information) == 0 else {
+            throw currentPOSIXError()
         }
         guard information.st_mode & S_IFMT == S_IFREG else {
             throw JSONLReaderError.unsupportedFile
@@ -129,5 +171,87 @@ public enum JSONLReader {
             ),
             Int64(information.st_size)
         )
+    }
+
+    private static func continuityMatches(
+        _ checkpoint: JSONLContinuityCheckpoint,
+        before offset: Int64,
+        descriptor: Int32
+    ) throws -> Bool {
+        guard let tail = try readExactly(
+            checkpoint.byteCount,
+            from: descriptor,
+            offset: offset - Int64(checkpoint.byteCount)
+        ) else {
+            return false
+        }
+        return Data(SHA256.hash(data: tail)) == checkpoint.digest
+    }
+
+    private static func continuityCheckpoint(
+        before offset: Int64,
+        descriptor: Int32
+    ) throws -> JSONLContinuityCheckpoint? {
+        guard offset > 0 else { return nil }
+        let byteCount = Int(min(offset, Int64(continuityWindowBytes)))
+        guard let tail = try readExactly(
+            byteCount,
+            from: descriptor,
+            offset: offset - Int64(byteCount)
+        ) else {
+            throw JSONLReaderError.invalidCursor
+        }
+        return JSONLContinuityCheckpoint(
+            byteCount: byteCount,
+            digest: Data(SHA256.hash(data: tail))
+        )
+    }
+
+    private static func readUpTo(
+        _ count: Int,
+        from descriptor: Int32,
+        offset: Int64
+    ) throws -> Data {
+        var data = Data(count: count)
+        var total = 0
+        try data.withUnsafeMutableBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            while total < count {
+                let readCount = Darwin.pread(
+                    descriptor,
+                    baseAddress.advanced(by: total),
+                    count - total,
+                    off_t(offset + Int64(total))
+                )
+                if readCount > 0 {
+                    total += readCount
+                } else if readCount == 0 {
+                    break
+                } else if errno == EINTR {
+                    continue
+                } else {
+                    throw currentPOSIXError()
+                }
+            }
+        }
+        data.removeSubrange(total..<data.count)
+        return data
+    }
+
+    private static func readExactly(
+        _ count: Int,
+        from descriptor: Int32,
+        offset: Int64
+    ) throws -> Data? {
+        let data = try readUpTo(count, from: descriptor, offset: offset)
+        return data.count == count ? data : nil
+    }
+
+    private static func closeDescriptor(_ descriptor: Int32) {
+        while Darwin.close(descriptor) != 0, errno == EINTR {}
+    }
+
+    private static func currentPOSIXError() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }

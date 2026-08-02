@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import RuntimeRaidersCore
@@ -102,6 +103,161 @@ final class JSONLReaderTests: XCTestCase {
         }
     }
 
+    func testEqualLengthSameInodeRegrowDiscardsStalePartialAndReadsNewPrefix() throws {
+        let original = Data("old-complete\nold-partial".utf8)
+        let replacement = Data("new-first\nnew-second\nxxx".utf8)
+        XCTAssertEqual(original.count, replacement.count)
+
+        try withTemporaryFile(contents: original) { file in
+            let first = try JSONLReader.readAppended(file: file, cursor: JSONLCursor(), maxBytes: 100)
+            XCTAssertEqual(first.lines, [Data("old-complete".utf8)])
+            XCTAssertEqual(first.cursor.partialLine, Data("old-partial".utf8))
+
+            try replaceContentsPreservingInode(of: file, with: replacement)
+
+            let afterRegrow = try JSONLReader.readAppended(
+                file: file,
+                cursor: first.cursor,
+                maxBytes: 100
+            )
+            XCTAssertEqual(
+                afterRegrow.lines,
+                [Data("new-first".utf8), Data("new-second".utf8)]
+            )
+            XCTAssertEqual(afterRegrow.cursor.partialLine, Data("xxx".utf8))
+            XCTAssertEqual(afterRegrow.cursor.fileIdentity, first.cursor.fileIdentity)
+        }
+    }
+
+    func testGreaterLengthSameInodeRegrowDoesNotSkipNewPrefixWithoutPartialLine() throws {
+        let original = Data("old-one\nold-two\n".utf8)
+        let replacement = Data("first\nsecond\nthird\n".utf8)
+        XCTAssertGreaterThan(replacement.count, original.count)
+
+        try withTemporaryFile(contents: original) { file in
+            let first = try JSONLReader.readAppended(file: file, cursor: JSONLCursor(), maxBytes: 100)
+            XCTAssertEqual(first.lines, [Data("old-one".utf8), Data("old-two".utf8)])
+            XCTAssertTrue(first.cursor.partialLine.isEmpty)
+
+            try replaceContentsPreservingInode(of: file, with: replacement)
+
+            let afterRegrow = try JSONLReader.readAppended(
+                file: file,
+                cursor: first.cursor,
+                maxBytes: 100
+            )
+            XCTAssertEqual(
+                afterRegrow.lines,
+                [Data("first".utf8), Data("second".utf8), Data("third".utf8)]
+            )
+            XCTAssertTrue(afterRegrow.cursor.partialLine.isEmpty)
+            XCTAssertEqual(afterRegrow.cursor.fileIdentity, first.cursor.fileIdentity)
+        }
+    }
+
+    func testEqualLengthSameInodeRegrowDoesNotSkipNewPrefixWithoutPartialLine() throws {
+        let original = Data("old-a\nold-b\n".utf8)
+        let replacement = Data("new-a\nnew-b\n".utf8)
+        XCTAssertEqual(replacement.count, original.count)
+
+        try withTemporaryFile(contents: original) { file in
+            let first = try JSONLReader.readAppended(file: file, cursor: JSONLCursor(), maxBytes: 100)
+            XCTAssertTrue(first.cursor.partialLine.isEmpty)
+
+            try replaceContentsPreservingInode(of: file, with: replacement)
+
+            let afterRegrow = try JSONLReader.readAppended(
+                file: file,
+                cursor: first.cursor,
+                maxBytes: 100
+            )
+            XCTAssertEqual(afterRegrow.lines, [Data("new-a".utf8), Data("new-b".utf8)])
+            XCTAssertTrue(afterRegrow.cursor.partialLine.isEmpty)
+        }
+    }
+
+    func testGreaterLengthSameInodeRegrowDiscardsStalePartialAndReadsNewPrefix() throws {
+        let original = Data("old\npartial".utf8)
+        let replacement = Data("first\nsecond\nmore".utf8)
+        XCTAssertGreaterThan(replacement.count, original.count)
+
+        try withTemporaryFile(contents: original) { file in
+            let first = try JSONLReader.readAppended(file: file, cursor: JSONLCursor(), maxBytes: 100)
+            XCTAssertEqual(first.cursor.partialLine, Data("partial".utf8))
+
+            try replaceContentsPreservingInode(of: file, with: replacement)
+
+            let afterRegrow = try JSONLReader.readAppended(
+                file: file,
+                cursor: first.cursor,
+                maxBytes: 100
+            )
+            XCTAssertEqual(afterRegrow.lines, [Data("first".utf8), Data("second".utf8)])
+            XCTAssertEqual(afterRegrow.cursor.partialLine, Data("more".utf8))
+        }
+    }
+
+    func testFinalComponentSymlinkIsRejectedWithoutReadingItsTarget() throws {
+        try withTemporaryFile(contents: Data("DO_NOT_EXPORT_EXTERNAL_TARGET\n".utf8)) { target in
+            let symlink = target.deletingLastPathComponent().appendingPathComponent("events-link.jsonl")
+            try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
+
+            XCTAssertThrowsError(
+                try JSONLReader.readAppended(file: symlink, cursor: JSONLCursor(), maxBytes: 100)
+            )
+            XCTAssertEqual(
+                try Data(contentsOf: target),
+                Data("DO_NOT_EXPORT_EXTERNAL_TARGET\n".utf8)
+            )
+        }
+    }
+
+    func testReadOnlyFileIsReadWithoutChangingContentOrMetadata() throws {
+        let contents = Data("read-only\n".utf8)
+        try withTemporaryFile(contents: contents) { file in
+            XCTAssertEqual(Darwin.chmod(file.path, mode_t(S_IRUSR)), 0)
+            defer { Darwin.chmod(file.path, mode_t(S_IRUSR | S_IWUSR)) }
+            let before = try FileManager.default.attributesOfItem(atPath: file.path)
+
+            let result = try JSONLReader.readAppended(
+                file: file,
+                cursor: JSONLCursor(),
+                maxBytes: 100
+            )
+
+            let after = try FileManager.default.attributesOfItem(atPath: file.path)
+            XCTAssertEqual(result.lines, [Data("read-only".utf8)])
+            XCTAssertEqual(try Data(contentsOf: file), contents)
+            XCTAssertEqual(after[.size] as? NSNumber, before[.size] as? NSNumber)
+            XCTAssertEqual(after[.systemFileNumber] as? NSNumber, before[.systemFileNumber] as? NSNumber)
+            XCTAssertEqual(after[.modificationDate] as? Date, before[.modificationDate] as? Date)
+        }
+    }
+
+    func testMultibyteUTF8RecordSurvivesChunkBoundaryByteForByte() throws {
+        let record = Data("{\"model\":\"mage-⚔️\"}".utf8)
+        var contents = record
+        contents.append(0x0A)
+        let swordStart = try XCTUnwrap(contents.firstIndex(of: 0xe2))
+
+        try withTemporaryFile(contents: contents) { file in
+            let first = try JSONLReader.readAppended(
+                file: file,
+                cursor: JSONLCursor(),
+                maxBytes: swordStart + 1
+            )
+            XCTAssertEqual(first.lines, [])
+
+            let second = try JSONLReader.readAppended(
+                file: file,
+                cursor: first.cursor,
+                maxBytes: JSONLReader.maximumReadBytes
+            )
+            XCTAssertEqual(second.lines, [record])
+            XCTAssertTrue(second.cursor.partialLine.isEmpty)
+        }
+    }
+
     func testInvalidCursorAndReadBoundsFailWithoutMutatingInput() throws {
         try withTemporaryFile(contents: Data("line\n".utf8)) { file in
             let negative = JSONLCursor(offset: -1)
@@ -136,6 +292,39 @@ final class JSONLReaderTests: XCTestCase {
         }
     }
 
+    func testCursorDecodesLegacyCodableStateWithoutContinuityCheckpoint() throws {
+        let legacy = Data(
+            #"{"offset":12,"fileIdentity":{"device":1,"inode":2},"partialLine":"cGFydGlhbA=="}"#.utf8
+        )
+
+        let cursor = try JSONDecoder().decode(JSONLCursor.self, from: legacy)
+
+        XCTAssertEqual(cursor.offset, 12)
+        XCTAssertEqual(cursor.fileIdentity, JSONLFileIdentity(device: 1, inode: 2))
+        XCTAssertEqual(cursor.partialLine, Data("partial".utf8))
+        XCTAssertNil(cursor.continuityCheckpoint)
+    }
+
+    func testCursorCodablePersistsOnlyBoundedDigestForContinuityTail() throws {
+        let checkpoint = JSONLContinuityCheckpoint(
+            byteCount: 4_096,
+            digest: Data(repeating: 0xab, count: 32)
+        )
+        let cursor = JSONLCursor(
+            offset: 4_096,
+            fileIdentity: JSONLFileIdentity(device: 1, inode: 2),
+            partialLine: Data(),
+            continuityCheckpoint: checkpoint
+        )
+
+        let encoded = try JSONEncoder().encode(cursor)
+        let decoded = try JSONDecoder().decode(JSONLCursor.self, from: encoded)
+
+        XCTAssertEqual(decoded, cursor)
+        XCTAssertEqual(decoded.continuityCheckpoint?.digest.count, 32)
+        XCTAssertEqual(decoded.continuityCheckpoint?.byteCount, 4_096)
+    }
+
     func testOversizedUnterminatedLineFailsClosedAtBufferLimit() throws {
         try withTemporaryFile(
             contents: Data(repeating: Character("x").asciiValue!, count: JSONLReader.maximumBufferedLineBytes + 1)
@@ -161,5 +350,13 @@ final class JSONLReaderTests: XCTestCase {
         let file = directory.appendingPathComponent("events.jsonl")
         try contents.write(to: file)
         try body(file)
+    }
+
+    private func replaceContentsPreservingInode(of file: URL, with contents: Data) throws {
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: contents)
+        try handle.synchronize()
     }
 }

@@ -28,22 +28,69 @@ public struct AtomicStore {
         )
         defer { try? FileManager.default.removeItem(at: temporary) }
 
-        try data.write(to: temporary, options: .withoutOverwriting)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o600))],
-            ofItemAtPath: temporary.path
-        )
-        let handle = try FileHandle(forWritingTo: temporary)
-        do {
-            try handle.synchronize()
-            try handle.close()
-        } catch {
-            try? handle.close()
-            throw error
-        }
+        try Self.createPrivateTemporaryFile(at: temporary, contents: data)
 
         try replace(temporary, destination)
         try Self.synchronizeDirectory(parent)
+    }
+
+    private static func createPrivateTemporaryFile(at temporary: URL, contents: Data) throws {
+        let descriptor = Darwin.open(
+            temporary.path,
+            O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC,
+            mode_t(S_IRUSR | S_IWUSR)
+        )
+        guard descriptor >= 0 else {
+            throw currentPOSIXError()
+        }
+
+        var needsClose = true
+        defer {
+            if needsClose {
+                try? closeDescriptor(descriptor)
+            }
+        }
+
+        try writeAll(contents, to: descriptor)
+        try synchronizeDescriptor(descriptor)
+        try closeDescriptor(descriptor)
+        needsClose = false
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) throws {
+        try data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            var offset = 0
+            while offset < buffer.count {
+                let count = min(buffer.count - offset, Int(Int32.max))
+                let written = Darwin.write(
+                    descriptor,
+                    baseAddress.advanced(by: offset),
+                    count
+                )
+                if written > 0 {
+                    offset += written
+                } else if written < 0, errno == EINTR {
+                    continue
+                } else {
+                    throw written == 0 ? POSIXError(.EIO) : currentPOSIXError()
+                }
+            }
+        }
+    }
+
+    private static func synchronizeDescriptor(_ descriptor: Int32) throws {
+        while Darwin.fsync(descriptor) != 0 {
+            if errno == EINTR { continue }
+            throw currentPOSIXError()
+        }
+    }
+
+    private static func closeDescriptor(_ descriptor: Int32) throws {
+        while Darwin.close(descriptor) != 0 {
+            if errno == EINTR { continue }
+            throw currentPOSIXError()
+        }
     }
 
     private static func atomicReplace(temporary: URL, destination: URL) throws {
@@ -53,13 +100,22 @@ public struct AtomicStore {
     }
 
     private static func synchronizeDirectory(_ directory: URL) throws {
-        let descriptor = Darwin.open(directory.path, O_RDONLY)
+        let descriptor = Darwin.open(directory.path, O_RDONLY | O_CLOEXEC)
         guard descriptor >= 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw currentPOSIXError()
         }
-        defer { Darwin.close(descriptor) }
-        guard Darwin.fsync(descriptor) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        var needsClose = true
+        defer {
+            if needsClose {
+                try? closeDescriptor(descriptor)
+            }
         }
+        try synchronizeDescriptor(descriptor)
+        try closeDescriptor(descriptor)
+        needsClose = false
+    }
+
+    private static func currentPOSIXError() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }
