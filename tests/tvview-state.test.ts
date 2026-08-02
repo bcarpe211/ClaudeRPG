@@ -50,6 +50,44 @@ describe('buildTvState', () => {
     expect(placed.length).toBe(2);
   });
 
+  it('exposes current Raid and Fight progress plus recently active enabled Raiders', () => {
+    const now = 100_000;
+    const active = createPlayer(db, { name: 'Active', class_key: 'wizard', gender: 'M' }, now);
+    const idle = createPlayer(db, { name: 'Idle', class_key: 'thief', gender: 'F' }, now);
+    const disabled = createPlayer(db, { name: 'Disabled', class_key: 'knight', gender: 'M' }, now);
+    ingestTokenUsage(db, tokens(active.auth_token, 1_000), now, { cacheReadWeight: 0 });
+    ingestTokenUsage(db, tokens(disabled.auth_token, 1_000), now, { cacheReadWeight: 0 });
+    db.prepare('UPDATE players SET disabled=1 WHERE id=?').run(disabled.id);
+    new GameEngine(db, { rng: () => 0.5 }).tick(now);
+
+    const s = buildTvState(db, now);
+    const dungeon = db.prepare('SELECT id, regular_count FROM dungeons WHERE id=?')
+      .get(s.dungeonId) as { id: number; regular_count: number };
+    const encounter = db.prepare('SELECT index_in_dungeon FROM encounters WHERE id=?')
+      .get(s.encounter!.id) as { index_in_dungeon: number };
+
+    expect(s).toMatchObject({
+      raidNumber: dungeon.id,
+      fightIndex: encounter.index_in_dungeon + 1,
+      fightCount: dungeon.regular_count + 1,
+      activeRaiders: 1,
+    });
+    expect(s.players.map((player) => player.name)).toEqual(expect.arrayContaining([
+      active.name, idle.name, disabled.name,
+    ]));
+  });
+
+  it('does not serialize Run provider, model, or effort data to the TV', () => {
+    const player = createPlayer(db, { name: 'Private', class_key: 'wizard', gender: 'M' }, 1);
+    ingestTokenUsage(db, tokens(player.auth_token, 1_000), 100_000, { cacheReadWeight: 0 });
+    new GameEngine(db, { rng: () => 0.5 }).tick(100_000);
+
+    const payload = JSON.stringify(buildTvState(db, 100_000));
+    expect(payload).not.toContain('provider');
+    expect(payload).not.toContain('model');
+    expect(payload).not.toContain('effort');
+  });
+
   it('leaderboard modifier reflects the accumulate activity score (survives past the old recent-window)', () => {
     // Widen the decay window so a burst that would have fallen outside the old
     // 5-minute rolling window still reports fully under the new accumulate

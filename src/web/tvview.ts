@@ -54,6 +54,10 @@ export interface TvMonsterAttack {
 }
 export interface TvState {
   dungeonId: number | null;
+  raidNumber: number | null;
+  fightIndex: number | null;
+  fightCount: number | null;
+  activeRaiders: number;
   paused: boolean;
   encounter: TvEncounter | null;
   players: TvHero[];
@@ -71,9 +75,19 @@ export function buildTvState(
 
   // Encounter (active only).
   let encounter: TvEncounter | null = null;
+  let raidNumber: number | null = null;
+  let fightIndex: number | null = null;
+  let fightCount: number | null = null;
   if (gs.current_encounter_id) {
     const e = db.prepare('SELECT * FROM encounters WHERE id=?').get(gs.current_encounter_id) as any;
     if (e && e.status === 'active') {
+      const dungeon = db.prepare('SELECT id, regular_count FROM dungeons WHERE id=?')
+        .get(e.dungeon_id) as { id: number; regular_count: number } | undefined;
+      if (dungeon) {
+        raidNumber = dungeon.id;
+        fightIndex = e.index_in_dungeon + 1;
+        fightCount = dungeon.regular_count + 1;
+      }
       const meta = monsterByIndex(e.creature_index);
       const isPack = e.kind === 'pack' && e.pack_count > 1; // a mob of several -> plural name
       encounter = {
@@ -113,6 +127,8 @@ export function buildTvState(
       potionEffects,
     };
   });
+  const activeRaiders = rows.filter((p) => !p.disabled
+    && activityScore(db, p.id, now, cfg) > 0).length;
 
   // Assign battlefield slots to enabled players (same order) from the layout.
   const layout = currentTvLayout(db);
@@ -142,5 +158,16 @@ export function buildTvState(
     defeat = { ...summary, creatureUrl: creatureSpriteUrl(summary.creatureIndex) };
   }
 
-  return { dungeonId: gs.current_dungeon_id, paused: !!gs.paused, encounter, players, defeat, monsterAttack };
+  return {
+    dungeonId: gs.current_dungeon_id,
+    raidNumber,
+    fightIndex,
+    fightCount,
+    activeRaiders,
+    paused: !!gs.paused,
+    encounter,
+    players,
+    defeat,
+    monsterAttack,
+  };
 }

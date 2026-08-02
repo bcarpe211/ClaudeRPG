@@ -115,17 +115,17 @@ export function buildLeaderboards(
   }
 
   return [
-    { key: 'overall_tokens', title: 'Overall Tokens', format: 'tokens', entries: rank((p) => p.effective_tokens) },
+    { key: 'overall_tokens', title: 'Total Raid Power', format: 'tokens', entries: rank((p) => p.effective_tokens) },
     { key: 'total_damage', title: 'Total Damage', format: 'damage', entries: rank((p) => dmgTotal.get(p.id) ?? 0) },
     { key: 'gold', title: 'Gold on Hand', format: 'gold', entries: rank((p) => p.gold) },
     { key: 'level', title: 'Level', format: 'level', entries: rank((p) => p.level) },
     { key: 'monsters_slain', title: 'Monsters Slain', format: 'count', entries: rank((p) => slain.get(p.id) ?? 0) },
     { key: 'mvp_count', title: 'MVP Count', format: 'count', entries: rank((p) => mvp.get(p.id) ?? 0) },
     { key: 'biggest_hit', title: 'Biggest Hit', format: 'damage', entries: rank((p) => dmgMax.get(p.id) ?? 0) },
-    { key: 'on_fire', title: 'On Fire Now', format: 'multiplier', entries: rank((p) => fire.get(p.id) ?? 1) },
+    { key: 'on_fire', title: 'Raid Momentum', format: 'multiplier', entries: rank((p) => fire.get(p.id) ?? 1) },
     { key: 'peak_multiplier', title: 'Highest Multiplier', format: 'multiplier', entries: rank((p) => p.peak_modifier) },
-    { key: 'today_tokens', title: "Today's Tokens", format: 'tokens', entries: rank((p) => today.get(p.id) ?? 0) },
-    { key: 'week_tokens', title: "This Week's Tokens", format: 'tokens', entries: rank((p) => week.get(p.id) ?? 0) },
+    { key: 'today_tokens', title: "Today's Raid Power", format: 'tokens', entries: rank((p) => today.get(p.id) ?? 0) },
+    { key: 'week_tokens', title: "This Week's Raid Power", format: 'tokens', entries: rank((p) => week.get(p.id) ?? 0) },
     { key: 'days_champion', title: 'Days as Champion', format: 'count', entries: rank((p) => champ.get(p.id) ?? 0) },
     { key: 'most_battered', title: 'Most Battered', format: 'count', entries: rank((p) => battered.get(p.id) ?? 0) },
     { key: 'most_gold_stolen', title: 'Most Robbed', format: 'gold', entries: rank((p) => robbed.get(p.id) ?? 0) },

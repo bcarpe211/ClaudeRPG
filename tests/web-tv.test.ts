@@ -15,6 +15,7 @@ describe('TV routes', () => {
     const res = await request(app).get('/tv');
     expect(res.status).toBe(200);
     expect(res.text).toContain('<body data-tv-mode="full">');
+    expect(res.text).toContain('<title>Runtime Raiders — TV</title>');
     expect(res.text).toContain('<canvas');
     expect(res.text).toContain('/static/tv/tv.js');
     expect(res.text).toContain('cursor: none');

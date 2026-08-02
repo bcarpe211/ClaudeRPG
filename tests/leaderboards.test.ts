@@ -116,6 +116,28 @@ describe('buildLeaderboards', () => {
     expect(bs.every((b) => b.entries.every((e) => e.avatarUrl.startsWith('/sprites/creatures_24x24/')))).toBe(true);
   });
 
+  it('keeps compatibility keys and order while using the approved Raid titles', () => {
+    mkPlayer('A');
+    const bs = buildLeaderboards(db, 1_000, cfg);
+
+    expect(bs.map((b) => b.key)).toEqual([
+      'overall_tokens', 'total_damage', 'gold', 'level', 'monsters_slain', 'mvp_count',
+      'biggest_hit', 'on_fire', 'peak_multiplier', 'today_tokens', 'week_tokens',
+      'days_champion', 'most_battered', 'most_gold_stolen',
+    ]);
+    expect(Object.fromEntries([
+      ['overall_tokens', board(bs, 'overall_tokens').title],
+      ['today_tokens', board(bs, 'today_tokens').title],
+      ['week_tokens', board(bs, 'week_tokens').title],
+      ['on_fire', board(bs, 'on_fire').title],
+    ])).toEqual({
+      overall_tokens: 'Total Raid Power',
+      today_tokens: "Today's Raid Power",
+      week_tokens: "This Week's Raid Power",
+      on_fire: 'Raid Momentum',
+    });
+  });
+
   it('resolves each player avatar exactly once for all 14 boards', () => {
     const a = mkPlayer('A');
     const b = mkPlayer('B');

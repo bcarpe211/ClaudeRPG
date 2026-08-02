@@ -516,6 +516,11 @@ function drawHpBar() {
     const nameSize = Math.max(14, Math.round(h * 1.15));
     shadowText(e.name, panelX + panelW / 2, y - Math.round(h * 0.55),
       `bold ${nameSize}px system-ui`, '#f2e4e4', 'center');
+    const progress = raidStatus();
+    if (progress) {
+      shadowText(progress, panelX + panelW / 2, y + h + 10,
+        'bold 12px system-ui', '#e8c96a', 'center');
+    }
     return;
   }
 
@@ -537,6 +542,13 @@ function drawHpBar() {
   const nameSize = 14;
   shadowText(e.name, panelX + panelW / 2, statusTop + nameSize,
     `bold ${nameSize}px system-ui`, '#f2e4e4', 'center');
+}
+
+function raidStatus() {
+  if (!state || !state.encounter || state.raidNumber === null
+      || state.fightIndex === null || state.fightCount === null) return '';
+  const raiders = state.activeRaiders;
+  return `Raid ${state.raidNumber} · Fight ${state.fightIndex}/${state.fightCount} · ${raiders} Raider${raiders === 1 ? '' : 's'} active`;
 }
 
 function drawFloaters(t) {

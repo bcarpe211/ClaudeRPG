@@ -200,20 +200,20 @@ class FakeEventSource {
   }
 }
 
-function compactRenderAt(dpr: number) {
+function renderTvAt(dpr: number, mode: 'compact' | 'full' = 'compact') {
   const source = readFileSync('src/web/public/tv/tv.js', 'utf8');
   const stage = new FakeCanvas(dpr);
   const animationFrames: Array<(time: number) => void> = [];
   let stream: FakeEventSource | undefined;
   const windowObject = {
     devicePixelRatio: dpr,
-    innerWidth: 480,
-    innerHeight: 400,
+    innerWidth: mode === 'compact' ? 480 : 1200,
+    innerHeight: mode === 'compact' ? 400 : 800,
     addEventListener() {},
     ClaudeRpgPotionFx: undefined,
   };
   const documentObject = {
-    body: { dataset: { tvMode: 'compact' } },
+    body: { dataset: { tvMode: mode } },
     getElementById: (id: string) => id === 'stage' ? stage : null,
     createElement: (tag: string) => {
       if (tag !== 'canvas') throw new Error(`Unexpected element ${tag}`);
@@ -254,6 +254,10 @@ function compactRenderAt(dpr: number) {
     paused: false,
     defeat: null,
     monsterAttack: null,
+    raidNumber: 12,
+    fightIndex: 2,
+    fightCount: 4,
+    activeRaiders: 7,
     encounter: {
       id: 1,
       name: 'Elder Demon',
@@ -279,7 +283,9 @@ function compactRenderAt(dpr: number) {
   if (!dungeonDraw) throw new Error('Renderer did not draw the dungeon canvas');
   const barFills = stage.context.fills.filter(({ color }) =>
     color === '#180a0a' || color === '#3a0d0d' || color === '#d23b3b');
-  if (barFills.length !== 3) throw new Error(`Expected 3 HP fills, got ${barFills.length}`);
+  if (mode === 'compact' && barFills.length !== 3) {
+    throw new Error(`Expected 3 HP fills, got ${barFills.length}`);
+  }
 
   return {
     backingSize: { width: stage.width, height: stage.height },
@@ -291,10 +297,37 @@ function compactRenderAt(dpr: number) {
       draws: titleDraws,
     },
     bar: barFills,
+    texts: stage.context.texts,
   };
 }
 
+function compactRenderAt(dpr: number) {
+  return renderTvAt(dpr, 'compact');
+}
+
 describe('compact TV renderer geometry', () => {
+  it('shows Raid and Fight status on the full TV without changing the compact hub', () => {
+    const rendering = renderTvAt(1, 'full');
+
+    expect(rendering.texts.map(({ text }) => text)).toContain(
+      'Raid 12 · Fight 2/4 · 7 Raiders active',
+    );
+  });
+
+  it('keeps the compact hub geometry unchanged when Raid display state arrives', () => {
+    const rendering = compactRenderAt(1);
+
+    expect(rendering.backingSize).toEqual({ width: 480, height: 400 });
+    expect(rendering.dungeon).toEqual({
+      left: 0,
+      top: 40,
+      right: 480,
+      bottom: 400,
+      width: 480,
+      height: 360,
+    });
+  });
+
   it('keeps the title and rounded HP bar inside the 40px status area at DPR 1', () => {
     const rendering = compactRenderAt(1);
 
