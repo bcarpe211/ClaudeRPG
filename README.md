@@ -1,8 +1,15 @@
-# ClaudeRPG
+# Runtime Raiders
 
-An office co-op RPG that gamifies Claude Code token usage on a Raspberry Pi 5 TV
-kiosk. See `docs/superpowers/specs/` for the design and `docs/superpowers/plans/`
-for implementation plans.
+Runtime Raiders is the Codex-first candidate for this office co-op dungeon RPG.
+Its local companion privately collects only approved Codex Desktop and Codex
+CLI Run metadata, then sends scored Run events to the candidate server. This
+repository has not cut production over: the deployed ClaudeRPG/OTLP system,
+its existing DNS, and its Pi setup remain authoritative until an explicit,
+separately approved Runtime Raiders cutover.
+
+The candidate's local verification record is
+[docs/runtime-raiders/canary-checklist.md](docs/runtime-raiders/canary-checklist.md).
+It is not a claim that an installer is signed, published, deployed, or active.
 
 ## Run it on a Raspberry Pi 5 (TV kiosk)
 
@@ -31,6 +38,11 @@ npm install
 | `SESSION_SECRET` | random | Session cookie secret |
 | `OTEL_ENDPOINT_HOST` | `claude-rpg.local` | Host shown in player setup snippets |
 | `SPRITES_DIR` | `assets/oryx_16-bit_fantasy_1.1/Sliced` | Sliced sprite directory |
+| `SCORING_MODE` | `legacy-otlp` | Keep legacy OTLP scoring until explicit Runtime Raiders cutover; candidate value: `runtime-raiders` |
+| `RUN_SCORING_CUTOVER_AT` | — | Required millisecond epoch when `SCORING_MODE=runtime-raiders` |
+| `RUN_ENABLED_SURFACES` | — | Required candidate allowlist: `codex_desktop,codex_cli` |
+| `RAID_POWER_POLICY_PATH` | `config/raid-power-policy-v1.json` | Candidate Raid Power policy |
+| `PUBLIC_URL` | derived local URL | Candidate server origin returned during enrollment |
 
 ### Run
 ```bash
@@ -38,6 +50,21 @@ ADMIN_PASSWORD=yourpassword npm run dev    # auto-reload
 # or
 ADMIN_PASSWORD=yourpassword npm start
 ```
+
+To run the undeployed Runtime Raiders candidate locally, use an explicit
+cutover timestamp and the Codex-only surface allowlist:
+
+```bash
+SCORING_MODE=runtime-raiders \
+RUN_SCORING_CUTOVER_AT=1800000000000 \
+RUN_ENABLED_SURFACES=codex_desktop,codex_cli \
+RAID_POWER_POLICY_PATH=config/raid-power-policy-v1.json \
+PUBLIC_URL=http://localhost:8080 \
+ADMIN_PASSWORD=yourpassword npm start
+```
+
+This is a local candidate command, not a production cutover. The legacy OTLP
+default remains in effect until explicit approval.
 Then open:
 - `http://localhost:8080/` — register a character
 - `http://localhost:8080/character` — log in with your token

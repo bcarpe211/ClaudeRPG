@@ -1,0 +1,272 @@
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import request from 'supertest';
+import { loadConfig } from '../src/config';
+import { openDb } from '../src/db/db';
+import { GameEngine } from '../src/domain/engine';
+import { applyGoldMutation } from '../src/domain/goldledger';
+import { purchaseConsumable } from '../src/domain/inventory';
+import { activatePotion } from '../src/domain/potions';
+import { createPlayer, getPlayerById } from '../src/domain/players';
+import { recentRuns } from '../src/domain/runs';
+import type { RunEventV1, UsageCountersV1 } from '../src/domain/run-events';
+import { seedSettings } from '../src/domain/settings';
+import { createApp } from '../src/web/app';
+
+const NOW = 1_800_000_000_000;
+const CUTOVER = NOW - 60_000;
+const POLICY_PATH = resolve('config/raid-power-policy-v1.json');
+const ZERO_USAGE: UsageCountersV1 = {
+  input: 0,
+  output: 0,
+  cache_read: 0,
+  cache_write: 0,
+  reasoning_output: 0,
+};
+
+let db: ReturnType<typeof openDb>;
+let player: ReturnType<typeof createPlayer>;
+let app: ReturnType<typeof createApp>;
+let databaseDirectory: string;
+let eventIdentity = 0;
+
+function runtimeConfig() {
+  return loadConfig({
+    PUBLIC_URL: 'http://127.0.0.1:1',
+    SCORING_MODE: 'runtime-raiders',
+    RUN_SCORING_CUTOVER_AT: String(CUTOVER),
+    RAID_POWER_POLICY_PATH: POLICY_PATH,
+    RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli',
+  });
+}
+
+function hexKey(value: number): string {
+  return value.toString(16).padStart(64, '0');
+}
+
+function runEvent(
+  deviceId: string,
+  overrides: Omit<Partial<RunEventV1>, 'usage'> & {
+    usage?: Partial<UsageCountersV1>;
+  } = {},
+): RunEventV1 {
+  eventIdentity += 1;
+  const startedAt = overrides.started_at_ms ?? CUTOVER + 1_000;
+  const eventTime = overrides.event_time_ms ?? startedAt + 1_000;
+  return {
+    schema_version: 1,
+    companion_version: '0.1.0-synthetic',
+    device_id: deviceId,
+    provider: 'codex',
+    surface: 'codex_desktop',
+    run_key: hexKey(eventIdentity + 10_000),
+    sequence: 1,
+    event_time_ms: eventTime,
+    observed_at_ms: eventTime,
+    started_at_ms: startedAt,
+    state: 'open',
+    model: 'synthetic-model',
+    effort: 'synthetic-effort',
+    idempotency_key: hexKey(eventIdentity),
+    ...overrides,
+    usage: { ...ZERO_USAGE, input: 100, ...overrides.usage },
+  };
+}
+
+function post(path: string, body: object, token?: string) {
+  const outgoing = request(app)
+    .post(path)
+    .set('content-type', 'application/json')
+    .send(body);
+  return token === undefined ? outgoing : outgoing.set('authorization', `Bearer ${token}`);
+}
+
+async function enrollDevice(): Promise<{ deviceId: string; deviceToken: string }> {
+  const issued = await post('/api/raiders/enrollments', { raider_key: player.auth_token });
+  expect(issued.status).toBe(201);
+  const issuedBody = issued.body as { install_command: string };
+  const code = issuedBody.install_command.match(/--code '([A-Za-z0-9_-]{43})'$/)?.[1];
+  expect(code).toBeDefined();
+
+  const deviceId = randomUUID();
+  const enrolled = await post('/api/raiders/enroll', {
+    code,
+    device_id: deviceId,
+    companion_version: '0.1.0-synthetic',
+  });
+  expect(enrolled.status).toBe(201);
+  const enrollment = enrolled.body as { device_token: string; enabled_surfaces: string[] };
+  expect(enrollment.enabled_surfaces).toEqual(['codex_desktop', 'codex_cli']);
+  return { deviceId, deviceToken: enrollment.device_token };
+}
+
+function armGoldPotion(): void {
+  applyGoldMutation(db, {
+    playerId: player.id,
+    amount: 100_000,
+    reason: 'opening_balance',
+    sourceTable: 'runtime_raiders_e2e',
+    sourceId: String(player.id),
+    now: NOW - 3_000,
+  });
+  expect(purchaseConsumable(db, {
+    playerId: player.id,
+    skuId: 'potion_gold_t1',
+    quantity: 1,
+    expectedUnitPrice: 100_000,
+    requestId: `runtime-raiders-e2e-buy-${player.id}`,
+    now: NOW - 2_000,
+    timeZone: 'America/New_York',
+  })).toMatchObject({ ok: true });
+  expect(activatePotion(db, {
+    playerId: player.id,
+    skuId: 'potion_gold_t1',
+    requestId: `runtime-raiders-e2e-drink-${player.id}`,
+    now: NOW - 1_000,
+    timeZone: 'America/New_York',
+  })).toMatchObject({ ok: true, potionType: 'gold' });
+}
+
+function count(table: 'runs' | 'run_events' | 'token_events' | 'potion_work_events'): number {
+  return (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+}
+
+beforeEach(async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(NOW);
+  databaseDirectory = mkdtempSync(join(tmpdir(), 'runtime-raiders-e2e-'));
+  db = openDb(join(databaseDirectory, 'runtime-raiders.db'));
+  seedSettings(db);
+  player = createPlayer(db, { name: 'Synthetic Raider', class_key: 'knight', gender: 'M' }, NOW);
+  eventIdentity = 0;
+  app = createApp({ db, config: runtimeConfig() });
+});
+
+afterEach(() => {
+  db.close();
+  rmSync(databaseDirectory, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+describe('Runtime Raiders local integration gate', () => {
+  it('scores parallel synthetic Codex Runs once, preserves legacy projection, potion work, wake, and recent Run queries', async () => {
+    db.prepare('UPDATE game_state SET paused = 1, last_activity_at = ? WHERE id = 1')
+      .run(NOW - 20 * 60_000);
+    const device = await enrollDevice();
+    const wakingEvent = runEvent(device.deviceId, { run_key: hexKey(20_000) });
+    const wake = await post('/api/runs/events', { events: [wakingEvent] }, device.deviceToken);
+    expect(wake.status).toBe(200);
+    expect(wake.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    new GameEngine(db, { rng: () => 0.5 }).tick(NOW + 1);
+    expect(db.prepare('SELECT paused FROM game_state WHERE id = 1').get()).toEqual({ paused: 0 });
+    armGoldPotion();
+    const desktopOpen = runEvent(device.deviceId, {
+      run_key: hexKey(20_001),
+      sequence: 1,
+      usage: { input: 120 },
+    });
+    const desktopCompleted = runEvent(device.deviceId, {
+      run_key: desktopOpen.run_key,
+      sequence: 2,
+      event_time_ms: desktopOpen.event_time_ms + 1_000,
+      observed_at_ms: desktopOpen.observed_at_ms + 1_000,
+      state: 'completed',
+      usage: { input: 200, output: 20 },
+    });
+    const cliCompleted = runEvent(device.deviceId, {
+      surface: 'codex_cli',
+      run_key: hexKey(20_002),
+      sequence: 1,
+      started_at_ms: CUTOVER + 2_000,
+      event_time_ms: CUTOVER + 2_000 + 6 * 24 * 60 * 60 * 1_000,
+      observed_at_ms: CUTOVER + 2_000 + 6 * 24 * 60 * 60 * 1_000,
+      state: 'completed',
+      usage: { input: 300, reasoning_output: 30 },
+    });
+    const desktopLong = runEvent(device.deviceId, {
+      run_key: hexKey(20_003),
+      started_at_ms: CUTOVER + 3_000,
+      event_time_ms: CUTOVER + 3_000 + 6 * 24 * 60 * 60 * 1_000,
+      observed_at_ms: CUTOVER + 3_000 + 6 * 24 * 60 * 60 * 1_000,
+      state: 'completed',
+      usage: { input: 250 },
+    });
+    const cliShort = runEvent(device.deviceId, {
+      surface: 'codex_cli',
+      run_key: hexKey(20_004),
+      started_at_ms: CUTOVER + 4_000,
+      event_time_ms: CUTOVER + 5_000,
+      observed_at_ms: CUTOVER + 5_000,
+      state: 'completed',
+      usage: { input: 150 },
+    });
+
+    const accepted = await post('/api/runs/events', {
+      events: [desktopOpen, desktopCompleted, cliCompleted, desktopLong, cliShort],
+    }, device.deviceToken);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ accepted: 5, duplicate: 0, ignored: 0 });
+
+    const duplicate = await post('/api/runs/events', { events: [desktopCompleted] }, device.deviceToken);
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body).toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
+    expect(count('runs')).toBe(5);
+    expect(count('run_events')).toBe(6);
+    expect(count('token_events')).toBe(6);
+    expect(count('potion_work_events')).toBe(5);
+
+    const raidPower = db.prepare('SELECT COALESCE(SUM(raid_power), 0) AS total FROM runs')
+      .get() as { total: number };
+    const tokenProjection = db.prepare(`
+      SELECT COALESCE(SUM(effective_delta), 0) AS effective,
+             COALESCE(SUM(total_delta), 0) AS total
+      FROM token_events WHERE player_id = ?
+    `).get(player.id) as { effective: number; total: number };
+    expect(tokenProjection).toEqual({ effective: raidPower.total, total: 0 });
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: raidPower.total,
+      total_tokens: 0,
+      last_token_at: NOW,
+    });
+
+    expect(recentRuns(db, player.id, 20)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ surface: 'codex_desktop', state: 'completed' }),
+      expect.objectContaining({ surface: 'codex_cli', state: 'completed' }),
+    ]));
+  });
+
+  it('rejects reserved and mixed synthetic surfaces atomically without Run, audit, or progression mutation', async () => {
+    const device = await enrollDevice();
+    const before = {
+      runs: count('runs'),
+      events: count('run_events'),
+      tokens: count('token_events'),
+      effective: getPlayerById(db, player.id)!.effective_tokens,
+    };
+    const enabled = runEvent(device.deviceId, { run_key: hexKey(30_001) });
+    const claude = runEvent(device.deviceId, {
+      provider: 'claude',
+      surface: 'claude_code',
+      run_key: hexKey(30_002),
+    });
+    const omp = runEvent(device.deviceId, {
+      provider: 'omp',
+      surface: 'omp',
+      run_key: hexKey(30_003),
+    });
+
+    for (const events of [[claude], [omp], [enabled, claude]]) {
+      const rejected = await post('/api/runs/events', { events }, device.deviceToken);
+      expect(rejected.status).toBe(422);
+      expect(rejected.body).toEqual({ reason: 'surface_disabled' });
+      expect({
+        runs: count('runs'),
+        events: count('run_events'),
+        tokens: count('token_events'),
+        effective: getPlayerById(db, player.id)!.effective_tokens,
+      }).toEqual(before);
+    }
+  });
+});
