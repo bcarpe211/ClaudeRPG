@@ -37,6 +37,11 @@ const KNOWN_SURFACES = new Set<RunSurface>([
   'omp',
 ]);
 const rawBodyBytes = new WeakMap<Request, number>();
+const rawBodyRejected = new WeakSet<Request>();
+
+type DestroyableWritable = NodeJS.WritableStream & {
+  destroy(error?: Error): void;
+};
 
 const raiderKeyBody = z.object({
   raider_key: z.string().min(1).max(200),
@@ -64,6 +69,25 @@ function strictJson(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+function rejectPayloadTooLarge(
+  req: Request,
+  res: Response,
+  downstreamStreams: ReadonlySet<DestroyableWritable> = new Set(),
+): void {
+  if (rawBodyRejected.has(req)) return;
+  rawBodyRejected.add(req);
+  req.pause();
+  req.unpipe();
+  res.set('Connection', 'close');
+  res.once('finish', () => {
+    if (!req.destroyed) req.destroy();
+  });
+  res.status(413).json({ reason: 'payload_too_large' });
+  for (const stream of downstreamStreams) {
+    stream.destroy(new Error('raw request body exceeds 256 KiB'));
+  }
+}
+
 function boundedWireBody(req: Request, res: Response, next: NextFunction): void {
   const contentLength = req.get('content-length');
   if (contentLength !== undefined) {
@@ -73,18 +97,30 @@ function boundedWireBody(req: Request, res: Response, next: NextFunction): void 
       return;
     }
     if (bytes > MAX_BODY_BYTES) {
-      res.status(413).json({ reason: 'payload_too_large' });
+      rejectPayloadTooLarge(req, res);
       return;
     }
   }
   next();
 }
 
-function trackWireBody(req: Request, _res: Response, next: NextFunction): void {
+function trackWireBody(req: Request, res: Response, next: NextFunction): void {
   rawBodyBytes.set(req, 0);
+  const downstreamStreams = new Set<DestroyableWritable>();
+  const originalPipe = req.pipe.bind(req);
+  req.pipe = ((destination: NodeJS.WritableStream, options?: { end?: boolean }) => {
+    if ('destroy' in destination && typeof destination.destroy === 'function') {
+      downstreamStreams.add(destination as DestroyableWritable);
+    }
+    return originalPipe(destination, options);
+  }) as typeof req.pipe;
   req.on('data', (chunk: Buffer | string) => {
     const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
-    rawBodyBytes.set(req, (rawBodyBytes.get(req) ?? 0) + bytes);
+    const total = (rawBodyBytes.get(req) ?? 0) + bytes;
+    rawBodyBytes.set(req, total);
+    if (total > MAX_BODY_BYTES) {
+      rejectPayloadTooLarge(req, res, downstreamStreams);
+    }
   });
   next();
 }
@@ -95,7 +131,7 @@ function rejectOversizedWireBody(
   next: NextFunction,
 ): void {
   if ((rawBodyBytes.get(req) ?? 0) > MAX_BODY_BYTES) {
-    res.status(413).json({ reason: 'payload_too_large' });
+    if (!res.headersSent) rejectPayloadTooLarge(req, res);
     return;
   }
   next();
@@ -297,8 +333,9 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
   });
 
   const privateRouteErrors: ErrorRequestHandler = (error, req, res, _next) => {
+    if (res.headersSent) return;
     if ((rawBodyBytes.get(req) ?? 0) > MAX_BODY_BYTES) {
-      res.status(413).json({ reason: 'payload_too_large' });
+      rejectPayloadTooLarge(req, res);
       return;
     }
     const status = typeof error === 'object' && error !== null

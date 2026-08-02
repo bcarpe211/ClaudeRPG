@@ -48,6 +48,9 @@ export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
   app.set('trust proxy', 'loopback');
   app.set('view engine', 'ejs');
   app.set('views', VIEWS);
+  // Private Run routes own their JSON parsing and inactive-mode gate. Mount
+  // them before the legacy form parser so scoring-disabled is unconditional.
+  registerRunRoutes(app, { db, config });
   app.use(express.urlencoded({ extended: false }));
   app.use(
     session({
@@ -69,7 +72,6 @@ export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
   registerShopRoutes(app, { db, config, slotmapsDir });
   registerAdminRoutes(app, { db, config });
   registerMetricsRoutes(app, { db, config });
-  registerRunRoutes(app, { db, config });
 
   const tvHub = new TvHub(db, skinAssets);
   registerTvRoutes(app, { db, config }, tvHub);

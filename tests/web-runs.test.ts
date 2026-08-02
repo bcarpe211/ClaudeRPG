@@ -124,6 +124,64 @@ async function postChunkedGzip(
   }
 }
 
+async function postChunkedGzipWithDelayedEnd(
+  path: string,
+  compressedBody: Buffer,
+): Promise<{ status: number; body: unknown; responseBeforeRequestEnd: boolean }> {
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address() as AddressInfo;
+  let outgoing: ReturnType<typeof httpRequest> | undefined;
+  let delayedEnd: NodeJS.Timeout | undefined;
+  let failTimer: NodeJS.Timeout | undefined;
+  try {
+    return await new Promise((resolveResponse, reject) => {
+      let requestEnded = false;
+      let responseStarted = false;
+      failTimer = setTimeout(() => reject(new Error('live raw cutoff timed out')), 2_000);
+      outgoing = httpRequest({
+        hostname: '127.0.0.1',
+        port: address.port,
+        path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Encoding': 'gzip',
+          'Transfer-Encoding': 'chunked',
+        },
+      }, (incoming) => {
+        responseStarted = true;
+        const chunks: Buffer[] = [];
+        incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
+        incoming.on('error', reject);
+        incoming.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolveResponse({
+            status: incoming.statusCode ?? 0,
+            body: text.length === 0 ? null : JSON.parse(text),
+            responseBeforeRequestEnd: !requestEnded,
+          });
+        });
+      });
+      outgoing.on('error', (error) => {
+        if (!responseStarted) reject(error);
+      });
+      for (let offset = 0; offset < compressedBody.length; offset += 4_096) {
+        outgoing.write(compressedBody.subarray(offset, offset + 4_096));
+      }
+      delayedEnd = setTimeout(() => {
+        requestEnded = true;
+        if (!outgoing?.destroyed) outgoing?.end();
+      }, 300);
+    });
+  } finally {
+    if (delayedEnd) clearTimeout(delayedEnd);
+    if (failTimer) clearTimeout(failTimer);
+    outgoing?.destroy();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+}
+
 async function createEnrollment() {
   const response = await request(app)
     .post('/api/raiders/enrollments')
@@ -239,6 +297,32 @@ describe('private Run JSON boundaries', () => {
 
     expect(response.status).toBe(413);
     expect(response.body).toEqual({ reason: 'payload_too_large' });
+  });
+
+  it('returns 413 and terminates a chunked gzip stream before request end', async () => {
+    const validMember = gzipSync(Buffer.from(JSON.stringify({
+      raider_key: player.auth_token,
+    })));
+    const emptyMember = gzipSync(Buffer.alloc(0));
+    const compressed = Buffer.concat([
+      validMember,
+      ...Array.from(
+        { length: Math.ceil((280_000 - validMember.length) / emptyMember.length) },
+        () => emptyMember,
+      ),
+    ]);
+    expect(compressed.length).toBeGreaterThanOrEqual(280_000);
+
+    const response = await postChunkedGzipWithDelayedEnd(
+      '/api/raiders/enrollments',
+      compressed,
+    );
+
+    expect(response.status).toBe(413);
+    expect(response.body).toEqual({ reason: 'payload_too_large' });
+    expect(response.responseBeforeRequestEnd).toBe(true);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM raider_enrollments').get())
+      .toEqual({ count: 0 });
   });
 
   it('rejects more than 100 events before creating any Run state', async () => {
@@ -447,6 +531,7 @@ describe('mutually exclusive scoring and atomic surface allowlist', () => {
     'gates %s scoring before content type, parsing, decompression, and size checks',
     async (scoringMode) => {
       app = createApp({ db, config: loadConfig({ SCORING_MODE: scoringMode }) });
+      const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const calls = [
         request(app)
           .post('/api/runs/events')
@@ -460,6 +545,10 @@ describe('mutually exclusive scoring and atomic surface allowlist', () => {
           .post('/api/runs/events')
           .set('Content-Type', 'application/json')
           .send(JSON.stringify({ events: 'x'.repeat(300 * 1_024) })),
+        request(app)
+          .post('/api/runs/events')
+          .set('Content-Type', 'application/x-www-form-urlencoded')
+          .send(`events=${'x'.repeat(120 * 1_024)}`),
       ];
 
       for (const call of calls) {
@@ -468,6 +557,7 @@ describe('mutually exclusive scoring and atomic surface allowlist', () => {
         expect(response.body).toEqual({ reason: 'scoring_disabled' });
       }
       expect(countRows('runs')).toBe(0);
+      expect(log).not.toHaveBeenCalled();
     },
   );
 
