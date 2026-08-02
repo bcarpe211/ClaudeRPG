@@ -62,6 +62,14 @@ describe('dungeon shell', () => {
     expect(res.text).toContain('Your AI keeps running. Your Raider keeps raiding.');
     expect(res.text).not.toContain('your usage, gamified');
   });
+
+  it('renders the shared footer on requested routes', async () => {
+    for (const path of ['/', '/register', '/character', '/admin/login']) {
+      const page = await request(app).get(path);
+      expect(page.status).toBe(200);
+      expect(page.text).toContain('class="foot"');
+    }
+  });
 });
 
 describe('lite frame', () => {

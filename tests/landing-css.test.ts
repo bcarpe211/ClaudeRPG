@@ -9,7 +9,7 @@ describe('Runtime Raiders landing presentation', () => {
     expect(css).toMatch(/@media \(max-width:480px\)\{[\s\S]*?\.hero-motto\{[^}]*font-size:clamp\(26px,8\.5vw,38px\)/);
   });
 
-  it('removes the separator from the landing footer only', () => {
-    expect(css).toMatch(/\.foot\{[^}]*border-top:0/);
+  it('leaves shared footer presentation to dungeon.css', () => {
+    expect(css).not.toMatch(/\.foot\s*\{/);
   });
 });

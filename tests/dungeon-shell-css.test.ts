@@ -24,6 +24,11 @@ describe('responsive dungeon shell safe area', () => {
     expect(css).toMatch(/\.foot\{[^}]*padding:20px var\(--shell-inline\) 0/);
   });
 
+  it('removes the footer separator from the shared shell', () => {
+    expect(css).toMatch(/\.foot\{[^}]*border-top:0/);
+    expect(css).not.toMatch(/\.foot\{[^}]*border-top:1px solid var\(--line\)/);
+  });
+
   it('parks gutter loot behind the walls and reverses without display none', () => {
     expect(css).toMatch(
       /\.loot-rail\{[^}]*width:max\(var\(--wall\),calc\(\(100vw - 1120px\)\/2 \+ 18px\)\)[^}]*transform:translateX\(0\)[^}]*opacity:1[^}]*visibility:visible/,

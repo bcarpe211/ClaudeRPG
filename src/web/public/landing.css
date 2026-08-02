@@ -54,4 +54,3 @@
 .final h2{font-size:clamp(28px,4.6vw,46px);margin:0 0 8px;color:var(--head);font-weight:850;letter-spacing:-.02em} .final p{margin:0 0 22px;color:var(--muted)}
 @media (max-width:900px){.hero{grid-template-columns:1fr;gap:30px;min-height:0}.boss-card{order:-1}.steps{grid-template-columns:1fr}.trust-cols{grid-template-columns:1fr}}
 @media (max-width:480px){.hero-motto{font-size:clamp(26px,8.5vw,38px)}}
-.foot{border-top:0}
