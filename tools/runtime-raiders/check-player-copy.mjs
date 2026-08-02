@@ -19,6 +19,7 @@ const scanTargets = [
   'src/web/public',
   'src/domain/settings-meta.ts',
   'src/domain/playerhub.ts',
+  'src/domain/shopview.ts',
   'README.md',
 ];
 

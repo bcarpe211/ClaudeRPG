@@ -187,7 +187,7 @@ describe('buildShopViewModel', () => {
       maxQuantity: 3,
       missingGoldForOne: 100_000,
       iconClass: 'potion-gold',
-      effectCopy: '50g per 1,000 effective tokens',
+      effectCopy: '50g per 1,000 Raid Power',
     });
     expect(view.consumables[1]).toMatchObject({
       name: 'Beginner Damage Potion',
@@ -205,7 +205,7 @@ describe('buildShopViewModel', () => {
 
     const view = buildShopViewModel(db, player.id, undefined, undefined, now, timeZone)!;
 
-    expect(view.consumables[0].effectCopy).toBe('73g per 1,000 effective tokens');
+    expect(view.consumables[0].effectCopy).toBe('73g per 1,000 Raid Power');
     expect(view.consumables[1].effectCopy).toBe('+12.5% personal base hit');
   });
 

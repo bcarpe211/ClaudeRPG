@@ -96,7 +96,7 @@
             const unavailable = !offer.available;
             const soldOut = offer.available && offer.stockRemaining === 0;
             const readyCopy = offer.potionType === 'gold'
-              ? 'Ready to turn hard work into bonus gold.'
+              ? 'Ready to squeeze bonus gold from your next Raid.'
               : 'Ready to put more force behind every hit.';
           %>
             <article class="bazaar-product <%= offer.iconClass %><%= soldOut ? ' is-sold-out' : '' %><%= unavailable ? ' is-unavailable' : '' %>"

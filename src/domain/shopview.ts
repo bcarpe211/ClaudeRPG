@@ -97,7 +97,7 @@ function effectCopyFor(
 ): string {
   const snapshot = potionEffectSnapshotForConfiguration(config, product.potionType);
   if (snapshot.kind === 'gold') {
-    return `${snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 effective tokens`;
+    return `${snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 Raid Power`;
   }
   const percent = Number(((snapshot.baseHitMultiplier - 1) * 100).toFixed(10));
   return `+${percent.toLocaleString('en-US', { maximumFractionDigits: 10 })}% personal base hit`;

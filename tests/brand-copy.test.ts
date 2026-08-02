@@ -145,6 +145,20 @@ describe('Runtime Raiders brand copy', () => {
     expect(result.output).toBe('');
   });
 
+  it('scans Bazaar view-model copy that is rendered on active player pages', () => {
+    const root = copyFixture();
+    writeFileSync(
+      join(root, 'src/domain/shopview.ts'),
+      "export const potionCopy = '50g per 1,000 effective tokens';\n",
+    );
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('src/domain/shopview.ts:1');
+    expect(result.output).toContain('stale player copy: effective tokens');
+  });
+
   it('rejects case variants of every forbidden term', () => {
     const root = copyFixture();
     const variants = [

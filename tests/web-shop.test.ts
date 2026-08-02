@@ -56,7 +56,7 @@ describe('Bazaar', () => {
     expect(res.headers['cache-control']).toBe('private, no-store');
     expect(res.text).toContain('Beginner Gold Potion');
     expect(res.text).toContain('Beginner Damage Potion');
-    expect(res.text).toContain('50g per 1,000 effective tokens');
+    expect(res.text).toContain('50g per 1,000 Raid Power');
     expect(res.text).toContain('+25% personal base hit');
     expect(res.text.match(/2 active hours/g)).toHaveLength(2);
     expect(res.text.match(/action="\/shop\/consumables\/purchase"/g)).toHaveLength(2);
@@ -67,12 +67,12 @@ describe('Bazaar', () => {
     expect(res.text).toContain('Buy 1 · 100,000g');
     expect(res.text).toContain('Buy 1 · 150,000g');
     expect(res.text).toContain(
-      'data-ready-copy="Ready to turn hard work into bonus gold."',
+      'data-ready-copy="Ready to squeeze bonus gold from your next Raid."',
     );
     expect(res.text).toContain(
       'data-ready-copy="Ready to put more force behind every hit."',
     );
-    expect(res.text).toContain('Ready to turn hard work into bonus gold.');
+    expect(res.text).toContain('Ready to squeeze bonus gold from your next Raid.');
     expect(res.text).toContain('Ready to put more force behind every hit.');
     expect(res.text).not.toContain('Your purse is ready for 1.');
 
@@ -93,7 +93,7 @@ describe('Bazaar', () => {
 
     const res = await request(app).get('/shop').query({ token: player.auth_token });
 
-    expect(res.text).toContain('73g per 1,000 effective tokens');
+    expect(res.text).toContain('73g per 1,000 Raid Power');
     expect(res.text).toContain('+12.5% personal base hit');
     expect(res.text).toContain('1 active second');
     expect(res.text).toContain('30 active minutes');
