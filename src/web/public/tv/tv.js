@@ -518,8 +518,10 @@ function drawHpBar() {
       `bold ${nameSize}px system-ui`, '#f2e4e4', 'center');
     const progress = raidStatus();
     if (progress) {
-      shadowText(progress, panelX + panelW / 2, y + h + 10,
-        'bold 12px system-ui', '#e8c96a', 'center');
+      const progressSize = Math.max(12, Math.round(nameSize * 0.8));
+      const progressGap = Math.max(10, Math.round(h * 0.6));
+      shadowText(progress, panelX + panelW / 2, y + h + progressGap,
+        `bold ${progressSize}px system-ui`, '#e8c96a', 'center');
     }
     return;
   }

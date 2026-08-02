@@ -77,6 +77,27 @@ describe('buildTvState', () => {
     ]));
   });
 
+  it('keeps current Raid counts through a defeat or rest gap without an active Fight', () => {
+    const now = 100_000;
+    const player = createPlayer(db, { name: 'Raider', class_key: 'wizard', gender: 'M' }, now);
+    ingestTokenUsage(db, tokens(player.auth_token, 1_000), now, { cacheReadWeight: 0 });
+    new GameEngine(db, { rng: () => 0.5 }).tick(now);
+
+    const active = buildTvState(db, now);
+    const dungeon = db.prepare('SELECT id, regular_count FROM dungeons WHERE id=?')
+      .get(active.dungeonId) as { id: number; regular_count: number };
+    db.prepare('UPDATE game_state SET current_encounter_id=NULL, paused=1 WHERE id=1').run();
+
+    const gap = buildTvState(db, now);
+    expect(gap).toMatchObject({
+      dungeonId: dungeon.id,
+      raidNumber: dungeon.id,
+      fightIndex: null,
+      fightCount: dungeon.regular_count + 1,
+      encounter: null,
+    });
+  });
+
   it('does not serialize Run provider, model, or effort data to the TV', () => {
     const player = createPlayer(db, { name: 'Private', class_key: 'wizard', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(player.auth_token, 1_000), 100_000, { cacheReadWeight: 0 });

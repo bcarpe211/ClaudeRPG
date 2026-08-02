@@ -314,6 +314,25 @@ describe('compact TV renderer geometry', () => {
     );
   });
 
+  it('scales the full-TV Raid status with the encounter chrome at DPR 1 and 2', () => {
+    const dpr1 = renderTvAt(1, 'full');
+    const dpr2 = renderTvAt(2, 'full');
+    const status = 'Raid 12 · Fight 2/4 · 7 Raiders active';
+    const findText = (rendering: ReturnType<typeof renderTvAt>, text: string) => {
+      const draw = rendering.texts.find((candidate) => candidate.text === text);
+      if (!draw) throw new Error(`Missing ${text}`);
+      return draw;
+    };
+
+    const statusAt1 = findText(dpr1, status);
+    const statusAt2 = findText(dpr2, status);
+    const titleAt1 = findText(dpr1, 'Elder Demon');
+    const titleAt2 = findText(dpr2, 'Elder Demon');
+
+    expect(statusAt1.fontPx / titleAt1.fontPx).toBeGreaterThanOrEqual(0.75);
+    expect(statusAt2.fontPx / titleAt2.fontPx).toBeGreaterThanOrEqual(0.75);
+  });
+
   it('keeps the compact hub geometry unchanged when Raid display state arrives', () => {
     const rendering = compactRenderAt(1);
 

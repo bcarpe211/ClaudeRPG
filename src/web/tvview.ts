@@ -75,19 +75,17 @@ export function buildTvState(
 
   // Encounter (active only).
   let encounter: TvEncounter | null = null;
-  let raidNumber: number | null = null;
+  const raid = gs.current_dungeon_id
+    ? db.prepare('SELECT id, regular_count FROM dungeons WHERE id=?')
+      .get(gs.current_dungeon_id) as { id: number; regular_count: number } | undefined
+    : undefined;
+  const raidNumber = raid?.id ?? null;
   let fightIndex: number | null = null;
-  let fightCount: number | null = null;
+  const fightCount = raid ? raid.regular_count + 1 : null;
   if (gs.current_encounter_id) {
     const e = db.prepare('SELECT * FROM encounters WHERE id=?').get(gs.current_encounter_id) as any;
     if (e && e.status === 'active') {
-      const dungeon = db.prepare('SELECT id, regular_count FROM dungeons WHERE id=?')
-        .get(e.dungeon_id) as { id: number; regular_count: number } | undefined;
-      if (dungeon) {
-        raidNumber = dungeon.id;
-        fightIndex = e.index_in_dungeon + 1;
-        fightCount = dungeon.regular_count + 1;
-      }
+      fightIndex = e.index_in_dungeon + 1;
       const meta = monsterByIndex(e.creature_index);
       const isPack = e.kind === 'pack' && e.pack_count > 1; // a mob of several -> plural name
       encounter = {
