@@ -70,7 +70,7 @@ describe('Runtime Raiders brand copy', () => {
     const wordmark = res.text.match(/<a\b(?=[^>]*\bclass="brand")(?=[^>]*\baria-label="Runtime Raiders")[^>]*>([\s\S]*?)<\/a>/)?.[1] ?? '';
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain('<title>Register — Runtime Raiders</title>');
+    expect(res.text).toContain('<title>Create Your Raider — Runtime Raiders</title>');
     expect(wordmark).toContain('<strong class="brand-primary">RUNTIME</strong>');
     expect(wordmark).toContain('<span class="brand-companion">RAIDERS</span>');
     expect(wordmark).not.toContain('CLAUDE');
