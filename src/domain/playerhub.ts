@@ -27,14 +27,16 @@ import {
   cosmeticSkinUrlForPlayer,
   type SkinAssetContext,
 } from './slotcosmetics';
-import { buildSetupSnippet } from './snippet';
+import { activeRunCount, collectorStatus, recentRuns } from './runs';
 
 const DEFAULT_DEBUFF_FACTOR = 0.85;
 const DEFAULT_DEBUFF_SECONDS = 8;
+const ACTIVE_RUN_STALE_AFTER_MS = 15 * 60_000;
 const POTION_UNAVAILABLE_COPY = 'Potion tuning is temporarily unavailable.';
 
 export interface PlayerHubToday {
   effectiveTokens: number;
+  raidPower: number;
   damage: number;
   fightRank: number | null;
   goldEarned: number;
@@ -84,7 +86,24 @@ export type PlayerHubViewModel = PlayerHubState & {
   className: string;
   connected: boolean;
   dye: ReturnType<typeof dyeViewModel>;
-  snippet: string;
+  activeRuns: number;
+  latestRun: {
+    provider: string;
+    surface: string;
+    model: string;
+    effort: string;
+    state: string;
+    elapsedMs: number;
+    nativeUsage: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      reasoningOutput: number;
+    };
+    raidPower: number;
+  } | null;
+  collector: ReturnType<typeof collectorStatus>;
 };
 
 function configuredNumber(
@@ -281,6 +300,7 @@ export function buildPlayerHubState(
     effects: activeEffects(db, player.id, now),
     today: {
       effectiveTokens: tokens.total,
+      raidPower: tokens.total,
       damage: combat?.damage ?? 0,
       fightRank: fightRank(db, encounterId, player.id),
       goldEarned: gold.total,
@@ -299,6 +319,7 @@ export function buildPlayerHubViewModel(
   context: SkinAssetContext & { publicUrl: string },
 ): PlayerHubViewModel {
   const assets = { spritesDir: context.spritesDir, slotmapsDir: context.slotmapsDir };
+  const [run] = recentRuns(db, player.id, 1);
   return {
     ...buildPlayerHubState(db, player, now, timeZone),
     avatarA: cosmeticSkinUrlForPlayer(db, player, 'a', assets),
@@ -306,6 +327,23 @@ export function buildPlayerHubViewModel(
     className: getClass(player.class_key)?.name ?? player.class_key,
     connected: player.last_token_at !== null,
     dye: dyeViewModel(db, player, context.slotmapsDir),
-    snippet: buildSetupSnippet({ token: player.auth_token, endpoint: context.publicUrl }),
+    activeRuns: activeRunCount(db, player.id, now, ACTIVE_RUN_STALE_AFTER_MS),
+    latestRun: run ? {
+      provider: run.provider,
+      surface: run.surface,
+      model: run.model ?? 'Unknown',
+      effort: run.effort ?? 'Unknown',
+      state: run.state,
+      elapsedMs: Math.max(0, (run.terminalAt ?? run.lastEventAt) - run.startedAt),
+      nativeUsage: {
+        input: run.usage.input,
+        output: run.usage.output,
+        cacheRead: run.usage.cache_read,
+        cacheWrite: run.usage.cache_write,
+        reasoningOutput: run.usage.reasoning_output,
+      },
+      raidPower: run.raidPower,
+    } : null,
+    collector: collectorStatus(db, player.id),
   };
 }

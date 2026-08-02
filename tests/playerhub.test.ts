@@ -5,7 +5,7 @@ import { purchaseConsumable } from '../src/domain/inventory';
 import { officeDayKey, nextOfficeMidnight } from '../src/domain/office-time';
 import { activatePotion } from '../src/domain/potions';
 import { createPlayer, getPlayerById } from '../src/domain/players';
-import { buildPlayerHubState } from '../src/domain/playerhub';
+import { buildPlayerHubState, buildPlayerHubViewModel } from '../src/domain/playerhub';
 import { seedSettings, setSetting } from '../src/domain/settings';
 
 const timeZone = 'America/New_York';
@@ -66,7 +66,111 @@ function seedInventoryAndGoldPotion(playerId: number): void {
   db.prepare('UPDATE game_state SET combat_active_ms=combat_active_ms+1000 WHERE id=1').run();
 }
 
+function seedRun(playerId: number, input: {
+  runKey: string;
+  updatedAt: number;
+  model: string | null;
+  effort: string | null;
+  raidPower: number;
+}): void {
+  db.prepare(
+    `INSERT INTO runs
+      (player_id, provider, surface, run_key, state, started_at_ms,
+       terminal_at_ms, last_event_at_ms, last_observed_at_ms, usage_input,
+       usage_output, usage_cache_read, usage_cache_write,
+       usage_reasoning_output, latest_model, latest_effort, policy_version,
+       raid_power, created_at, updated_at)
+     VALUES (?, 'codex', 'codex_desktop', ?, 'open', ?, NULL, ?, ?,
+       11, 22, 33, 44, 55, ?, ?, 'raid-power-v1', ?, ?, ?)`,
+  ).run(
+    playerId,
+    input.runKey,
+    input.updatedAt - 5_000,
+    input.updatedAt - 1_000,
+    input.updatedAt,
+    input.model,
+    input.effort,
+    input.raidPower,
+    input.updatedAt - 5_000,
+    input.updatedAt,
+  );
+}
+
 describe('player hub state', () => {
+  it('exposes parallel Runs, newest safe details, collector status, and Today Raid Power', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Run Reader', class_key: 'wizard', gender: 'M' },
+      now - 20_000,
+    );
+    const olderRunKey = 'a'.repeat(64);
+    const latestRunKey = 'b'.repeat(64);
+    const deviceId = '00000000-0000-4000-8000-000000000004';
+    const credentialHash = 'c'.repeat(64);
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'd'.repeat(64), now - 20_000);
+    db.prepare(
+      'INSERT INTO token_events (player_id, ts, effective_delta, total_delta) VALUES (?, ?, 777, 777)',
+    ).run(player.id, now - 500);
+    db.prepare(
+      `INSERT INTO raider_devices
+        (device_id, player_id, token_hash, companion_version, created_at, last_seen_at)
+       VALUES (?, ?, ?, '0.1.0', ?, ?)`,
+    ).run(deviceId, player.id, credentialHash, now - 10_000, now - 100);
+    seedRun(player.id, {
+      runKey: olderRunKey,
+      updatedAt: now - 2_000,
+      model: 'older-model',
+      effort: 'high',
+      raidPower: 100,
+    });
+    seedRun(player.id, {
+      runKey: latestRunKey,
+      updatedAt: now - 1_000,
+      model: null,
+      effort: null,
+      raidPower: 321,
+    });
+
+    const hub = buildPlayerHubViewModel(
+      db,
+      getPlayerById(db, player.id)!,
+      now,
+      timeZone,
+      { spritesDir: '/sprites', slotmapsDir: '/slotmaps', publicUrl: 'https://example.test' },
+    );
+
+    expect(hub.activeRuns).toBe(2);
+    expect(hub.latestRun).toEqual({
+      provider: 'codex',
+      surface: 'codex_desktop',
+      model: 'Unknown',
+      effort: 'Unknown',
+      state: 'open',
+      elapsedMs: 4_000,
+      nativeUsage: {
+        input: 11,
+        output: 22,
+        cacheRead: 33,
+        cacheWrite: 44,
+        reasoningOutput: 55,
+      },
+      raidPower: 321,
+    });
+    expect(hub.today.raidPower).toBe(777);
+    expect(hub.collector).toEqual({ lastSeenAt: now - 100, devices: 1 });
+    const output = JSON.stringify(hub);
+    expect(output).not.toContain(olderRunKey);
+    expect(output).not.toContain(latestRunKey);
+    expect(output).not.toContain(deviceId);
+    expect(output).not.toContain(credentialHash);
+    expect(output).not.toContain('runKey');
+    expect(output).not.toContain('deviceId');
+    expect(output).not.toContain('path');
+    expect(output).not.toContain('credential');
+  });
+
   it('returns private player progress, public fight leaders, and office-local Today totals', () => {
     const player = createPlayer(db, { name: 'Hero', class_key: 'wizard', gender: 'M' }, now - 20_000);
     db.prepare('UPDATE players SET last_token_at=? WHERE id=?').run(now, player.id);
@@ -123,6 +227,7 @@ describe('player hub state', () => {
     expect(hub.activationTiming).toBe('starts_now');
     expect(hub.today).toEqual({
       effectiveTokens: 1234,
+      raidPower: 1234,
       damage: 500,
       fightRank: 2,
       goldEarned: 250,

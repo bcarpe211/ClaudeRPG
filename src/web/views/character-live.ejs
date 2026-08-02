@@ -1,10 +1,10 @@
 <div class="hub-panel-head">
-  <div><h2>Live Dungeon</h2><p>The same battle playing on the office TV, packed into your field journal.</p></div>
+  <div><h2>Current Raid</h2><p>The same battle playing on the office TV, packed into your field journal.</p></div>
   <a href="/tv" class="btn btn-ghost">Watch full screen</a>
 </div>
 <div class="hub-live-grid">
   <div class="hub-dungeon">
-    <iframe class="hub-dungeon-frame" src="/tv/embed" title="Live ClaudeRPG dungeon"></iframe>
+    <iframe class="hub-dungeon-frame" src="/tv/embed" title="Current Runtime Raiders dungeon"></iframe>
   </div>
 
   <section class="hub-subpanel hub-fight-leaders" aria-labelledby="hub-leaders-title">
@@ -25,12 +25,36 @@
   <section class="hub-today-panel" aria-labelledby="hub-today-title">
     <h3 id="hub-today-title">Today</h3>
     <div class="hub-today">
-      <div class="hub-today-card"><span>Effective tokens</span><strong id="hub-today-tokens"><%= today.effectiveTokens.toLocaleString('en-US') %></strong></div>
+      <div class="hub-today-card"><span>Raid Power</span><strong id="hub-today-tokens"><%= today.raidPower.toLocaleString('en-US') %></strong></div>
       <div class="hub-today-card"><span>Damage</span><strong id="hub-today-damage"><%= today.damage.toLocaleString('en-US') %></strong></div>
       <div class="hub-today-card"><span>Fight rank</span><strong id="hub-today-rank"><%= today.fightRank == null ? '—' : '#' + today.fightRank %></strong></div>
       <div class="hub-today-card"><span>Gold earned</span><strong id="hub-today-gold"><%= today.goldEarned.toLocaleString('en-US') %>g</strong></div>
-      <div class="hub-today-card"><span>Active time</span><strong id="hub-today-active"><%= Math.floor(today.combatActiveMs / 3600000) %>h <%= Math.floor((today.combatActiveMs % 3600000) / 60000) %>m</strong></div>
+      <div class="hub-today-card"><span>Raid time</span><strong id="hub-today-active"><%= Math.floor(today.combatActiveMs / 3600000) %>h <%= Math.floor((today.combatActiveMs % 3600000) / 60000) %>m</strong></div>
       <div class="hub-today-card"><span>Potions used</span><strong id="hub-today-potions"><%= today.potionsUsed %></strong></div>
     </div>
+  </section>
+
+  <section class="hub-run-details" aria-labelledby="hub-run-details-title">
+    <div class="hub-run-details-head">
+      <h3 id="hub-run-details-title">Run Details</h3>
+      <span><%= activeRuns %> <%= activeRuns === 1 ? 'Run' : 'Runs' %> active</span>
+    </div>
+    <% if (latestRun) { %>
+      <article class="hub-latest-run">
+        <strong>Latest Run</strong>
+        <dl>
+          <dt>Provider</dt><dd><%= latestRun.provider %></dd>
+          <dt>Surface</dt><dd><%= latestRun.surface %></dd>
+          <dt>Model</dt><dd><%= latestRun.model %></dd>
+          <dt>Effort</dt><dd><%= latestRun.effort %></dd>
+          <dt>State</dt><dd><%= latestRun.state[0].toUpperCase() + latestRun.state.slice(1) %></dd>
+          <dt>Elapsed</dt><dd><%= Math.floor(latestRun.elapsedMs / 60000) %>m <%= Math.floor((latestRun.elapsedMs % 60000) / 1000) %>s</dd>
+          <dt>Native usage</dt><dd><%= latestRun.nativeUsage.input.toLocaleString('en-US') %> input · <%= latestRun.nativeUsage.output.toLocaleString('en-US') %> output · <%= latestRun.nativeUsage.cacheRead.toLocaleString('en-US') %> cache read · <%= latestRun.nativeUsage.cacheWrite.toLocaleString('en-US') %> cache write · <%= latestRun.nativeUsage.reasoningOutput.toLocaleString('en-US') %> reasoning</dd>
+          <dt>Awarded</dt><dd><%= latestRun.raidPower.toLocaleString('en-US') %> Raid Power</dd>
+        </dl>
+      </article>
+    <% } else { %>
+      <p class="hub-empty-line">No Runs recorded yet.</p>
+    <% } %>
   </section>
 </div>

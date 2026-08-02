@@ -24,7 +24,7 @@ describe('character sheet', () => {
     expect(res.text).toContain('name="token"');
   });
 
-  it('GET /character?token=... shows the sheet with stats and snippet', async () => {
+  it('GET /character?token=... shows the Raider Hub without a persistent setup snippet', async () => {
     const p = createPlayer(db, { name: 'Gandalf', class_key: 'wizard', gender: 'M' }, 1000);
     db.prepare('UPDATE players SET gold = 2000000 WHERE id = ?').run(p.id);
     purchase(db, p.id, 'cosmetic_wheel_t1', 1_500_000, 1001);
@@ -32,12 +32,19 @@ describe('character sheet', () => {
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('private, no-store');
     expect(res.text).toContain('Gandalf');
-    expect(res.text).toContain('claude_rpg_token=');
+    expect(res.text).toContain('Raider Hub');
+    expect(res.text).toContain('Current Raid');
+    expect(res.text).toContain('Raid time');
+    expect(res.text).toContain('Companion Setup');
+    expect(res.text).toContain('Raider settings');
+    expect(res.text).toContain('Generate one-time command');
+    expect(res.text).not.toContain('claude_rpg_token=');
+    expect(res.text).not.toContain('Total tokens');
     expect(res.text).toContain('class="character-avatar sprite-anim"');
     expect(res.text.match(/class="px frame-a"/g)).toHaveLength(1);
     expect(res.text.match(/class="px frame-b"/g)).toHaveLength(1);
     expect(res.text.match(/<canvas id="dye-preview"/g)).toHaveLength(1);
-    expect(res.text).toContain('role="tablist" aria-label="Character sections"');
+    expect(res.text).toContain('role="tablist" aria-label="Raider sections"');
     expect(res.text).toContain('id="hub-tab-live" role="tab" aria-selected="true"');
     expect(res.text).toContain('id="hub-live" role="tabpanel"');
     expect(res.text).toContain('<iframe class="hub-dungeon-frame" src="/tv/embed"');
@@ -51,7 +58,7 @@ describe('character sheet', () => {
     expect(dungeonIndex).toBeLessThan(leadersIndex);
     expect(leadersIndex).toBeLessThan(todayIndex);
     expect(res.text).not.toContain('class="hub-live-side"');
-    expect(res.text).toContain('<span>Active time</span>');
+    expect(res.text).toContain('<span>Raid time</span>');
     expect(res.text).toContain('id="hub-inventory" role="tabpanel" hidden');
     expect(res.text).toContain('id="hub-wardrobe" role="tabpanel" hidden');
     expect(res.text).toContain('/static/player-hub.css');
@@ -75,10 +82,11 @@ describe('character sheet', () => {
     const hubClient = JSON.parse(hubBootstrap![1]) as {
       token: string;
       initialState: Record<string, unknown>;
-      endpoints: { state: string };
+      endpoints: { state: string; enroll: string };
     };
     expect(hubClient.token).toBe(p.auth_token);
     expect(hubClient.endpoints.state).toContain(encodeURIComponent(p.auth_token));
+    expect(hubClient.endpoints.enroll).toBe('/api/raiders/enrollments');
     expect(JSON.stringify(hubClient.initialState)).not.toContain(p.auth_token);
     expect(JSON.stringify(hubClient.initialState)).not.toContain('auth_token');
     expect(res.text).not.toContain('dye-active-label');
@@ -91,6 +99,61 @@ describe('character sheet', () => {
     expect(res.text).not.toContain('class="dye-fin dye-default"');
     expect(res.text).not.toContain('↺');
     expect(res.text).toContain('class="dye-fin-swatch dye-fin-default" aria-hidden="true"');
+  });
+
+  it('renders compact informational Run Details after the current Raid support cards', async () => {
+    const player = createPlayer(
+      db,
+      { name: 'Parallel Raider', class_key: 'ranger', gender: 'F' },
+      Date.now() - 20_000,
+    );
+    const observedAt = Date.now() - 100;
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'c'.repeat(64), observedAt - 20_000);
+    const insert = db.prepare(
+      `INSERT INTO runs
+        (player_id, provider, surface, run_key, state, started_at_ms,
+         terminal_at_ms, last_event_at_ms, last_observed_at_ms, usage_input,
+         usage_output, usage_cache_read, usage_cache_write,
+         usage_reasoning_output, latest_model, latest_effort, policy_version,
+         raid_power, created_at, updated_at)
+       VALUES (?, 'codex', ?, ?, 'open', ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         'raid-power-v1', ?, ?, ?)` ,
+    );
+    insert.run(
+      player.id, 'codex_cli', 'a'.repeat(64), observedAt - 9_000,
+      observedAt - 1_000, observedAt - 1_000, 1, 2, 3, 4, 5,
+      'gpt-literal', 'xhigh', 123, observedAt - 9_000, observedAt - 1_000,
+    );
+    insert.run(
+      player.id, 'codex_desktop', 'b'.repeat(64), observedAt - 5_000,
+      observedAt, observedAt, 11, 22, 33, 44, 55,
+      null, null, 321, observedAt - 5_000, observedAt,
+    );
+
+    const response = await request(app).get('/character').query({ token: player.auth_token });
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('2 Runs active');
+    expect(response.text).toContain('Run Details');
+    expect(response.text).toContain('Latest Run');
+    expect(response.text).toContain('codex');
+    expect(response.text).toContain('codex_desktop');
+    expect(response.text).toContain('Unknown');
+    expect(response.text).toContain('Open');
+    expect(response.text).toContain('11 input');
+    expect(response.text).toContain('22 output');
+    expect(response.text).toContain('321 Raid Power');
+    const todayIndex = response.text.indexOf('class="hub-today-panel"');
+    const runDetailsIndex = response.text.indexOf('class="hub-run-details"');
+    expect(todayIndex).toBeLessThan(runDetailsIndex);
+    expect(response.text).not.toContain('a'.repeat(64));
+    expect(response.text).not.toContain('b'.repeat(64));
+    expect(response.text).not.toContain('device_id');
+    expect(response.text).not.toContain('run_key');
+    expect(response.text).not.toMatch(/model[^<]*(rank|rarity|multiplier)/i);
+    expect(response.text).not.toMatch(/effort[^<]*(rank|rarity|multiplier)/i);
   });
 
   it('renders owned potion quantity as unavailable when current tuning is invalid', async () => {

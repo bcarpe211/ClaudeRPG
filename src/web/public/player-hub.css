@@ -43,7 +43,7 @@
 .hub-panel-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:14px}
 .hub-panel-head h2{margin:0 0 3px}.hub-panel-head p{margin:0;color:var(--muted);font-size:13px}
 
-.hub-live-grid{display:grid;grid-template-columns:minmax(0,480px) minmax(240px,1fr);grid-template-areas:"dungeon leaders" "today today";gap:12px 20px;align-items:stretch}
+.hub-live-grid{display:grid;grid-template-columns:minmax(0,480px) minmax(240px,1fr);grid-template-areas:"dungeon leaders" "today today" "runs runs";gap:12px 20px;align-items:stretch}
 .hub-dungeon{grid-area:dungeon;position:relative;isolation:isolate;min-width:0;width:min(480px,100%);aspect-ratio:6/5;overflow:visible;border:0;background:transparent}
 .hub-dungeon::before{content:"";position:absolute;z-index:-1;left:0;right:0;top:10%;bottom:0;border-radius:11px;box-shadow:8px 10px 20px -11px #000e,3px 4px 8px -5px #000f;pointer-events:none}
 .hub-dungeon-frame{position:relative;z-index:1;display:block;width:100%;height:100%;aspect-ratio:6/5;border:0;background:transparent;image-rendering:pixelated}
@@ -65,6 +65,10 @@
 .hub-today-card{min-width:0;padding:10px 9px;background:linear-gradient(180deg,#140d1dd1,#0b0710e0)}
 .hub-today-card span{display:block;overflow:hidden;color:#746879;font-size:9px;letter-spacing:.06em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
 .hub-today-card strong{display:block;margin-top:4px;color:#c4b9ca;font-size:15px;overflow-wrap:anywhere}
+.hub-run-details{grid-area:runs;min-width:0;padding:12px 13px;border:1px solid #34283f;border-radius:9px;background:linear-gradient(180deg,#140d1dd1,#0b0710e0)}
+.hub-run-details-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.hub-run-details-head h3{margin:0;color:#cdb767;font:850 11px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase}.hub-run-details-head span{color:var(--muted);font-size:11px}
+.hub-latest-run{margin-top:10px}.hub-latest-run>strong{display:block;margin-bottom:7px;color:#c4b9ca;font-size:12px}.hub-latest-run dl{display:grid;grid-template-columns:repeat(6,max-content minmax(0,1fr));gap:5px 8px;margin:0;font-size:10px}.hub-latest-run dt{color:#746879}.hub-latest-run dd{min-width:0;margin:0;color:#c4b9ca;overflow-wrap:anywhere}.hub-latest-run dt:nth-of-type(7){grid-column:1}.hub-latest-run dd:nth-of-type(7){grid-column:2 / span 7}.hub-latest-run dt:nth-of-type(8){grid-column:10}.hub-latest-run dd:nth-of-type(8){grid-column:11 / -1}
+.hub-setup-copy,.hub-setup-status{color:var(--muted);font-size:12px}.hub-setup-command{max-height:250px;margin:12px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}.hub-setup-command[hidden]{display:none}
 
 .hub-inventory-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.hub-filter{margin:0;padding:7px 10px;border:1px solid var(--line);border-radius:6px;
   background:#ffffff07;color:var(--ink);box-shadow:none;font-size:11px}.hub-filter:hover{transform:none;box-shadow:none}.hub-filter[aria-pressed="true"]{border-color:var(--gold-dim);color:var(--gold2);background:#e8c96a12}
@@ -138,13 +142,14 @@
 .hub-settings-card h2{font-size:16px}.hub-settings-card pre{max-height:250px;margin-bottom:0}.hub-delete{grid-column:2}.hub-settings-card form button{margin-top:12px}
 
 @container (max-width:739px){
-  .hub-live-grid{grid-template-columns:1fr;grid-template-areas:"dungeon" "leaders" "today"}
+  .hub-live-grid{grid-template-columns:1fr;grid-template-areas:"dungeon" "leaders" "today" "runs"}
   .hub-inventory-layout{grid-template-columns:1fr}
   .hub-item-detail{height:auto;min-height:190px}
   #hub-item-detail-content{height:auto;min-height:0}
   .hub-item-detail .btn{margin-top:14px}
   .hub-dungeon{justify-self:center;width:min(480px,100%)}
   .hub-today{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .hub-latest-run dl{grid-template-columns:max-content minmax(0,1fr) max-content minmax(0,1fr)}.hub-latest-run dt:nth-of-type(7),.hub-latest-run dt:nth-of-type(8){grid-column:1}.hub-latest-run dd:nth-of-type(7),.hub-latest-run dd:nth-of-type(8){grid-column:2 / -1}
 }
 
 @container (max-width:520px){

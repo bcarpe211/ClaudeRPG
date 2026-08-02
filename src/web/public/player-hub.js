@@ -49,6 +49,9 @@
   const avatarWrap = byId('hub-avatar-wrap');
   const fightLeaders = byId('hub-leaders');
   const potionCanvas = byId('hub-potion-fx');
+  const companionGenerate = byId('hub-companion-generate');
+  const companionCommand = byId('hub-companion-command');
+  const companionStatus = byId('hub-companion-status');
   const potionContext = potionCanvas?.getContext?.('2d') ?? null;
   const reducedMotion = root.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
   if (!grid || !detail || !drinkButton || !confirmDialog || !confirmDrink) return;
@@ -258,7 +261,7 @@
   function renderTodayAndFight() {
     const gold = documentRef.querySelector('[data-hub-gold]');
     if (gold) gold.textContent = number.format(state.gold);
-    setText('hub-today-tokens', number.format(state.today.effectiveTokens));
+    setText('hub-today-tokens', number.format(state.today.raidPower ?? state.today.effectiveTokens));
     setText('hub-today-damage', number.format(state.today.damage));
     setText('hub-today-rank', state.today.fightRank == null ? '—' : `#${state.today.fightRank}`);
     setText('hub-today-gold', `${number.format(state.today.goldEarned)}g`);
@@ -521,6 +524,35 @@
     }
   }
 
+  async function generateCompanionCommand() {
+    if (!companionGenerate || !companionCommand || !companionStatus) return;
+    companionGenerate.disabled = true;
+    companionGenerate.textContent = 'Generating…';
+    companionStatus.textContent = '';
+    try {
+      const response = await root.fetch(bootstrap.endpoints.enroll, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raider_key: bootstrap.token }),
+      });
+      const result = await response.json();
+      if (!response.ok || typeof result.install_command !== 'string') {
+        throw new Error('enrollment rejected');
+      }
+      companionCommand.textContent = result.install_command;
+      companionCommand.hidden = false;
+      const expiresAt = new Intl.DateTimeFormat(undefined, {
+        hour: 'numeric', minute: '2-digit',
+      }).format(new Date(result.expires_at));
+      companionStatus.textContent = `Fresh one-time command generated. Expires at ${expiresAt}.`;
+    } catch {
+      companionStatus.textContent = 'Could not generate a command. Try again.';
+    } finally {
+      companionGenerate.disabled = false;
+      companionGenerate.textContent = 'Generate one-time command';
+    }
+  }
+
   function openEffects() {
     if (!effectsSurface || !avatarTrigger) return;
     effectsSurface.hidden = false;
@@ -563,6 +595,7 @@
     event.preventDefault();
     closeDialog();
   });
+  companionGenerate?.addEventListener('click', generateCompanionCommand);
 
   avatarTrigger?.addEventListener('pointerenter', openEffects);
   avatarTrigger?.addEventListener('focus', () => {

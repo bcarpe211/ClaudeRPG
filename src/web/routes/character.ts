@@ -88,10 +88,11 @@ export function registerCharacterRoutes(
       );
       return;
     }
+    const now = Date.now();
     const hub = buildPlayerHubViewModel(
       db,
       player,
-      Date.now(),
+      now,
       config.officeTimeZone,
       { spritesDir: config.spritesDir, slotmapsDir, publicUrl: config.publicUrl },
     );

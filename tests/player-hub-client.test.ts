@@ -210,7 +210,8 @@ function interactionHarness(options: {
     'potion-confirm-inventory', 'potion-confirm-doses', 'hub-potion-feedback',
     'hub-bottle-burst', 'hub-leaders', 'hub-today-tokens', 'hub-today-damage',
     'hub-today-rank', 'hub-today-gold', 'hub-today-active', 'hub-today-potions',
-    'hub-potion-fx',
+    'hub-potion-fx', 'hub-companion-generate', 'hub-companion-command',
+    'hub-companion-status',
   ];
   ids.forEach((id) => register(
     id,
@@ -264,7 +265,7 @@ function interactionHarness(options: {
       },
     ],
     today: {
-      effectiveTokens: 1_000, damage: 200, fightRank: 2, goldEarned: 300,
+      effectiveTokens: 1_000, raidPower: 1_000, damage: 200, fightRank: 2, goldEarned: 300,
       combatActiveMs: 3_600_000, potionsUsed: 1,
     },
     currentFight: { leaders: [{ playerId: 2, name: 'Rogue', damage: 900 }] },
@@ -326,7 +327,11 @@ function interactionHarness(options: {
       playerId: 42,
       token: 'secret-token',
       initialState,
-      endpoints: { state: '/character/state?token=secret-token', activate: '/character/potions/activate' },
+      endpoints: {
+        state: '/character/state?token=secret-token',
+        activate: '/character/potions/activate',
+        enroll: '/api/raiders/enrollments',
+      },
     },
     fetch: async (url: string, options: Record<string, any> = {}) => {
       fetchCalls.push({ url, options });
@@ -399,6 +404,43 @@ describe('mounted player hub tabs', () => {
 });
 
 describe('player hub inventory, effects, and refresh behavior', () => {
+  it('generates and replaces one-time Companion Setup commands using only the Raider Key', async () => {
+    const h = interactionHarness({ responses: [
+      { ok: true, json: async () => ({
+        install_command: 'curl first-one-time-command',
+        expires_at: Date.parse('2026-07-30T04:10:00Z'),
+      }) },
+    ] });
+    const generate = h.document.getElementById('hub-companion-generate')!;
+    const command = h.document.getElementById('hub-companion-command')!;
+    const status = h.document.getElementById('hub-companion-status')!;
+
+    await generate.dispatchAsync('click');
+
+    expect(h.fetchCalls).toHaveLength(1);
+    expect(h.fetchCalls[0].url).toBe('/api/raiders/enrollments');
+    expect(h.fetchCalls[0].options).toMatchObject({
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ raider_key: 'secret-token' }),
+    });
+    expect(h.fetchCalls[0].options.body).not.toContain('device_id');
+    expect(h.fetchCalls[0].options.body).not.toContain('device_token');
+    expect(command.textContent).toBe('curl first-one-time-command');
+    expect(command.hidden).toBe(false);
+    expect(status.textContent).toContain('one-time command');
+
+    h.responses.push({ ok: true, json: async () => ({
+      install_command: 'curl fresh-replacement-command',
+      expires_at: Date.parse('2026-07-30T04:20:00Z'),
+    }) });
+    await generate.dispatchAsync('click');
+
+    expect(h.fetchCalls).toHaveLength(2);
+    expect(command.textContent).toBe('curl fresh-replacement-command');
+    expect(command.textContent).not.toContain('first-one-time-command');
+  });
+
   it('renders polling inventory cells with accessible quantity labels', () => {
     const h = interactionHarness();
     const grid = h.document.getElementById('hub-inventory-grid')!;

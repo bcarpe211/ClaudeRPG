@@ -42,6 +42,7 @@
         </aside>
       </div>
       <div class="hub-identity">
+        <span class="dye-kicker">Raider Hub</span>
         <h1 id="hub-player-name"><%= player.name %></h1>
         <p><strong><%= className %></strong> · <%= player.gender === 'M' ? 'Male' : 'Female' %> · <%= connected ? 'Connected' : 'Not seen yet' %></p>
       </div>
@@ -49,16 +50,16 @@
         <span aria-hidden="true">✦</span><span>Store</span>
       </a>
     </div>
-    <div class="hub-stats" aria-label="Character stats">
+    <div class="hub-stats" aria-label="Raider stats">
       <div class="hub-stat"><span class="hub-stat-label">Level</span><span class="hub-stat-value"><%= player.level %></span></div>
-      <div class="hub-stat"><span class="hub-stat-label">XP</span><span class="hub-stat-value"><%= player.effective_tokens.toLocaleString('en-US') %></span></div>
-      <div class="hub-stat"><span class="hub-stat-label">Total tokens</span><span class="hub-stat-value"><%= player.total_tokens.toLocaleString('en-US') %></span></div>
+      <div class="hub-stat"><span class="hub-stat-label">Raid Power</span><span class="hub-stat-value"><%= player.effective_tokens.toLocaleString('en-US') %></span></div>
       <div class="hub-stat hub-stat-gold"><span class="hub-stat-label">Gold</span><span class="hub-stat-value" data-hub-gold><%= gold.toLocaleString('en-US') %></span></div>
+      <div class="hub-stat"><span class="hub-stat-label">Momentum</span><span class="hub-stat-value"><%= activeRuns > 0 ? activeRuns + ' ' + (activeRuns === 1 ? 'Run' : 'Runs') + ' active' : collector.lastSeenAt != null ? 'Companion ready' : collector.devices > 0 ? 'Companion enrolled' : 'Setup needed' %></span></div>
     </div>
   </section>
 
-  <div class="hub-tabs" role="tablist" aria-label="Character sections">
-    <button id="hub-tab-live" role="tab" aria-selected="true" class="hub-tab" type="button" aria-controls="hub-live" tabindex="0">Live Dungeon</button>
+  <div class="hub-tabs" role="tablist" aria-label="Raider sections">
+    <button id="hub-tab-live" role="tab" aria-selected="true" class="hub-tab" type="button" aria-controls="hub-live" tabindex="0">Current Raid</button>
     <button id="hub-tab-inventory" role="tab" aria-selected="false" class="hub-tab" type="button" aria-controls="hub-inventory" tabindex="-1">Inventory</button>
     <button id="hub-tab-wardrobe" role="tab" aria-selected="false" class="hub-tab" type="button" aria-controls="hub-wardrobe" tabindex="-1">Wardrobe</button>
   </div>
@@ -74,11 +75,14 @@
   </section>
 
   <details class="hub-character-settings">
-    <summary>Character settings</summary>
+    <summary>Raider settings</summary>
     <div class="hub-settings-grid">
       <section class="hub-settings-card">
-        <h2>Your setup snippet</h2>
-        <pre><%= snippet %></pre>
+        <h2>Companion Setup</h2>
+        <p class="hub-setup-copy">Generate a fresh one-time command. It expires after 10 minutes.</p>
+        <button id="hub-companion-generate" type="button" class="btn btn-ghost">Generate one-time command</button>
+        <pre id="hub-companion-command" class="hub-setup-command" tabindex="0" hidden></pre>
+        <p id="hub-companion-status" class="hub-setup-status" role="status" aria-live="polite"></p>
       </section>
       <section class="hub-settings-card">
         <h2>Rename</h2>
@@ -126,6 +130,7 @@
   endpoints: {
     state: '/character/state?token=' + encodeURIComponent(player.auth_token),
     activate: '/character/potions/activate',
+    enroll: '/api/raiders/enrollments',
   },
 }; %>
 <script>window.__PLAYER_HUB__ = <%- JSON.stringify(playerHubClient).replace(/</g, '\\u003c') %>;</script>
