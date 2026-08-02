@@ -15,6 +15,7 @@ import { registerTvRoutes } from './routes/tv';
 import { registerCatalogRoutes } from './routes/catalog';
 import { registerDungeonPreviewRoutes } from './routes/dungeon-preview';
 import { registerCosmeticsReviewRoutes } from './routes/cosmetics-review';
+import { registerRunRoutes } from './routes/runs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(__dirname, 'views');
@@ -65,6 +66,7 @@ export function createApp({ db, config, slotmapsDir }: AppDeps): Express {
   registerShopRoutes(app, { db, config, slotmapsDir });
   registerAdminRoutes(app, { db, config });
   registerMetricsRoutes(app, { db, config });
+  registerRunRoutes(app, { db, config });
 
   const tvHub = new TvHub(db, skinAssets);
   registerTvRoutes(app, { db, config }, tvHub);

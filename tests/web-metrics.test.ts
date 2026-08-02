@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config';
 import { seedSettings, setSetting } from '../src/domain/settings';
 import { createApp } from '../src/web/app';
 import { createPlayer, getPlayerById } from '../src/domain/players';
+import { resolve } from 'node:path';
 
 let db: ReturnType<typeof openDb>;
 let app: ReturnType<typeof createApp>;
@@ -132,5 +133,33 @@ describe('POST /v1/metrics', () => {
       .send({});
     expect(limited.status).toBe(429);
     expect(limited.headers['retry-after']).toBeDefined();
+  });
+
+  it('acknowledges without writing when Runtime Raiders scoring is active', async () => {
+    const p = createPlayer(db, { name: 'A', class_key: 'knight', gender: 'M' }, 1);
+    app = createApp({
+      db,
+      config: loadConfig({
+        SCORING_MODE: 'runtime-raiders',
+        RUN_SCORING_CUTOVER_AT: '1800000000000',
+        RAID_POWER_POLICY_PATH: resolve('config/raid-power-policy-v1.json'),
+        RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli',
+      }),
+    });
+
+    const res = await request(app)
+      .post('/v1/metrics')
+      .set('Content-Type', 'application/json')
+      .send(body(p.auth_token, { input: 100, output: 20 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({});
+    expect(getPlayerById(db, p.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM metric_deliveries').get())
+      .toEqual({ count: 0 });
   });
 });

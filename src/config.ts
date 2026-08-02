@@ -1,4 +1,19 @@
 import { randomBytes } from 'node:crypto';
+import {
+  providerForSurface,
+  type RunSurface,
+} from './domain/run-events';
+import { loadRaidPowerPolicy } from './domain/raid-power-policy';
+
+export type ScoringMode = 'legacy-otlp' | 'runtime-raiders' | 'disabled';
+
+const DEFAULT_RAID_POWER_POLICY_PATH = 'config/raid-power-policy-v1.json';
+const RUN_SURFACES = new Set<RunSurface>([
+  'codex_desktop',
+  'codex_cli',
+  'claude_code',
+  'omp',
+]);
 
 export interface Config {
   port: number;
@@ -15,6 +30,57 @@ export interface Config {
   enableDungeonPreview: boolean;
   enableCosmeticsReview: boolean;
   officeTimeZone: string;
+  scoringMode: ScoringMode;
+  runCutoverAt: number;
+  raidPowerPolicyPath: string;
+  enabledRunSurfaces: RunSurface[];
+}
+
+function scoringMode(env: NodeJS.ProcessEnv): ScoringMode {
+  const value = env.SCORING_MODE ?? 'legacy-otlp';
+  if (value !== 'legacy-otlp' && value !== 'runtime-raiders' && value !== 'disabled') {
+    throw new Error(`Invalid SCORING_MODE: ${value}`);
+  }
+  return value;
+}
+
+function runCutoverAt(env: NodeJS.ProcessEnv, required: boolean): number {
+  const value = env.RUN_SCORING_CUTOVER_AT;
+  if (value === undefined) {
+    if (required) throw new Error('RUN_SCORING_CUTOVER_AT is required');
+    return 0;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new Error('RUN_SCORING_CUTOVER_AT must be a non-negative safe integer epoch');
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error('RUN_SCORING_CUTOVER_AT must be a non-negative safe integer epoch');
+  }
+  return parsed;
+}
+
+function enabledRunSurfaces(env: NodeJS.ProcessEnv): RunSurface[] {
+  const value = env.RUN_ENABLED_SURFACES;
+  if (value === undefined) return [];
+  const items = value.split(',').map((item) => item.trim());
+  if (items.some((item) => item.length === 0)) {
+    throw new Error('RUN_ENABLED_SURFACES must not contain empty items');
+  }
+
+  const surfaces: RunSurface[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!RUN_SURFACES.has(item as RunSurface)) {
+      throw new Error(`Invalid RUN_ENABLED_SURFACES item: ${item}`);
+    }
+    if (seen.has(item)) {
+      throw new Error(`Duplicate RUN_ENABLED_SURFACES item: ${item}`);
+    }
+    seen.add(item);
+    surfaces.push(item as RunSurface);
+  }
+  return surfaces;
 }
 
 function officeTimeZone(env: NodeJS.ProcessEnv): string {
@@ -30,6 +96,27 @@ function officeTimeZone(env: NodeJS.ProcessEnv): string {
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const port = env.PORT ? Number(env.PORT) : 8080;
   const otelHost = env.OTEL_ENDPOINT_HOST ?? 'claude-rpg.local';
+  const mode = scoringMode(env);
+  const cutoverAt = runCutoverAt(env, mode === 'runtime-raiders');
+  const raidPowerPolicyPath = env.RAID_POWER_POLICY_PATH
+    ?? DEFAULT_RAID_POWER_POLICY_PATH;
+  const surfaces = enabledRunSurfaces(env);
+
+  if (mode === 'runtime-raiders') {
+    if (surfaces.length === 0) {
+      throw new Error('RUN_ENABLED_SURFACES is required in runtime-raiders mode');
+    }
+    const policy = loadRaidPowerPolicy(raidPowerPolicyPath);
+    for (const surface of surfaces) {
+      const provider = providerForSurface(surface);
+      if (!(policy.enabled_providers as readonly string[]).includes(provider)) {
+        throw new Error(
+          `RUN_ENABLED_SURFACES provider ${provider} is not enabled by the Raid Power policy`,
+        );
+      }
+    }
+  }
+
   return {
     port,
     dbPath: env.DB_PATH ?? './data/claude-rpg.db',
@@ -49,5 +136,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       env.ENABLE_COSMETICS_REVIEW === '1'
       || env.ENABLE_COSMETICS_REVIEW === 'true',
     officeTimeZone: officeTimeZone(env),
+    scoringMode: mode,
+    runCutoverAt: cutoverAt,
+    raidPowerPolicyPath,
+    enabledRunSurfaces: surfaces,
   };
 }

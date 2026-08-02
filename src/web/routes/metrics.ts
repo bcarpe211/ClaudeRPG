@@ -63,7 +63,14 @@ function otlpBodyParser(
   });
 }
 
-export function registerMetricsRoutes(app: Express, { db }: AppDeps): void {
+export function registerMetricsRoutes(app: Express, { db, config }: AppDeps): void {
+  if (config.scoringMode !== 'legacy-otlp') {
+    app.post('/v1/metrics', (_req, res) => {
+      res.status(200).json({});
+    });
+    return;
+  }
+
   const rateLimiter = createMetricsRateLimiter();
   app.post(
     '/v1/metrics',
