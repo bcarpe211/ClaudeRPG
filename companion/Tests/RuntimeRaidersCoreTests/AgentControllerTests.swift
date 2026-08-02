@@ -287,8 +287,10 @@ final class AgentControllerTests: XCTestCase {
             XCTAssertEqual(try harness.outbox.queuedCount(), 0)
 
             let restarted = try harness.makeController()
-            var appended = Data("\n".utf8)
-            appended.append(completedRun(nativeID: "valid-after-oversized-restart"))
+            let trapNativeID = "DO_NOT_REPORT_OVERSIZED_SUFFIX"
+            let validNativeID = "valid-after-oversized-restart"
+            var appended = completedRun(nativeID: trapNativeID)
+            appended.append(completedRun(nativeID: validNativeID))
             try append(appended, to: file)
             try restarted.processChangedFiles([file])
             while restarted.hasPendingReadWork {
@@ -296,12 +298,22 @@ final class AgentControllerTests: XCTestCase {
             }
 
             let records = try harness.outbox.records(limit: 100)
-            XCTAssertEqual(records.filter { $0.event.state == .completed }.count, 1)
-            XCTAssertTrue(
-                records.allSatisfy {
-                    !String(decoding: $0.encodedEvent, as: UTF8.self).contains("xxxx")
-                }
+            let completedRunKeys = records
+                .filter { $0.event.state == .completed }
+                .map(\.event.runKey)
+            let dedupeSecret = Data("DO_NOT_EXPORT_LOCAL_SECRET".utf8)
+            let trapRunKey = try RunIdentity.key(
+                provider: .codex,
+                nativeID: trapNativeID,
+                dedupeSecret: dedupeSecret
             )
+            let validRunKey = try RunIdentity.key(
+                provider: .codex,
+                nativeID: validNativeID,
+                dedupeSecret: dedupeSecret
+            )
+            XCTAssertFalse(completedRunKeys.contains(trapRunKey))
+            XCTAssertEqual(completedRunKeys, [validRunKey])
         }
     }
 
