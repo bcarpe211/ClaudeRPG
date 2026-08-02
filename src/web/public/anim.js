@@ -1,4 +1,4 @@
-// Portable two-frame sprite animation for ClaudeRPG.
+// Portable two-frame sprite animation for Runtime Raiders.
 // creatures_24x24 is a 22x18 sheet of A/B animation pairs: a frame-A sprite at
 // file index N has its animation partner at N+18 (the next row). Frame A = odd
 // rows. This module carries that math (renderer-agnostic — used by the catalog

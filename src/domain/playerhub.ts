@@ -125,7 +125,7 @@ function productEffectCopy(
 ): string {
   const snapshot = potionEffectSnapshotForConfiguration(config, product.potionType);
   if (snapshot.kind === 'gold') {
-    return `${snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 effective tokens`;
+    return `${snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 Raid Power`;
   }
   const percent = Number(((snapshot.baseHitMultiplier - 1) * 100).toFixed(10));
   return `+${percent.toLocaleString('en-US')}% personal base hit`;
@@ -187,7 +187,7 @@ function activeEffects(
         kind: 'gold' as const,
         iconClass: 'potion-gold',
         title: 'Beginner Gold Potion',
-        description: `${effect.snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 effective tokens`,
+        description: `${effect.snapshot.goldPerUnit.toLocaleString('en-US')}g per 1,000 Raid Power`,
         remainingMs: effect.remainingGameMs,
         tier: effect.tier,
         state: effect.state,

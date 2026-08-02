@@ -33,10 +33,10 @@
       : null;
   }
 
-  root.ClaudeRpgShopPreview = Object.freeze({ hueAt, demoRuleFor });
+  root.ClaudeRpgShopPreview = Object.freeze({ hueAt, demoRuleFor }); // runtime-raiders-copy-allow -- compatibility global
 
   const preview = root.__SHOP_PREVIEW__;
-  const colorMath = root.ClaudeRpgDyeColor;
+  const colorMath = root.ClaudeRpgDyeColor; // runtime-raiders-copy-allow -- compatibility global
   const documentRef = root.document;
   if (!preview || !colorMath || !documentRef || typeof root.requestAnimationFrame !== 'function') {
     return;

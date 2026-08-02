@@ -4,8 +4,8 @@
 // source of truth; this mirrors its slot operations for immediate local preview.
 (function () {
   const D = window.__DYE__;
-  const colorMath = window.ClaudeRpgDyeColor;
-  const Draft = window.ClaudeRpgDyeDraft;
+  const colorMath = window.ClaudeRpgDyeColor; // runtime-raiders-copy-allow -- compatibility global
+  const Draft = window.ClaudeRpgDyeDraft; // runtime-raiders-copy-allow -- compatibility global
   if (!D || !colorMath || !Draft) return;
 
   const preview = document.getElementById('dye-preview');

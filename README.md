@@ -1,58 +1,115 @@
 # Runtime Raiders
 
-Runtime Raiders is the Codex-first candidate for this office co-op dungeon RPG.
-Its local companion privately collects only approved Codex Desktop and Codex
-CLI Run metadata, then sends scored Run events to the candidate server. This
-repository has not cut production over: the deployed ClaudeRPG/OTLP system,
-its existing DNS, and its Pi setup remain authoritative until an explicit,
-separately approved Runtime Raiders cutover.
+**Clock in. Clear dungeons. Get paid.**
+
+Runtime Raiders is an office co-op dungeon RPG powered by completed AI Runs.
+Each person creates a Raider, keeps working in an enabled AI surface, and earns
+Raid Power that drives leveling, Momentum, Fights, gold, potions, cosmetics, and
+the Leaderboard. Your AI keeps running. Your Raider keeps raiding.
+
+This repository contains the Runtime Raiders server and its private local
+companion. The current release enables two Run surfaces: **Codex Desktop** and
+**Codex CLI**. Existing package, database, service, route, and migration names
+remain compatibility identifiers; a product rebrand does not rename them.
 
 The candidate's local verification record is
 [docs/runtime-raiders/canary-checklist.md](docs/runtime-raiders/canary-checklist.md).
 It is not a claim that an installer is signed, published, deployed, or active.
 
-## Run it on a Raspberry Pi 5 (TV kiosk)
+## How it works
 
-To deploy as an unattended office TV display (auto-start server + Chromium kiosk
-on `/tv`, reachable at `claude-rpg.local`), see **[docs/PI_SETUP.md](docs/PI_SETUP.md)**:
-clone the repo on the Pi and run `bash scripts/pi/setup.sh`.
+1. A person creates a Raider and receives a Raider Key.
+2. A one-time enrollment command installs the local companion for that Raider.
+3. The companion observes completed Runs from an enabled local provider record,
+   derives metadata and usage counters locally, and sends signed Run events to
+   the trusted Runtime Raiders server.
+4. The server deduplicates the Run, applies the versioned Raid Power policy, and
+   updates the Raider, Momentum, active Fight, rewards, and Run Details.
 
-## Plan A: Server foundation + player management (this milestone)
+The server is Node.js/TypeScript with Express, EJS, SQLite, and a Canvas 2D TV
+renderer. The companion is a separately tested local collector. The immutable
+Raid Power policy is stored at `config/raid-power-policy-v1.json`; provider
+evidence and calibration records live under `docs/runtime-raiders/`.
+
+## Privacy and network boundary
+
+The companion performs **local, metadata-only collection**. For enabled Runs it
+may derive the provider, launch surface, opaque Run identity, lifecycle state,
+timestamps, model/effort display metadata, and numeric usage counters needed for
+Raid Power. It does **not** collect or send prompt text, response text, tool
+content or arguments, commands, source files, credentials, project names, or
+provider-record paths.
+
+The companion does not watch processes, windows, shell history, hooks, or
+history databases, and it does not change provider configuration. AI traffic
+continues to use only the standard network behavior of Codex Desktop or Codex
+CLI; the companion does not proxy or add provider requests. Its only additional
+application destination is the configured Runtime Raiders server. Treat that
+server as a trusted destination because it receives Run metadata, usage counts,
+and Raider/device credentials over the enrolled connection.
+
+Codex Desktop and Codex CLI are the only currently enabled launch surfaces.
+Unknown or disabled providers are not scanned, accepted, inferred, or used as a
+fallback.
+
+### Planned providers: separately gated and disabled
+
+- **Omp** is planned, not enabled. It requires its own controlled canary,
+  privacy audit, record adapter, matched-provider Raid Power calibration and
+  policy version, and explicit server and companion allowlist approval.
+- **Claude Code** is planned, not enabled. It separately requires a credentialed
+  controlled canary, privacy audit, record adapter, matched-provider Raid Power
+  calibration and policy version, and explicit server and companion allowlist
+  approval.
+
+Neither planned provider is authorized by the current Codex evidence or policy.
+
+## Local development
 
 ### Requirements
+
 - Node.js 20+
 - The Oryx art pack under `assets/oryx_16-bit_fantasy_1.1/Sliced/`
 
-### Setup
+### Install and test
+
 ```bash
 npm install
+npm test
+npm run typecheck
+npm run check:player-copy
 ```
 
 ### Environment variables
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `PORT` | `8080` | HTTP port |
-| `DB_PATH` | `./data/claude-rpg.db` | SQLite file path |
-| `ADMIN_USERNAME` | `admin` | Admin login |
-| `ADMIN_PASSWORD` | `changeme` | Admin password (set this!) |
-| `SESSION_SECRET` | random | Session cookie secret |
-| `OTEL_ENDPOINT_HOST` | `claude-rpg.local` | Host shown in player setup snippets |
-| `SPRITES_DIR` | `assets/oryx_16-bit_fantasy_1.1/Sliced` | Sliced sprite directory |
-| `SCORING_MODE` | `legacy-otlp` | Keep legacy OTLP scoring until explicit Runtime Raiders cutover; candidate value: `runtime-raiders` |
-| `RUN_SCORING_CUTOVER_AT` | — | Required millisecond epoch when `SCORING_MODE=runtime-raiders` |
-| `RUN_ENABLED_SURFACES` | — | Required candidate allowlist: `codex_desktop,codex_cli` |
-| `RAID_POWER_POLICY_PATH` | `config/raid-power-policy-v1.json` | Candidate Raid Power policy |
-| `PUBLIC_URL` | derived local URL | Candidate server origin returned during enrollment |
 
-### Run
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8080` | HTTP port |
+| `DB_PATH` | `./data/claude-rpg.db` | Compatibility SQLite file path |
+| `ADMIN_USERNAME` | `admin` | Admin login |
+| `ADMIN_PASSWORD` | `changeme` | Admin password; change it |
+| `SESSION_SECRET` | random | Session cookie secret |
+| `SPRITES_DIR` | `assets/oryx_16-bit_fantasy_1.1/Sliced` | Sliced sprite directory |
+| `SCORING_MODE` | `legacy-otlp` | Compatibility default; use `runtime-raiders` only with an explicit cutover |
+| `RUN_SCORING_CUTOVER_AT` | — | Required millisecond epoch in Runtime Raiders mode |
+| `RUN_ENABLED_SURFACES` | — | Required allowlist; current value is `codex_desktop,codex_cli` |
+| `RAID_POWER_POLICY_PATH` | `config/raid-power-policy-v1.json` | Versioned Raid Power policy |
+| `PUBLIC_URL` | derived local URL | Server origin returned during enrollment |
+| `OTEL_ENDPOINT_HOST` | `claude-rpg.local` | Legacy OTLP only; inactive in Runtime Raiders mode |
+
+The internal `cache_read_weight` setting is also legacy OTLP only and inactive
+in Runtime Raiders mode. Native cache usage remains part of a Run's versioned
+Raid Power policy; the legacy setting does not alter it.
+
+### Start the server
+
 ```bash
-ADMIN_PASSWORD=yourpassword npm run dev    # auto-reload
+ADMIN_PASSWORD=yourpassword npm run dev
 # or
 ADMIN_PASSWORD=yourpassword npm start
 ```
 
-To run the **server-only synthetic candidate** locally, use a past cutover
-timestamp and the Codex-only surface allowlist:
+For server-only synthetic Runtime Raiders route testing:
 
 ```bash
 SCORING_MODE=runtime-raiders \
@@ -63,28 +120,36 @@ PUBLIC_URL=http://localhost:8080 \
 ADMIN_PASSWORD=yourpassword npm start
 ```
 
-This starts only the local server candidate for synthetic route testing; it is
-not a companion enrollment command or a production cutover. The companion
-enforces its production-origin guard and therefore must not be pointed at this
-local URL. The legacy OTLP default remains in effect until explicit approval.
-Then open:
-- `http://localhost:8080/` — register a character
-- `http://localhost:8080/character` — log in with your token
+This starts only a local server candidate. It is not a companion enrollment
+command or production cutover. The companion's production-origin guard means it
+must not be pointed at this local URL.
+
+Open:
+
+- `http://localhost:8080/` — Runtime Raiders overview
+- `http://localhost:8080/register` — Create Your Raider
+- `http://localhost:8080/character` — Raider Login
+- `http://localhost:8080/tv` — office TV
 - `http://localhost:8080/admin` — admin panel
 
-### Test
+## Raspberry Pi 5 TV kiosk
+
+The existing Pi setup keeps the compatibility hostname `claude-rpg.local`,
+service name `claude-rpg.service`, database path, and operational scripts. Those
+identifiers are deliberately not renamed by the product rebrand. See
+**[docs/PI_SETUP.md](docs/PI_SETUP.md)** for the established server and Chromium
+kiosk setup on `/tv`.
+
+Do not treat local candidate verification as authorization to deploy, publish,
+change DNS/Caddy, or replace the currently running Pi service.
+
+## Sprite catalog (development only)
+
+To browse sprite indices, parsed names, and current game assignments, start the
+server with the catalog flag and open `/catalog`:
+
 ```bash
-npm test
+ENABLE_CATALOG=1 npm start
 ```
 
-## Sprite catalog (dev only)
-
-To browse every sprite with its file index, parsed name, and current in-game
-assignment (used for art curation), run with the catalog flag and open
-`/catalog`:
-
-```bash
-ENABLE_CATALOG=1 npm start   # then open http://localhost:8080/catalog
-```
-
-It is off by default and never mounted on the kiosk.
+The catalog is off by default and is never mounted on the kiosk.

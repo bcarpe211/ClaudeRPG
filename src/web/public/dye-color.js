@@ -45,5 +45,5 @@
     return hsvToRgb(rule.hue == null ? 0 : rule.hue, saturation, value);
   }
 
-  root.ClaudeRpgDyeColor = Object.freeze({ hsvToRgb, toneColorize, applyRule });
+  root.ClaudeRpgDyeColor = Object.freeze({ hsvToRgb, toneColorize, applyRule }); // runtime-raiders-copy-allow -- compatibility global
 })(globalThis);

@@ -338,20 +338,20 @@
       || !hasEffect
       || reducedMotion?.matches
       || documentRef.visibilityState === 'hidden'
-      || !root.ClaudeRpgPotionFx
+      || !root.ClaudeRpgPotionFx // runtime-raiders-copy-allow -- compatibility global
     ) {
       stopPotionAnimation();
       return;
     }
 
-    const stepMs = Number.isFinite(root.ClaudeRpgPotionFx.stepMs)
-      ? root.ClaudeRpgPotionFx.stepMs
+    const stepMs = Number.isFinite(root.ClaudeRpgPotionFx.stepMs) // runtime-raiders-copy-allow -- compatibility global
+      ? root.ClaudeRpgPotionFx.stepMs // runtime-raiders-copy-allow -- compatibility global
       : 120;
     const frameKey = `${tiers.goldTier ?? 0}:${tiers.damageTier ?? 0}:${Math.floor(timeMs / stepMs)}`;
     if (frameKey !== potionFrameKey) {
       potionFrameKey = frameKey;
       clearPotionCanvas();
-      const motes = root.ClaudeRpgPotionFx.frame({
+      const motes = root.ClaudeRpgPotionFx.frame({ // runtime-raiders-copy-allow -- compatibility global
         playerId: bootstrap.playerId,
         ...tiers,
         timeMs,
@@ -382,7 +382,7 @@
       || !hasEffect
       || reducedMotion?.matches
       || documentRef.visibilityState === 'hidden'
-      || !root.ClaudeRpgPotionFx
+      || !root.ClaudeRpgPotionFx // runtime-raiders-copy-allow -- compatibility global
       || typeof root.requestAnimationFrame !== 'function'
     ) {
       stopPotionAnimation();

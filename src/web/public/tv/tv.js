@@ -1,5 +1,5 @@
 'use strict';
-// ClaudeRPG TV renderer: Canvas 2D, SSE-driven. The dungeon is a floating panel
+// Runtime Raiders TV renderer: Canvas 2D, SSE-driven. The dungeon is a floating panel
 // pre-rendered to an offscreen canvas, sitting on a tiled texture backdrop with a
 // drop shadow; dynamic actors draw on top. The dungeon name sits in the strip
 // below the panel; the monster HP bar sits in the strip above it.
@@ -254,7 +254,7 @@ function drawSprite(im, cx, cy, w, h) {
 }
 
 function drawPotionMotes(p, drawX, drawY, w, t) {
-  const potionFx = window.ClaudeRpgPotionFx;
+  const potionFx = window.ClaudeRpgPotionFx; // runtime-raiders-copy-allow -- compatibility global
   if (!potionFx || !p.potionEffects) return;
   const sourceScale = Math.max(1, Math.round(w / 26));
   const moteScale = Math.max(1, Math.round(sourceScale * 2 / 3));

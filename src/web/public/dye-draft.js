@@ -53,5 +53,5 @@
     });
   }
 
-  root.ClaudeRpgDyeDraft = Object.freeze({ cloneStates, equalState, dirtyOperations });
+  root.ClaudeRpgDyeDraft = Object.freeze({ cloneStates, equalState, dirtyOperations }); // runtime-raiders-copy-allow -- compatibility global
 })(globalThis);

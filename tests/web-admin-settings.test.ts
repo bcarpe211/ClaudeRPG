@@ -60,7 +60,13 @@ describe('admin settings', () => {
     expect(res.text).toContain('Idle-pause delay');           // friendly label
     expect(res.text).toContain('the dungeon rests');          // description text
     expect(res.text).toContain('default:');                   // default shown
-    expect(res.text).toContain('Activity modifier');          // a group heading
+    expect(res.text).toContain('Momentum');                   // current group heading
+    expect(res.text).toContain('Runtime Raiders settings');
+    expect(res.text).toContain('Raid Power per +1 Momentum');
+    expect(res.text).toContain('name="token_modifier_k"');   // compatibility key remains
+    expect(res.text).toContain('Legacy cache-read weight');
+    expect(res.text).toContain('name="cache_read_weight"');  // compatibility key remains
+    expect(res.text).toContain('Legacy OTLP only; inactive in Runtime Raiders mode.');
   });
 
   it('updates a knob', async () => {

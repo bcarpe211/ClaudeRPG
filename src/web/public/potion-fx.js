@@ -54,5 +54,5 @@
     });
   }
 
-  root.ClaudeRpgPotionFx = Object.freeze({ frame, stepMs: STEP_MS });
+  root.ClaudeRpgPotionFx = Object.freeze({ frame, stepMs: STEP_MS }); // runtime-raiders-copy-allow -- compatibility global
 })(typeof window === 'undefined' ? globalThis : window);

@@ -25,12 +25,33 @@ beforeEach(() => {
 });
 
 describe('admin players', () => {
+  it('brands the login as Runtime Raiders administration', async () => {
+    const res = await request(app).get('/admin/login');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Runtime Raiders admin');
+  });
+
   it('lists players on the dashboard', async () => {
     createPlayer(db, { name: 'Gandalf', class_key: 'wizard', gender: 'M' }, 1000);
     const agent = await adminAgent();
     const res = await agent.get('/admin');
     expect(res.status).toBe(200);
     expect(res.text).toContain('Gandalf');
+    expect(res.text).toContain('Raiders (1)');
+    expect(res.text).toContain('<th>Raid Power</th>');
+  });
+
+  it('labels compatibility totals without changing edit field names', async () => {
+    const p = createPlayer(db, { name: 'Gandalf', class_key: 'wizard', gender: 'M' }, 1000);
+    const agent = await adminAgent();
+    const res = await agent.get(`/admin/players/${p.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Edit Raider: Gandalf');
+    expect(res.text).toContain('Raid Power');
+    expect(res.text).toContain('name="effective_tokens"');
+    expect(res.text).toContain('Legacy raw-token total');
+    expect(res.text).not.toContain('name="total_tokens"');
   });
 
   it('updates a player via the edit form', async () => {

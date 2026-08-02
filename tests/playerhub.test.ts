@@ -418,7 +418,7 @@ describe('player hub state', () => {
       }),
     ]);
     expect(hub.effects.find((effect) => effect.kind === 'gold')).toMatchObject({
-      description: '50g per 1,000 effective tokens',
+      description: '50g per 1,000 Raid Power',
       state: 'armed',
     });
   });

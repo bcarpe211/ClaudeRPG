@@ -134,6 +134,15 @@ describe('admin Potion Lab', () => {
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('private, no-store');
     expect(response.text).toContain('Potion Lab');
+    expect(response.text).toContain('>Raiders</a>');
+    expect(response.text).toContain('Raider<select name="player"');
+    expect(response.text).toContain('All Raiders');
+    expect(response.text).toContain('<th>Raid Power</th>');
+    expect(response.text).toContain('Median net by Raider');
+    expect(response.text).toContain('Raid Power/damage/podium allocation');
+    expect(response.text).toContain("a Raider's share");
+    expect(response.text).toContain('Distinct Raiders with completed evidence.');
+    expect(response.text).not.toContain('<th>Player</th>');
     expect(response.text).toContain('Gold Potion outcomes');
     expect(response.text).toContain('Purchase date');
     expect(response.text).toContain('Activation / completion');
@@ -153,7 +162,6 @@ describe('admin Potion Lab', () => {
     expect(response.text).toContain('150,000g');
     expect(response.text).toContain('100%');
     expect(response.text).toContain('50,000g net');
-    expect(response.text).toContain('Median net by player');
     expect(response.text).toContain('Median net by office hour');
     expect(response.text).toContain('Damage counterfactuals');
     expect(response.text).toContain('Activation window');

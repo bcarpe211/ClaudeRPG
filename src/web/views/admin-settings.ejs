@@ -1,6 +1,6 @@
 <div class="panel">
-  <h1>Game settings</h1>
-  <p>Each knob is read live by the game engine. Edit values and click Save. Ranges are hints, not hard limits.</p>
+  <h1>Runtime Raiders settings</h1>
+  <p>Each setting is read live by the game engine. Edit values and click Save. Ranges are hints, not hard limits. Settings marked legacy-only are retained for compatibility and do not affect Runtime Raiders scoring.</p>
   <form method="post" action="/admin/settings">
     <% groups.forEach(function (g) { %>
       <fieldset class="settings-group">
@@ -24,7 +24,7 @@
     <% }) %>
     <button type="submit">Save settings</button>
   </form>
-  <p style="margin-top:16px;"><a href="/admin">← Back to players</a></p>
+  <p style="margin-top:16px;"><a href="/admin">← Back to Raiders</a></p>
   <script>
     document.querySelectorAll('.reset-btn').forEach(function (b) {
       b.addEventListener('click', function () {

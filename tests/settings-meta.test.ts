@@ -56,4 +56,30 @@ describe('settings metadata', () => {
     expect(item.value).toBe('250');
     expect(item.default).toBe(DEFAULT_SETTINGS.base_hit);
   });
+
+  it('presents Runtime Raiders terms while preserving compatibility setting keys', () => {
+    expect(SETTINGS_META.base_xp).toMatchObject({
+      label: 'Raid Power for level 2',
+      unit: 'Raid Power',
+    });
+    expect(SETTINGS_META.token_modifier_k).toMatchObject({
+      label: 'Raid Power per +1 Momentum',
+      unit: 'Raid Power',
+    });
+    expect(SETTINGS_META.modifier_cap.label).toBe('Maximum Momentum');
+    expect(SETTINGS_META.reward_work_pct.description).toContain('Raid Power contribution');
+    expect(SETTINGS_META.cache_read_weight).toMatchObject({
+      label: 'Legacy cache-read weight',
+      unit: '0–1',
+    });
+    expect(SETTINGS_META.cache_read_weight.description).toContain(
+      'Legacy OTLP only; inactive in Runtime Raiders mode.',
+    );
+
+    const items = groupedSettings(DEFAULT_SETTINGS).flatMap((group) => group.items);
+    expect(items.find((item) => item.key === 'token_modifier_k')?.label)
+      .toBe('Raid Power per +1 Momentum');
+    expect(items.find((item) => item.key === 'cache_read_weight')?.label)
+      .toBe('Legacy cache-read weight');
+  });
 });
