@@ -91,6 +91,12 @@ describe('Runtime Raiders brand copy', () => {
       primaryLine: 'Clock in. Clear dungeons. Get paid.',
       secondaryLine: 'Your AI keeps running. Your Raider keeps raiding.',
     }));
+    expect(BRAND.primaryLines).toEqual([
+      'Clock in.',
+      'Clear dungeons.',
+      'Get paid.',
+    ]);
+    expect(BRAND.primaryLines.join(' ')).toBe(BRAND.primaryLine);
     expect(TERMS.leaderboard).toBe('Leaderboard');
     expect(Object.isFrozen(BRAND)).toBe(true);
     expect(Object.isFrozen(TERMS)).toBe(true);

@@ -21,7 +21,13 @@ describe('registration', () => {
     const res = await request(app).get('/');
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain('Clock in. Clear dungeons. Get paid.');
+    expect(res.text).toContain(
+      '<h1 class="hero-motto" aria-label="Clock in. Clear dungeons. Get paid.">',
+    );
+    expect(res.text.match(/class="hero-motto-line" aria-hidden="true"/g)).toHaveLength(3);
+    expect(res.text).toContain('>Clock in.</span>');
+    expect(res.text).toContain('>Clear dungeons.</span>');
+    expect(res.text).toContain('>Get paid.</span>');
     expect(res.text).toContain('Get paid means in-game gold and rewards.');
     expect(res.text).toContain('Create Your Raider');
     expect(res.text).toContain('Create your Raider.');

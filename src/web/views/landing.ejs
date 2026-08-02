@@ -1,7 +1,9 @@
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow"><span class="dot"></span> LIVE — the raid is underway</p>
-        <h1><%= brand.primaryLine %></h1>
+        <h1 class="hero-motto" aria-label="<%= brand.primaryLine %>">
+          <% brand.primaryLines.forEach(function (line) { %><span class="hero-motto-line" aria-hidden="true"><%= line %></span><% }); %>
+        </h1>
         <p class="lede">A shared dungeon crawl where your private local companion turns Runs into Raid Power for the party.</p>
         <p class="reward-note">Get paid means in-game gold and rewards.</p>
         <div class="cta-row"><a class="btn btn-gold" href="/register"><img class="px bi" src="/static/landing/sword.png" alt=""> Create Your Raider</a><a class="btn btn-ghost" href="/tv">▶ Watch on the TV</a></div>
