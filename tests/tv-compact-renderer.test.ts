@@ -462,14 +462,28 @@ describe('compact TV renderer geometry', () => {
 });
 
 describe('adaptive full TV geometry', () => {
-  it('uses the 38 percent target at 1920 by 1080 without reducing scale 2', () => {
+  it('floors the 38 percent ceiling at 1920 by 1080 without reducing scale 2', () => {
     const rendering = renderTvAt(1, 'full', {}, { width: 1920, height: 1080 });
 
     expect(rendering.tvLayout.scale).toBe(2);
-    expect(rendering.tvLayout.sidebarW).toBe(Math.round(1920 * 0.38));
+    expect(rendering.tvLayout.sidebarW).toBe(729);
+    expect(rendering.tvLayout.sidebarW).toBeLessThanOrEqual(1920 * 0.38);
     expect(rendering.tvLayout.fieldX).toBe(rendering.tvLayout.sidebarW);
     expect(rendering.tvLayout.panelW).toBe(20 * 24 * 2);
     expect(rendering.dungeon.width).toBe(20 * 24 * 2);
+  });
+
+  it('reserves whole-pixel 3 percent margins at 800 by 600', () => {
+    const rendering = renderTvAt(1, 'full', {}, { width: 800, height: 600 });
+    const fieldWidth = 800 - rendering.tvLayout.sidebarW;
+    const leftMargin = rendering.tvLayout.panelX - rendering.tvLayout.fieldX;
+    const rightMargin = 800 - rendering.tvLayout.panelX - rendering.tvLayout.panelW;
+
+    expect(rendering.tvLayout.scale).toBe(1);
+    expect([leftMargin, rightMargin]).toEqual([16, 16]);
+    expect(leftMargin).toBeGreaterThanOrEqual(fieldWidth * 0.03);
+    expect(rightMargin).toBeGreaterThanOrEqual(fieldWidth * 0.03);
+    expect(rendering.tvLayout.sidebarW).toBe(288);
   });
 
   it('caps the 4K sidebar so the height-supported scale 5 dungeon still fits', () => {

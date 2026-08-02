@@ -118,9 +118,12 @@ function computeScale() {
   panelW = 20 * tilePx;
   panelH = 15 * tilePx;
 
-  const targetSidebarW = Math.round(vw * SIDEBAR_TARGET_FRAC);
-  const minimumFieldW = panelW / (1 - 2 * FIELD_SIDE_MARGIN_FRAC);
-  const maximumSidebarW = Math.max(0, Math.floor(vw - minimumFieldW));
+  const targetSidebarW = Math.floor(vw * SIDEBAR_TARGET_FRAC);
+  const minimumSideMargin = Math.ceil(
+    panelW * FIELD_SIDE_MARGIN_FRAC / (1 - 2 * FIELD_SIDE_MARGIN_FRAC),
+  );
+  const minimumFieldW = panelW + 2 * minimumSideMargin;
+  const maximumSidebarW = Math.max(0, vw - minimumFieldW);
   sidebarW = Math.min(targetSidebarW, maximumSidebarW);
   fieldX = sidebarW;
 
