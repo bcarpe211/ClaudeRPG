@@ -432,6 +432,28 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testDisappearingCapturedFileCannotBlockBoundaryActivation() throws {
+        try withHarness(readLimitBytes: 64) { harness in
+            let metadata = lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ])
+            let first = try harness.makeFile("vanish-a.jsonl", contents: metadata)
+            let disappearing = try harness.makeFile("vanish-b.jsonl", contents: metadata)
+            try harness.controller.install(existingFiles: [first, disappearing])
+            try FileManager.default.removeItem(at: disappearing)
+
+            var callbacks = 0
+            while harness.controller.hasPendingReadWork, callbacks < 100 {
+                try harness.controller.continuePendingWork()
+                callbacks += 1
+            }
+
+            XCTAssertLessThan(callbacks, 100)
+            XCTAssertTrue(harness.controller.isAcceptingCollection)
+            XCTAssertFalse(harness.controller.hasPendingSeedWork)
+        }
+    }
+
     func testAppendArrivingBetweenSeedSlicesIsCollectedAfterSnapshottedEOF() throws {
         try withHarness(readLimitBytes: 128) { harness in
             let file = try harness.makeFile(
