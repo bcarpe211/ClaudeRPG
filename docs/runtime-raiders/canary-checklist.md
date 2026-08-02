@@ -14,8 +14,8 @@ provider configuration.
 | Server: duplicate events | 1 | verified | 2026-08-02T07:08:34Z |
 | Server: persisted Runs | 5 | verified | 2026-08-02T07:08:34Z |
 | Server: reserved/mixed surface rejections | 3 | verified | 2026-08-02T07:08:34Z |
-| Server: rejected-batch mutations | 0 | verified | 2026-08-02T07:08:34Z |
-| Companion: private Codex fixture observations | 12 | verified | 2026-08-02T06:37:20Z |
+| Server: rejected-batch scoring/progression mutations | 0 | verified | 2026-08-02T07:08:34Z |
+| Companion: private Codex fixture files | 12 | verified | 2026-08-02T06:37:20Z |
 | Companion: fake-transport outbound destinations | 1 allowlisted destination | verified | 2026-08-02T06:37:20Z |
 | Companion: content-trap outbound matches | 0 | verified | 2026-08-02T06:37:20Z |
 | Companion: denied-server banked outbox events | 1 or more | verified | 2026-08-02T06:37:20Z |

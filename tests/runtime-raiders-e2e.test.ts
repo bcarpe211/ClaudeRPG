@@ -134,6 +134,26 @@ function count(table: 'runs' | 'run_events' | 'token_events' | 'potion_work_even
   return (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
 }
 
+function scoringProgressionSnapshot() {
+  return {
+    runs: count('runs'),
+    events: count('run_events'),
+    tokens: count('token_events'),
+    potionWork: count('potion_work_events'),
+    player: db.prepare(`
+      SELECT level, total_tokens, effective_tokens, last_token_at, gold, peak_modifier
+      FROM players WHERE id = ?
+    `).get(player.id),
+    game: db.prepare(`
+      SELECT paused, last_activity_at, combat_active_ms FROM game_state WHERE id = 1
+    `).get(),
+    inventory: db.prepare('SELECT COUNT(*) AS count FROM player_inventory WHERE player_id = ?')
+      .get(player.id),
+    potions: db.prepare('SELECT COUNT(*) AS count FROM potion_activations WHERE player_id = ?')
+      .get(player.id),
+  };
+}
+
 beforeEach(async () => {
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
   databaseDirectory = mkdtempSync(join(tmpdir(), 'runtime-raiders-e2e-'));
@@ -239,12 +259,8 @@ describe('Runtime Raiders local integration gate', () => {
 
   it('rejects reserved and mixed synthetic surfaces atomically without Run, audit, or progression mutation', async () => {
     const device = await enrollDevice();
-    const before = {
-      runs: count('runs'),
-      events: count('run_events'),
-      tokens: count('token_events'),
-      effective: getPlayerById(db, player.id)!.effective_tokens,
-    };
+    // authenticateDevice intentionally advances raider_devices.last_seen_at.
+    const before = scoringProgressionSnapshot();
     const enabled = runEvent(device.deviceId, { run_key: hexKey(30_001) });
     const claude = runEvent(device.deviceId, {
       provider: 'claude',
@@ -261,12 +277,7 @@ describe('Runtime Raiders local integration gate', () => {
       const rejected = await post('/api/runs/events', { events }, device.deviceToken);
       expect(rejected.status).toBe(422);
       expect(rejected.body).toEqual({ reason: 'surface_disabled' });
-      expect({
-        runs: count('runs'),
-        events: count('run_events'),
-        tokens: count('token_events'),
-        effective: getPlayerById(db, player.id)!.effective_tokens,
-      }).toEqual(before);
+      expect(scoringProgressionSnapshot()).toEqual(before);
     }
   });
 });
