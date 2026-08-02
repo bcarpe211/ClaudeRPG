@@ -24,6 +24,8 @@ describe('character sheet', () => {
     expect(res.text).toContain('<title>Raider Login — Runtime Raiders</title>');
     expect(res.text).toContain('view your Raider Hub');
     expect(res.text).toContain('Open Raider Hub');
+    expect(res.text).toContain('<div class="panel raider-login">');
+    expect(res.text).not.toContain('style="max-width:520px"');
     expect(res.text).not.toContain('Raider sheet');
     expect(res.text).toContain('name="token"');
   });
