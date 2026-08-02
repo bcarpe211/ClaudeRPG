@@ -349,10 +349,13 @@ final class JSONLReaderTests: XCTestCase {
         XCTAssertEqual(decoded.continuityCheckpoint?.byteCount, 4_096)
     }
 
-    func testOversizedUnterminatedLineFailsClosedAtBufferLimit() throws {
-        try withTemporaryFile(
-            contents: Data(repeating: Character("x").asciiValue!, count: JSONLReader.maximumBufferedLineBytes + 1)
-        ) { file in
+    func testOversizedUnterminatedLineIsDiscardedUntilNewlineWithoutReturningItsContent() throws {
+        var contents = Data(
+            repeating: Character("x").asciiValue!,
+            count: JSONLReader.maximumBufferedLineBytes + 2
+        )
+        contents.append(Data("\nvalid-after-oversized\n".utf8))
+        try withTemporaryFile(contents: contents) { file in
             let first = try JSONLReader.readAppended(
                 file: file,
                 cursor: JSONLCursor(),
@@ -360,9 +363,26 @@ final class JSONLReaderTests: XCTestCase {
             )
             XCTAssertEqual(first.cursor.partialLine.count, JSONLReader.maximumBufferedLineBytes)
 
-            XCTAssertThrowsError(
-                try JSONLReader.readAppended(file: file, cursor: first.cursor, maxBytes: 1)
+            let recovery = try JSONLReader.readAppended(
+                file: file,
+                cursor: first.cursor,
+                maxBytes: 1
             )
+            XCTAssertEqual(recovery.lines, [])
+            XCTAssertTrue(recovery.cursor.partialLine.isEmpty)
+
+            let persisted = try JSONDecoder().decode(
+                JSONLCursor.self,
+                from: JSONEncoder().encode(recovery.cursor)
+            )
+            let afterRecovery = try JSONLReader.readAppended(
+                file: file,
+                cursor: persisted,
+                maxBytes: JSONLReader.maximumReadBytes
+            )
+            XCTAssertEqual(afterRecovery.lines, [Data("valid-after-oversized".utf8)])
+            XCTAssertTrue(afterRecovery.cursor.partialLine.isEmpty)
+            XCTAssertEqual(afterRecovery.cursor.offset, Int64(contents.count))
         }
     }
 

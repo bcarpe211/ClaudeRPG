@@ -17,17 +17,46 @@ public struct JSONLCursor: Codable, Equatable, Sendable {
     public var fileIdentity: JSONLFileIdentity?
     public var partialLine: Data
     public var continuityCheckpoint: JSONLContinuityCheckpoint?
+    public var discardingOversizedLine: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case offset
+        case fileIdentity
+        case partialLine
+        case continuityCheckpoint
+        case discardingOversizedLine
+    }
 
     public init(
         offset: Int64 = 0,
         fileIdentity: JSONLFileIdentity? = nil,
         partialLine: Data = Data(),
-        continuityCheckpoint: JSONLContinuityCheckpoint? = nil
+        continuityCheckpoint: JSONLContinuityCheckpoint? = nil,
+        discardingOversizedLine: Bool = false
     ) {
         self.offset = offset
         self.fileIdentity = fileIdentity
         self.partialLine = partialLine
         self.continuityCheckpoint = continuityCheckpoint
+        self.discardingOversizedLine = discardingOversizedLine
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        offset = try container.decode(Int64.self, forKey: .offset)
+        fileIdentity = try container.decodeIfPresent(
+            JSONLFileIdentity.self,
+            forKey: .fileIdentity
+        )
+        partialLine = try container.decode(Data.self, forKey: .partialLine)
+        continuityCheckpoint = try container.decodeIfPresent(
+            JSONLContinuityCheckpoint.self,
+            forKey: .continuityCheckpoint
+        )
+        discardingOversizedLine = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .discardingOversizedLine
+        ) ?? false
     }
 }
 
@@ -82,7 +111,9 @@ public enum JSONLReader {
         }
         guard cursor.offset >= 0,
               cursor.partialLine.count <= maximumBufferedLineBytes,
-              Int64(cursor.partialLine.count) <= cursor.offset else {
+              Int64(cursor.partialLine.count) <= cursor.offset,
+              !cursor.discardingOversizedLine || cursor.partialLine.isEmpty,
+              !cursor.discardingOversizedLine || cursor.offset > 0 else {
             throw JSONLReaderError.invalidCursor
         }
         if let checkpoint = cursor.continuityCheckpoint {
@@ -96,7 +127,8 @@ public enum JSONLReader {
         if cursor.fileIdentity == nil,
            cursor.offset != 0
             || !cursor.partialLine.isEmpty
-            || cursor.continuityCheckpoint != nil {
+            || cursor.continuityCheckpoint != nil
+            || cursor.discardingOversizedLine {
             throw JSONLReaderError.invalidCursor
         }
 
@@ -128,29 +160,45 @@ public enum JSONLReader {
             from: descriptor,
             offset: effectiveCursor.offset
         )
-        var buffered = effectiveCursor.partialLine
-        buffered.append(appended)
+        let newOffset = effectiveCursor.offset + Int64(appended.count)
+        var buffered: Data
+        var bufferedStartOffset: Int64
+        var discardingOversizedLine = effectiveCursor.discardingOversizedLine
+        if discardingOversizedLine {
+            if let newline = appended.firstIndex(of: 0x0A) {
+                let afterNewline = appended.index(after: newline)
+                buffered = Data(appended[afterNewline...])
+                bufferedStartOffset = effectiveCursor.offset + Int64(afterNewline)
+                discardingOversizedLine = false
+            } else {
+                buffered = Data()
+                bufferedStartOffset = newOffset
+            }
+        } else {
+            buffered = effectiveCursor.partialLine
+            buffered.append(appended)
+            bufferedStartOffset = effectiveCursor.offset
+                - Int64(effectiveCursor.partialLine.count)
+        }
 
         var lines: [Data] = []
         var lineEndOffsets: [Int64] = []
-        let bufferedStartOffset = effectiveCursor.offset - Int64(effectiveCursor.partialLine.count)
         var lineStart = buffered.startIndex
         while lineStart < buffered.endIndex,
               let newline = buffered[lineStart...].firstIndex(of: 0x0A) {
             let line = Data(buffered[lineStart..<newline])
-            guard line.count <= maximumBufferedLineBytes else {
-                throw JSONLReaderError.lineTooLong
+            if line.count <= maximumBufferedLineBytes {
+                lines.append(line)
+                lineEndOffsets.append(bufferedStartOffset + Int64(newline + 1))
             }
-            lines.append(line)
-            lineEndOffsets.append(bufferedStartOffset + Int64(newline + 1))
             lineStart = buffered.index(after: newline)
         }
 
-        let partial = Data(buffered[lineStart...])
-        guard partial.count <= maximumBufferedLineBytes else {
-            throw JSONLReaderError.lineTooLong
+        var partial = Data(buffered[lineStart...])
+        if partial.count > maximumBufferedLineBytes {
+            partial = Data()
+            discardingOversizedLine = true
         }
-        let newOffset = effectiveCursor.offset + Int64(appended.count)
         let nextCursor = JSONLCursor(
             offset: newOffset,
             fileIdentity: metadata.identity,
@@ -158,7 +206,8 @@ public enum JSONLReader {
             continuityCheckpoint: try continuityCheckpoint(
                 before: newOffset,
                 descriptor: descriptor
-            )
+            ),
+            discardingOversizedLine: discardingOversizedLine
         )
         return JSONLReadResult(
             lines: lines,

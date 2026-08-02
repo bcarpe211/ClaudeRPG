@@ -268,6 +268,43 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testRestartRecoversPastPersistedOversizedLineAndCollectsLaterValidRun() throws {
+        try withHarness { harness in
+            let file = try harness.makeFile("oversized-restart.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [file])
+            try append(
+                Data(
+                    repeating: Character("x").asciiValue!,
+                    count: JSONLReader.maximumBufferedLineBytes + 1
+                ),
+                to: file
+            )
+
+            try harness.controller.processChangedFiles([file])
+            XCTAssertTrue(harness.controller.hasPendingReadWork)
+            try harness.controller.continuePendingWork()
+            XCTAssertFalse(harness.controller.hasPendingReadWork)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+
+            let restarted = try harness.makeController()
+            var appended = Data("\n".utf8)
+            appended.append(completedRun(nativeID: "valid-after-oversized-restart"))
+            try append(appended, to: file)
+            try restarted.processChangedFiles([file])
+            while restarted.hasPendingReadWork {
+                try restarted.continuePendingWork()
+            }
+
+            let records = try harness.outbox.records(limit: 100)
+            XCTAssertEqual(records.filter { $0.event.state == .completed }.count, 1)
+            XCTAssertTrue(
+                records.allSatisfy {
+                    !String(decoding: $0.encodedEvent, as: UTF8.self).contains("xxxx")
+                }
+            )
+        }
+    }
+
     func testEachCallbackReadsAtMostConfiguredBoundAndPreservesProviderFileOrder() throws {
         try withHarness(readLimitBytes: 96) { harness in
             let file = try harness.makeFile("bounded.jsonl", contents: Data())
