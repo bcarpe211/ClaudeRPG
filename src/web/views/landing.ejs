@@ -1,9 +1,10 @@
     <section class="hero">
       <div class="hero-copy">
-        <p class="eyebrow"><span class="dot"></span> LIVE — the office is fighting right now</p>
-        <h1>Your code has<br>consequences.</h1>
-        <p class="lede">An office co-op RPG that runs on your <b>Claude Code</b> usage. Everyone&rsquo;s tokens power a shared dungeon crawl on the big screen &mdash; the more the team ships, the harder the party hits.</p>
-        <div class="cta-row"><a class="btn btn-gold" href="/register"><img class="px bi" src="/static/landing/sword.png" alt=""> Create your character</a><a class="btn btn-ghost" href="/tv">▶ Watch on the TV</a></div>
+        <p class="eyebrow"><span class="dot"></span> LIVE — the raid is underway</p>
+        <h1><%= brand.primaryLine %></h1>
+        <p class="lede">A shared dungeon crawl where your private local companion turns Runs into Raid Power for the party.</p>
+        <p class="reward-note">Get paid means in-game gold and rewards.</p>
+        <div class="cta-row"><a class="btn btn-gold" href="/register"><img class="px bi" src="/static/landing/sword.png" alt=""> Create Your Raider</a><a class="btn btn-ghost" href="/tv">▶ Watch on the TV</a></div>
       </div>
       <aside class="boss-card">
         <% if (boss) { %>
@@ -14,38 +15,37 @@
           <div class="hp-meta"><span><img class="px si" src="/static/landing/heart.png" alt=""> <%= boss.hpText %> HP</span><span><%= boss.hpPct %>%</span></div>
           <div class="party"><div class="pty-row"><% boss.avatars.forEach(function(a){ %><span class="pty"><img class="px" src="<%= a %>" alt=""></span><% }); %></div><span><%= boss.count %> adventurer<%= boss.count === 1 ? '' : 's' %> contributing</span></div>
         <% } else { %>
-          <div class="boss-idle"><img class="px" src="/static/landing/skull.png" alt=""><h3>The dungeon rests</h3><p>No active battle right now &mdash; register and start coding to wake it.</p></div>
+          <div class="boss-idle"><img class="px" src="/static/landing/skull.png" alt=""><h3>The dungeon rests</h3><p>No active battle right now &mdash; create your Raider and begin a Run to wake it.</p></div>
         <% } %>
       </aside>
     </section>
 
     <section class="classes">
-      <div class="sec-head"><h2>Pick your fighter</h2><p>Nine classes, each with its own sprite on the TV. Click one to enlist.</p></div>
+      <div class="sec-head"><h2>Choose your Raider&rsquo;s class</h2><p>Nine classic classes, each with its own sprite on the TV. Click one to enlist.</p></div>
       <div class="cls-grid"><% classes.forEach(function(c){ %><a class="cls" href="/register?class=<%= c.key %>"><span class="cls-sprite"><img class="px" src="<%= c.sprite %>" alt="<%= c.name %>"></span><span class="cls-name"><%= c.name %></span><span class="cls-glint"></span></a><% }); %></div>
     </section>
 
     <section class="how">
-      <div class="sec-head"><h2>How to join</h2><p>Two minutes, then you&rsquo;re contributing.</p></div>
+      <div class="sec-head"><h2>How your Runs become Raid Power</h2><p>Three quick steps, then your Raider joins the party.</p></div>
       <ol class="steps">
-        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/scroll.png" alt=""><b>1</b></span><div><h3>Register &amp; pick a class</h3><p>Choose your fighter from nine classes and claim your character token.</p></div></li>
-        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/key.png" alt=""><b>2</b></span><div><h3>Add one line to your shell</h3><p>Paste a short snippet into your <code>~/.zshrc</code>. That&rsquo;s the whole setup.</p></div></li>
-        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/coins.png" alt=""><b>3</b></span><div><h3>Code as you normally do</h3><p>Your Claude Code token usage becomes XP, damage &amp; gold against the shared monster on the office TV.</p></div></li>
+        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/scroll.png" alt=""><b>1</b></span><div><h3>Create your Raider.</h3><p>Choose a name, a look, and a classic class for the TV.</p></div></li>
+        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/key.png" alt=""><b>2</b></span><div><h3>Install the private local companion.</h3><p>It enrolls this device with a one-time code and keeps your Raider connected.</p></div></li>
+        <li class="step"><span class="step-ico"><img class="px" src="/static/landing/coins.png" alt=""><b>3</b></span><div><h3><%= runStep ?? 'Your Runs generate Raid Power.' %></h3><p>Raid Power helps the party face the shared monster on the office TV.</p></div></li>
       </ol>
-      <div class="snippet"><div class="snip-head"><img class="px si" src="/static/landing/key.png" alt=""> the whole setup &mdash; drop into your shell</div><pre><%= snippet %></pre></div>
-      <div class="callout"><img class="px si" src="/static/landing/skull.png" alt=""><span class="ctxt"><b>Claude Code only.</b> This tracks the <b>Claude Code CLI</b> &mdash; it does <b>not</b> count Claude <b>API</b> tokens or usage from the <b>desktop / web app</b>. No CLI, no XP.</span></div>
+      <% if (supportedSurfaceLine) { %><p class="support-line"><img class="px si" src="/static/landing/key.png" alt=""> <%= supportedSurfaceLine %></p><% } %>
     </section>
 
     <section class="trust">
       <div class="sec-head"><h2>What it sees &mdash; and what it doesn&rsquo;t</h2><p>It reads usage numbers, nothing else. Here&rsquo;s exactly where the line is.</p></div>
       <div class="trust-cols">
-        <div class="tcol sees"><h3><img class="px si" src="/static/landing/gem_green.png" alt=""> It sees</h3><ul><li>How many tokens you used</li><li>Which model</li><li>When (timestamps)</li></ul><p class="fine">Delivered as OpenTelemetry <b>metrics</b> from the Claude Code CLI &mdash; the same counters it already emits.</p></div>
-        <div class="tcol nots"><h3><img class="px si" src="/static/landing/shield.png" alt=""> It never sees</h3><ul><li>Your prompts</li><li>Your code or files</li><li>Your conversations</li></ul><p class="fine">None of that lives in metrics. Pause anytime with <code>rpg_off</code>.</p></div>
+        <div class="tcol sees"><h3><img class="px si" src="/static/landing/gem_green.png" alt=""> What it sees</h3><p class="privacy-line"><strong>It sees:</strong> provider, supported surface, usage counts, model, effort, timestamps, Run state</p></div>
+        <div class="tcol nots"><h3><img class="px si" src="/static/landing/shield.png" alt=""> What it never sends</h3><p class="privacy-line"><strong>It never sends:</strong> prompts, responses, commands, tool details, code, files, paths, workspaces, shell history</p></div>
       </div>
     </section>
 
     <section class="final">
       <div class="final-loot"><img class="px" src="/static/landing/gem_red.png" alt=""><img class="px" src="/static/landing/sword_flame.png" alt=""><img class="px" src="/static/landing/gem_blue.png" alt=""></div>
       <h2>Enter the dungeon.</h2>
-      <p>The monster won&rsquo;t slay itself. Well &mdash; it might, if the office ships enough.</p>
-      <a class="btn btn-gold big" href="/register"><img class="px bi" src="/static/landing/sword.png" alt=""> Create your character</a>
+      <p>Your next Run can bring gold, rewards, and Raid Power to the whole party.</p>
+      <a class="btn btn-gold big" href="/register"><img class="px bi" src="/static/landing/sword.png" alt=""> Create Your Raider</a>
     </section>

@@ -9,22 +9,54 @@ let db: ReturnType<typeof openDb>;
 let app: ReturnType<typeof createApp>;
 beforeEach(() => {
   db = openDb(':memory:');
-  app = createApp({ db, config: loadConfig({}) });
+  app = createApp({
+    db,
+    config: loadConfig({ RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli' }),
+  });
 });
 
 describe('registration', () => {
-  it('GET / is the landing page (pitch, Claude-Code-only note, links to register + tv)', async () => {
+  it('GET / introduces the Runs-and-Raiders loop without legacy telemetry support claims', async () => {
+    // Catches a landing page that advertises a legacy telemetry setup or an unsupported surface.
     const res = await request(app).get('/');
+
     expect(res.status).toBe(200);
-    expect(res.text).toContain('Your code has');            // hero pitch
-    expect(res.text).toContain('Claude Code only');          // the scope callout
-    expect(res.text).toContain('does <b>not</b> count Claude <b>API</b>');
+    expect(res.text).toContain('Clock in. Clear dungeons. Get paid.');
+    expect(res.text).toContain('Get paid means in-game gold and rewards.');
+    expect(res.text).toContain('Create Your Raider');
+    expect(res.text).toContain('Create your Raider.');
+    expect(res.text).toContain('Install the private local companion.');
+    expect(res.text).toContain('Use Codex Desktop or CLI; your Runs generate Raid Power.');
+    expect(res.text).toContain('Supported Run surfaces: Codex Desktop and Codex CLI.');
+    expect(res.text).toContain('It sees:</strong> provider, supported surface, usage counts, model, effort, timestamps, Run state');
+    expect(res.text).toContain('It never sends:</strong> prompts, responses, commands, tool details, code, files, paths, workspaces, shell history');
+    expect(res.text).not.toContain('OTEL_RESOURCE_ATTRIBUTES');
+    expect(res.text).not.toContain('CLAUDE_CODE_ENABLE_TELEMETRY');
+    expect(res.text).not.toContain('Claude Code only');
+    expect(res.text).not.toContain('ClaudeRPG');
+    expect(res.text).not.toContain('Omp');
+    expect(res.text).not.toContain('Claude Code');
     expect(res.text).toContain('href="/register"');
     expect(res.text).toContain('href="/tv"');
-    expect(res.text).toContain('The dungeon rests');         // idle boss fallback (no encounter)
-    expect(res.text).toContain('href="/static/dungeon.css"'); // now on the shared shell
+    expect(res.text).toContain('The dungeon rests');
+    expect(res.text).toContain('href="/static/dungeon.css"');
     expect(res.text).toContain('class="wall wall-l"');
-    expect(res.text).toContain('href="/static/landing.css"'); // landing-unique styles still linked
+    expect(res.text).toContain('href="/static/landing.css"');
+  });
+
+  it('GET / fails closed when its configured surfaces include an unsupported public label', async () => {
+    // Catches a landing page that invents or partially publishes a disabled support matrix.
+    const restrictedApp = createApp({
+      db: openDb(':memory:'),
+      config: loadConfig({ RUN_ENABLED_SURFACES: 'codex_desktop,omp' }),
+    });
+
+    const res = await request(restrictedApp).get('/');
+
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('Supported Run surfaces:');
+    expect(res.text).not.toContain('Codex Desktop');
+    expect(res.text).not.toContain('Omp');
   });
 
   it('GET /register shows the form with all 9 classes', async () => {
@@ -42,23 +74,49 @@ describe('registration', () => {
     expect(res.text).toContain('function applyGender'); // the swap script is present
   });
 
-  it('GET /register?class= preselects that fighter', async () => {
+  it('GET /register?class= preselects that Raider class', async () => {
     const res = await request(app).get('/register?class=wizard');
     expect(res.status).toBe(200);
     expect(res.text).toContain('id="class_key" value="wizard"');
     expect(res.text).toContain('data-key="wizard" onclick="pick(this)"'); // grid present
   });
 
-  it('POST /register creates a player and shows the token + snippet', async () => {
+  it('POST /register creates one Raider and a ten-minute enrollment without putting the Raider Key in the installer', async () => {
+    // Catches registration that reuses the persistent Raider Key as an installer credential.
+    const before = Date.now();
     const res = await request(app)
       .post('/register')
       .type('form')
       .send({ name: 'Sir Reginald', class_key: 'knight', gender: 'M' });
+    const after = Date.now();
+
     expect(res.status).toBe(200);
-    expect(res.text).toContain('claude_rpg_token=');
+    expect(res.text).toContain('Raider Key');
+    expect(res.text).toContain('raiders on');
+    expect(res.text).toContain('raiders off');
+    expect(res.text).toContain('raiders status');
+    expect(res.text).toContain('raiders doctor');
+    expect(res.text).toContain('raiders uninstall');
     const players = listPlayers(db);
     expect(players.length).toBe(1);
     expect(players[0].name).toBe('Sir Reginald');
+    expect(res.text).toContain(players[0].auth_token);
+
+    const enrollments = db.prepare(`
+      SELECT created_at, expires_at
+      FROM raider_enrollments
+      WHERE player_id = ?
+    `).all(players[0].id) as Array<{ created_at: number; expires_at: number }>;
+    expect(enrollments).toHaveLength(1);
+    expect(enrollments[0].expires_at - enrollments[0].created_at).toBe(10 * 60_000);
+    expect(enrollments[0].created_at).toBeGreaterThanOrEqual(before);
+    expect(enrollments[0].created_at).toBeLessThanOrEqual(after);
+
+    const installCommand = res.text.match(/curl -fsSL (?:'|&#39;)[^'&]+(?:'|&#39;) \| sh -s -- --code (?:'|&#39;)([A-Za-z0-9_-]{43})(?:'|&#39;)/)?.[0];
+    const oneTimeCode = res.text.match(/--code (?:'|&#39;)([A-Za-z0-9_-]{43})(?:'|&#39;)/)?.[1];
+    expect(installCommand).toBeDefined();
+    expect(oneTimeCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(installCommand).not.toContain(players[0].auth_token);
   });
 
   it('POST /register rejects bad input', async () => {

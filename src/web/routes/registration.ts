@@ -5,9 +5,10 @@ import { renderPage } from '../app';
 import { asyncHandler } from '../async';
 import { CLASSES, getClass, classSpriteUrl } from '../../domain/classes';
 import { createPlayer } from '../../domain/players';
-import { buildSetupSnippet } from '../../domain/snippet';
+import { createEnrollment } from '../../domain/raider-enrollment';
 import { buildTvState } from '../tvview';
 import { formatCompact } from '../../domain/format';
+import type { RunSurface } from '../../domain/run-events';
 
 const RegisterInput = z.object({
   name: z.string().trim().min(1).max(40),
@@ -23,6 +24,46 @@ const classCards = () =>
     spriteM: classSpriteUrl(c.key, 'M'),
     spriteF: classSpriteUrl(c.key, 'F'),
   }));
+
+const PUBLIC_SURFACE_LABELS: Readonly<Partial<Record<RunSurface, string>>> = {
+  codex_desktop: 'Codex Desktop',
+  codex_cli: 'Codex CLI',
+};
+
+interface LandingRunSupport {
+  line: string;
+  runStep: string;
+}
+
+function landingRunSupport(surfaces: readonly RunSurface[]): LandingRunSupport | null {
+  const labels = surfaces.map((surface) => PUBLIC_SURFACE_LABELS[surface]);
+  if (labels.length === 0 || labels.some((label) => label === undefined)) return null;
+
+  const names = labels as string[];
+  const supportList = names.length === 1
+    ? names[0]
+    : names.length === 2
+      ? `${names[0]} and ${names[1]}`
+      : `${names.slice(0, -1).join(', ')}, and ${names.at(-1)}`;
+  const stepNames = names.map((name) => name === 'Codex CLI' ? 'CLI' : name);
+  const stepList = stepNames.length === 1
+    ? stepNames[0]
+    : stepNames.length === 2
+      ? `${stepNames[0]} or ${stepNames[1]}`
+      : `${stepNames.slice(0, -1).join(', ')}, or ${stepNames.at(-1)}`;
+  return {
+    line: `Supported Run surfaces: ${supportList}.`,
+    runStep: `Use ${stepList}; your Runs generate Raid Power.`,
+  };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `"'"'`)}'`;
+}
+
+function buildInstallCommand(publicUrl: string, oneTimeCode: string): string {
+  return `curl -fsSL ${shellQuote(`${publicUrl}/install.sh`)} | sh -s -- --code ${shellQuote(oneTimeCode)}`;
+}
 
 export function registerRegistrationRoutes(
   app: Express,
@@ -51,23 +92,24 @@ export function registerRegistrationRoutes(
         location: d?.theme ?? 'The dungeon',
       };
     }
-    const snippet = buildSetupSnippet({ token: '<your-token>', endpoint: config.publicUrl });
+    const runSupport = landingRunSupport(config.enabledRunSurfaces);
     res.send(
       await renderPage('landing', {
-        title: 'ClaudeRPG',
+        title: 'Home',
         frame: 'full',
         styles: ['landing.css'],
         classes,
         boss,
-        snippet,
+        supportedSurfaceLine: runSupport?.line ?? null,
+        runStep: runSupport?.runStep ?? null,
       }),
     );
   }));
 
-  // Registration form (moved off `/`). `?class=` preselects a fighter from the landing.
+  // Registration form (moved off `/`). `?class=` preselects a Raider class from the landing.
   app.get('/register', asyncHandler(async (_req, res) => {
     const selected = getClass(String(_req.query.class ?? '')) ? String(_req.query.class) : 'knight';
-    res.send(await renderPage('register', { title: 'Register', classes: classCards(), selected }));
+    res.send(await renderPage('register', { title: 'Create Your Raider', classes: classCards(), selected }));
   }));
 
   app.post('/register', asyncHandler(async (req, res) => {
@@ -75,7 +117,7 @@ export function registerRegistrationRoutes(
     if (!parsed.success) {
       res.status(400).send(
         await renderPage('register', {
-          title: 'Register',
+          title: 'Create Your Raider',
           classes: classCards(),
           selected: getClass(String(req.body?.class_key ?? '')) ? String(req.body.class_key) : 'knight',
           error: 'Please enter a name and pick a valid class.',
@@ -84,14 +126,15 @@ export function registerRegistrationRoutes(
       );
       return;
     }
-    const player = createPlayer(db, parsed.data, Date.now());
-    const snippet = buildSetupSnippet({ token: player.auth_token, endpoint: config.publicUrl });
+    const now = Date.now();
+    const player = createPlayer(db, parsed.data, now);
+    const enrollment = createEnrollment(db, player.id, now);
     res.send(
       await renderPage('registered', {
-        title: 'Registered',
+        title: 'Your Raider',
         player,
         className: getClass(player.class_key)!.name,
-        snippet,
+        installCommand: buildInstallCommand(config.publicUrl, enrollment.code),
       }),
     );
   }));
