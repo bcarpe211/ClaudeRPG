@@ -43,11 +43,18 @@ public struct JSONLContinuityCheckpoint: Codable, Equatable, Sendable {
 
 public struct JSONLReadResult: Equatable, Sendable {
     public let lines: [Data]
+    public let lineEndOffsets: [Int64]
     public let cursor: JSONLCursor
     public let bytesRead: Int
 
-    public init(lines: [Data], cursor: JSONLCursor, bytesRead: Int) {
+    public init(
+        lines: [Data],
+        lineEndOffsets: [Int64],
+        cursor: JSONLCursor,
+        bytesRead: Int
+    ) {
         self.lines = lines
+        self.lineEndOffsets = lineEndOffsets
         self.cursor = cursor
         self.bytesRead = bytesRead
     }
@@ -125,6 +132,8 @@ public enum JSONLReader {
         buffered.append(appended)
 
         var lines: [Data] = []
+        var lineEndOffsets: [Int64] = []
+        let bufferedStartOffset = effectiveCursor.offset - Int64(effectiveCursor.partialLine.count)
         var lineStart = buffered.startIndex
         while lineStart < buffered.endIndex,
               let newline = buffered[lineStart...].firstIndex(of: 0x0A) {
@@ -133,6 +142,7 @@ public enum JSONLReader {
                 throw JSONLReaderError.lineTooLong
             }
             lines.append(line)
+            lineEndOffsets.append(bufferedStartOffset + Int64(newline + 1))
             lineStart = buffered.index(after: newline)
         }
 
@@ -150,7 +160,49 @@ public enum JSONLReader {
                 descriptor: descriptor
             )
         )
-        return JSONLReadResult(lines: lines, cursor: nextCursor, bytesRead: appended.count)
+        return JSONLReadResult(
+            lines: lines,
+            lineEndOffsets: lineEndOffsets,
+            cursor: nextCursor,
+            bytesRead: appended.count
+        )
+    }
+
+    static func cursor(
+        file: URL,
+        atOffset offset: Int64,
+        expectedIdentity: JSONLFileIdentity
+    ) throws -> JSONLCursor {
+        guard offset >= 0 else { throw JSONLReaderError.invalidCursor }
+        let descriptor = Darwin.open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw currentPOSIXError() }
+        defer { closeDescriptor(descriptor) }
+        let metadata = try fileMetadata(descriptor: descriptor)
+        guard metadata.identity == expectedIdentity, metadata.size >= offset else {
+            throw JSONLReaderError.invalidCursor
+        }
+        return JSONLCursor(
+            offset: offset,
+            fileIdentity: metadata.identity,
+            continuityCheckpoint: try continuityCheckpoint(
+                before: offset,
+                descriptor: descriptor
+            )
+        )
+    }
+
+    static func isCurrent(file: URL, cursor: JSONLCursor) throws -> Bool {
+        guard cursor.offset >= 0,
+              let identity = cursor.fileIdentity else { return false }
+        let descriptor = Darwin.open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw currentPOSIXError() }
+        defer { closeDescriptor(descriptor) }
+        let metadata = try fileMetadata(descriptor: descriptor)
+        guard metadata.identity == identity,
+              metadata.size >= cursor.offset else { return false }
+        guard cursor.offset > 0 else { return true }
+        guard let checkpoint = cursor.continuityCheckpoint else { return false }
+        return try continuityMatches(checkpoint, before: cursor.offset, descriptor: descriptor)
     }
 
     private static func fileMetadata(descriptor: Int32) throws -> (

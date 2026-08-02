@@ -14,6 +14,7 @@ public final class FileWatcher: @unchecked Sendable {
     private let registry: AdapterRegistry
     private let handler: ChangeHandler
     private let processingQueue: DispatchQueue
+    private let afterStreamStarted: @Sendable () -> Void
     private let eventQueue = DispatchQueue(
         label: "com.redlattice.runtime-raiders.fsevents",
         qos: .utility
@@ -43,6 +44,20 @@ public final class FileWatcher: @unchecked Sendable {
     ) {
         self.registry = registry
         self.processingQueue = processingQueue
+        afterStreamStarted = {}
+        handler = onChange
+        watchedRoots = [registry.codexRoot]
+    }
+
+    init(
+        registry: AdapterRegistry,
+        processingQueue: DispatchQueue,
+        afterStreamStarted: @escaping @Sendable () -> Void,
+        onChange: @escaping ChangeHandler
+    ) {
+        self.registry = registry
+        self.processingQueue = processingQueue
+        self.afterStreamStarted = afterStreamStarted
         handler = onChange
         watchedRoots = [registry.codexRoot]
     }
@@ -68,8 +83,8 @@ public final class FileWatcher: @unchecked Sendable {
     }
 
     public func start() throws {
-        try lock.withLock {
-            guard stream == nil else { return }
+        let didStart = try lock.withLock { () throws -> Bool in
+            guard stream == nil else { return false }
             let contextOwner = Unmanaged.passRetained(callbackBox)
             var context = FSEventStreamContext(
                 version: 0,
@@ -105,6 +120,14 @@ public final class FileWatcher: @unchecked Sendable {
             }
             stream = created
             retainedContext = contextOwner
+            return true
+        }
+        guard didStart else { return }
+        afterStreamStarted()
+        processingQueue.async { [weak self] in
+            guard let self,
+                  let files = try? discoverProviderFiles() else { return }
+            handler(files)
         }
     }
 

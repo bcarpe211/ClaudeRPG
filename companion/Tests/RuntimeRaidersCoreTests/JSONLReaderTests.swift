@@ -48,6 +48,30 @@ final class JSONLReaderTests: XCTestCase {
         }
     }
 
+    func testLineEndOffsetsAreStableAcrossDifferentCursorChunking() throws {
+        try withTemporaryFile(contents: Data("one\nsecond\nthree\n".utf8)) { file in
+            let oneShot = try JSONLReader.readAppended(
+                file: file,
+                cursor: JSONLCursor(),
+                maxBytes: 100
+            )
+            var cursor = JSONLCursor()
+            var boundedOffsets: [Int64] = []
+            for _ in 0..<8 {
+                let result = try JSONLReader.readAppended(
+                    file: file,
+                    cursor: cursor,
+                    maxBytes: 4
+                )
+                boundedOffsets.append(contentsOf: result.lineEndOffsets)
+                cursor = result.cursor
+            }
+
+            XCTAssertEqual(oneShot.lineEndOffsets, [4, 11, 17])
+            XCTAssertEqual(boundedOffsets, oneShot.lineEndOffsets)
+        }
+    }
+
     func testEOFReturnsNoLinesAndLeavesCursorStable() throws {
         try withTemporaryFile(contents: Data("complete\n".utf8)) { file in
             let first = try JSONLReader.readAppended(file: file, cursor: JSONLCursor(), maxBytes: 100)

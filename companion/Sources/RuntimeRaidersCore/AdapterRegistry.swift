@@ -31,6 +31,21 @@ public final class ApprovedProviderFile: @unchecked Sendable {
         )
     }
 
+    func cursor(atOffset offset: Int64, expectedIdentity: JSONLFileIdentity) throws -> JSONLCursor {
+        try JSONLReader.cursor(
+            file: URL(fileURLWithPath: "/dev/fd/\(descriptor)"),
+            atOffset: offset,
+            expectedIdentity: expectedIdentity
+        )
+    }
+
+    func isCurrent(_ cursor: JSONLCursor) throws -> Bool {
+        try JSONLReader.isCurrent(
+            file: URL(fileURLWithPath: "/dev/fd/\(descriptor)"),
+            cursor: cursor
+        )
+    }
+
     func snapshot() throws -> (identity: JSONLFileIdentity, size: Int64) {
         var metadata = stat()
         guard Darwin.fstat(descriptor, &metadata) == 0 else {

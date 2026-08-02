@@ -252,6 +252,46 @@ final class CodexAdapterTests: XCTestCase {
         }
     }
 
+    func testIdentifiableMalformedSessionMetadataRejectsFilesPermanently() throws {
+        let malformed = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta"}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":"invalid"}"#,
+            #"{"type":"session_meta","payload":{}}"#,
+            #"{"timestamp":"not-a-time","type":"session_meta","payload":{}}"#,
+        ]
+        let lifecycle = [
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"turn_context","payload":{"turn_id":"rejected-turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        for (index, invalid) in malformed.enumerated() {
+            var adapter = CodexAdapter(expectedSurface: .codexCLI)
+            var output = adapter.consume(
+                line: Data(invalid.utf8),
+                source: .init(ordinal: 0),
+                observedAt: observedAt
+            )
+            output += adapter.consume(
+                line: try sessionMetadata(
+                    payload: validSessionPayload(for: .codexCLI),
+                    timestampSecond: 1
+                ),
+                source: .init(ordinal: 1),
+                observedAt: observedAt
+            )
+            for (offset, line) in lifecycle.enumerated() {
+                output += adapter.consume(
+                    line: Data(line.utf8),
+                    source: .init(ordinal: Int64(offset + 2)),
+                    observedAt: observedAt
+                )
+            }
+
+            XCTAssertTrue(output.isEmpty, "accepted malformed session case \(index)")
+            XCTAssertNoThrow(try CodexAdapter(snapshot: adapter.snapshot()))
+        }
+    }
+
     func testMatchingTurnContextProvidesBoundedDisplayMetadataOnly() throws {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [

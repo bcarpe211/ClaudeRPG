@@ -139,15 +139,15 @@ public struct CodexAdapter: ProviderAdapter {
               (0...Self.maximumSafeInteger).contains(observedAt),
               let object = try? JSONSerialization.jsonObject(with: line),
               let record = object as? [String: Any],
-              let type = record["type"] as? String,
-              let payload = record["payload"] as? [String: Any],
-              let eventTime = Self.timestampMS(record["timestamp"] as? String) else {
+              let type = record["type"] as? String else {
             return []
         }
 
         if type == "session_meta" {
             guard !rejectedSurface else { return [] }
-            guard payload["cli_version"] as? String == Self.supportedRecordVersion,
+            guard let payload = record["payload"] as? [String: Any],
+                  Self.timestampMS(record["timestamp"] as? String) != nil,
+                  payload["cli_version"] as? String == Self.supportedRecordVersion,
                   Self.validRequiredMarker(payload["id"]),
                   Self.validRequiredMarker(payload["originator"]),
                   let surface = Self.sessionSurface(payload["source"]) else {
@@ -166,6 +166,10 @@ public struct CodexAdapter: ProviderAdapter {
             return []
         }
 
+        guard let payload = record["payload"] as? [String: Any],
+              let eventTime = Self.timestampMS(record["timestamp"] as? String) else {
+            return []
+        }
         guard !rejectedSurface, verifiedSurface == expectedSurface else { return [] }
 
         if type == "turn_context" {

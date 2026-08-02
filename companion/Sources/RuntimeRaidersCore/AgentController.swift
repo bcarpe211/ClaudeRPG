@@ -241,6 +241,8 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
 }
 
 public final class AgentController: @unchecked Sendable {
+    private static let maximumProvenanceBytes = 65_536
+
     private struct PersistedFileState: Codable {
         var cursor: JSONLCursor
         var nextOrdinal: Int64
@@ -356,15 +358,26 @@ public final class AgentController: @unchecked Sendable {
 
     public func install(existingFiles: [URL]) throws {
         try lock.withLock {
-            for file in normalized(existingFiles) where state.files[file.path] == nil {
+            let files = normalized(existingFiles)
+            let existingPaths = Set(files.map(\.path))
+            for path in Array(state.files.keys)
+                where state.files[path]?.seeding == true && !existingPaths.contains(path) {
+                state.files.removeValue(forKey: path)
+                pendingPaths.remove(path)
+            }
+            for file in files where state.files[file.path] == nil {
                 state.files[file.path] = initialFileState(seeding: true)
             }
-            try persist()
             guard state.enabled else {
+                try persist()
                 lastCallbackBytesRead = 0
                 return
             }
-            try process(files: normalized(existingFiles))
+            pauseCollection()
+            try captureSeedBoundaries(files)
+            try persist()
+            try process(files: files, bypassAcceptance: true, boundaryOnly: true)
+            finishBoundarySetupIfReady()
         }
     }
 
@@ -384,6 +397,8 @@ public final class AgentController: @unchecked Sendable {
                 fileState.adapterSnapshots = try snapshotsPreparedForSeeding(
                     from: fileState.adapterSnapshots
                 )
+                fileState.cursor = JSONLCursor()
+                fileState.nextOrdinal = 0
                 fileState.seedTargetOffset = nil
                 fileState.seedFileIdentity = nil
                 state.files[path] = fileState
@@ -397,28 +412,25 @@ public final class AgentController: @unchecked Sendable {
         try lock.withLock {
             guard !state.enabled else {
                 lastCallbackBytesRead = 0
-                acceptanceLock.withLock { acceptingCollection = true }
+                finishBoundarySetupIfReady()
                 return
             }
             state.enabled = true
             runRegistry = RunRegistry()
             pendingPaths.removeAll()
-            for path in state.files.keys {
-                guard var fileState = state.files[path] else { continue }
-                fileState.seeding = true
-                fileState.adapterSnapshots = try snapshotsPreparedForSeeding(
-                    from: fileState.adapterSnapshots
-                )
-                fileState.seedTargetOffset = nil
-                fileState.seedFileIdentity = nil
-                state.files[path] = fileState
+            let files = normalized(existingFiles)
+            let existingPaths = Set(files.map(\.path))
+            for path in Array(state.files.keys) where !existingPaths.contains(path) {
+                state.files.removeValue(forKey: path)
             }
-            for file in normalized(existingFiles) {
+            for file in files {
                 if var fileState = state.files[file.path] {
                     fileState.seeding = true
                     fileState.adapterSnapshots = try snapshotsPreparedForSeeding(
                         from: fileState.adapterSnapshots
                     )
+                    fileState.cursor = JSONLCursor()
+                    fileState.nextOrdinal = 0
                     fileState.seedTargetOffset = nil
                     fileState.seedFileIdentity = nil
                     state.files[file.path] = fileState
@@ -426,23 +438,32 @@ public final class AgentController: @unchecked Sendable {
                     state.files[file.path] = initialFileState(seeding: true)
                 }
             }
+            try captureSeedBoundaries(files)
             try persist()
-            try process(files: normalized(existingFiles), bypassAcceptance: true)
-            acceptanceLock.withLock { acceptingCollection = true }
+            try process(files: files, bypassAcceptance: true, boundaryOnly: true)
+            finishBoundarySetupIfReady()
         }
     }
 
     public func processChangedFiles(_ files: [URL]) throws {
         try lock.withLock {
-            guard state.enabled, isAcceptingCollection else {
+            guard state.enabled else {
                 lastCallbackBytesRead = 0
                 return
             }
-            for file in normalized(files) where state.files[file.path] == nil {
+            let files = normalized(files)
+            for file in files where state.files[file.path] == nil {
                 state.files[file.path] = initialFileState(seeding: true)
             }
+            if !isAcceptingCollection {
+                pendingPaths.formUnion(files.map(\.path))
+                try captureSeedBoundaries(files)
+                try persist()
+                lastCallbackBytesRead = 0
+                return
+            }
             try persist()
-            try process(files: normalized(files))
+            try process(files: files)
         }
     }
 
@@ -452,13 +473,25 @@ public final class AgentController: @unchecked Sendable {
 
     public func continuePendingWork() throws {
         try lock.withLock {
-            guard state.enabled, isAcceptingCollection else {
+            guard state.enabled else {
                 lastCallbackBytesRead = 0
                 return
             }
-            let files = pendingPaths
+            let paths = isAcceptingCollection
+                ? pendingPaths
+                : pendingPaths.filter { state.files[$0]?.seeding == true }
+            let files = paths
                 .map { URL(fileURLWithPath: $0) }
-            try process(files: normalized(files))
+            if isAcceptingCollection {
+                try process(files: normalized(files))
+            } else {
+                try process(
+                    files: normalized(files),
+                    bypassAcceptance: true,
+                    boundaryOnly: true
+                )
+                finishBoundarySetupIfReady()
+            }
         }
     }
 
@@ -521,7 +554,11 @@ public final class AgentController: @unchecked Sendable {
         )
     }
 
-    private func process(files: [URL], bypassAcceptance: Bool = false) throws {
+    private func process(
+        files: [URL],
+        bypassAcceptance: Bool = false,
+        boundaryOnly: Bool = false
+    ) throws {
         guard bypassAcceptance || isAcceptingCollection else {
             lastCallbackBytesRead = 0
             return
@@ -532,6 +569,7 @@ public final class AgentController: @unchecked Sendable {
         for file in files where remaining > 0 {
             guard bypassAcceptance || isAcceptingCollection else { return }
             guard var fileState = state.files[file.path] else { continue }
+            if boundaryOnly, !fileState.seeding { continue }
             let approved: ApprovedProviderFile
             do {
                 approved = try registry.approveProviderFile(file)
@@ -569,25 +607,107 @@ public final class AgentController: @unchecked Sendable {
                 try persist()
             }
 
-            let priorCursor = fileState.cursor
-            let priorIdentity = priorCursor.fileIdentity
-            let priorOffset = priorCursor.offset
-            let seedTarget = fileState.seedTargetOffset
-            if fileState.seeding, seedTarget == 0, priorOffset == 0 {
-                fileState.cursor = JSONLCursor(fileIdentity: snapshot.identity)
-                finishSeeding(&fileState)
+            if fileState.seeding {
+                guard let seedTarget = fileState.seedTargetOffset,
+                      let seedIdentity = fileState.seedFileIdentity else {
+                    continue
+                }
+                if seedTarget == 0 {
+                    fileState.cursor = try approved.cursor(
+                        atOffset: 0,
+                        expectedIdentity: seedIdentity
+                    )
+                    finishSeeding(&fileState)
+                    state.files[file.path] = fileState
+                    try persist()
+                    continue
+                }
+
+                let provenanceTarget = min(
+                    seedTarget,
+                    Int64(Self.maximumProvenanceBytes)
+                )
+                if fileState.cursor.offset >= provenanceTarget {
+                    fileState.cursor = try approved.cursor(
+                        atOffset: seedTarget,
+                        expectedIdentity: seedIdentity
+                    )
+                    finishSeeding(&fileState)
+                    state.files[file.path] = fileState
+                    try persist()
+                    continue
+                }
+                let requestedBytes = min(
+                    remaining,
+                    Int(provenanceTarget - fileState.cursor.offset)
+                )
+                let provenance: JSONLReadResult
+                do {
+                    provenance = try approved.readAppended(
+                        cursor: fileState.cursor,
+                        maxBytes: requestedBytes
+                    )
+                } catch {
+                    pendingPaths.remove(file.path)
+                    continue
+                }
+                afterProviderRead()
+                guard bypassAcceptance || isAcceptingCollection else { return }
+                remaining -= provenance.bytesRead
+                lastCallbackBytesRead += provenance.bytesRead
+                let readerReset = provenance.cursor.offset
+                    != fileState.cursor.offset + Int64(provenance.bytesRead)
+                let prefixStable = try !readerReset
+                    && provenance.cursor.fileIdentity == seedIdentity
+                    && approved.isCurrent(provenance.cursor)
+                if !prefixStable {
+                    let latest = try approved.snapshot()
+                    fileState = initialFileState(seeding: true)
+                    fileState.seedTargetOffset = latest.size
+                    fileState.seedFileIdentity = latest.identity
+                    state.files[file.path] = fileState
+                    try persist()
+                    continue
+                }
+
+                var adapters = try restoredAdapters(from: fileState.adapterSnapshots)
+                for (line, endOffset) in zip(
+                    provenance.lines,
+                    provenance.lineEndOffsets
+                ) {
+                    let source = ProviderRecordSource(ordinal: endOffset)
+                    fileState.nextOrdinal = endOffset
+                    for index in adapters.indices {
+                        adapters[index].consumeDuringSeeding(
+                            line: line,
+                            source: source,
+                            observedAt: clockMS()
+                        )
+                    }
+                }
+                fileState.cursor = provenance.cursor
+                fileState.adapterSnapshots = try snapshots(of: adapters)
+                if provenance.cursor.offset >= provenanceTarget {
+                    fileState.cursor = try approved.cursor(
+                        atOffset: seedTarget,
+                        expectedIdentity: seedIdentity
+                    )
+                    finishSeeding(&fileState)
+                } else if provenance.bytesRead < requestedBytes {
+                    let latest = try approved.snapshot()
+                    fileState = initialFileState(seeding: true)
+                    fileState.seedTargetOffset = latest.size
+                    fileState.seedFileIdentity = latest.identity
+                }
                 state.files[file.path] = fileState
                 try persist()
                 continue
             }
-            let requestedBytes: Int
-            if fileState.seeding, let seedTarget, seedTarget > priorOffset {
-                requestedBytes = min(remaining, Int(seedTarget - priorOffset))
-            } else if fileState.seeding {
-                requestedBytes = min(remaining, 1)
-            } else {
-                requestedBytes = remaining
-            }
+
+            let priorCursor = fileState.cursor
+            let priorIdentity = priorCursor.fileIdentity
+            let priorOffset = priorCursor.offset
+            let requestedBytes = remaining
             let result: JSONLReadResult
             do {
                 result = try approved.readAppended(
@@ -602,51 +722,6 @@ public final class AgentController: @unchecked Sendable {
             guard bypassAcceptance || isAcceptingCollection else { return }
             remaining -= result.bytesRead
             lastCallbackBytesRead += result.bytesRead
-            if fileState.seeding {
-                guard result.cursor.fileIdentity == fileState.seedFileIdentity,
-                      let seedTarget else {
-                    fileState = initialFileState(seeding: true)
-                    state.files[file.path] = fileState
-                    try persist()
-                    continue
-                }
-                let readerReset = result.cursor.offset != priorOffset + Int64(result.bytesRead)
-                if readerReset {
-                    fileState = initialFileState(seeding: true)
-                    fileState.seedTargetOffset = snapshot.size
-                    fileState.seedFileIdentity = snapshot.identity
-                    state.files[file.path] = fileState
-                    try persist()
-                    continue
-                }
-                if priorOffset >= seedTarget {
-                    fileState.cursor = priorCursor
-                    finishSeeding(&fileState)
-                } else {
-                    var adapters = try restoredAdapters(from: fileState.adapterSnapshots)
-                    for line in result.lines {
-                        let source = ProviderRecordSource(ordinal: fileState.nextOrdinal)
-                        fileState.nextOrdinal += 1
-                        for index in adapters.indices {
-                            adapters[index].consumeDuringSeeding(
-                                line: line,
-                                source: source,
-                                observedAt: clockMS()
-                            )
-                        }
-                    }
-                    fileState.cursor = result.cursor
-                    fileState.adapterSnapshots = try snapshots(of: adapters)
-                    if result.cursor.offset >= seedTarget || result.bytesRead < requestedBytes {
-                        finishSeeding(&fileState)
-                    }
-                }
-                guard bypassAcceptance || isAcceptingCollection else { return }
-                state.files[file.path] = fileState
-                try persist()
-                continue
-            }
-
             if result.bytesRead < requestedBytes {
                 pendingPaths.remove(file.path)
             }
@@ -657,10 +732,10 @@ public final class AgentController: @unchecked Sendable {
                 adapters = freshAdapters()
                 fileState.nextOrdinal = 0
             }
-            for line in result.lines {
+            for (line, endOffset) in zip(result.lines, result.lineEndOffsets) {
                 guard bypassAcceptance || isAcceptingCollection else { return }
-                let source = ProviderRecordSource(ordinal: fileState.nextOrdinal)
-                fileState.nextOrdinal += 1
+                let source = ProviderRecordSource(ordinal: endOffset)
+                fileState.nextOrdinal = endOffset
                 for index in adapters.indices {
                     let observations = adapters[index].consume(
                         line: line,
@@ -689,6 +764,33 @@ public final class AgentController: @unchecked Sendable {
         }
     }
 
+    private func captureSeedBoundaries(_ files: [URL]) throws {
+        for file in files {
+            guard var fileState = state.files[file.path], fileState.seeding else { continue }
+            let snapshot: (identity: JSONLFileIdentity, size: Int64)
+            do {
+                snapshot = try registry.approveProviderFile(file).snapshot()
+            } catch {
+                state.files.removeValue(forKey: file.path)
+                pendingPaths.remove(file.path)
+                continue
+            }
+            if fileState.seedTargetOffset == nil
+                || fileState.seedFileIdentity != snapshot.identity {
+                fileState = initialFileState(seeding: true)
+                fileState.seedTargetOffset = snapshot.size
+                fileState.seedFileIdentity = snapshot.identity
+                state.files[file.path] = fileState
+            }
+        }
+    }
+
+    private func finishBoundarySetupIfReady() {
+        guard state.enabled,
+              !state.files.values.contains(where: \.seeding) else { return }
+        acceptanceLock.withLock { acceptingCollection = true }
+    }
+
     private func initialFileState(seeding: Bool) -> PersistedFileState {
         PersistedFileState(
             cursor: JSONLCursor(),
@@ -701,7 +803,6 @@ public final class AgentController: @unchecked Sendable {
     }
 
     private func finishSeeding(_ fileState: inout PersistedFileState) {
-        if !fileState.cursor.partialLine.isEmpty { fileState.nextOrdinal += 1 }
         fileState.cursor.partialLine = Data()
         fileState.seeding = false
         fileState.seedTargetOffset = nil

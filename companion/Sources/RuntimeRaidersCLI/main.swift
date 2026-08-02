@@ -125,12 +125,10 @@ private final class DaemonRuntime: @unchecked Sendable {
 
     private func handleChangedFiles(_ files: [URL]) {
         do {
-            guard controller.isAcceptingCollection else { return }
             try controller.processChangedFiles(files)
-            guard controller.isAcceptingCollection else { return }
-            try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
             scheduleReadContinuationIfNeeded()
             guard controller.isAcceptingCollection else { return }
+            try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
             uploader.schedule(enabled: true)
         } catch {
             // Provider/user work is never impeded by collection failures.

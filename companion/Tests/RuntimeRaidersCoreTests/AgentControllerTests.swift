@@ -26,6 +26,32 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testInitialBoundaryReadsOnlyBoundedProvenanceRegardlessOfHistoricalSize() throws {
+        try withHarness { harness in
+            var history = lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ])
+            history.append(Data(repeating: 0x78, count: 4 * 1_024 * 1_024))
+            let file = try harness.makeFile("large-history.jsonl", contents: history)
+
+            try harness.controller.install(existingFiles: [file])
+
+            XCTAssertLessThanOrEqual(harness.controller.lastCallbackBytesRead, 70_000)
+            XCTAssertFalse(harness.controller.hasPendingSeedWork)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+
+            try append(turnWithoutSessionMeta(nativeID: "future-after-large-history"), to: file)
+            while true {
+                try harness.controller.processChangedFiles([file])
+                if !harness.controller.hasPendingReadWork { break }
+            }
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100).filter { $0.event.state == .completed }.count,
+                1
+            )
+        }
+    }
+
     func testSeededSessionMetadataVerifiesLaterTurnsWithoutRepeatedMetadata() throws {
         try withHarness { harness in
             let file = try harness.makeFile(
@@ -300,18 +326,21 @@ final class AgentControllerTests: XCTestCase {
         try withHarness { harness in
             let file = try harness.makeFile("rewrite.jsonl", contents: Data())
             try harness.controller.install(existingFiles: [file])
-            try append(completedRun(nativeID: "first-run"), to: file)
+            let firstRun = completedRun(nativeID: "first-run")
+            try append(firstRun, to: file)
             try harness.controller.processChangedFiles([file])
 
+            let rewrittenRun = completedRun(nativeID: "rewritten-run")
             let handle = try FileHandle(forWritingTo: file)
             try handle.truncate(atOffset: 0)
-            try handle.write(contentsOf: completedRun(nativeID: "rewritten-run"))
+            try handle.write(contentsOf: rewrittenRun)
             try handle.close()
             try harness.controller.processChangedFiles([file])
 
             let events = try harness.outbox.records(limit: 100).map(\.event)
-            XCTAssertEqual(events.last?.state, .completed)
-            XCTAssertEqual(events.last?.sequence, 4)
+            XCTAssertTrue(events.contains {
+                $0.state == .completed && $0.sequence == Int64(rewrittenRun.count)
+            })
         }
     }
 
@@ -336,6 +365,70 @@ final class AgentControllerTests: XCTestCase {
             }
 
             XCTAssertEqual(try harness.outbox.records(limit: 100).last?.event.state, .completed)
+        }
+    }
+
+    func testInstallCapturesEveryFileBoundaryBeforeLowBudgetSeedWork() throws {
+        try withHarness(readLimitBytes: 128) { harness in
+            let metadata = lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ])
+            let files = try (0..<4).map { index in
+                try harness.makeFile("boundary-\(index).jsonl", contents: metadata)
+            }
+
+            try harness.controller.install(existingFiles: files)
+            try append(
+                turnWithoutSessionMeta(nativeID: "future-on-later-file"),
+                to: files.last!
+            )
+            var callbacks = 0
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+                callbacks += 1
+                XCTAssertLessThan(callbacks, 100)
+            }
+
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+        }
+    }
+
+    func testChangedPathIsBufferedWhileMultiCallbackBoundaryIsStillClosed() throws {
+        try withHarness(readLimitBytes: 64) { harness in
+            let metadata = lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ])
+            let first = try harness.makeFile("buffer-a.jsonl", contents: metadata)
+            let second = try harness.makeFile("buffer-b.jsonl", contents: metadata)
+            try harness.controller.install(existingFiles: [first, second])
+            XCTAssertFalse(harness.controller.isAcceptingCollection)
+
+            let created = try harness.makeFile("buffer-created.jsonl", contents: metadata)
+            try harness.controller.processChangedFiles([created])
+            XCTAssertTrue(harness.controller.hasPendingReadWork)
+            XCTAssertFalse(harness.controller.isAcceptingCollection)
+            try append(
+                turnWithoutSessionMeta(nativeID: "future-after-buffered-boundary"),
+                to: created
+            )
+
+            var callbacks = 0
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+                callbacks += 1
+                XCTAssertLessThan(callbacks, 100)
+            }
+
+            XCTAssertTrue(harness.controller.isAcceptingCollection)
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
         }
     }
 
@@ -453,6 +546,9 @@ final class AgentControllerTests: XCTestCase {
             try harness.controller.turnOn(existingFiles: [])
             try FileManager.default.moveItem(at: parked, to: file)
             try harness.controller.processChangedFiles([file])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
             XCTAssertEqual(try harness.outbox.queuedCount(), 0)
 
             try append(completedRun(nativeID: "future-after-reappear"), to: file)
@@ -669,6 +765,75 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testWatcherStartRescanClosesStartupAndOnScanGaps() throws {
+        for startsEnabled in [true, false] {
+            try withHarness { harness in
+                let existing = try harness.makeFile("existing.jsonl", contents: Data())
+                if !startsEnabled {
+                    try harness.controller.install(existingFiles: [existing])
+                    try harness.controller.turnOff()
+                    try append(
+                        completedRun(nativeID: "DO_NOT_EXPORT_OFF_INTERVAL"),
+                        to: existing
+                    )
+                }
+
+                let newFile = harness.providerRoot.appendingPathComponent("created-in-gap.jsonl")
+                let existingFuture = completedRun(nativeID: "existing-created-in-gap")
+                let newHistory = completedRun(nativeID: "DO_NOT_EXPORT_NEW_FILE_BOUNDARY")
+                let callbackFinished = DispatchSemaphore(value: 0)
+                let controller = harness.controller
+                let queue = DispatchQueue(
+                    label: "com.redlattice.runtime-raiders.start-race-test"
+                )
+                let watcher = FileWatcher(
+                    registry: harness.registry,
+                    processingQueue: queue,
+                    afterStreamStarted: {
+                        try! appendProviderData(existingFuture, to: existing)
+                        try! newHistory.write(to: newFile)
+                    }
+                ) { files in
+                    try? controller.processChangedFiles(files)
+                    while controller.hasPendingReadWork {
+                        try? controller.continuePendingWork()
+                    }
+                    callbackFinished.signal()
+                }
+                defer { watcher.stop() }
+
+                let boundaryFiles = try watcher.discoverProviderFiles()
+                if startsEnabled {
+                    try controller.install(existingFiles: boundaryFiles)
+                } else {
+                    try controller.turnOn(existingFiles: boundaryFiles)
+                }
+                try watcher.start()
+                XCTAssertEqual(callbackFinished.wait(timeout: .now() + 2), .success)
+
+                XCTAssertEqual(
+                    try harness.outbox.records(limit: 100)
+                        .filter { $0.event.state == .completed }.count,
+                    1
+                )
+
+                try append(
+                    turnWithoutSessionMeta(nativeID: "future-in-gap-created-file"),
+                    to: newFile
+                )
+                try controller.processChangedFiles([newFile])
+                while controller.hasPendingReadWork {
+                    try controller.continuePendingWork()
+                }
+                XCTAssertEqual(
+                    try harness.outbox.records(limit: 100)
+                        .filter { $0.event.state == .completed }.count,
+                    2
+                )
+            }
+        }
+    }
+
     func testOnlyPrivacyEncoderOutputReachesOutboxAndStatusDoctorStayContentFree() throws {
         try withHarness { harness in
             let file = try harness.makeFile("privacy.jsonl", contents: Data())
@@ -869,6 +1034,13 @@ final class AgentControllerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: harness.root) }
         try body(harness)
     }
+}
+
+private func appendProviderData(_ data: Data, to file: URL) throws {
+    let handle = try FileHandle(forWritingTo: file)
+    defer { try? handle.close() }
+    try handle.seekToEnd()
+    try handle.write(contentsOf: data)
 }
 
 private final class ControllerHarness {
