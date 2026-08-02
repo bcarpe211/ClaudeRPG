@@ -83,6 +83,7 @@
         <button id="hub-companion-generate" type="button" class="btn btn-ghost">Generate one-time command</button>
         <pre id="hub-companion-command" class="hub-setup-command" tabindex="0" hidden></pre>
         <p id="hub-companion-status" class="hub-setup-status" role="status" aria-live="polite"></p>
+        <p id="hub-companion-error" class="hub-setup-status flash err" role="alert" aria-live="assertive" hidden></p>
       </section>
       <section class="hub-settings-card">
         <h2>Rename</h2>
@@ -94,11 +95,11 @@
         </form>
       </section>
       <section class="hub-settings-card hub-delete">
-        <h2>Delete character</h2>
-        <p style="color:var(--muted)">This permanently removes your character and its progress.</p>
-        <form method="post" action="/character/delete" onsubmit="return confirm('Delete this character permanently?');">
+        <h2>Delete Raider</h2>
+        <p style="color:var(--muted)">This permanently removes your Raider and its progress.</p>
+        <form method="post" action="/character/delete" onsubmit="return confirm('Delete this Raider permanently?');">
           <input type="hidden" name="token" value="<%= player.auth_token %>" />
-          <button type="submit" class="btn-danger">Delete</button>
+          <button type="submit" class="btn-danger">Delete Raider</button>
         </form>
       </section>
     </div>

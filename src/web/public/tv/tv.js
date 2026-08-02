@@ -368,7 +368,7 @@ function render(t) {
   if (state) {
     drawHpBar();
     if (!IS_COMPACT) drawLeaderboard(t);
-    if (state.paused) drawOverlay('The dungeon rests… awaiting adventurers');
+    if (state.paused) drawOverlay('The dungeon rests… awaiting Raiders');
     if (state.defeat) drawDefeat();
   }
 }
@@ -588,7 +588,7 @@ function homeBoard() {
   const rows = players.slice()
     .sort((a, b) => b.effectiveTokens - a.effectiveTokens || a.name.localeCompare(b.name))
     .map((p) => ({ avatarUrl: p.avatarUrl, name: p.name,
-      stat: `L${p.level}  ${fmt(p.effectiveTokens)} tok  ${fmt(p.gold)}g  ×${p.modifier.toFixed(1)}` }));
+      stat: `L${p.level}  ${fmt(p.effectiveTokens)} Raid Power  ${fmt(p.gold)}g  ×${p.modifier.toFixed(1)}` }));
   return { title: 'STANDINGS', rows, bigStat: false };
 }
 
@@ -692,7 +692,7 @@ function drawDefeat() {
     ctx.fillStyle = p.playerId === d.mvpPlayerId ? '#ffd36a' : '#cdb9e0';
     ctx.font = `${Math.round(h * 0.04)}px system-ui`;
     const pct = d.totalDamage ? Math.round((p.damage / d.totalDamage) * 100) : 0;
-    ctx.fillText(`${mvp}${p.name}  ${fmt(p.damage)} (${pct}%)  ${fmt(p.tokensDuringFight)}tok  +${fmt(p.gold)}g` +
+    ctx.fillText(`${mvp}${p.name}  ${fmt(p.damage)} (${pct}%)  ${fmt(p.tokensDuringFight)} Raid Power  +${fmt(p.gold)}g` +
       (p.leveledTo ? `  ⬆L${p.leveledTo}` : ''), x + w * 0.1, ry);
     ry += h * 0.055;
   }

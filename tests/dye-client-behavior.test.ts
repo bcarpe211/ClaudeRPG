@@ -661,7 +661,7 @@ describe('dye browser Wardrobe behavior', () => {
   it.each([
     [400, 'Wardrobe save was rejected — refresh required'],
     [403, 'Wardrobe access changed — refresh required'],
-    [404, 'Character session expired — reload required'],
+    [404, 'Raider session expired — reload required'],
   ])('treats HTTP %i as definitive and requires reload without retrying', async (statusCode, message) => {
     const harness = createWardrobeHarness();
     const failed = deferred<ResponseLike>();

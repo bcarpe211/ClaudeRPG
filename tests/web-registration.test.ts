@@ -28,6 +28,9 @@ describe('registration', () => {
     expect(res.text).toContain('Install the private local companion.');
     expect(res.text).toContain('Use Codex Desktop or CLI; your Runs generate Raid Power.');
     expect(res.text).toContain('Supported Run surfaces: Codex Desktop and Codex CLI.');
+    expect(res.text).toContain(
+      'It reads local Run metadata and usage counters, never work content.',
+    );
     expect(res.text).toContain('It sees:</strong> provider, supported surface, usage counts, model, effort, timestamps, Run state');
     expect(res.text).toContain('It never sends:</strong> prompts, responses, commands, tool details, code, files, paths, workspaces, shell history');
     expect(res.text).not.toContain('OTEL_RESOURCE_ATTRIBUTES');
@@ -36,6 +39,7 @@ describe('registration', () => {
     expect(res.text).not.toContain('ClaudeRPG');
     expect(res.text).not.toContain('Omp');
     expect(res.text).not.toContain('Claude Code');
+    expect(res.text).not.toContain('adventurer');
     expect(res.text).toContain('href="/register"');
     expect(res.text).toContain('href="/tv"');
     expect(res.text).toContain('The dungeon rests');
@@ -97,6 +101,8 @@ describe('registration', () => {
     expect(res.text).toContain('<code>raiders status</code> reports your current state and supported surfaces.');
     expect(res.text).toContain('<code>raiders doctor</code> diagnoses setup without exporting secrets or content.');
     expect(res.text).toContain('<code>raiders uninstall</code> stops and removes only Runtime Raiders-owned companion files.');
+    expect(res.text).toContain('Open your Raider Hub');
+    expect(res.text).not.toContain('Raider sheet');
     const players = listPlayers(db);
     expect(players.length).toBe(1);
     expect(players[0].name).toBe('Sir Reginald');

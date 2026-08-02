@@ -26,7 +26,7 @@ afterEach(() => {
 function copyFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-copy-'));
   fixtureRoots.push(root);
-  for (const dir of ['src/web/views', 'src/web/public', 'src/domain']) {
+  for (const dir of ['src/web/views', 'src/web/public/tv', 'src/web/routes', 'src/domain']) {
     mkdirSync(join(root, dir), { recursive: true });
   }
   writeFileSync(join(root, 'src/domain/settings-meta.ts'), 'export {};\n');
@@ -178,5 +178,55 @@ describe('Runtime Raiders brand copy', () => {
 
     expect(result.status).toBe(1);
     for (const [, term] of variants) expect(result.output).toContain(`stale player copy: ${term}`);
+  });
+
+  it('rejects path-scoped legacy Raider identity and Raid Power copy', () => {
+    const root = copyFixture();
+    const residues = [
+      ['src/web/public/player-hub.js', "progress.textContent = '1 / 2 tokens';\n"],
+      ['src/web/public/tv/tv.js', "draw('1,000 tok'); draw('awaiting adventurers');\n"],
+      ['src/web/routes/character.ts', "const title = 'Character Login'; const error = 'No character found for that token.';\n"],
+      ['src/web/views/character-sheet.ejs', '<h2>Delete character</h2>\n'],
+      ['src/web/views/character-login.ejs', '<p>View Raider sheet</p>\n'],
+      ['src/web/views/registered.ejs', '<a>Open your Raider sheet</a>\n'],
+      ['src/web/views/character-wardrobe.ejs', '<canvas aria-label="Live character dye preview"></canvas>\n'],
+      ['src/web/public/dye.js', "const error = 'Character session expired — reload required';\n"],
+      ['src/web/views/landing.ejs', '<span>3 adventurers contributing</span>\n'],
+    ] as const;
+    for (const [path, contents] of residues) writeFileSync(join(root, path), contents);
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    for (const [path] of residues) expect(result.output).toContain(`${path}:1`);
+  });
+
+  it('allows compatibility routes, hooks, and internal token fields in guarded paths', () => {
+    const root = copyFixture();
+    writeFileSync(
+      join(root, 'src/web/routes/character.ts'),
+      "app.get('/character', handler); app.post('/character/delete', handler);\n",
+    );
+    writeFileSync(
+      join(root, 'src/web/views/character-sheet.ejs'),
+      '<div class="character-avatar" id="hub-today-tokens"><%= player.effective_tokens %></div>\n',
+    );
+    writeFileSync(
+      join(root, 'src/web/public/tv/tv.js'),
+      'const value = participant.tokensDuringFight + player.effectiveTokens;\n',
+    );
+    writeFileSync(
+      join(root, 'src/web/public/player-hub.css'),
+      '.hub-character-settings .character-store { display: grid; }\n',
+    );
+    writeFileSync(
+      join(root, 'src/web/public/player-hub.js'),
+      'const payload = { token: bootstrap.token, raider_key: bootstrap.token };\n',
+    );
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe('');
   });
 });

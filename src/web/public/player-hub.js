@@ -52,6 +52,7 @@
   const companionGenerate = byId('hub-companion-generate');
   const companionCommand = byId('hub-companion-command');
   const companionStatus = byId('hub-companion-status');
+  const companionError = byId('hub-companion-error');
   const potionContext = potionCanvas?.getContext?.('2d') ?? null;
   const reducedMotion = root.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
   if (!grid || !detail || !drinkButton || !confirmDialog || !confirmDrink) return;
@@ -68,6 +69,7 @@
   let refreshQueued = false;
   let potionFrameRequest = null;
   let potionFrameKey = null;
+  let companionRequestInFlight = false;
 
   function clear(element) {
     while (element.firstChild) element.removeChild(element.firstChild);
@@ -205,7 +207,7 @@
           : 'Active';
         progress.textContent = `${stateLabel} · ${remainingLabel(active.remainingMs)}`;
         if (active.progress) {
-          progress.textContent += ` · ${number.format(active.progress.value)} / ${number.format(active.progress.max)} tokens`;
+          progress.textContent += ` · ${number.format(active.progress.value)} / ${number.format(active.progress.max)} Raid Power`;
         }
       }
     }
@@ -525,10 +527,13 @@
   }
 
   async function generateCompanionCommand() {
-    if (!companionGenerate || !companionCommand || !companionStatus) return;
+    if (!companionGenerate || !companionCommand || !companionStatus || !companionError
+        || companionRequestInFlight) return;
+    companionRequestInFlight = true;
     companionGenerate.disabled = true;
     companionGenerate.textContent = 'Generating…';
-    companionStatus.textContent = '';
+    companionError.textContent = '';
+    companionError.hidden = true;
     try {
       const response = await root.fetch(bootstrap.endpoints.enroll, {
         method: 'POST',
@@ -536,18 +541,26 @@
         body: JSON.stringify({ raider_key: bootstrap.token }),
       });
       const result = await response.json();
-      if (!response.ok || typeof result.install_command !== 'string') {
+      const installCommand = typeof result.install_command === 'string'
+        ? result.install_command.trim()
+        : '';
+      const expiresAtMs = result.expires_at;
+      if (!response.ok || installCommand.length === 0
+          || typeof expiresAtMs !== 'number' || !Number.isFinite(expiresAtMs)
+          || expiresAtMs <= Date.now()) {
         throw new Error('enrollment rejected');
       }
-      companionCommand.textContent = result.install_command;
-      companionCommand.hidden = false;
       const expiresAt = new Intl.DateTimeFormat(undefined, {
         hour: 'numeric', minute: '2-digit',
-      }).format(new Date(result.expires_at));
+      }).format(new Date(expiresAtMs));
+      companionCommand.textContent = installCommand;
+      companionCommand.hidden = false;
       companionStatus.textContent = `Fresh one-time command generated. Expires at ${expiresAt}.`;
     } catch {
-      companionStatus.textContent = 'Could not generate a command. Try again.';
+      companionError.textContent = 'Could not generate a command. Try again.';
+      companionError.hidden = false;
     } finally {
+      companionRequestInFlight = false;
       companionGenerate.disabled = false;
       companionGenerate.textContent = 'Generate one-time command';
     }

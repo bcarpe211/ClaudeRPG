@@ -351,7 +351,7 @@
           ? 'Wardrobe save was rejected — refresh required'
           : response.status === 403
             ? 'Wardrobe access changed — refresh required'
-            : 'Character session expired — reload required';
+            : 'Raider session expired — reload required';
         reloadButton.hidden = false;
         message = refreshMessage;
         result = 'refresh-required';

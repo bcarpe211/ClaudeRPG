@@ -200,7 +200,11 @@ class FakeEventSource {
   }
 }
 
-function renderTvAt(dpr: number, mode: 'compact' | 'full' = 'compact') {
+function renderTvAt(
+  dpr: number,
+  mode: 'compact' | 'full' = 'compact',
+  stateOverrides: Record<string, unknown> = {},
+) {
   const source = readFileSync('src/web/public/tv/tv.js', 'utf8');
   const stage = new FakeCanvas(dpr);
   const animationFrames: Array<(time: number) => void> = [];
@@ -271,6 +275,7 @@ function renderTvAt(dpr: number, mode: 'compact' | 'full' = 'compact') {
       packCount: 1,
     },
     players: [],
+    ...stateOverrides,
   });
   const render = animationFrames.shift();
   if (!render) throw new Error('Renderer did not request an animation frame');
@@ -312,6 +317,46 @@ describe('compact TV renderer geometry', () => {
     expect(rendering.texts.map(({ text }) => text)).toContain(
       'Raid 12 · Fight 2/4 · 7 Raiders active',
     );
+  });
+
+  it('labels full-TV standings, rest, and defeat values with Raiders and Raid Power', () => {
+    const rendering = renderTvAt(1, 'full', {
+      paused: true,
+      encounter: null,
+      players: [{
+        id: 1,
+        name: 'Astra',
+        avatarUrl: '/sprites/raider.png',
+        level: 4,
+        effectiveTokens: 1_234,
+        gold: 99,
+        modifier: 1.2,
+        disabled: false,
+        damage: 700,
+        x: null,
+        y: null,
+      }],
+      defeat: {
+        creatureUrl: '/sprites/monster.png',
+        creatureIndex: 1,
+        totalDamage: 700,
+        mvpPlayerId: 1,
+        participants: [{
+          playerId: 1,
+          name: 'Astra',
+          damage: 700,
+          tokensDuringFight: 456,
+          gold: 12,
+          leveledTo: null,
+        }],
+      },
+    });
+    const text = rendering.texts.map((draw) => draw.text).join('\n');
+
+    expect(text).toContain('L4  1.2K Raid Power  99g  ×1.2');
+    expect(text).toContain('awaiting Raiders');
+    expect(text).toContain('456 Raid Power');
+    expect(text).not.toMatch(/\btok\b|adventurer/i);
   });
 
   it('scales the full-TV Raid status with the encounter chrome at DPR 1 and 2', () => {

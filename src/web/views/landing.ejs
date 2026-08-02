@@ -13,7 +13,7 @@
           <div class="boss-name"><img class="px ci" src="/static/landing/crown.png" alt=""> <%= boss.name %></div>
           <div class="hpbar"><span style="width:<%= boss.hpPct %>%"></span></div>
           <div class="hp-meta"><span><img class="px si" src="/static/landing/heart.png" alt=""> <%= boss.hpText %> HP</span><span><%= boss.hpPct %>%</span></div>
-          <div class="party"><div class="pty-row"><% boss.avatars.forEach(function(a){ %><span class="pty"><img class="px" src="<%= a %>" alt=""></span><% }); %></div><span><%= boss.count %> adventurer<%= boss.count === 1 ? '' : 's' %> contributing</span></div>
+          <div class="party"><div class="pty-row"><% boss.avatars.forEach(function(a){ %><span class="pty"><img class="px" src="<%= a %>" alt=""></span><% }); %></div><span><%= boss.count %> Raider<%= boss.count === 1 ? '' : 's' %> contributing</span></div>
         <% } else { %>
           <div class="boss-idle"><img class="px" src="/static/landing/skull.png" alt=""><h3>The dungeon rests</h3><p>No active battle right now &mdash; create your Raider and begin a Run to wake it.</p></div>
         <% } %>
@@ -36,7 +36,7 @@
     </section>
 
     <section class="trust">
-      <div class="sec-head"><h2>What it sees &mdash; and what it doesn&rsquo;t</h2><p>It reads usage numbers, nothing else. Here&rsquo;s exactly where the line is.</p></div>
+      <div class="sec-head"><h2>What it sees &mdash; and what it doesn&rsquo;t</h2><p>It reads local Run metadata and usage counters, never work content. Here&rsquo;s exactly where the line is.</p></div>
       <div class="trust-cols">
         <div class="tcol sees"><h3><img class="px si" src="/static/landing/gem_green.png" alt=""> What it sees</h3><p class="privacy-line"><strong>It sees:</strong> provider, supported surface, usage counts, model, effort, timestamps, Run state</p></div>
         <div class="tcol nots"><h3><img class="px si" src="/static/landing/shield.png" alt=""> What it never sends</h3><p class="privacy-line"><strong>It never sends:</strong> prompts, responses, commands, tool details, code, files, paths, workspaces, shell history</p></div>

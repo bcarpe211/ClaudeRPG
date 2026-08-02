@@ -75,15 +75,15 @@ export function registerCharacterRoutes(
     res.set('Cache-Control', 'private, no-store');
     const token = typeof req.query.token === 'string' ? req.query.token : '';
     if (!token) {
-      res.send(await renderPage('character-login', { title: 'Character Login' }));
+      res.send(await renderPage('character-login', { title: 'Raider Login' }));
       return;
     }
     const player = getPlayerByToken(db, token);
     if (!player) {
       res.status(404).send(
         await renderPage('character-login', {
-          title: 'Character Login',
-          error: 'No character found for that token.',
+          title: 'Raider Login',
+          error: 'No Raider found for that Raider Key.',
         }),
       );
       return;

@@ -77,6 +77,29 @@ describe('buildTvState', () => {
     ]));
   });
 
+  it('computes each Raider activity score once for both Momentum and active status', () => {
+    const now = 100_000;
+    const active = createPlayer(db, { name: 'Active', class_key: 'wizard', gender: 'M' }, now);
+    createPlayer(db, { name: 'Idle', class_key: 'thief', gender: 'F' }, now);
+    ingestTokenUsage(db, tokens(active.auth_token, 1_000), now, { cacheReadWeight: 0 });
+    let activityQueries = 0;
+    const countedDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== 'prepare') return Reflect.get(target, property, receiver);
+        return (sql: string) => {
+          if (sql.includes('SELECT ts, effective_delta FROM token_events')) activityQueries += 1;
+          return target.prepare(sql);
+        };
+      },
+    });
+
+    const state = buildTvState(countedDb, now);
+
+    expect(activityQueries).toBe(2);
+    expect(state.activeRaiders).toBe(1);
+    expect(state.players.find((player) => player.id === active.id)?.modifier).toBeGreaterThan(1);
+  });
+
   it('keeps current Raid counts through a defeat or rest gap without an active Fight', () => {
     const now = 100_000;
     const player = createPlayer(db, { name: 'Raider', class_key: 'wizard', gender: 'M' }, now);

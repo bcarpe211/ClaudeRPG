@@ -211,12 +211,13 @@ function interactionHarness(options: {
     'hub-bottle-burst', 'hub-leaders', 'hub-today-tokens', 'hub-today-damage',
     'hub-today-rank', 'hub-today-gold', 'hub-today-active', 'hub-today-potions',
     'hub-potion-fx', 'hub-companion-generate', 'hub-companion-command',
-    'hub-companion-status',
+    'hub-companion-status', 'hub-companion-error',
   ];
   ids.forEach((id) => register(
     id,
     id === 'potion-confirm' ? 'dialog' : id === 'hub-potion-fx' ? 'canvas' : 'div',
   ));
+  document.getElementById('hub-companion-error')!.hidden = true;
   const avatar = register('avatar-trigger', 'button');
   avatar.className = 'hub-avatar-trigger';
   register('hub-gold').attributes.set('data-hub-gold', '');
@@ -405,10 +406,11 @@ describe('mounted player hub tabs', () => {
 
 describe('player hub inventory, effects, and refresh behavior', () => {
   it('generates and replaces one-time Companion Setup commands using only the Raider Key', async () => {
+    const now = Date.now();
     const h = interactionHarness({ responses: [
       { ok: true, json: async () => ({
         install_command: 'curl first-one-time-command',
-        expires_at: Date.parse('2026-07-30T04:10:00Z'),
+        expires_at: now + 10 * 60_000,
       }) },
     ] });
     const generate = h.document.getElementById('hub-companion-generate')!;
@@ -429,16 +431,81 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(command.textContent).toBe('curl first-one-time-command');
     expect(command.hidden).toBe(false);
     expect(status.textContent).toContain('one-time command');
+    expect(h.document.getElementById('hub-companion-error')!.hidden).toBe(true);
 
     h.responses.push({ ok: true, json: async () => ({
       install_command: 'curl fresh-replacement-command',
-      expires_at: Date.parse('2026-07-30T04:20:00Z'),
+      expires_at: now + 20 * 60_000,
     }) });
     await generate.dispatchAsync('click');
 
     expect(h.fetchCalls).toHaveLength(2);
     expect(command.textContent).toBe('curl fresh-replacement-command');
     expect(command.textContent).not.toContain('first-one-time-command');
+  });
+
+  it.each([
+    ['empty command', { install_command: '   ', expires_at: Date.now() + 60_000 }],
+    ['non-finite expiry', { install_command: 'curl malformed-command', expires_at: Infinity }],
+    ['past expiry', { install_command: 'curl expired-command', expires_at: Date.now() - 1 }],
+  ])('preserves the current command and status for a malformed enrollment: %s', async (_label, payload) => {
+    const h = interactionHarness({ responses: [{ ok: true, json: async () => payload }] });
+    const generate = h.document.getElementById('hub-companion-generate')!;
+    const command = h.document.getElementById('hub-companion-command')!;
+    const status = h.document.getElementById('hub-companion-status')!;
+    const error = h.document.getElementById('hub-companion-error')!;
+    command.textContent = 'curl retained-command';
+    command.hidden = false;
+    status.textContent = 'Current command expires later.';
+
+    await generate.dispatchAsync('click');
+
+    expect(command.textContent).toBe('curl retained-command');
+    expect(command.hidden).toBe(false);
+    expect(status.textContent).toBe('Current command expires later.');
+    expect(error.textContent).toBe('Could not generate a command. Try again.');
+    expect(error.hidden).toBe(false);
+    expect(generate.disabled).toBe(false);
+    expect(generate.textContent).toBe('Generate one-time command');
+  });
+
+  it('allows retry after malformed enrollment and suppresses duplicate in-flight requests', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    const firstJson = new Promise((resolve) => { resolveFirst = resolve; });
+    const h = interactionHarness({ responses: [
+      { ok: true, json: async () => firstJson },
+      { ok: true, json: async () => ({
+        install_command: 'curl retry-command',
+        expires_at: Date.now() + 60_000,
+      }) },
+    ] });
+    const generate = h.document.getElementById('hub-companion-generate')!;
+    const error = h.document.getElementById('hub-companion-error')!;
+
+    const first = generate.dispatchAsync('click');
+    const duplicate = generate.dispatchAsync('click');
+    expect(h.fetchCalls).toHaveLength(1);
+    expect(generate.disabled).toBe(true);
+
+    resolveFirst({ install_command: '', expires_at: Date.now() + 60_000 });
+    await Promise.all([first, duplicate]);
+    expect(error.textContent).toContain('Try again');
+    expect(generate.disabled).toBe(false);
+
+    await generate.dispatchAsync('click');
+    expect(h.fetchCalls).toHaveLength(2);
+    expect(h.document.getElementById('hub-companion-command')!.textContent)
+      .toBe('curl retry-command');
+    expect(error.textContent).toBe('');
+    expect(error.hidden).toBe(true);
+  });
+
+  it('labels active potion progress in Raid Power', () => {
+    const h = interactionHarness();
+    const progressCopy = h.document.getElementById('hub-item-active-progress')!.textContent;
+
+    expect(progressCopy).toContain('500,000 / 2,500,000 Raid Power');
+    expect(progressCopy).not.toMatch(/\btokens?\b/i);
   });
 
   it('renders polling inventory cells with accessible quantity labels', () => {

@@ -21,6 +21,10 @@ describe('character sheet', () => {
   it('GET /character shows the login form', async () => {
     const res = await request(app).get('/character');
     expect(res.status).toBe(200);
+    expect(res.text).toContain('<title>Raider Login — Runtime Raiders</title>');
+    expect(res.text).toContain('view your Raider Hub');
+    expect(res.text).toContain('Open Raider Hub');
+    expect(res.text).not.toContain('Raider sheet');
     expect(res.text).toContain('name="token"');
   });
 
@@ -38,6 +42,8 @@ describe('character sheet', () => {
     expect(res.text).toContain('Companion Setup');
     expect(res.text).toContain('Raider settings');
     expect(res.text).toContain('Generate one-time command');
+    expect(res.text).toContain('id="hub-companion-error"');
+    expect(res.text).toMatch(/id="hub-companion-error"[^>]*hidden/);
     expect(res.text).not.toContain('claude_rpg_token=');
     expect(res.text).not.toContain('Total tokens');
     expect(res.text).toContain('class="character-avatar sprite-anim"');
@@ -65,6 +71,11 @@ describe('character sheet', () => {
     expect(res.text).toContain('/static/player-hub.js');
     expect(res.text).toContain('window.__PLAYER_HUB__ =');
     expect(res.text).toContain('class="hub-character-settings"');
+    expect(res.text).toContain('<h2>Delete Raider</h2>');
+    expect(res.text).toContain('permanently removes your Raider and its progress');
+    expect(res.text).toContain("confirm('Delete this Raider permanently?')");
+    expect(res.text).not.toContain('Delete character');
+    expect(res.text).toContain('aria-label="Live Raider dye preview"');
     expect(res.text).toContain('id="hub-effects"');
     expect(res.text).toContain('aria-controls="hub-effects"');
     expect(res.text).toContain('id="hub-effects-list"');
@@ -285,6 +296,8 @@ describe('character sheet', () => {
   it('rejects an unknown token', async () => {
     const res = await request(app).get('/character').query({ token: 'nope' });
     expect(res.status).toBe(404);
+    expect(res.text).toContain('No Raider found for that Raider Key.');
+    expect(res.text).not.toContain('No character found');
   });
 
   it('escapes adversarial authenticated and public leader names in the player-hub bootstrap', async () => {

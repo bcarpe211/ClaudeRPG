@@ -112,13 +112,16 @@ export function buildTvState(
     'SELECT * FROM players ORDER BY effective_tokens DESC, id ASC',
   ).all() as any[];
   const potionTiersByPlayer = visiblePotionTiersByPlayer(db, now);
+  const activityByPlayer = new Map<number, number>();
   const players: TvHero[] = rows.map((p) => {
+    const score = activityScore(db, p.id, now, cfg);
+    activityByPlayer.set(p.id, score);
     const potionEffects = potionTiersByPlayer.get(p.id)
       ?? { goldTier: null, damageTier: null };
     return {
       id: p.id, name: p.name, avatarUrl: cosmeticSkinUrlForPlayer(db, p, 'a', assets),
       level: p.level, totalTokens: p.total_tokens, effectiveTokens: p.effective_tokens,
-      gold: p.gold, modifier: tokenModifier(activityScore(db, p.id, now, cfg), cfg.tokenModifierK, cfg.modifierCap),
+      gold: p.gold, modifier: tokenModifier(score, cfg.tokenModifierK, cfg.modifierCap),
       disabled: !!p.disabled, connected: p.last_token_at != null,
       damage: dmgByPlayer.get(p.id) ?? 0, x: null, y: null,
       debuffed: debuffFactor(db, p.id, now, cfg) < 1,
@@ -126,7 +129,7 @@ export function buildTvState(
     };
   });
   const activeRaiders = rows.filter((p) => !p.disabled
-    && activityScore(db, p.id, now, cfg) > 0).length;
+    && (activityByPlayer.get(p.id) ?? 0) > 0).length;
 
   // Assign battlefield slots to enabled players (same order) from the layout.
   const layout = currentTvLayout(db);

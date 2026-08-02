@@ -90,4 +90,24 @@ describe('settings metadata', () => {
     expect(SETTINGS_META.potion_damage_t1_base_hit_pct.description)
       .not.toContain('activity');
   });
+
+  it('describes tuning through Raid Power and game outcomes, not employee performance', () => {
+    const gameOutcomeKeys = [
+      'base_hit',
+      'decay_after_minutes',
+      'baseline_battle_minutes',
+      'pause_after_minutes',
+      'potion_gold_t1_duration_s',
+      'potion_gold_t1_gold_per_1000',
+      'potion_daily_stock_per_sku',
+      'potion_daily_uses_per_type',
+    ];
+    for (const key of gameOutcomeKeys) {
+      expect(SETTINGS_META[key].description, key).not.toMatch(/\b(?:office|work)\b/i);
+    }
+    expect(SETTINGS_META.base_hit.description).toContain('Raid Power');
+    expect(SETTINGS_META.baseline_battle_minutes.description).toContain('Fight');
+    expect(SETTINGS_META.pause_after_minutes.description).toContain('Raid');
+    expect(SETTINGS_META.potion_gold_t1_gold_per_1000.description).toContain('gold');
+  });
 });
