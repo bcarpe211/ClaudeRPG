@@ -19,8 +19,8 @@ Disabled means unsupported. Runtime Raiders must not scan those providers' roots
 
 | Surface | Verified version | Local record root | Launch provenance | Run identity | Usage | Lifecycle |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex Desktop | `0.146.0-alpha.3.1` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The approved Desktop session matched the runtime thread and originator markers; `session_meta.payload.source` was a structured object. No path participates in identity. | String `turn_context.payload.turn_id` | `event_msg` / `token_count` / `payload.info.last_token_usage`; numeric input, cached input, cache-write input, output, reasoning output, and total fields | `session_meta`, `event_msg.task_started`, `turn_context`, zero or more cumulative token observations, `event_msg.task_complete` |
-| Codex CLI | `codex-cli 0.146.0-alpha.3.1` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The isolated CLI canary created exactly one new record and `session_meta.payload.source` was a string, structurally distinct from the Desktop canary. No scalar source value or path participates in identity. | String `turn_context.payload.turn_id`, also matched by the canary's user response metadata | Same cumulative `last_token_usage` object and numeric fields as Desktop | Same verified lifecycle as Desktop; the bounded process exited successfully and wrote `task_complete` |
+| Codex Desktop | `0.146.0-alpha.3.1` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The approved Desktop session had bounded nonempty string `id` and `originator` fields and the nested `session_meta.payload.source.subagent.thread_spawn` structure described below. No scalar marker value or path participates in identity. | String `turn_context.payload.turn_id` | `event_msg` / `token_count` / `payload.info.last_token_usage`; numeric input, cached input, cache-write input, output, reasoning output, and total fields | `session_meta`, `event_msg.task_started`, `turn_context`, zero or more cumulative token observations, `event_msg.task_complete` |
+| Codex CLI | `codex-cli 0.146.0-alpha.3.1` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The isolated CLI canary created exactly one new record with bounded nonempty string `id`, `originator`, and `source` fields. The string source shape is structurally distinct from Desktop. No scalar marker value or path participates in identity. | String `turn_context.payload.turn_id`, also matched by the canary's user response metadata | Same cumulative `last_token_usage` object and numeric fields as Desktop | Same verified lifecycle as Desktop; the bounded process exited successfully and wrote `task_complete` |
 | Omp | unverified | not scanned | disabled | unsupported | unsupported | unsupported |
 | Claude Code | unverified | not scanned | disabled | unsupported | unsupported | unsupported |
 
@@ -32,6 +32,18 @@ Disabled means unsupported. Runtime Raiders must not scan those providers' roots
 - Duplicate records are idempotent. Reordered records remain pending until their required identity and lifecycle facts are available.
 - Distinct `turn_id` values remain separate Runs, including the paired parallel fixtures, and must never be merged.
 - Launch provenance comes from the verified `session_meta` shape/runtime marker, never from `cwd`, a project name, or a path.
+
+The launch predicate is structural and fail-closed. Both surfaces require exact
+`payload.cli_version == "0.146.0-alpha.3.1"` plus bounded, nonempty string
+`payload.id` and `payload.originator`. CLI additionally requires a bounded,
+nonempty string `payload.source`. Desktop requires `payload.source` to contain
+only `subagent`, containing only `thread_spawn`, whose exact fields are
+`agent_nickname` (bounded nonempty string), `agent_path` (bounded nonempty
+string), `agent_role` (null), `depth` (nonnegative safe integer), and
+`parent_thread_id` (bounded nonempty string). These scalar values are never
+matched, exported, or used as Run identity. Missing, empty, wrong-type, or
+structurally unknown required provenance—and additional fields inside the
+Desktop source structure—permanently reject that file snapshot.
 
 ## Privacy audit contract
 

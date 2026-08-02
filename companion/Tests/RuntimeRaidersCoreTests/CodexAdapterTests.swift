@@ -76,7 +76,7 @@ final class CodexAdapterTests: XCTestCase {
     func testInvalidUsageAndThreadTotalsNeverBecomeUsage() {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
             #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":999},"last_token_usage":{"input_tokens":true,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
@@ -103,12 +103,13 @@ final class CodexAdapterTests: XCTestCase {
             ("unknown", "unknown-version"),
         ]
         for surface in [RunSurface.codexCLI, .codexDesktop] {
-            let source: Any = surface == .codexCLI ? "cli" : ["desktop": true]
             for unsupported in unsupportedVersions {
                 var adapter = CodexAdapter(expectedSurface: surface)
-                var payload: [String: Any] = ["source": source]
+                var payload = validSessionPayload(for: surface)
                 if let version = unsupported.value {
                     payload["cli_version"] = version
+                } else {
+                    payload.removeValue(forKey: "cli_version")
                 }
                 var output = adapter.consume(
                     line: try sessionMetadata(payload: payload, timestampSecond: 0),
@@ -131,7 +132,7 @@ final class CodexAdapterTests: XCTestCase {
 
                 output += adapter.consume(
                     line: try sessionMetadata(
-                        payload: ["source": source, "cli_version": "0.146.0-alpha.3.1"],
+                        payload: validSessionPayload(for: surface),
                         timestampSecond: 5
                     ),
                     source: .init(ordinal: 5),
@@ -159,10 +160,102 @@ final class CodexAdapterTests: XCTestCase {
         }
     }
 
+    func testMalformedSessionProvenanceRejectsFilesPermanently() throws {
+        for surface in [RunSurface.codexCLI, .codexDesktop] {
+            let valid = validSessionPayload(for: surface)
+            var cases: [(name: String, payload: [String: Any])] = []
+
+            var missingID = valid
+            missingID.removeValue(forKey: "id")
+            cases.append(("missing id", missingID))
+            cases.append(("wrong-type id", valid.merging(["id": 7]) { _, new in new }))
+            cases.append(("empty id", valid.merging(["id": ""]) { _, new in new }))
+
+            var missingOriginator = valid
+            missingOriginator.removeValue(forKey: "originator")
+            cases.append(("missing originator", missingOriginator))
+            cases.append((
+                "wrong-type originator",
+                valid.merging(["originator": false]) { _, new in new }
+            ))
+            cases.append((
+                "empty originator",
+                valid.merging(["originator": ""]) { _, new in new }
+            ))
+
+            if surface == .codexCLI {
+                cases.append((
+                    "empty CLI source",
+                    valid.merging(["source": ""]) { _, new in new }
+                ))
+            } else {
+                cases.append((
+                    "empty Desktop source",
+                    valid.merging(["source": [String: Any]()]) { _, new in new }
+                ))
+                cases.append((
+                    "arbitrary Desktop source",
+                    valid.merging(["source": ["desktop": true]]) { _, new in new }
+                ))
+                cases.append((
+                    "incomplete Desktop source",
+                    valid.merging([
+                        "source": ["subagent": ["thread_spawn": ["depth": 1]]],
+                    ]) { _, new in new }
+                ))
+                var wrongDepth = desktopSource()
+                var subagent = wrongDepth["subagent"] as! [String: Any]
+                var threadSpawn = subagent["thread_spawn"] as! [String: Any]
+                threadSpawn["depth"] = "1"
+                subagent["thread_spawn"] = threadSpawn
+                wrongDepth["subagent"] = subagent
+                cases.append((
+                    "wrong-type Desktop marker",
+                    valid.merging(["source": wrongDepth]) { _, new in new }
+                ))
+            }
+
+            for invalid in cases {
+                var adapter = CodexAdapter(expectedSurface: surface)
+                var output = adapter.consume(
+                    line: try sessionMetadata(payload: invalid.payload, timestampSecond: 0),
+                    source: .init(ordinal: 0),
+                    observedAt: observedAt
+                )
+                output += adapter.consume(
+                    line: try sessionMetadata(
+                        payload: validSessionPayload(for: surface),
+                        timestampSecond: 1
+                    ),
+                    source: .init(ordinal: 1),
+                    observedAt: observedAt
+                )
+                let lifecycle = [
+                    #"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:03Z","type":"turn_context","payload":{"turn_id":"rejected-turn"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+                ]
+                for (offset, line) in lifecycle.enumerated() {
+                    output += adapter.consume(
+                        line: Data(line.utf8),
+                        source: .init(ordinal: Int64(offset + 2)),
+                        observedAt: observedAt
+                    )
+                }
+
+                XCTAssertTrue(
+                    output.isEmpty,
+                    "\(surface) accepted \(invalid.name)"
+                )
+                XCTAssertNoThrow(try CodexAdapter(snapshot: adapter.snapshot()))
+            }
+        }
+    }
+
     func testMatchingTurnContextProvidesBoundedDisplayMetadataOnly() throws {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1","cwd":"DO_NOT_EXPORT_PATH"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1","cwd":"DO_NOT_EXPORT_PATH"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"gpt-test","effort":"high","content":"DO_NOT_EXPORT_PROMPT"}}"#,
         ]
@@ -236,10 +329,10 @@ final class CodexAdapterTests: XCTestCase {
     func testReachableRejectedSurfaceSnapshotRestoresFailClosed() throws {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
-            #"{"timestamp":"2026-01-01T00:00:03Z","type":"session_meta","payload":{"source":{"desktop":true},"cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":{"subagent":{"thread_spawn":{"agent_nickname":"agent","agent_path":"path","agent_role":null,"depth":1,"parent_thread_id":"parent"}}},"cli_version":"0.146.0-alpha.3.1"}}"#,
         ]
         for (index, line) in lines.enumerated() {
             _ = adapter.consume(
@@ -256,7 +349,7 @@ final class CodexAdapterTests: XCTestCase {
     func testDuplicateCompletionCannotRepeatOrStealTheNextTurn() {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn-1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
@@ -346,6 +439,29 @@ final class CodexAdapterTests: XCTestCase {
             "type": "session_meta",
             "payload": payload,
         ])
+    }
+
+    private func validSessionPayload(for surface: RunSurface) -> [String: Any] {
+        [
+            "id": "session",
+            "originator": "originator",
+            "cli_version": "0.146.0-alpha.3.1",
+            "source": surface == .codexCLI ? "cli" : desktopSource(),
+        ]
+    }
+
+    private func desktopSource() -> [String: Any] {
+        [
+            "subagent": [
+                "thread_spawn": [
+                    "agent_nickname": "agent",
+                    "agent_path": "path",
+                    "agent_role": NSNull(),
+                    "depth": 1,
+                    "parent_thread_id": "parent",
+                ] as [String: Any],
+            ] as [String: Any],
+        ]
     }
 
     private func fixtureURL(_ name: String) -> URL {

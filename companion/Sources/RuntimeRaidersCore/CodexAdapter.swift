@@ -147,19 +147,13 @@ public struct CodexAdapter: ProviderAdapter {
 
         if type == "session_meta" {
             guard !rejectedSurface else { return [] }
-            guard payload["cli_version"] as? String == Self.supportedRecordVersion else {
+            guard payload["cli_version"] as? String == Self.supportedRecordVersion,
+                  Self.validRequiredMarker(payload["id"]),
+                  Self.validRequiredMarker(payload["originator"]),
+                  let surface = Self.sessionSurface(payload["source"]) else {
                 rejectedSurface = true
                 verifiedSurface = nil
                 clearLifecycle()
-                return []
-            }
-            guard let sourceShape = payload["source"] else { return [] }
-            let surface: RunSurface
-            if sourceShape is String {
-                surface = .codexCLI
-            } else if sourceShape is [String: Any] {
-                surface = .codexDesktop
-            } else {
                 return []
             }
             if surface == expectedSurface, expectedSurface == .codexCLI || expectedSurface == .codexDesktop {
@@ -363,6 +357,31 @@ public struct CodexAdapter: ProviderAdapter {
     private static func displayValue(_ value: Any?) -> String? {
         guard let string = value as? String, string.utf8.count <= 100 else { return nil }
         return string
+    }
+
+    private static func validRequiredMarker(_ value: Any?) -> Bool {
+        guard let string = value as? String else { return false }
+        return !string.isEmpty && string.utf8.count <= 4_096
+    }
+
+    private static func sessionSurface(_ source: Any?) -> RunSurface? {
+        if validRequiredMarker(source) { return .codexCLI }
+        guard let source = source as? [String: Any],
+              Set(source.keys) == ["subagent"],
+              let subagent = source["subagent"] as? [String: Any],
+              Set(subagent.keys) == ["thread_spawn"],
+              let threadSpawn = subagent["thread_spawn"] as? [String: Any],
+              Set(threadSpawn.keys) == [
+                  "agent_nickname", "agent_path", "agent_role", "depth", "parent_thread_id",
+              ],
+              validRequiredMarker(threadSpawn["agent_nickname"]),
+              validRequiredMarker(threadSpawn["agent_path"]),
+              threadSpawn["agent_role"] is NSNull,
+              integer(threadSpawn["depth"]) != nil,
+              validRequiredMarker(threadSpawn["parent_thread_id"]) else {
+            return nil
+        }
+        return .codexDesktop
     }
 
     private static func validOptionalIdentity(_ value: String?) -> Bool {

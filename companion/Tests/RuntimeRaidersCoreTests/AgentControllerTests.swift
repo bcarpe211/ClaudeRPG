@@ -31,7 +31,7 @@ final class AgentControllerTests: XCTestCase {
             let file = try harness.makeFile(
                 "single-session-meta.jsonl",
                 contents: lines([
-                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
                 ])
             )
             try harness.controller.install(existingFiles: [file])
@@ -118,7 +118,7 @@ final class AgentControllerTests: XCTestCase {
             let file = try harness.makeFile(
                 "single-session-meta-off-on.jsonl",
                 contents: lines([
-                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
                 ])
             )
             try harness.controller.install(existingFiles: [file])
@@ -819,7 +819,7 @@ final class AgentControllerTests: XCTestCase {
 
     private func runPrefix(nativeID: String) -> Data {
         lines([
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             "{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"\(nativeID)\",\"model\":\"synthetic\"}}",
         ])
