@@ -205,19 +205,44 @@ class FakeEventSource {
   }
 }
 
+interface TvViewport {
+  width: number;
+  height: number;
+}
+
+interface TvLayoutMetrics {
+  sidebarW: number;
+  fieldX: number;
+  scale: number;
+  panelX: number;
+  panelW: number;
+  panelH: number;
+}
+
 function renderTvAt(
   dpr: number,
   mode: 'compact' | 'full' = 'compact',
   stateOverrides: Record<string, unknown> = {},
+  viewport: TvViewport = mode === 'compact'
+    ? { width: 480, height: 400 }
+    : { width: 1200, height: 800 },
 ) {
   const source = readFileSync('src/web/public/tv/tv.js', 'utf8');
+  const instrumentedSource = `${source}\nwindow.__readTvLayout = () => ({ sidebarW, fieldX, scale, panelX, panelW, panelH });`;
   const stage = new FakeCanvas(dpr);
   const animationFrames: Array<(time: number) => void> = [];
   let stream: FakeEventSource | undefined;
-  const windowObject = {
+  const windowObject: {
+    devicePixelRatio: number;
+    innerWidth: number;
+    innerHeight: number;
+    addEventListener: () => void;
+    ClaudeRpgPotionFx: undefined;
+    __readTvLayout?: () => TvLayoutMetrics;
+  } = {
     devicePixelRatio: dpr,
-    innerWidth: mode === 'compact' ? 480 : 1200,
-    innerHeight: mode === 'compact' ? 400 : 800,
+    innerWidth: viewport.width,
+    innerHeight: viewport.height,
     addEventListener() {},
     ClaudeRpgPotionFx: undefined,
   };
@@ -230,7 +255,7 @@ function renderTvAt(
     },
   };
 
-  vm.runInNewContext(source, {
+  vm.runInNewContext(instrumentedSource, {
     document: documentObject,
     window: windowObject,
     Image: FakeImage,
@@ -289,7 +314,12 @@ function renderTvAt(
   const titleDraws = stage.context.texts.filter(({ text }) => text === 'Elder Demon');
   const titleTop = Math.min(...titleDraws.map(({ baseline, fontPx }) => baseline - fontPx * 0.82));
   const titleBottom = Math.max(...titleDraws.map(({ baseline, fontPx }) => baseline + fontPx * 0.22));
-  const dungeonDraw = stage.context.images.find(({ source: image }) => image instanceof FakeCanvas);
+  const tvLayout = windowObject.__readTvLayout?.();
+  if (!tvLayout) throw new Error('Renderer did not expose its test layout');
+  const dungeonDraw = stage.context.images.find(({ source: image }) =>
+    image instanceof FakeCanvas
+      && image.width === tvLayout.panelW
+      && image.height === tvLayout.panelH);
   if (!dungeonDraw) throw new Error('Renderer did not draw the dungeon canvas');
   const barFills = stage.context.fills.filter(({ color }) =>
     color === '#180a0a' || color === '#3a0d0d' || color === '#d23b3b');
@@ -308,6 +338,7 @@ function renderTvAt(
     },
     bar: barFills,
     texts: stage.context.texts,
+    tvLayout,
   };
 }
 
@@ -427,5 +458,28 @@ describe('compact TV renderer geometry', () => {
     expect(dpr2.dungeon).toEqual(dpr1.dungeon);
     expect(dpr2.title).toEqual(dpr1.title);
     expect(dpr2.bar).toEqual(dpr1.bar);
+  });
+});
+
+describe('adaptive full TV geometry', () => {
+  it('uses the 38 percent target at 1920 by 1080 without reducing scale 2', () => {
+    const rendering = renderTvAt(1, 'full', {}, { width: 1920, height: 1080 });
+
+    expect(rendering.tvLayout.scale).toBe(2);
+    expect(rendering.tvLayout.sidebarW).toBe(Math.round(1920 * 0.38));
+    expect(rendering.tvLayout.fieldX).toBe(rendering.tvLayout.sidebarW);
+    expect(rendering.tvLayout.panelW).toBe(20 * 24 * 2);
+    expect(rendering.dungeon.width).toBe(20 * 24 * 2);
+  });
+
+  it('caps the 4K sidebar so the height-supported scale 5 dungeon still fits', () => {
+    const rendering = renderTvAt(1, 'full', {}, { width: 3840, height: 2160 });
+    const fieldWidth = 3840 - rendering.tvLayout.sidebarW;
+
+    expect(rendering.tvLayout.scale).toBe(5);
+    expect(rendering.tvLayout.sidebarW).toBeLessThan(Math.round(3840 * 0.38));
+    expect(fieldWidth).toBeGreaterThanOrEqual(rendering.tvLayout.panelW / 0.94);
+    expect(rendering.tvLayout.panelW).toBe(20 * 24 * 5);
+    expect(rendering.dungeon.width).toBe(20 * 24 * 5);
   });
 });

@@ -10,7 +10,8 @@ const COMPACT_WIDTH = 20 * TILE;
 const COMPACT_HEIGHT = 15 * TILE + COMPACT_STATUS;
 const TV_MODE = document.body.dataset.tvMode === 'compact' ? 'compact' : 'full';
 const IS_COMPACT = TV_MODE === 'compact';
-const SIDEBAR_FRAC = IS_COMPACT ? 0 : 0.30; // leaderboard width fraction
+const SIDEBAR_TARGET_FRAC = 0.38;
+const FIELD_SIDE_MARGIN_FRAC = 0.03;
 const SHADOW = { col: 30, row: 37 }; // wall-shadow tile (mirrors WALL_SHADOW in tilesheet.ts)
 const MSHADOW = { S: { col: 37, row: 37 }, M: { col: 38, row: 37 }, L: { col: 39, row: 37 } }; // mirrors MONSTER_SHADOWS in tilesheet.ts
 const TEX = { col: 6, row: 12 };     // dark backdrop texture tile
@@ -104,18 +105,26 @@ function computeScale() {
   }
 
   const vw = canvas.width, vh = canvas.height;
-  sidebarW = Math.round(vw * SIDEBAR_FRAC);
-  fieldX = sidebarW;
-  const fieldW = vw - sidebarW;
-  // reserve a top strip (monster name + HP bar) + thin framing margins, so the
-  // dungeon floats on the backdrop while taking the largest clean integer scale.
-  const hpZone = vh * 0.09, bottomMargin = vh * 0.02, sideMargin = fieldW * 0.03;
-  const availW = fieldW - 2 * sideMargin;
+  const hpZone = vh * 0.09;
+  const bottomMargin = vh * 0.02;
   const availH = vh - hpZone - bottomMargin;
-  // largest INTEGER scale that fits -> crisp pixels at any resolution
-  scale = Math.max(1, Math.floor(Math.min(availW / (20 * TILE), availH / (15 * TILE))));
+  const heightScale = Math.max(1, Math.floor(availH / (15 * TILE)));
+  const widthScale = Math.max(1, Math.floor(
+    vw * (1 - 2 * FIELD_SIDE_MARGIN_FRAC) / (20 * TILE),
+  ));
+
+  scale = Math.max(1, Math.min(heightScale, widthScale));
   tilePx = TILE * scale;
-  panelW = 20 * tilePx; panelH = 15 * tilePx;
+  panelW = 20 * tilePx;
+  panelH = 15 * tilePx;
+
+  const targetSidebarW = Math.round(vw * SIDEBAR_TARGET_FRAC);
+  const minimumFieldW = panelW / (1 - 2 * FIELD_SIDE_MARGIN_FRAC);
+  const maximumSidebarW = Math.max(0, Math.floor(vw - minimumFieldW));
+  sidebarW = Math.min(targetSidebarW, maximumSidebarW);
+  fieldX = sidebarW;
+
+  const fieldW = vw - sidebarW;
   panelX = fieldX + Math.round((fieldW - panelW) / 2);
   panelY = Math.round(hpZone + (availH - panelH) / 2);
 }

@@ -23,7 +23,9 @@ describe('TV renderer bootstrap', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'), 'utf8');
 
     expect(source).toContain('document.body.dataset.tvMode');
-    expect(source).toContain('const SIDEBAR_FRAC = IS_COMPACT ? 0 : 0.30;');
+    expect(source).toContain('const SIDEBAR_TARGET_FRAC = 0.38;');
+    expect(source).toContain('const FIELD_SIDE_MARGIN_FRAC = 0.03;');
+    expect(source).not.toContain('const SIDEBAR_FRAC = IS_COMPACT ? 0 : 0.30;');
     expect(source).toContain("new EventSource('/tv/stream')");
     expect(source.match(/new EventSource\(/g)).toHaveLength(1);
     expect(source).toContain('if (!IS_COMPACT) drawLeaderboard(t);');
