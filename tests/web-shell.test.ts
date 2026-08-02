@@ -22,11 +22,26 @@ describe('dungeon shell', () => {
 
   it('full-frame pages render the gutter loot rails', async () => {
     const res = await request(app).get('/register');
+    const styles = [...res.text.matchAll(/class="loot [lr]" style="([^"]+)"/g)]
+      .map((match) => match[1]);
+    const value = (style: string, name: string) =>
+      style.match(new RegExp(`--${name}:([^;]+)`))?.[1];
+
     expect(res.text).toContain('class="loot-rail left"');
     expect(res.text).toContain('class="loot-rail right"');
     expect(res.text).toContain('--drift:-22px');
     expect(res.text).toContain('--drift:24px');
     expect(res.text).not.toContain('frame-lite');
+    expect(styles).toHaveLength(10);
+    expect(styles.map((style) => value(style, 'd'))).toEqual([
+      '9.4s', '11.2s', '12.8s', '10.3s', '13.6s',
+      '12.1s', '9.7s', '13.2s', '10.8s', '11.6s',
+    ]);
+    expect(styles.map((style) => value(style, 'delay'))).toEqual([
+      '-2.1s', '-7.4s', '-4.9s', '-8.6s', '-1.3s',
+      '-6.2s', '-3.8s', '-9.1s', '-5.4s', '-10.3s',
+    ]);
+    expect(new Set(styles.map((style) => value(style, 'delay'))).size).toBe(10);
   });
 
   it('renders the Runtime Raiders wordmark and raider-first navigation', async () => {
