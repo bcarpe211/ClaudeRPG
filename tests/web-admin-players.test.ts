@@ -31,6 +31,16 @@ describe('admin players', () => {
     expect(res.text).toContain('Runtime Raiders admin');
   });
 
+  it('renders the Raider list with responsive action and table containers', async () => {
+    const agent = await adminAgent();
+    const res = await agent.get('/admin');
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('class="admin-player-head"');
+    expect(res.text).toContain('class="admin-player-actions"');
+    expect(res.text).toMatch(/class="admin-player-table-wrap"[^>]*>\s*<table>/);
+  });
+
   it('lists players on the dashboard', async () => {
     createPlayer(db, { name: 'Gandalf', class_key: 'wizard', gender: 'M' }, 1000);
     const agent = await adminAgent();

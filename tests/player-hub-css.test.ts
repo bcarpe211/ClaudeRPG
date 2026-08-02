@@ -95,6 +95,23 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/\.hub-item-qty\{[^}]*text-shadow:/);
   });
 
+  it('fits the narrow inventory room inside the 320px moss-wall safe area', () => {
+    const narrowViewport = css.slice(css.indexOf('@media (max-width:360px)'));
+    const safePanelWidth = 320 - 2 * (36 + 8) - 2 * 13;
+    const roomWidth = 6 * 34;
+
+    expect(roomWidth).toBeLessThanOrEqual(safePanelWidth);
+    expect(narrowViewport).toMatch(
+      /\.hub-inventory-room\{[^}]*width:204px[^}]*height:306px/,
+    );
+    expect(narrowViewport).toMatch(
+      /\.hub-room-tiles\{[^}]*width:288px[^}]*height:432px[^}]*transform:scale\(\.7083333333\)[^}]*transform-origin:top left/,
+    );
+    expect(narrowViewport).toMatch(
+      /\.hub-inventory-grid\{[^}]*left:34px[^}]*top:34px[^}]*transform:scale\(\.7083333333\)[^}]*transform-origin:top left/,
+    );
+  });
+
   it('resets every narrow interior tile to plain Duskstone with stronger specificity', () => {
     const narrowRoom = css.slice(
       css.indexOf('@container (max-width:520px)'),

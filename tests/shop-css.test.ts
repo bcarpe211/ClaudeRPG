@@ -96,6 +96,12 @@ describe('Gilded Mimic marketplace CSS', () => {
     expect(declarations('.potion-damage .bazaar-potion-icon')).not.toContain('filter:');
   });
 
+  it('stacks potion metadata before its tier badge can clip at 320px', () => {
+    expect(marketplace).toMatch(
+      /@media \(max-width:480px\)\{[\s\S]*?\.bazaar-potion-head \.bazaar-product-meta\{[^}]*flex-direction:column[^}]*align-items:flex-start[^}]*gap:5px/,
+    );
+  });
+
   it('gives sold-out cards a visible disabled state without hiding their stock', () => {
     expect(declarations('.bazaar-product.is-sold-out')).toContain('opacity:');
     expect(declarations('.bazaar-product.is-sold-out button')).toContain('cursor:not-allowed');

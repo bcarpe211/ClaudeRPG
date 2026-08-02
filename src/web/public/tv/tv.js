@@ -305,6 +305,29 @@ function shadowText(txt, x, y, font, fill, align) {
   ctx.fillStyle = fill; ctx.fillText(txt, x, y);
 }
 
+function fitSidebarText(text, maxWidth, font) {
+  ctx.save();
+  ctx.font = font;
+  if (ctx.measureText(text).width <= maxWidth) {
+    ctx.restore();
+    return text;
+  }
+
+  const ellipsis = '…';
+  const ellipsisWidth = ctx.measureText(ellipsis).width;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (ctx.measureText(text.slice(0, mid)).width + ellipsisWidth <= maxWidth) low = mid;
+    else high = mid - 1;
+  }
+
+  const fitted = `${text.slice(0, low).trimEnd()}${ellipsis}`;
+  ctx.restore();
+  return fitted;
+}
+
 function roundedRectPath(x, y, w, h, radius) {
   const r = Math.max(0, Math.min(radius, w / 2, h / 2));
   ctx.beginPath();
@@ -624,12 +647,14 @@ function drawLeaderboard(t) {
   const avW = Math.round(rowH * 0.8);
   const avX = pad + rankW;
   const textX = avX + avW + Math.round(rowH * 0.14);
+  const nameFont = `${Math.round(rowH * 0.4)}px system-ui`;
+  const maxTextW = sidebarW - pad - textX;
   const statFont = Math.round(rowH * (bigStat ? 0.38 : 0.3)); // multi-stat standings line runs smaller
   for (let i = 0; i < rows.length; i++) {
     const e = rows[i];
     shadowText(`${i + 1}.`, pad, y + rowH * 0.6, `bold ${Math.round(rowH * 0.42)}px system-ui`, '#8a7aa0', 'left');
     ctx.drawImage(img(e.avatarUrl), avX, y, avW, avW);
-    shadowText(e.name, textX, y + rowH * 0.42, `${Math.round(rowH * 0.4)}px system-ui`, '#cdb9e0', 'left');
+    shadowText(fitSidebarText(e.name, maxTextW, nameFont), textX, y + rowH * 0.42, nameFont, '#cdb9e0', 'left');
     shadowText(e.stat, textX, y + rowH * 0.84, `bold ${statFont}px system-ui`, '#e8c96a', 'left');
     y += rowH;
   }
@@ -687,13 +712,20 @@ function drawDefeat() {
   ctx.textAlign = 'left';
   let ry = y + h * 0.48;
   const ranked = [...d.participants].sort((a, b) => b.damage - a.damage).slice(0, 10);
+  const resultFont = `${Math.round(h * 0.04)}px system-ui`;
+  const maxResultW = w * 0.8;
+  ctx.font = resultFont;
   for (const p of ranked) {
     const mvp = p.playerId === d.mvpPlayerId ? '★ ' : '   ';
     ctx.fillStyle = p.playerId === d.mvpPlayerId ? '#ffd36a' : '#cdb9e0';
-    ctx.font = `${Math.round(h * 0.04)}px system-ui`;
     const pct = d.totalDamage ? Math.round((p.damage / d.totalDamage) * 100) : 0;
-    ctx.fillText(`${mvp}${p.name}  ${fmt(p.damage)} (${pct}%)  ${fmt(p.tokensDuringFight)} Raid Power  +${fmt(p.gold)}g` +
-      (p.leveledTo ? `  ⬆L${p.leveledTo}` : ''), x + w * 0.1, ry);
+    const resultStats = `${fmt(p.damage)} (${pct}%)  ${fmt(p.tokensDuringFight)} Raid Power  +${fmt(p.gold)}g` +
+      (p.leveledTo ? `  ⬆L${p.leveledTo}` : '');
+    const maxNameW = maxResultW - ctx.measureText(resultStats).width - w * 0.02;
+    ctx.textAlign = 'left';
+    ctx.fillText(fitSidebarText(`${mvp}${p.name}`, maxNameW, resultFont), x + w * 0.1, ry);
+    ctx.textAlign = 'right';
+    ctx.fillText(resultStats, x + w * 0.9, ry);
     ry += h * 0.055;
   }
 }

@@ -29,6 +29,31 @@ describe('TV renderer bootstrap', () => {
     expect(source).toContain('if (!IS_COMPACT) drawLeaderboard(t);');
   });
 
+  it('bounds long leaderboard names inside the TV sidebar', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'), 'utf8');
+    const leaderboard = source.slice(
+      source.indexOf('function drawLeaderboard'),
+      source.indexOf('function drawOverlay'),
+    );
+
+    expect(source).toContain('function fitSidebarText(text, maxWidth, font)');
+    expect(leaderboard).toContain('const nameFont =');
+    expect(leaderboard).toContain('const maxTextW = sidebarW - pad - textX;');
+    expect(leaderboard).toContain('fitSidebarText(e.name, maxTextW, nameFont)');
+  });
+
+  it('bounds long defeat rows inside the result panel', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'), 'utf8');
+    const defeat = source.slice(source.indexOf('function drawDefeat'));
+
+    expect(defeat).toContain('const resultFont =');
+    expect(defeat).toContain('const maxResultW = w * 0.8;');
+    expect(defeat).toContain('const resultStats =');
+    expect(defeat).toContain('const maxNameW = maxResultW - ctx.measureText(resultStats).width - w * 0.02;');
+    expect(defeat).toContain('fitSidebarText(`${mvp}${p.name}`, maxNameW, resultFont)');
+    expect(defeat).toContain("ctx.textAlign = 'right';");
+  });
+
   it('clips the compact room and keeps status and pause treatment compact-only', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'web', 'public', 'tv', 'tv.js'),

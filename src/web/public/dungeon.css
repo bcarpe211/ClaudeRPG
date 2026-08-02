@@ -118,8 +118,17 @@ code{color:var(--gold2)}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line)}
 th{color:var(--muted);font-weight:600}
+.admin-player-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.admin-player-head h1{margin-bottom:0}.admin-player-actions{display:flex;align-items:center;gap:8px}.admin-player-actions form{display:inline-flex}
+.admin-player-table-wrap{max-width:100%;overflow-x:auto}.admin-player-table-wrap table{min-width:512px}
 .flash{padding:11px 15px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);margin-bottom:16px}
 .err{color:#ff9b9b;border-color:rgba(224,72,63,.4)}
+
+@media (max-width:480px){
+  .admin-player-head{align-items:flex-start;flex-direction:column}
+  .admin-player-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .admin-player-actions .btn{justify-content:center}.admin-player-actions form{grid-column:1/-1;display:block}.admin-player-actions button{width:100%;justify-content:center}
+}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important}.loot{opacity:.5}}
 
@@ -564,6 +573,7 @@ button:disabled:hover{transform:none;box-shadow:none}
   .bazaar-floor{padding-inline:13px}.bazaar-product{padding:16px}
   .bazaar-consumables{padding-inline:13px}
   .bazaar-potion-controls{grid-template-columns:1fr}
+  .bazaar-potion-head .bazaar-product-meta{flex-direction:column;align-items:flex-start;gap:5px}
   .bazaar-product-meta{align-items:flex-start}.bazaar-buy-row{align-items:stretch;flex-direction:column}
   .bazaar-buy-row form,.bazaar-buy-row button{width:100%}
   .adventurer-ledger{margin-inline:8px;padding:8px}.ledger-stat{padding:5px 8px}

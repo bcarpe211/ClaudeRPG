@@ -234,4 +234,10 @@
   .hub-panel{padding:12px}.hub-today{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
+@media (max-width:360px){
+  .hub-inventory-room{width:204px;height:306px}
+  .hub-room-tiles{width:288px;height:432px;transform:scale(.7083333333);transform-origin:top left}
+  .hub-inventory-grid{left:34px;top:34px;transform:scale(.7083333333);transform-origin:top left}
+}
+
 @media (prefers-reduced-motion:reduce){.hub-avatar-trigger img{animation:none!important}.hub-bottle-burst,.hub-bottle-burst.is-bursting{animation:none!important;opacity:0!important}}

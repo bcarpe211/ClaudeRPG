@@ -69,4 +69,10 @@ describe('Runtime Raiders dungeon-shell palette', () => {
     expect(css).toMatch(/@media \(max-width:360px\)\{[\s\S]*?\.bar\{[^}]*flex-direction:column[^}]*align-items:flex-start/);
     expect(css).toMatch(/@media \(max-width:360px\)\{[\s\S]*?\.bar nav\{[^}]*display:grid[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)[^}]*width:100%/);
   });
+
+  it('contains the admin Raider table and stacks its actions on narrow screens', () => {
+    expect(css).toMatch(/\.admin-player-table-wrap\{[^}]*max-width:100%[^}]*overflow-x:auto/);
+    expect(css).toMatch(/@media \(max-width:480px\)\{[\s\S]*?\.admin-player-head\{[^}]*align-items:flex-start[^}]*flex-direction:column/);
+    expect(css).toMatch(/@media \(max-width:480px\)\{[\s\S]*?\.admin-player-actions\{[^}]*display:grid[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)[^}]*width:100%/);
+  });
 });

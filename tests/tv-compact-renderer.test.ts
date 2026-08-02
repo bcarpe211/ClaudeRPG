@@ -115,6 +115,11 @@ class RecordingContext {
     });
   }
 
+  measureText(text: string): { width: number } {
+    const fontPx = Number(this.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 10);
+    return { width: text.length * fontPx * 0.55 };
+  }
+
   drawImage(source: FakeCanvas | FakeImage, ...args: number[]): void {
     let x: number;
     let y: number;
