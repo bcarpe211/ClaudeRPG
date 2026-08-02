@@ -21,12 +21,12 @@
   <% } %>
 
   <header class="bar">
-    <a class="brand" href="/"><img class="px" src="/static/landing/sword.png" alt=""><span><%= brand.name %></span></a>
-    <nav><a href="/">Home</a><a href="/tv">Watch the TV</a><a href="/register">Register</a><a href="/character">Log in</a><a href="/admin">Admin</a></nav>
+    <a class="brand" href="/" aria-label="<%= brand.name %>"><img class="px" src="/static/landing/sword.png" alt=""><span class="brand-wordmark" aria-hidden="true"><strong class="brand-primary">RUNTIME</strong><span class="brand-companion">RAIDERS</span></span></a>
+    <nav><a href="/">Home</a><a href="/tv">Watch the TV</a><a href="/register">Create Raider</a><a href="/character">Raider Login</a><a href="/admin">Admin</a></nav>
   </header>
 
   <main><%- body %></main>
 
-  <footer class="foot"><span><img class="px si" src="/static/landing/skull.png" alt=""> Runs on the office TV · your usage, gamified</span><span>Pixel art &copy; Oryx Design Lab</span></footer>
+  <footer class="foot"><span><img class="px si" src="/static/landing/skull.png" alt=""> <%= brand.secondaryLine %></span><span>Pixel art &copy; Oryx Design Lab</span></footer>
 </body>
 </html>

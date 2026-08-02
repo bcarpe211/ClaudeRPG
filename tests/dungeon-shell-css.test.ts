@@ -45,3 +45,23 @@ describe('responsive dungeon shell safe area', () => {
     expect(liteInline(480, 36, 8)).toBe(44);
   });
 });
+
+describe('Runtime Raiders dungeon-shell palette', () => {
+  it('keeps the purple dungeon surfaces and the gilded brand color', () => {
+    expect(css).toMatch(/--panel:#160f20;--panel2:#1c1329;--card:#221631;--line:#2e2140/);
+    expect(css).toContain('--gold:#e8c96a');
+    expect(css).toContain('--guild-wine:#54282b');
+    expect(css).toContain('background-color:#0c0912');
+  });
+
+  it('uses a restrained wine edge instead of a slate shell repaint', () => {
+    expect(css).toMatch(/\.brand-wordmark\{[^}]*border-bottom:2px solid var\(--guild-wine\)/);
+    expect(css).not.toMatch(/background-color:\s*#(?:0f172a|111827|1e293b|334155)/i);
+  });
+
+  it('gives the wordmark readable primary and companion weights on narrow screens', () => {
+    expect(css).toMatch(/\.brand-primary\{[^}]*color:var\(--gold\)[^}]*font-weight:900/);
+    expect(css).toMatch(/\.brand-companion\{[^}]*font-weight:700/);
+    expect(css).toMatch(/@media \(max-width:480px\)\{[\s\S]*?\.brand\{[^}]*font-size:18px/);
+  });
+});

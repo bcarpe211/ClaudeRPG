@@ -1,7 +1,7 @@
 /* ClaudeRPG shared dungeon shell + design system. Single dark theme. */
 :root{
   --panel:#160f20;--panel2:#1c1329;--card:#221631;--line:#2e2140;
-  --gold:#e8c96a;--gold2:#f4dd93;--gold-dim:#a5863f;
+  --gold:#e8c96a;--gold2:#f4dd93;--gold-dim:#a5863f;--guild-wine:#54282b;
   --red:#e0483f;--red-track:#3c1618;--live:#7bd88f;
   --ink:#c9bce0;--head:#f3ecdf;--muted:#8b7ea6;--wall:66px;--shell-gap:12px;--shell-inline:34px;
 }
@@ -69,8 +69,11 @@ body.frame-lite .loot-rail{display:none}
 /* shell chrome: header bar + content + footer */
 .bar,main,.foot{position:relative;z-index:2}
 .bar{display:flex;align-items:center;justify-content:space-between;max-width:1120px;margin:0 auto;padding:22px var(--shell-inline)}
-.brand{display:flex;align-items:center;gap:12px;font-weight:850;letter-spacing:.13em;font-size:21px;color:var(--head)}
-.brand img{width:32px;height:32px} .brand b{color:var(--gold)}
+.brand{display:flex;align-items:center;gap:12px;font-size:21px;color:var(--head)}
+.brand img{width:32px;height:32px}
+.brand-wordmark{display:flex;align-items:baseline;gap:.28em;padding-bottom:2px;border-bottom:2px solid var(--guild-wine);letter-spacing:.13em;line-height:1}
+.brand-primary{color:var(--gold);font-weight:900}
+.brand-companion{font-weight:700}
 .bar nav{display:flex;gap:20px;font-size:14px;color:var(--muted);align-items:center;flex-wrap:wrap}
 .bar nav a:hover{color:var(--gold)}
 main{max-width:1120px;margin:0 auto;padding:8px var(--shell-inline) 40px}
@@ -81,6 +84,7 @@ body.frame-lite main{max-width:1180px}
 .foot{max-width:1120px;margin:20px auto 34px;padding:20px var(--shell-inline) 0;border-top:1px solid var(--line);
   display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:12.5px;color:var(--muted)}
 .foot .si{width:15px;height:15px;display:inline-block;vertical-align:-3px;margin-right:5px}
+@media (max-width:480px){.brand{gap:8px;font-size:18px}.brand img{width:28px;height:28px}.brand-wordmark{gap:.22em;letter-spacing:.09em}}
 
 /* shared primitives */
 .panel{background:linear-gradient(180deg,var(--card),var(--panel));border:1px solid var(--line);

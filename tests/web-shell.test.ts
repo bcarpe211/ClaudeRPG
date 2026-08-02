@@ -26,6 +26,25 @@ describe('dungeon shell', () => {
     expect(res.text).toContain('class="loot-rail right"');
     expect(res.text).not.toContain('frame-lite');
   });
+
+  it('renders the Runtime Raiders wordmark and raider-first navigation', async () => {
+    const res = await request(app).get('/register');
+    const wordmark = res.text.match(/<a class="brand" href="\/"[^>]*>([\s\S]*?)<\/a>/)?.[1] ?? '';
+
+    expect(wordmark).toContain('RUNTIME');
+    expect(wordmark).toContain('RAIDERS');
+    expect(res.text).toContain('>Create Raider</a>');
+    expect(res.text).toContain('>Raider Login</a>');
+    expect(res.text).not.toContain('>Register</a>');
+    expect(res.text).not.toContain('>Log in</a>');
+  });
+
+  it('uses the game premise in the footer without implying work output', async () => {
+    const res = await request(app).get('/register');
+
+    expect(res.text).toContain('Your AI keeps running. Your Raider keeps raiding.');
+    expect(res.text).not.toContain('your usage, gamified');
+  });
 });
 
 describe('lite frame', () => {
