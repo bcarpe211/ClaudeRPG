@@ -26,7 +26,7 @@ afterEach(() => {
 function copyFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-copy-'));
   fixtureRoots.push(root);
-  for (const dir of ['src/web/views', 'src/web/public/tv', 'src/web/routes', 'src/domain']) {
+  for (const dir of ['src/web/views', 'src/web/public/tv', 'src/web/routes', 'src/domain', 'docs']) {
     mkdirSync(join(root, dir), { recursive: true });
   }
   writeFileSync(join(root, 'src/domain/settings-meta.ts'), 'export {};\n');
@@ -149,6 +149,22 @@ describe('Runtime Raiders brand copy', () => {
 
     expect(result.status).toBe(0);
     expect(result.output).toBe('');
+  });
+
+  it('rejects Pi operator instructions that install, enable, or force-run the moving-main updater', () => {
+    const root = copyFixture();
+    writeFileSync(join(root, 'docs/PI_SETUP.md'), [
+      'sudo install -m 755 ~/ClaudeRPG/scripts/pi/auto-update.sh /usr/local/bin/claude-rpg-autoupdate',
+      'sudo systemctl enable --now claude-rpg-autoupdate.timer',
+      'sudo systemctl start claude-rpg-autoupdate',
+    ].join('\n'));
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('docs/PI_SETUP.md:1: stale operator instruction: install moving-main updater');
+    expect(result.output).toContain('docs/PI_SETUP.md:2: stale operator instruction: enable moving-main updater');
+    expect(result.output).toContain('docs/PI_SETUP.md:3: stale operator instruction: force-run moving-main updater');
   });
 
   it('scans Bazaar view-model copy that is rendered on active player pages', () => {

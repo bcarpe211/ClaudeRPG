@@ -50,11 +50,23 @@ After reboot the TV should show the dungeon. From your laptop:
 Both names are for internal-network access only; neither creates public ingress.
 
 ## 5. Onboard players
-Each teammate registers a character at `http://raiders.local:8080/`, then
-pastes the shown setup snippet into their shell (`~/.zshrc`/`~/.bashrc`) and opens
-a new terminal. Their Claude Code token usage then streams to the Pi. (Off the
-office network the snippet's `raiders.local` simply won't resolve, so nothing
-is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
+Each teammate registers a character at `http://raiders.local:8080/`. Registration
+provides a private, one-time companion installer for that Raider; run it once on
+the owner's Mac. The installer starts collection **off** and never edits shell or
+provider configuration.
+
+Before opting in, run `raiders status` (and `raiders doctor` if it reports a
+problem) and confirm collection is disabled. Consent is explicit: run
+`raiders on` only when the owner wants Runtime Raiders collection, and run
+`raiders off` to stop it. Use separate controlled canaries for Codex Desktop and
+Codex CLI. With Raiders off, both canaries must work normally and produce no
+Runtime Raiders upload; after explicit opt-in, verify each allowed surface
+separately.
+
+Only Codex Desktop and Codex CLI are available in this release. Claude Code and
+Omp are unavailable and unsupported. Manually remove the legacy Claude OTel
+shell configuration and old `rpg_*` commands, then start a fresh shell. The
+companion installer does not remove or change legacy shell configuration for you.
 
 ## On-Pi verification checklist
 - [ ] `systemctl status claude-rpg` → **active (running)**.
@@ -62,8 +74,15 @@ is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
 - [ ] From a laptop on the internal network: `ping raiders.local` resolves and
       `https://raiders.redlattice.com` loads.
 - [ ] The TV shows the kiosk (dungeon + leaderboard), no desktop/cursor/bars.
-- [ ] Register a character and send a quick Claude Code task → the hero appears
-      and starts attacking within a few seconds.
+- [ ] Register a character; run the one-time companion installer and confirm
+      `raiders status` reports collection disabled before consent.
+- [ ] With Raiders off, complete harmless Codex Desktop and Codex CLI canaries:
+      both work normally and neither uploads Runtime Raiders data.
+- [ ] After explicit `raiders on`, complete a controlled Codex Desktop canary
+      and a separate controlled Codex CLI canary; confirm each allowed surface
+      is recorded as expected. Run `raiders off` when the canaries finish.
+- [ ] Confirm Claude Code and Omp remain unavailable; do not configure or probe
+      either provider.
 - [ ] Reboot the Pi → it returns to the kiosk unattended.
 - [ ] Pull power mid-fight, restore → the game resumes (state persisted in SQLite).
 - [ ] Leave it idle past `pause_after_minutes` → "the dungeon rests" overlay; a
@@ -109,27 +128,19 @@ cd ~/ClaudeRPG && git pull --ff-only && sudo systemctl restart claude-rpg
 (The kiosk page auto-reconnects via SSE; refresh isn't usually needed, but you
 can reboot for a clean slate.)
 
-### Automatic updates during downtime
+### Release automation is disabled
 
-A systemd timer (`claude-rpg-autoupdate.timer`) checks every ~2 min and, **only
-when the game is idle-paused** (`game_state.paused=1` — "the dungeon rests"),
-fast-forward-pulls `origin/main` and restarts the service. It never interrupts a
-live fight, never touches `data/`/`node_modules`, and holds off on a dirty or
-diverged tree. Restarts are safe: state persists in SQLite (WAL + graceful
-shutdown), so an idle-window restart is invisible.
+The current `claude-rpg-autoupdate` timer and its oneshot remain disabled and
+inactive after every terminal outcome: accepted cutover, abort, or rollback.
+They follow moving `origin/main`, so an idle/paused game is not authorization to
+release a future commit. Keep the current units disabled; do not install, enable,
+or force-run them.
 
-Install (one-time):
-```bash
-sudo install -m 755 ~/ClaudeRPG/scripts/pi/auto-update.sh /usr/local/bin/claude-rpg-autoupdate
-sudo cp ~/ClaudeRPG/deploy/claude-rpg-autoupdate.service ~/ClaudeRPG/deploy/claude-rpg-autoupdate.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now claude-rpg-autoupdate.timer
-```
-Inspect: `systemctl list-timers claude-rpg-autoupdate` · logs
-`journalctl -u claude-rpg-autoupdate -n 30`. Force a check now (respects the
-idle gate): `sudo systemctl start claude-rpg-autoupdate`. Disable:
-`sudo systemctl disable --now claude-rpg-autoupdate.timer`. After editing the
-script in the repo, re-copy it to `/usr/local/bin/claude-rpg-autoupdate`.
+Any future automation needs separate design and review. It may be authorized only
+for an explicitly approved pinned SHA and must recheck that SHA, the unit
+contract, pause gate, ownership, environment, and database integrity before each
+checkout or service start. Authorization for this cutover does not authorize a
+future or rejected SHA.
 
 ## Uninstall
 ```bash

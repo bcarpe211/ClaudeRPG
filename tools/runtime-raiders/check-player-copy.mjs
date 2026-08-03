@@ -23,6 +23,25 @@ const scanTargets = [
   'src/domain/shopview.ts',
   'README.md',
 ];
+const operatorGuideTargets = ['docs/PI_SETUP.md'];
+const operatorInstructionRules = [
+  {
+    pattern: /sudo\s+install\b.*\bclaude-rpg-autoupdate\b/i,
+    label: 'install moving-main updater',
+  },
+  {
+    pattern: /sudo\s+(?:cp|install)\b.*\bclaude-rpg-autoupdate\.(?:service|timer)\b/i,
+    label: 'install moving-main updater',
+  },
+  {
+    pattern: /sudo\s+systemctl\s+enable(?:\s+--now)?\s+claude-rpg-autoupdate\.timer\b/i,
+    label: 'enable moving-main updater',
+  },
+  {
+    pattern: /sudo\s+systemctl\s+start\s+claude-rpg-autoupdate\b/i,
+    label: 'force-run moving-main updater',
+  },
+];
 const pathScopedRules = [
   { path: 'src/web/public/player-hub.js', pattern: /['"`][^'"`]*\s+tokens?\b/i, label: 'token unit' },
   { path: 'src/web/public/tv/tv.js', pattern: /\btok\b/i, label: 'tok unit' },
@@ -63,6 +82,20 @@ for (const target of scanTargets) {
       for (const rule of pathScopedRules) {
         if (relativeFile === rule.path && rule.pattern.test(line)) {
           violations.push(`${relativeFile}:${index + 1}: stale player copy: ${rule.label}`);
+        }
+      }
+    });
+  }
+}
+
+for (const target of operatorGuideTargets) {
+  for (const file of filesUnder(resolve(repositoryRoot, target))) {
+    const relativeFile = relative(repositoryRoot, file);
+    const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+    lines.forEach((line, index) => {
+      for (const rule of operatorInstructionRules) {
+        if (rule.pattern.test(line)) {
+          violations.push(`${relativeFile}:${index + 1}: stale operator instruction: ${rule.label}`);
         }
       }
     });

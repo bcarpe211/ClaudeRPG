@@ -600,6 +600,17 @@ describe('Runtime Raiders Pi preflight', () => {
     expect(result.output).toContain('FAIL Runtime Raiders environment');
   });
 
+  it('rejects a legacy OTEL endpoint assignment without exposing its value', () => {
+    const f = fixture();
+    writeFileSync(f.envFile, `${readFileSync(f.envFile, 'utf8')}OTEL_ENDPOINT_HOST=legacy-secret-endpoint.invalid\n`);
+
+    const result = run(f);
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+    expect(result.output).not.toContain('legacy-secret-endpoint.invalid');
+  });
+
   it('rejects the checked-in placeholder even when supplied as the expected timestamp', () => {
     const f = fixture();
     f.cutoverAt = '1800000000000';

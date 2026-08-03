@@ -110,6 +110,14 @@ env_value() {
   file_value "$ENV_FILE" "$1"
 }
 
+env_has_assignment() {
+  awk -v key="$1" '
+    /^[[:space:]]*#/ { next }
+    $0 ~ "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=" { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$ENV_FILE"
+}
+
 protected_root_env() {
   [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ] || return 1
   metadata=$(stat -c '%u %a' -- "$1" 2>/dev/null) || return 1
@@ -217,6 +225,7 @@ admin_password=''
 session_secret=''
 sprites_dir=''
 if [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ]; then
+  env_has_assignment OTEL_ENDPOINT_HOST && environment_ok=0
   port=$(env_value PORT 2>/dev/null) || environment_ok=0
   admin_username=$(env_value ADMIN_USERNAME 2>/dev/null) || environment_ok=0
   configured_db=$(env_value DB_PATH 2>/dev/null) || environment_ok=0
