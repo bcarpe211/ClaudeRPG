@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 const caddy = readFileSync(resolve('deploy/Caddyfile'), 'utf8');
 const env = readFileSync(resolve('deploy/claude-rpg.env.example'), 'utf8');
+const setup = readFileSync(resolve('scripts/pi/setup.sh'), 'utf8');
+const service = readFileSync(resolve('deploy/claude-rpg.service'), 'utf8');
+const labwcAutostart = readFileSync(resolve('deploy/labwc-autostart'), 'utf8');
+const kiosk = readFileSync(resolve('scripts/pi/kiosk.sh'), 'utf8');
 
 function assignments(key: string): string[] {
   return [...env.matchAll(new RegExp(`^${key}=(.*)$`, 'gm'))]
@@ -11,6 +15,21 @@ function assignments(key: string): string[] {
 }
 
 describe('Runtime Raiders internal deployment configuration', () => {
+  it('targets raiders.local while retaining the established service identifiers', () => {
+    expect(setup).toContain('HOSTNAME_WANT="raiders"');
+    expect(setup).toContain('mDNS: $HOSTNAME_WANT.local');
+    expect(setup).toContain('http://raiders.local:');
+    expect(setup).toContain('ENV_FILE="/etc/claude-rpg.env"');
+    expect(setup).toContain('UNIT_DST="/etc/systemd/system/claude-rpg.service"');
+    expect(setup).toContain('systemctl enable claude-rpg.service');
+    expect(service).toContain('EnvironmentFile=/etc/claude-rpg.env');
+  });
+
+  it('keeps the Pi kiosk on its local loopback TV endpoint', () => {
+    expect(labwcAutostart).toContain('__REPO__/scripts/pi/kiosk.sh &');
+    expect(kiosk).toContain('URL="http://localhost:${PORT}/tv"');
+  });
+
   it('keeps both hostnames in one Caddy site', () => {
     const siteHeaders = [...caddy.matchAll(/^([^\s#][^{\n]*)\{$/gm)]
       .map(([, header]) => header.trim());

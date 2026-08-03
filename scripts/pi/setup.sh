@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot, idempotent ClaudeRPG Pi 5 kiosk installer. Run as the kiosk user:
+# One-shot, idempotent Runtime Raiders Pi 5 kiosk installer. Run as the kiosk user:
 #   bash scripts/pi/setup.sh
 # Re-runnable. Uses sudo for system changes.
 set -euo pipefail
@@ -7,11 +7,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 KIOSK_USER="$(id -un)"
-HOSTNAME_WANT="claude-rpg"
+HOSTNAME_WANT="raiders"
 ENV_FILE="/etc/claude-rpg.env"
 UNIT_DST="/etc/systemd/system/claude-rpg.service"
 
-echo "== ClaudeRPG Pi setup =="
+echo "== Runtime Raiders Pi setup =="
 echo "repo:  $REPO_DIR"
 echo "user:  $KIOSK_USER"
 
@@ -113,5 +113,5 @@ echo "== Done. Next steps =="
 echo "  1) sudo nano $ENV_FILE   # set ADMIN_PASSWORD"
 echo "  2) sudo systemctl restart claude-rpg   # pick up the password"
 echo "  3) sudo reboot           # boot into the kiosk"
-echo "  Server:  http://claude-rpg.local:$(grep -E '^PORT=' "$ENV_FILE" | cut -d= -f2)/"
-echo "  TV:      http://claude-rpg.local:$(grep -E '^PORT=' "$ENV_FILE" | cut -d= -f2)/tv   (shown on the Pi's HDMI)"
+echo "  Server:  http://raiders.local:$(grep -E '^PORT=' "$ENV_FILE" | cut -d= -f2)/"
+echo "  TV:      http://raiders.local:$(grep -E '^PORT=' "$ENV_FILE" | cut -d= -f2)/tv   (shown on the Pi's HDMI)"

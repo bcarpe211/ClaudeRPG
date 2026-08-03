@@ -1,8 +1,12 @@
-# ClaudeRPG — Raspberry Pi 5 Kiosk Setup
+# Runtime Raiders — Raspberry Pi 5 Kiosk Setup
 
-Turns a Pi 5 + TV into an unattended ClaudeRPG display: the server starts on
+Turns a Pi 5 + TV into an unattended Runtime Raiders display: the server starts on
 boot, Chromium opens full-screen on `/tv`, and the Pi is reachable on the LAN as
-`claude-rpg.local`.
+`raiders.local`.
+
+Compatibility identifiers intentionally retained for this release:
+/home/rluser/ClaudeRPG, data/claude-rpg.db, /etc/claude-rpg.env,
+claude-rpg.service, and claude-rpg-autoupdate.*
 
 ## 1. Flash the OS
 - Use **Raspberry Pi Imager** → **Raspberry Pi OS (64-bit), Bookworm, *with desktop***.
@@ -28,7 +32,7 @@ The Oryx art pack must be present under `assets/oryx_16-bit_fantasy_1.1/Sliced/`
 bash scripts/pi/setup.sh
 ```
 This installs Node 22, Chromium, Avahi and build tools; runs `npm install`; sets
-the hostname to `claude-rpg`; installs the systemd service + `/etc/claude-rpg.env`;
+the hostname to `raiders`; installs the systemd service + `/etc/claude-rpg.env`;
 enables desktop autologin; and installs the Chromium kiosk autostart. It is safe
 to re-run.
 
@@ -39,20 +43,24 @@ sudo systemctl restart claude-rpg
 sudo reboot
 ```
 After reboot the TV should show the dungeon. From your laptop:
-- Admin: `http://claude-rpg.local:8080/admin` (user `admin`)
-- Register: `http://claude-rpg.local:8080/`
+- Internal DNS: `https://raiders.redlattice.com/admin` (user `admin`)
+- mDNS: `http://raiders.local:8080/admin` (user `admin`)
+- Register via mDNS: `http://raiders.local:8080/`
+
+Both names are for internal-network access only; neither creates public ingress.
 
 ## 5. Onboard players
-Each teammate registers a character at `http://claude-rpg.local:8080/`, then
+Each teammate registers a character at `http://raiders.local:8080/`, then
 pastes the shown setup snippet into their shell (`~/.zshrc`/`~/.bashrc`) and opens
 a new terminal. Their Claude Code token usage then streams to the Pi. (Off the
-office network the snippet's `claude-rpg.local` simply won't resolve, so nothing
+office network the snippet's `raiders.local` simply won't resolve, so nothing
 is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
 
 ## On-Pi verification checklist
 - [ ] `systemctl status claude-rpg` → **active (running)**.
 - [ ] `curl -fs http://localhost:8080/health` → `{"ok":true}`.
-- [ ] From a laptop on the LAN: `ping claude-rpg.local` resolves; the admin page loads.
+- [ ] From a laptop on the internal network: `ping raiders.local` resolves and
+      `https://raiders.redlattice.com` loads.
 - [ ] The TV shows the kiosk (dungeon + leaderboard), no desktop/cursor/bars.
 - [ ] Register a character and send a quick Claude Code task → the hero appears
       and starts attacking within a few seconds.
@@ -76,7 +84,7 @@ is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
 - **Kiosk didn't start but desktop did:** confirm `~/.config/labwc/autostart`
   exists and is executable; check the compositor (Pi 5 Bookworm = labwc). For
   wayfire, ensure the `[autostart]` entry is in `~/.config/wayfire.ini`.
-- **`claude-rpg.local` won't resolve:** confirm `avahi-daemon` is active and the
+- **`raiders.local` won't resolve:** confirm `avahi-daemon` is active and the
   client supports mDNS (most do); otherwise use the Pi's IP address.
 - **Wrong/blurry resolution:** the renderer adapts to any resolution; to force
   4K use `wlr-randr` or Screen Configuration on the Pi.
@@ -84,8 +92,8 @@ is sent — that's intended. `rpg_off`/`rpg_on` toggle it on-network.)
   XCURSOR theme (`setup.sh` step 7b). To temporarily bring the pointer back (e.g.
   to operate the Pi directly) and hide it again:
   ```bash
-  ssh rluser@claude-rpg.local 'cd ~/ClaudeRPG && bash scripts/pi/cursor.sh show'  # reboots to apply
-  ssh rluser@claude-rpg.local 'cd ~/ClaudeRPG && bash scripts/pi/cursor.sh hide'
+  ssh rluser@raiders.local 'cd ~/ClaudeRPG && bash scripts/pi/cursor.sh show'  # reboots to apply
+  ssh rluser@raiders.local 'cd ~/ClaudeRPG && bash scripts/pi/cursor.sh hide'
   ```
   Add `--no-reboot` to stage the change without rebooting. (CSS `cursor:none`
   alone doesn't work: Chromium only hides the pointer once it moves over the

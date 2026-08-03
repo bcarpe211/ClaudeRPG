@@ -1,5 +1,5 @@
 [Unit]
-Description=ClaudeRPG game server
+Description=Runtime Raiders game server
 After=network-online.target
 Wants=network-online.target
 
