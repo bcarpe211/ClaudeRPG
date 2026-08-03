@@ -171,6 +171,25 @@ afterEach(() => {
 });
 
 describe('Runtime Raiders local integration gate', () => {
+  it('passes the production acceptance query for a real accepted canary Run', async () => {
+    const device = await enrollDevice();
+    const accepted = await post(
+      '/api/runs/events',
+      { events: [runEvent(device.deviceId)] },
+      device.deviceToken,
+    );
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+
+    const result = db.prepare(`
+      SELECT count(*) AS invalid
+      FROM runs
+      WHERE started_at_ms < ? OR policy_version <> ?
+    `).get(CUTOVER, 'raid-power-v1') as { invalid: number };
+
+    expect(result.invalid).toBe(0);
+  });
+
   it('scores parallel synthetic Codex Runs once, preserves legacy projection, potion work, wake, and recent Run queries', async () => {
     db.prepare('UPDATE game_state SET paused = 1, last_activity_at = ? WHERE id = 1')
       .run(NOW - 20 * 60_000);

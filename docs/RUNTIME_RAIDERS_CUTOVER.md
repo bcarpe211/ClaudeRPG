@@ -18,7 +18,8 @@ not authorize another.
 | --- | --- | --- |
 | Internal `raiders.redlattice.com` DNS | IT | Public ingress or public DNS |
 | Caddy config/reload and Pi hostname | User-approved Pi administrator | Application cutover |
-| Fetching or publishing a release/artifact | Repository/release owner | Pi deployment or office activation |
+| Holding the updater | User-approved Pi administrator | Publishing, fetching, or deploying a release |
+| Publishing/fetching the approved SHA to tracked `origin/main` | Repository/release owner, after verified updater hold | Pi checkout, service start, or future SHAs |
 | Production cutover and rollback | Explicit user approval for the recorded release and window | Future deployments |
 | Companion install and old OTel cleanup | Mac owner or authorized administrator | Editing provider configuration |
 | Enabling canaries, then the office | Explicit canary/office activation approval | Enabling any unverified provider |
@@ -49,7 +50,7 @@ certificate material, or environment contents in this document or a commit.
 | Approved release full 40-character SHA (`RELEASE_SHA`) | `________________` |
 | Prior/release short SSE versions | `________________ / ________________` |
 | One 13-digit millisecond epoch (`CUTOVER_AT`) and UTC rendering | `________________ / ________________` |
-| Policy version | `1` |
+| Persisted policy key / JSON document version | `raid-power-v1` / `1` |
 | Production DB path | `/home/rluser/ClaudeRPG/data/claude-rpg.db` |
 | Verified pre-cutover `.backup` path (`DB_BACKUP`) | `________________` |
 | Production DB owner, group, and mode | `________________` |
@@ -57,6 +58,7 @@ certificate material, or environment contents in this document or a commit.
 | Prior environment SHA-256 | `________________` |
 | Candidate environment path and SHA-256 | `________________` |
 | Manager-loaded Caddy config and env paths | `________________ / ________________` |
+| Manager-loaded game `User` / `WorkingDirectory` / `EnvironmentFiles` / `ExecStart` | `________________` |
 | IT DNS evidence/date for both FQDNs | `________________` |
 | Caddy validation and TLS evidence/date for both FQDNs | `________________` |
 | `raiders.local`, SSH, Avahi, actual network-path evidence/date | `________________` |
@@ -64,6 +66,7 @@ certificate material, or environment contents in this document or a commit.
 | Migration/e2e/preflight/config test evidence | `________________` |
 | Exact user authorization and UTC timestamp | `________________` |
 | Final decision: accepted, aborted, or rolled back | `________________` |
+| Final updater timer/oneshot state | `________________` |
 
 Use these compatibility paths and names throughout:
 
@@ -78,8 +81,8 @@ UPDATER_SERVICE=claude-rpg-autoupdate.service
 ```
 
 In the operator shell, set `PRIOR_SHA`, `RELEASE_SHA`, `CUTOVER_AT`,
-`CADDY_CONFIG`, and `CADDY_ENV` to the recorded literal values. Do not derive or
-change them during the cutover. Confirm that both SHAs contain exactly 40
+`CANDIDATE_ENV_SHA256`, `GAME_EXEC_EXPECTED`, `CADDY_CONFIG`, and `CADDY_ENV` to the recorded literal
+values. Do not derive or change them during the cutover. Confirm that both SHAs contain exactly 40
 lowercase hexadecimal characters, are distinct, and that `CUTOVER_AT` contains
 exactly 13 decimal digits. Record the output of:
 
@@ -131,7 +134,26 @@ matching authorization above.
   replace that loopback URL with DNS or mDNS.
 - Verify `claude-rpg.service`, `/etc/claude-rpg.env`,
   `/home/rluser/ClaudeRPG`, `data/claude-rpg.db`, and
-  `claude-rpg-autoupdate.*` remain the active compatibility identifiers.
+  `claude-rpg-autoupdate.*` remain the active compatibility identifiers. Record
+  and mechanically verify the manager-loaded game-service contract rather than
+  trusting the unit file on disk:
+
+  ```sh
+  test "$(systemctl show "$SERVICE" --property=User --value)" = rluser
+  test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
+  test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
+    '/etc/claude-rpg.env (ignore_errors=no)'
+  GAME_EXEC=$(systemctl show "$SERVICE" --property=ExecStart --value)
+  case "$GAME_EXEC" in
+    *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
+    *) false ;;
+  esac
+  test "$GAME_EXEC" = "$GAME_EXEC_EXPECTED"
+  test "$(printf '%s' "$GAME_EXEC" | grep -oF \
+    "argv[]=$REPO/scripts/pi/run-server.sh" | wc -l)" = 1
+  ```
+
+  Any mismatch blocks publication and cutover.
 
 ### 1.3 Companion, provider, privacy, and old OTel gates
 
@@ -140,8 +162,11 @@ matching authorization above.
   `docs/runtime-raiders/companion-operations.md`. Publication is a separate
   authorized action. Record the artifact checksum, signature/notarization
   result, and date, never signing credentials.
-- Install authorized canaries with collection immediately set to off. Run
-  `raiders off`, `raiders status`, and `raiders doctor`. Complete the signed
+- Install authorized canaries with the transactional installer. It persists
+  collection off before the first launchd bootstrap; on upgrade it turns an
+  enabled existing daemon off and verifies persisted state before replacing the
+  app or LaunchAgent; after bootstrap it verifies off again. Run `raiders
+  status` and `raiders doctor`; do not use `raiders on`. Complete the signed
   artifact and deployed/Pi canary rows in
   `docs/runtime-raiders/canary-checklist.md` before launch.
 - The exact initial allowlist is
@@ -218,24 +243,47 @@ sudo stat -c '%U %G %a %n' "$CANDIDATE_ENV"
 sudo sha256sum "$CANDIDATE_ENV"
 ```
 
-## 2. Hold the updater, then run the read-only preflight
+## 2. Hold the updater before touching tracked `origin/main`
 
-Holding systemd units is a state change and requires Pi authorization. Do it
-before preflight; the hardened preflight deliberately fails immediately unless
-the timer is disabled and inactive and the already-launched oneshot is inactive.
+This ordering is an authorization boundary. The release owner must not publish
+the candidate to tracked `main`, and the Pi must not fetch or update tracked
+`origin/main`, until a Pi administrator has held and verified both updater
+units. In a clean Bash shell, use strict mode and attempt every hold action even
+if one fails:
 
 ```sh
-sudo systemctl disable --now "$UPDATER_TIMER"
-sudo systemctl stop "$UPDATER_SERVICE"
-systemctl is-enabled "$UPDATER_TIMER"   # exact result: disabled
-systemctl is-active "$UPDATER_TIMER"    # exact result: inactive
-systemctl is-active "$UPDATER_SERVICE"  # exact result: inactive
+set -Eeuo pipefail
+hold_updater() {
+  local rc=0
+  sudo systemctl disable --now "$UPDATER_TIMER" || rc=1
+  sudo systemctl stop "$UPDATER_SERVICE" || rc=1
+  test "$(systemctl is-enabled "$UPDATER_TIMER")" = disabled || rc=1
+  test "$(systemctl is-active "$UPDATER_TIMER")" = inactive || rc=1
+  test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive || rc=1
+  return "$rc"
+}
+hold_updater
 ```
 
-Do not start the cutover yet. While deployed `HEAD` still equals `PRIOR_SHA`,
-run the approved release's script directly from its Git object. `origin/main`
-must already resolve to the exact `RELEASE_SHA`; the preflight never fetches,
-checks out, installs, writes configuration, migrates, or changes service state.
+Failure is a NO-GO; do not publish, fetch, or deploy anything. After the exact
+hold has been recorded, the repository owner may separately authorize
+publishing only `RELEASE_SHA` to `main`. Fetch the approved object into the
+tracked remote ref as `rluser` using the literal SHA refspec, so a moving or
+future `main` cannot enter the Pi checkout:
+
+```sh
+sudo -u rluser -H git -C "$REPO" fetch --no-tags origin \
+  "$RELEASE_SHA:refs/remotes/origin/main"
+test "$(sudo -u rluser git --no-optional-locks -C "$REPO" \
+  rev-parse origin/main)" = "$RELEASE_SHA"
+hold_updater
+```
+
+Any fetch mismatch or failure is an abort and the updater remains held. Do not
+restore it merely because cutover was cancelled. While deployed `HEAD` still
+equals `PRIOR_SHA`, run the approved release's script directly from its Git
+object. The preflight never fetches, checks out, installs, writes configuration,
+migrates, or changes service state.
 
 ```sh
 set -o pipefail
@@ -273,7 +321,8 @@ change, service change, or game wake makes the result stale: stop and rerun it.
 
 Present the completed record of truth, fresh preflight result, test evidence,
 visual approval, signed canary evidence, exact prior/release SHAs, exact backup
-target, policy version `1`, exact `CUTOVER_AT`, DNS/TLS/mDNS evidence, current
+target, persisted policy key `raid-power-v1`, JSON policy document version `1`,
+exact `CUTOVER_AT`, DNS/TLS/mDNS evidence, current
 `paused=1`, rollback order, and post-rollback loss semantics to the user.
 
 The user must explicitly authorize this release SHA, timestamp, backup target,
@@ -285,23 +334,70 @@ NO-GO and reschedule if any value is missing; any gate is failed, unknown,
 pending, or stale; the game is not paused; the updater is not fully held; the
 checkout is dirty/diverged; signing, canaries, old OTel cleanup, internal DNS,
 TLS, mDNS, kiosk, migration rehearsal, backup capacity, or visual approval is
-incomplete; or explicit user authorization is absent. Restore the updater timer
-only if the operator intentionally returns to normal prior-release operation.
+incomplete; or explicit user authorization is absent. An abort leaves both
+updater units held. Returning to normal prior-release operation requires a
+separate recorded authorization, a verified `HEAD=PRIOR_SHA`, and a pinned
+updater design; the current moving-`main` updater is not safe to re-enable.
 
 ## 4. Coordinated cutover
 
 Use one operator and one shell. Announce the maintenance window. Companions and
 office collection stay off. Do not enable a companion anywhere in this section.
+Paste the state-changing sections into one clean Bash session, not line by line.
+Install a fail-closed trap before the first cutover action; every error or
+interrupt stops the game and reasserts the updater hold:
+
+```sh
+set -Eeuo pipefail
+fail_closed() {
+  local rc="${1:-1}"
+  test "$rc" -ne 0 || rc=1
+  trap - ERR HUP INT TERM
+  set +e
+  sudo systemctl disable --now "$UPDATER_TIMER"
+  sudo systemctl stop "$UPDATER_SERVICE"
+  sudo systemctl stop "$SERVICE"
+  echo "FAIL-CLOSED: game stopped; updater held; investigate before rollback" >&2
+  exit "$rc"
+}
+trap 'fail_closed $?' ERR
+trap 'fail_closed 130' HUP INT TERM
+
+assert_updater_held() {
+  test "$(systemctl is-enabled "$UPDATER_TIMER")" = disabled
+  test "$(systemctl is-active "$UPDATER_TIMER")" = inactive
+  test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive
+}
+assert_game_unit() {
+  test "$(systemctl show "$SERVICE" --property=User --value)" = rluser
+  test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
+  test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
+    '/etc/claude-rpg.env (ignore_errors=no)'
+  local loaded_exec
+  loaded_exec=$(systemctl show "$SERVICE" --property=ExecStart --value)
+  case "$loaded_exec" in
+    *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
+    *) return 1 ;;
+  esac
+  test "$loaded_exec" = "$GAME_EXEC_EXPECTED"
+  test "$(printf '%s' "$loaded_exec" | grep -oF \
+    "argv[]=$REPO/scripts/pi/run-server.sh" | wc -l)" = 1
+}
+assert_repo_owned() {
+  test "$(stat -c '%U' "$REPO")" = rluser
+  test -z "$(find "$REPO" -xdev ! -user rluser -print -quit)"
+}
+```
 
 ### 4.1 Reconfirm identity, pause, and updater hold
 
 ```sh
-test "$(git --no-optional-locks -C "$REPO" rev-parse HEAD)" = "$PRIOR_SHA"
-test -z "$(git --no-optional-locks -C "$REPO" status --porcelain)"
-test "$(git --no-optional-locks -C "$REPO" rev-parse origin/main)" = "$RELEASE_SHA"
-test "$(systemctl is-enabled "$UPDATER_TIMER")" = disabled
-test "$(systemctl is-active "$UPDATER_TIMER")" = inactive
-test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive
+assert_updater_held
+assert_game_unit
+assert_repo_owned
+test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = "$PRIOR_SHA"
+test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
+test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse origin/main)" = "$RELEASE_SHA"
 test "$(sqlite3 -readonly "$DB" \
   'PRAGMA query_only=ON; SELECT paused FROM game_state WHERE id=1;')" = 1
 ```
@@ -324,17 +420,18 @@ RETAINED_BEFORE=$BACKUP_DIR/retained-before.tsv
 DB_OWNER=$(stat -c '%U' "$DB")
 DB_GROUP=$(stat -c '%G' "$DB")
 DB_MODE=$(stat -c '%a' "$DB")
+PRIOR_ENV_SHA256=$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')
 sudo install -d -o root -g root -m 0700 "$BACKUP_DIR"
 
-git --no-optional-locks -C "$REPO" rev-parse HEAD
-sudo sha256sum "$CURRENT_ENV"
+sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD
 sudo install -o root -g root -m 0600 "$CURRENT_ENV" "$PRIOR_ENV_BACKUP"
 sudo sqlite3 "$DB" ".timeout 10000" ".backup '$DB_BACKUP'"
 sudo chown root:root "$DB_BACKUP"
 sudo chmod 0600 "$DB_BACKUP"
-sudo sqlite3 -readonly "$DB_BACKUP" \
-  'PRAGMA query_only=ON; PRAGMA integrity_check;'
-sudo sha256sum "$DB_BACKUP"
+test "$(sudo sqlite3 -readonly "$DB_BACKUP" \
+  'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
+DB_BACKUP_SHA256=$(sudo sha256sum "$DB_BACKUP" | awk '{print $1}')
+test "$(printf '%s' "$DB_BACKUP_SHA256" | wc -c)" = 64
 ```
 
 The integrity result must be exactly `ok`. A file copy of the live SQLite main
@@ -390,6 +487,7 @@ sudo sqlite3 -readonly -separator $'\t' "$DB_BACKUP" \
 sudo install -o root -g root -m 0600 /tmp/retained-before.tsv "$RETAINED_BEFORE"
 sudo rm /tmp/retained-before.tsv
 sudo sha256sum "$RETAINED_BEFORE"
+assert_updater_held
 ```
 
 If any query or backup check fails, abort before stopping the service.
@@ -399,6 +497,7 @@ If any query or backup check fails, abort before stopping the service.
 ```sh
 sudo systemctl stop "$SERVICE"
 test "$(systemctl is-active "$SERVICE")" = inactive
+assert_updater_held
 ```
 
 From this point until the new checkout, dependencies, reviewed environment, and
@@ -408,22 +507,31 @@ code with the new environment or new code with the old environment.
 ### 4.4 Install the exact release and environment while stopped
 
 ```sh
-git --no-optional-locks -C "$REPO" merge --ff-only "$RELEASE_SHA"
-test "$(git --no-optional-locks -C "$REPO" rev-parse HEAD)" = "$RELEASE_SHA"
+assert_repo_owned
+sudo -u rluser -H git -C "$REPO" merge --ff-only "$RELEASE_SHA"
+test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
+  "$RELEASE_SHA"
 
-if ! git --no-optional-locks -C "$REPO" diff --quiet \
-  "$PRIOR_SHA" "$RELEASE_SHA" -- package-lock.json; then
-  (cd "$REPO" && npm ci)
+if ! sudo -u rluser git --no-optional-locks -C "$REPO" diff --quiet \
+  "$PRIOR_SHA" "$RELEASE_SHA" -- package.json package-lock.json; then
+  sudo -u rluser -H sh -c 'cd "$1" && npm ci --include=dev' sh "$REPO"
 fi
 
 sudo install -o root -g root -m 0600 "$CANDIDATE_ENV" "$CURRENT_ENV"
-sudo stat -c '%U %G %a %n' "$CURRENT_ENV"
-sudo sha256sum "$CURRENT_ENV"
+test "$(sudo stat -c '%U:%G:%a' "$CURRENT_ENV")" = root:root:600
+test "$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')" = \
+  "$CANDIDATE_ENV_SHA256"
+assert_repo_owned
+sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
+test "$(stat -c '%U' "$REPO/node_modules")" = rluser
+test -z "$(find "$REPO/node_modules" -xdev ! -user rluser -print -quit)"
+assert_updater_held
+test "$(systemctl is-active "$SERVICE")" = inactive
 ```
 
 The installed SHA-256 must equal the reviewed candidate SHA-256. Confirm exactly
 one cutover timestamp, `SCORING_MODE=runtime-raiders`, exact
-`codex_desktop,codex_cli`, policy path/version `1`, existing DB/sprite paths,
+`codex_desktop,codex_cli`, policy path and JSON document version `1`, existing DB/sprite paths,
 strong secrets, and no `OTEL_ENDPOINT_HOST`. Do not print the environment.
 
 ### 4.5 Start once and wait for migration/health
@@ -431,7 +539,26 @@ strong secrets, and no `OTEL_ENDPOINT_HOST`. Do not print the environment.
 `openDb` applies the additive migration at service start; there is no separate
 production migration command.
 
+Reassert the entire start boundary immediately before the one permitted start.
+Do not start if any checkout, dependency, environment, database, ownership,
+unit, or updater fact changed:
+
 ```sh
+test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
+  "$RELEASE_SHA"
+test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
+assert_repo_owned
+sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
+test "$(sudo stat -c '%U:%G:%a' "$CURRENT_ENV")" = root:root:600
+test "$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')" = \
+  "$CANDIDATE_ENV_SHA256"
+test "$(stat -c '%U:%G:%a' "$DB")" = "$DB_OWNER:$DB_GROUP:$DB_MODE"
+test "$(sudo -u rluser sqlite3 -readonly "$DB" \
+  'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
+assert_game_unit
+assert_updater_held
+test "$(systemctl is-active "$SERVICE")" = inactive
+
 sudo systemctl start "$SERVICE"
 for attempt in $(seq 1 30); do
   if curl -fsS --max-time 2 http://localhost:8080/health >/dev/null; then
@@ -495,7 +622,8 @@ from the fail-closed `503 scoring_disabled` response. The executable config,
 metrics, and e2e tests are the evidence that scoring modes are mutually
 exclusive and realistic old OTLP input is acknowledged without writing.
 
-After controlled canaries, every new `runs.policy_version` must be `1`, all Run
+After controlled canaries, every new `runs.policy_version` must be the persisted
+policy key `raid-power-v1` (not the JSON document's numeric `policy_version: 1`), all Run
 starts must be at or after `CUTOVER_AT`, and `players.total_tokens` must remain
 at its retained baseline. Do not rewrite existing lifetime state.
 
@@ -546,7 +674,8 @@ Use content-free database aggregates to check the server-side canary boundary:
 ```sh
 test "$(sudo sqlite3 -readonly "$DB" \
   "PRAGMA query_only=ON; SELECT count(*) FROM runs
-   WHERE started_at_ms < $CUTOVER_AT OR policy_version <> '1';")" = 0
+   WHERE started_at_ms < $CUTOVER_AT
+      OR policy_version <> 'raid-power-v1';")" = 0
 test "$(sudo sqlite3 -readonly "$DB" \
   "PRAGMA query_only=ON; SELECT count(*) FROM runs
    WHERE provider <> 'codex'
@@ -560,26 +689,45 @@ test "$(sudo sqlite3 -readonly "$DB" \
   "$LEGACY_TOTAL_TOKENS_BEFORE"
 ```
 
-The grouped output must contain only `codex_cli` and `codex_desktop`, with the
+This exact policy-key query is also executed by
+`tests/runtime-raiders-e2e.test.ts` against a Run accepted through the real
+enrollment and event routes; a prose-only check is not acceptance evidence. The
+grouped output must contain only `codex_cli` and `codex_desktop`, with the
 expected canary counts. The legacy lifetime token total must remain unchanged.
 
 Any mismatch triggers section 7 immediately. Do not broaden
 `RUN_ENABLED_SURFACES`, change policy, or enable Claude/Omp to work around it.
 
-After canary and office acceptance, restore the updater timer and verify the
-oneshot is not already running:
+After canary and office acceptance, keep the updater held and close the
+fail-closed cutover shell only after recording the accepted state:
 
 ```sh
-sudo systemctl enable --now "$UPDATER_TIMER"
-test "$(systemctl is-enabled "$UPDATER_TIMER")" = enabled
-test "$(systemctl is-active "$UPDATER_TIMER")" = active
-test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive
+assert_updater_held
+test "$(systemctl is-active "$SERVICE")" = active
+trap - ERR HUP INT TERM
 ```
 
-Record the final SSE release SHA, policy version `1`, exact `CUTOVER_AT`, test
+Record the final SSE release SHA, persisted policy key `raid-power-v1`, JSON
+policy document version `1`, exact `CUTOVER_AT`, test
 results, UI/kiosk/network results, canary counts, user acceptance, and UTC time.
 The temporary old FQDN remains compatible. Retiring it or renaming the repo,
 database, env, service, or updater identifiers is a separate migration.
+
+The updater state is explicit for every terminal outcome:
+
+| Outcome | Game service | Updater timer | Updater oneshot |
+| --- | --- | --- | --- |
+| Accepted | Active only after all gates pass | Disabled and inactive | Inactive |
+| Aborted before state-changing cutover | Prior operation; stop if the fail-closed cutover shell was entered | Disabled and inactive | Inactive |
+| Rolled back | Prior SHA active only after rollback gates pass | Disabled and inactive | Inactive |
+
+Do not enable the current updater after acceptance: it follows moving
+`origin/main` and cannot enforce release authorization. A future separately
+reviewed, recorded ongoing-auto-deploy policy may enable automation only if the
+updater consumes an explicitly approved pinned SHA and rechecks that same SHA,
+unit contract, pause gate, ownership, environment, and database integrity before
+each checkout/start. Authorization of this cutover SHA does not authorize a
+rejected or future SHA.
 
 ## 7. Rollback
 
@@ -597,83 +745,174 @@ mismatch; non-idempotent outbox replay; or any unknown acceptance result.
 ### 7.2 Exact rollback order
 
 Do not attempt a destructive reverse migration. Use the recorded verified
-backup and prior SHA.
+backup and prior SHA. First turn collection off on every enabled canary and
+office Mac and verify `raiders status` reports off. Then open a clean Bash shell,
+restore the recorded variables, and install a rollback-specific fail-closed
+trap. Every failure keeps the updater held and game stopped:
 
-1. **Turn collection off first.** On every enabled canary and office Mac, run
-   `raiders off`, then confirm `raiders status` is off. This is external
-   coordination; do not continue enabling or asking clients to replay.
-2. **Hold the updater.** Disable/stop the timer, stop the updater oneshot, and
-   verify timer disabled/inactive and service inactive exactly as in section 2.
-3. **Stop the game service.** Run `sudo systemctl stop "$SERVICE"` and require
-   `inactive`.
-4. **Preserve the failed post-cutover database without deleting it.** With the
-   service stopped, move the DB and any WAL/SHM sidecars into a new root-only
-   incident directory:
+```sh
+set -Eeuo pipefail
+rollback_fail_closed() {
+  local rc="${1:-1}"
+  test "$rc" -ne 0 || rc=1
+  trap - ERR HUP INT TERM
+  set +e
+  sudo systemctl disable --now "$UPDATER_TIMER"
+  sudo systemctl stop "$UPDATER_SERVICE"
+  sudo systemctl stop "$SERVICE"
+  echo "ROLLBACK FAIL-CLOSED: game stopped; updater held" >&2
+  exit "$rc"
+}
+trap 'rollback_fail_closed $?' ERR
+trap 'rollback_fail_closed 130' HUP INT TERM
 
-   ```sh
-   FAILED_DIR=/var/backups/runtime-raiders/$CUTOVER_ID/failed-post-cutover
-   sudo install -d -o root -g root -m 0700 "$FAILED_DIR"
-   sudo mv "$DB" "$FAILED_DIR/claude-rpg.failed.db"
-   if sudo test -e "$DB-wal"; then
-     sudo mv "$DB-wal" "$FAILED_DIR/claude-rpg.failed.db-wal"
-   fi
-   if sudo test -e "$DB-shm"; then
-     sudo mv "$DB-shm" "$FAILED_DIR/claude-rpg.failed.db-shm"
-   fi
-   ```
+hold_updater() {
+  local rc=0
+  sudo systemctl disable --now "$UPDATER_TIMER" || rc=1
+  sudo systemctl stop "$UPDATER_SERVICE" || rc=1
+  test "$(systemctl is-enabled "$UPDATER_TIMER")" = disabled || rc=1
+  test "$(systemctl is-active "$UPDATER_TIMER")" = inactive || rc=1
+  test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive || rc=1
+  return "$rc"
+}
+hold_updater
+sudo systemctl stop "$SERVICE"
+test "$(systemctl is-active "$SERVICE")" = inactive
+```
 
-5. **Restore the verified pre-cutover DB.** Recheck the recorded backup checksum
-   and integrity, restore it, reapply the recorded DB owner/group/mode, and
-   verify the result as the service user:
+Verify the recorded logical backup **before moving the failed database**. The
+checksum comparison is exact, not a fresh checksum printed for a human to
+compare:
 
-   ```sh
-   sudo sha256sum "$DB_BACKUP"
-   sudo sqlite3 -readonly "$DB_BACKUP" \
-     'PRAGMA query_only=ON; PRAGMA integrity_check;'
-   sudo sqlite3 "$DB" ".restore '$DB_BACKUP'"
-   sudo chown "$DB_OWNER:$DB_GROUP" "$DB"
-   sudo chmod "$DB_MODE" "$DB"
-   sudo -u rluser sqlite3 -readonly "$DB" \
-     'PRAGMA query_only=ON; PRAGMA integrity_check;'
-   ```
+```sh
+test "$(sudo sha256sum "$DB_BACKUP" | awk '{print $1}')" = \
+  "$DB_BACKUP_SHA256"
+test "$(sudo sqlite3 -readonly "$DB_BACKUP" \
+  'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
+```
 
-   Both integrity results must be exactly `ok`.
-6. **Switch the clean checkout to the recorded prior SHA.** The updater remains
-   held. Require an otherwise clean checkout, echo the exact target, then move
-   `main` back deliberately:
+Create a unique incident directory under a protected parent. Record whether
+each sidecar existed, require every destination to be absent, use no-clobber
+moves, and prove that each source was preserved or was originally absent:
 
-   ```sh
-   test -z "$(git --no-optional-locks -C "$REPO" status --porcelain)"
-   printf 'rollback target: %s\n' "$PRIOR_SHA"
-   git -C "$REPO" reset --hard "$PRIOR_SHA"
-   test "$(git --no-optional-locks -C "$REPO" rev-parse HEAD)" = "$PRIOR_SHA"
-   if ! git --no-optional-locks -C "$REPO" diff --quiet \
-     "$PRIOR_SHA" "$RELEASE_SHA" -- package-lock.json; then
-     (cd "$REPO" && npm ci)
-   fi
-   ```
+```sh
+INCIDENT_PARENT="$BACKUP_DIR/incidents"
+sudo install -d -o root -g root -m 0700 "$INCIDENT_PARENT"
+FAILED_DIR=$(sudo mktemp -d "$INCIDENT_PARENT/failed-post-cutover.XXXXXX")
+test "$(sudo stat -c '%U:%G:%a' "$FAILED_DIR")" = root:root:700
 
-7. **Restore the prior environment and start.** Copy only the recorded root
-   `0600` backup, verify its recorded checksum without printing it, start once,
-   and wait for local health:
+HAD_WAL=0
+HAD_SHM=0
+sudo test ! -e "$FAILED_DIR/claude-rpg.failed.db"
+sudo test ! -e "$FAILED_DIR/claude-rpg.failed.db-wal"
+sudo test ! -e "$FAILED_DIR/claude-rpg.failed.db-shm"
+sudo test -f "$DB"
+if sudo test -e "$DB-wal"; then HAD_WAL=1; fi
+if sudo test -e "$DB-shm"; then HAD_SHM=1; fi
 
-   ```sh
-   sudo sha256sum "$PRIOR_ENV_BACKUP"
-   sudo install -o root -g root -m 0600 "$PRIOR_ENV_BACKUP" "$CURRENT_ENV"
-   sudo systemctl start "$SERVICE"
-   curl -fsS --retry 30 --retry-delay 2 --retry-connrefused \
-     http://localhost:8080/health
-   ```
+sudo mv --no-clobber "$DB" "$FAILED_DIR/claude-rpg.failed.db"
+if test "$HAD_WAL" = 1; then
+  sudo mv --no-clobber "$DB-wal" "$FAILED_DIR/claude-rpg.failed.db-wal"
+fi
+if test "$HAD_SHM" = 1; then
+  sudo mv --no-clobber "$DB-shm" "$FAILED_DIR/claude-rpg.failed.db-shm"
+fi
 
-8. **Verify prior operation.** Require active service, DB integrity, retained
-   pre-cutover aggregates, old internal HTTPS host, physical localhost kiosk and
-   Leaderboard, and a `/tv/stream` version event equal to the recorded short
-   `PRIOR_SHA`. The new host may remain as a harmless Caddy compatibility name;
-   the restored prior application is the authority.
-9. **Leave Runtime Raiders disabled.** Keep all companions off and the updater
-   timer disabled. Record the rollback and investigate only with copies of the
-   failed DB, logs, and synthetic/offline fixtures. Any later retry requires a
-   new record, fresh backup, fresh preflight, and new explicit authorization.
+sudo test ! -e "$DB"
+sudo test ! -e "$DB-wal"
+sudo test ! -e "$DB-shm"
+sudo test -f "$FAILED_DIR/claude-rpg.failed.db"
+if test "$HAD_WAL" = 1; then
+  sudo test -f "$FAILED_DIR/claude-rpg.failed.db-wal"
+else
+  sudo test ! -e "$FAILED_DIR/claude-rpg.failed.db-wal"
+fi
+if test "$HAD_SHM" = 1; then
+  sudo test -f "$FAILED_DIR/claude-rpg.failed.db-shm"
+else
+  sudo test ! -e "$FAILED_DIR/claude-rpg.failed.db-shm"
+fi
+```
+
+Restore only after proving the production main file and both sidecars are
+absent. Reapply and verify exact owner/group/mode, then verify integrity as the
+service user:
+
+```sh
+sudo test ! -e "$DB"
+sudo test ! -e "$DB-wal"
+sudo test ! -e "$DB-shm"
+sudo sqlite3 "$DB" ".restore '$DB_BACKUP'"
+sudo chown "$DB_OWNER:$DB_GROUP" "$DB"
+sudo chmod "$DB_MODE" "$DB"
+test "$(stat -c '%U:%G:%a' "$DB")" = "$DB_OWNER:$DB_GROUP:$DB_MODE"
+sudo test ! -e "$DB-wal"
+sudo test ! -e "$DB-shm"
+test "$(sudo -u rluser sqlite3 -readonly "$DB" \
+  'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
+```
+
+Switch the clean checkout and dependencies as `rluser`; both package manifests
+trigger a deterministic development-dependency install:
+
+```sh
+test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
+printf 'rollback target: %s\n' "$PRIOR_SHA"
+sudo -u rluser -H git -C "$REPO" reset --hard "$PRIOR_SHA"
+test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
+  "$PRIOR_SHA"
+if ! sudo -u rluser git --no-optional-locks -C "$REPO" diff --quiet \
+  "$PRIOR_SHA" "$RELEASE_SHA" -- package.json package-lock.json; then
+  sudo -u rluser -H sh -c 'cd "$1" && npm ci --include=dev' sh "$REPO"
+fi
+test -z "$(find "$REPO" -xdev ! -user rluser -print -quit)"
+sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
+```
+
+Restore the prior environment, then reassert every boundary before the one
+permitted rollback start:
+
+```sh
+test "$(sudo sha256sum "$PRIOR_ENV_BACKUP" | awk '{print $1}')" = \
+  "$PRIOR_ENV_SHA256"
+test "$(sudo stat -c '%U:%G:%a' "$PRIOR_ENV_BACKUP")" = root:root:600
+sudo install -o root -g root -m 0600 "$PRIOR_ENV_BACKUP" "$CURRENT_ENV"
+test "$(sudo stat -c '%U:%G:%a' "$CURRENT_ENV")" = root:root:600
+test "$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')" = \
+  "$PRIOR_ENV_SHA256"
+test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
+  "$PRIOR_SHA"
+test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
+test -z "$(find "$REPO" -xdev ! -user rluser -print -quit)"
+sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
+test "$(stat -c '%U:%G:%a' "$DB")" = "$DB_OWNER:$DB_GROUP:$DB_MODE"
+test "$(sudo -u rluser sqlite3 -readonly "$DB" \
+  'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
+test "$(systemctl show "$SERVICE" --property=User --value)" = rluser
+test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
+test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
+  '/etc/claude-rpg.env (ignore_errors=no)'
+GAME_EXEC=$(systemctl show "$SERVICE" --property=ExecStart --value)
+case "$GAME_EXEC" in
+  *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
+  *) false ;;
+esac
+test "$GAME_EXEC" = "$GAME_EXEC_EXPECTED"
+hold_updater
+test "$(systemctl is-active "$SERVICE")" = inactive
+
+sudo systemctl start "$SERVICE"
+curl -fsS --retry 30 --retry-delay 2 --retry-connrefused \
+  http://localhost:8080/health
+test "$(systemctl is-active "$SERVICE")" = active
+```
+
+Verify retained pre-cutover aggregates, old internal HTTPS, physical localhost
+kiosk and Leaderboard, and a `/tv/stream` version equal to the recorded short
+`PRIOR_SHA`. Keep all companions off. Recheck `hold_updater`, record the unique
+failed database directory and rollback result, then `trap - ERR HUP INT TERM`.
+Investigate only with copies of the failed DB, logs, and synthetic/offline
+fixtures. Any retry requires a new record, backup, preflight, and authorization.
 
 ### 7.3 Loss semantics after rollback
 
@@ -706,7 +945,7 @@ handle their local queues.
       stayed disabled and rejected.
 - [ ] Office activation occurred only after separate approval and canary
       acceptance.
-- [ ] Updater was restored only after acceptance, or remained held after
-      abort/rollback.
+- [ ] Updater timer is disabled/inactive and oneshot inactive for the recorded
+      accepted, aborted, or rolled-back outcome.
 - [ ] Final status is accepted, aborted, or rolled back, with loss semantics
       acknowledged.
