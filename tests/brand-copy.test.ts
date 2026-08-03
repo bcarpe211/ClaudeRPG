@@ -185,6 +185,35 @@ describe('Runtime Raiders brand copy', () => {
     expect(result.output).toContain('docs/PI_SETUP.md:4: stale operator instruction: raw pull-restart release');
   });
 
+  it('rejects a raw pull-restart release recipe split across consecutive lines', () => {
+    const root = copyFixture();
+    writeFileSync(join(root, 'docs/PI_SETUP.md'), [
+      '```bash',
+      'git pull --ff-only',
+      'sudo systemctl restart claude-rpg',
+      '```',
+    ].join('\n'));
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('docs/PI_SETUP.md:2: stale operator instruction: raw pull-restart release');
+  });
+
+  it('allows separate explicit retirement and pinned-runbook guidance', () => {
+    const root = copyFixture();
+    writeFileSync(join(root, 'docs/PI_SETUP.md'), [
+      'The old `git pull --ff-only` release shortcut is retired.',
+      'Never pair it with `sudo systemctl restart claude-rpg`.',
+      'Follow docs/RUNTIME_RAIDERS_CUTOVER.md for the separately authorized pinned-SHA procedure.',
+    ].join('\n'));
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe('');
+  });
+
   it('rejects restoring, enabling, or starting the moving-main updater in the cutover plan', () => {
     const root = copyFixture();
     const planDir = join(root, 'docs/superpowers/plans');

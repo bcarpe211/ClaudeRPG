@@ -26,6 +26,11 @@ const scanTargets = [
 const piSetupPath = 'docs/PI_SETUP.md';
 const cutoverPlanPath = 'docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md';
 const operatorGuideTargets = [piSetupPath, cutoverPlanPath];
+const rawPullCommandPattern = /\bgit\s+pull(?:\s+--ff-only)?\b/i;
+const gameRestartCommandPattern = /\b(?:sudo\s+)?systemctl\s+restart\s+claude-rpg(?:\.service)?\b/i;
+const safeReleaseContextPattern = /\b(?:do not|never|retired|runbook|pinned[- ]SHA|separately authorized)\b/i;
+const instructionBoundaryPattern = /^\s*(?:$|#{1,6}\s|```)/;
+const splitRecipeWindowLines = 3;
 const operatorInstructionRules = [
   {
     pattern: /sudo\s+install\b.*\bclaude-rpg-autoupdate\b/i,
@@ -135,6 +140,22 @@ for (const target of operatorGuideTargets) {
         }
       }
     });
+    if (relativeFile === piSetupPath) {
+      lines.forEach((line, index) => {
+        if (!rawPullCommandPattern.test(line) || safeReleaseContextPattern.test(line)) return;
+        const lastIndex = Math.min(lines.length - 1, index + splitRecipeWindowLines);
+        for (let candidateIndex = index + 1; candidateIndex <= lastIndex; candidateIndex += 1) {
+          const candidate = lines[candidateIndex];
+          if (instructionBoundaryPattern.test(candidate)) break;
+          const instructionBlock = lines.slice(index, candidateIndex + 1).join(' ');
+          if (safeReleaseContextPattern.test(instructionBlock)) break;
+          if (gameRestartCommandPattern.test(candidate)) {
+            violations.push(`${relativeFile}:${index + 1}: stale operator instruction: raw pull-restart release`);
+            break;
+          }
+        }
+      });
+    }
   }
 }
 
