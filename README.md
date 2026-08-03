@@ -143,9 +143,10 @@ Open:
 
 ## Raspberry Pi 5 TV kiosk
 
-The existing Pi setup keeps the compatibility hostname `claude-rpg.local`,
-service name `claude-rpg.service`, database path, and operational scripts. Those
-identifiers are deliberately not renamed by the product rebrand. See
+The Pi setup targets the mDNS hostname `raiders.local`. Compatibility identifiers
+intentionally retained for this release are `/home/rluser/ClaudeRPG`,
+`data/claude-rpg.db`, `/etc/claude-rpg.env`, `claude-rpg.service`, and
+`claude-rpg-autoupdate.*`. See
 **[docs/PI_SETUP.md](docs/PI_SETUP.md)** for the established server and Chromium
 kiosk setup on `/tv`.
 
