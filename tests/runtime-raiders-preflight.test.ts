@@ -33,6 +33,7 @@ function fixture() {
   roots.push(root);
   const repo = join(root, 'repo');
   const db = join(repo, 'data', 'claude-rpg.db');
+  const spritesDir = join(repo, 'assets', 'oryx_16-bit_fantasy_1.1', 'Sliced');
   const envFile = join(root, 'candidate.env');
   const policy = join(repo, 'config', 'raid-power-policy-v1.json');
   const caddyConfig = join(root, 'deployed-Caddyfile');
@@ -47,10 +48,12 @@ function fixture() {
   const commandLog = join(root, 'commands.log');
   const pauseState = join(root, 'pause-state');
   const updaterState = join(root, 'updater-state');
+  const gitState = join(root, 'git-state');
 
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(dirname(db), { recursive: true });
   mkdirSync(dirname(policy), { recursive: true });
+  mkdirSync(spritesDir, { recursive: true });
   mkdirSync(join(repo, 'deploy'), { recursive: true });
   mkdirSync(join(repo, 'src', 'domain'), { recursive: true });
   mkdirSync(fakes);
@@ -69,11 +72,15 @@ function fixture() {
   writeFileSync(commandLog, '');
   writeFileSync(pauseState, '0\n');
   writeFileSync(updaterState, '0\n');
+  mkdirSync(gitState);
 
   writeFileSync(envFile, [
+    'PORT=8080',
+    'ADMIN_USERNAME=admin',
     'ADMIN_PASSWORD=top-secret-password',
     'SESSION_SECRET=top-secret-session',
     `DB_PATH=${db}`,
+    `SPRITES_DIR=${spritesDir}`,
     'PUBLIC_URL=https://raiders.redlattice.com',
     'SCORING_MODE=runtime-raiders',
     `RUN_SCORING_CUTOVER_AT=${cutoverAt}`,
@@ -101,16 +108,33 @@ esac`);
 shift
 [ "\${1:-}" = "-C" ] || exit 73
 shift 2
+next_count() {
+  count_file="$RUNTIME_RAIDERS_TEST_GIT_STATE/$1"
+  count=0
+  if [ -f "$count_file" ]; then IFS= read -r count < "$count_file"; fi
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "$count_file"
+}
 case "$*" in
   'rev-parse --show-toplevel') printf '%s\\n' "$RUNTIME_RAIDERS_TEST_REPO" ;;
-  'rev-parse HEAD') printf '%s\\n' "\${FAKE_LOCAL_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;
-  'status --porcelain') [ "\${FAKE_GIT_DIRTY:-0}" = 0 ] || printf '%s\\n' ' M local-change' ;;
-  'rev-parse --verify origin/main^{commit}') printf '%s\\n' "\${FAKE_TARGET_SHA:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}" ;;
+  'rev-parse HEAD')
+    next_count head
+    if [ "$count" -gt 1 ]; then printf '%s\\n' "\${FAKE_FINAL_LOCAL_SHA:-\${FAKE_LOCAL_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}"; else printf '%s\\n' "\${FAKE_LOCAL_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"; fi ;;
+  'status --porcelain')
+    next_count status
+    if [ "$count" -gt 1 ]; then dirty="\${FAKE_FINAL_GIT_DIRTY:-\${FAKE_GIT_DIRTY:-0}}"; else dirty="\${FAKE_GIT_DIRTY:-0}"; fi
+    [ "$dirty" = 0 ] || printf '%s\\n' ' M local-change' ;;
+  'rev-parse --verify origin/main^{commit}')
+    next_count target
+    if [ "$count" -gt 1 ]; then printf '%s\\n' "\${FAKE_FINAL_TARGET_SHA:-\${FAKE_TARGET_SHA:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}"; else printf '%s\\n' "\${FAKE_TARGET_SHA:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"; fi ;;
   show\\ *:deploy/Caddyfile) /bin/cat "$RUNTIME_RAIDERS_TEST_APPROVED_CADDY" ;;
   show\\ *:config/raid-power-policy-v1.json) /bin/cat "$RUNTIME_RAIDERS_TEST_APPROVED_POLICY" ;;
   show\\ *:src/domain/raid-power-policy.ts) /bin/cat "$RUNTIME_RAIDERS_TEST_APPROVED_POLICY_LOADER" ;;
   ls-tree\\ -r\\ -l\\ *) printf '%s\\n' "100644 blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \${FAKE_TARGET_TREE_BYTES:-102400}\ttarget-file" ;;
-  merge-base\\ --is-ancestor\\ *) [ "\${FAKE_GIT_DIVERGED:-0}" = 0 ] ;;
+  merge-base\\ --is-ancestor\\ *)
+    next_count ancestry
+    if [ "$count" -gt 1 ]; then diverged="\${FAKE_FINAL_GIT_DIVERGED:-\${FAKE_GIT_DIVERGED:-0}}"; else diverged="\${FAKE_GIT_DIVERGED:-0}"; fi
+    [ "$diverged" = 0 ] ;;
   *) exit 74 ;;
 esac`);
 
@@ -159,11 +183,24 @@ case "$*" in
     if [ "$updater_active" = 1 ]; then printf '%s\\n' active; else printf '%s\\n' inactive; exit 3; fi ;;
   'is-active avahi-daemon.service')
     if [ "\${FAKE_AVAHI_ACTIVE:-1}" = 1 ]; then printf '%s\\n' active; else printf '%s\\n' inactive; exit 3; fi ;;
+  'is-active caddy.service')
+    if [ "\${FAKE_CADDY_ACTIVE:-1}" = 1 ]; then printf '%s\\n' active; else printf '%s\\n' inactive; exit 3; fi ;;
+  'show caddy.service --property=ExecStart --value')
+    printf '%s\\n' "{ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy run --config \${FAKE_CADDY_LOADED_CONFIG:-$RUNTIME_RAIDERS_TEST_CADDY_CONFIG} ; ignore_errors=no ; }" ;;
+  'show caddy.service --property=EnvironmentFiles --value')
+    printf '%s\\n' "\${FAKE_CADDY_LOADED_ENV:-$RUNTIME_RAIDERS_TEST_CADDY_ENV} (ignore_errors=no)" ;;
   'cat caddy.service')
     printf '%s\\n' '[Service]' \
       "EnvironmentFile=\${FAKE_CADDY_UNIT_ENV:-$RUNTIME_RAIDERS_TEST_CADDY_ENV}" \
       "ExecStart=/usr/bin/caddy run --config \${FAKE_CADDY_UNIT_CONFIG:-$RUNTIME_RAIDERS_TEST_CADDY_CONFIG}" ;;
   *) exit 77 ;;
+esac`);
+  executable(join(fakes, 'stat'), `
+[ "\${1:-}" = '-c' ] && [ "\${2:-}" = '%u %a' ] && [ "\${3:-}" = '--' ] || exit 79
+case "\${4:-}" in
+  "$RUNTIME_RAIDERS_TEST_ENV") printf '%s %s\\n' "\${FAKE_GAME_ENV_UID:-0}" "\${FAKE_GAME_ENV_MODE:-600}" ;;
+  "$RUNTIME_RAIDERS_TEST_CADDY_ENV") printf '%s %s\\n' "\${FAKE_CADDY_ENV_UID:-0}" "\${FAKE_CADDY_ENV_MODE:-600}" ;;
+  *) exit 80 ;;
 esac`);
   executable(join(fakes, 'du'), 'printf \'%s\\t%s\\n\' "${FAKE_NODE_MODULES_KB:-100}" "$1"');
   executable(join(fakes, 'df'), `printf '%s\\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' 'fake 4000000 1 '"\${FAKE_FREE_KB:-2000000}"' 1% /'`);
@@ -172,7 +209,7 @@ esac`);
     executable(join(fakes, command), 'exit 91');
   }
 
-  return { root, repo, db, envFile, policy, caddyConfig, approvedCaddy, approvedPolicy, approvedPolicyLoader, caddyEnv, releaseSha, priorSha, cutoverAt, fakes, commandLog, pauseState, updaterState };
+  return { root, repo, db, spritesDir, envFile, policy, caddyConfig, approvedCaddy, approvedPolicy, approvedPolicyLoader, caddyEnv, releaseSha, priorSha, cutoverAt, fakes, commandLog, pauseState, updaterState, gitState };
 }
 
 function git(repo: string, args: string[]): string {
@@ -185,8 +222,8 @@ function realGitFixture(largeTargetBytes = 0): Fixture {
   const f = fixture();
   const canonicalRoot = realpathSync(f.root);
   for (const key of [
-    'repo', 'db', 'envFile', 'policy', 'caddyConfig', 'approvedCaddy', 'approvedPolicy',
-    'approvedPolicyLoader', 'caddyEnv', 'fakes', 'commandLog', 'pauseState', 'updaterState',
+    'repo', 'db', 'spritesDir', 'envFile', 'policy', 'caddyConfig', 'approvedCaddy', 'approvedPolicy',
+    'approvedPolicyLoader', 'caddyEnv', 'fakes', 'commandLog', 'pauseState', 'updaterState', 'gitState',
   ] as const) {
     f[key] = f[key].replace(f.root, canonicalRoot);
   }
@@ -213,9 +250,11 @@ function realGitFixture(largeTargetBytes = 0): Fixture {
   git(f.repo, ['checkout', '-q', '--detach', f.priorSha]);
 
   mkdirSync(dirname(f.db), { recursive: true });
+  mkdirSync(f.spritesDir, { recursive: true });
   writeFileSync(f.db, 'production-shaped-database');
   symlinkSync(resolve('node_modules'), join(f.repo, 'node_modules'), 'dir');
   replaceAssignment(f.envFile, 'DB_PATH', f.db);
+  replaceAssignment(f.envFile, 'SPRITES_DIR', f.spritesDir);
   replaceAssignment(f.envFile, 'RAID_POWER_POLICY_PATH', join(f.repo, 'config/raid-power-policy-v1.json'));
   writeFileSync(f.caddyConfig, 'raiders.redlattice.com, clauderpg.redlattice.com {}\n');
   rmSync(join(f.fakes, 'git'));
@@ -242,6 +281,8 @@ function run(testFixture: Fixture, overrides: NodeJS.ProcessEnv = {}) {
       RUNTIME_RAIDERS_TEST_REPO: testFixture.repo,
       RUNTIME_RAIDERS_TEST_PAUSE_STATE: testFixture.pauseState,
       RUNTIME_RAIDERS_TEST_UPDATER_STATE: testFixture.updaterState,
+      RUNTIME_RAIDERS_TEST_GIT_STATE: testFixture.gitState,
+      RUNTIME_RAIDERS_TEST_ENV: testFixture.envFile,
       RUNTIME_RAIDERS_TEST_CADDY_CONFIG: testFixture.caddyConfig,
       RUNTIME_RAIDERS_TEST_APPROVED_CADDY: testFixture.approvedCaddy,
       RUNTIME_RAIDERS_TEST_APPROVED_POLICY: testFixture.approvedPolicy,
@@ -264,11 +305,52 @@ function replaceAssignment(path: string, key: string, value?: string): void {
   writeFileSync(path, next.join('\n'));
 }
 
+function replaceAssignmentLine(path: string, key: string, line: string): void {
+  const lines = readFileSync(path, 'utf8').split('\n');
+  const index = lines.findIndex((candidate) => candidate.startsWith(`${key}=`));
+  if (index < 0) throw new Error(`missing fixture assignment: ${key}`);
+  lines[index] = line;
+  writeFileSync(path, lines.join('\n'));
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('Runtime Raiders Pi preflight', () => {
+  it('samples the complete updater hold before every other external readiness observation', () => {
+    const result = run(fixture());
+    const commands = result.commands.trim().split('\n');
+    expect(result.status, result.output).toBe(0);
+    expect(commands.slice(0, 3)).toEqual([
+      'systemctl is-enabled claude-rpg-autoupdate.timer',
+      'systemctl is-active claude-rpg-autoupdate.timer',
+      'systemctl is-active claude-rpg-autoupdate.service',
+    ]);
+  });
+
+  it('stops before mutable readiness observations when the initial updater hold fails', () => {
+    const result = run(fixture(), { FAKE_UPDATER_SERVICE_ACTIVE: '1' });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL systemd units');
+    expect(result.commands).not.toContain('git ');
+    expect(result.commands).not.toContain('sqlite3 ');
+    expect(result.commands).not.toContain('caddy ');
+    expect(result.commands).not.toContain('curl ');
+  });
+
+  it.each([
+    ['HEAD changes', { FAKE_FINAL_LOCAL_SHA: 'c'.repeat(40) }],
+    ['worktree becomes dirty', { FAKE_FINAL_GIT_DIRTY: '1' }],
+    ['origin/main changes', { FAKE_FINAL_TARGET_SHA: 'c'.repeat(40) }],
+    ['ancestry changes', { FAKE_FINAL_GIT_DIVERGED: '1' }],
+  ])('rejects a repository whose %s before the final paused-state read', (_name, environment) => {
+    const result = run(fixture(), environment);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL final Git readiness');
+    expect(result.commands.trim().split('\n').at(-1)).toContain('SELECT paused FROM game_state');
+  });
+
   it('requires local HEAD to equal the explicitly recorded prior SHA', () => {
     const f = fixture();
     f.priorSha = 'c'.repeat(40);
@@ -391,20 +473,55 @@ describe('Runtime Raiders Pi preflight', () => {
     expect(result.output).not.toContain('second-secret');
   });
 
-  it('rejects a candidate game env with group or other permissions', () => {
+  it.each([
+    ['quoted value', 'ADMIN_PASSWORD="top-secret-password"'],
+    ['escaped value', 'ADMIN_PASSWORD=top-secret\\-password'],
+    ['leading whitespace', ' ADMIN_PASSWORD=top-secret-password'],
+    ['trailing whitespace', 'ADMIN_PASSWORD=top-secret-password '],
+  ])('rejects unsupported simple-assignment syntax with %s', (_name, assignment) => {
     const f = fixture();
-    chmodSync(f.envFile, 0o644);
+    replaceAssignmentLine(f.envFile, 'ADMIN_PASSWORD', assignment);
     const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+    expect(result.output).not.toContain('top-secret-password');
+  });
+
+  it('rejects a weak candidate game secret', () => {
+    const f = fixture();
+    replaceAssignment(f.envFile, 'ADMIN_PASSWORD', 'password');
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+    expect(result.output).not.toContain('password');
+  });
+
+  it('requires the candidate game environment to be root-owned', () => {
+    const result = run(fixture(), { FAKE_GAME_ENV_UID: '1000' });
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('FAIL paths');
   });
 
-  it('rejects Caddy paths that differ from the active systemd unit definition', () => {
+  it('rejects a candidate game env with group or other permissions', () => {
+    const f = fixture();
+    chmodSync(f.envFile, 0o644);
+    const result = run(f, { FAKE_GAME_ENV_MODE: '644' });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL paths');
+  });
+
+  it('rejects Caddy paths that differ from the manager-loaded service definition', () => {
     const f = fixture();
     const result = run(f, {
-      FAKE_CADDY_UNIT_CONFIG: join(f.root, 'other-Caddyfile'),
-      FAKE_CADDY_UNIT_ENV: join(f.root, 'other-caddy.env'),
+      FAKE_CADDY_LOADED_CONFIG: join(f.root, 'other-Caddyfile'),
+      FAKE_CADDY_LOADED_ENV: join(f.root, 'other-caddy.env'),
     });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Caddy configuration');
+  });
+
+  it('requires the manager-loaded Caddy service to be active', () => {
+    const result = run(fixture(), { FAKE_CADDY_ACTIVE: '0' });
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('FAIL Caddy configuration');
   });
@@ -421,6 +538,30 @@ describe('Runtime Raiders Pi preflight', () => {
     expect(result.output).not.toContain(token || 'top-secret-caddy-token');
   });
 
+  it('rejects a quoted effective Caddy placeholder', () => {
+    const f = fixture();
+    writeFileSync(f.caddyEnv, 'CLOUDFLARE_API_TOKEN="replace-with-your-cloudflare-token"\n');
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Caddy configuration');
+    expect(result.output).not.toContain('replace-with-your-cloudflare-token');
+  });
+
+  it('rejects a weak Caddy token', () => {
+    const f = fixture();
+    writeFileSync(f.caddyEnv, 'CLOUDFLARE_API_TOKEN=tiny\n');
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Caddy configuration');
+    expect(result.output).not.toContain('tiny');
+  });
+
+  it('requires the Caddy environment to be root-owned', () => {
+    const result = run(fixture(), { FAKE_CADDY_ENV_UID: '1000' });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL paths');
+  });
+
   it('rejects duplicate Cloudflare token assignments without exposing either token', () => {
     const f = fixture();
     writeFileSync(f.caddyEnv, 'CLOUDFLARE_API_TOKEN=first-secret\nCLOUDFLARE_API_TOKEN=second-secret\n');
@@ -434,7 +575,7 @@ describe('Runtime Raiders Pi preflight', () => {
   it('rejects a Caddy environment with group or other permissions', () => {
     const f = fixture();
     chmodSync(f.caddyEnv, 0o640);
-    const result = run(f);
+    const result = run(f, { FAKE_CADDY_ENV_MODE: '640' });
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('FAIL paths');
   });
@@ -463,6 +604,49 @@ describe('Runtime Raiders Pi preflight', () => {
     const f = fixture();
     f.cutoverAt = '1800000000000';
     replaceAssignment(f.envFile, 'RUN_SCORING_CUTOVER_AT', f.cutoverAt);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['nonnumeric', 'garbage'],
+    ['wrong compatibility port', '8081'],
+  ])('rejects a %s startup port', (_name, value) => {
+    const f = fixture();
+    replaceAssignment(f.envFile, 'PORT', value);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+  });
+
+  it.each([
+    ['missing username', undefined],
+    ['empty username', ''],
+    ['unsafe username', 'admin user'],
+  ])('rejects a candidate game environment with %s', (_name, value) => {
+    const f = fixture();
+    replaceAssignment(f.envFile, 'ADMIN_USERNAME', value);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+  });
+
+  it.each([
+    ['missing sprite path', undefined],
+    ['wrong sprite path', 'wrong'],
+  ])('rejects a candidate game environment with %s', (_name, value) => {
+    const f = fixture();
+    replaceAssignment(f.envFile, 'SPRITES_DIR', value === 'wrong' ? join(f.repo, 'assets', 'other') : value);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+  });
+
+  it('requires the intended sprite compatibility directory to exist and be readable', () => {
+    const f = fixture();
+    rmSync(f.spritesDir, { recursive: true });
     const result = run(f);
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('FAIL Runtime Raiders environment');

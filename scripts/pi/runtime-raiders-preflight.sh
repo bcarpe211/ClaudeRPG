@@ -86,15 +86,18 @@ file_value() {
   awk -v key="$key" '
     /^[[:space:]]*#/ { next }
     {
-      line = $0
-      if (line ~ "^[[:space:]]*" key "[[:space:]]*=") {
+      if ($0 ~ "^[[:space:]]*" key "[[:space:]]*=") {
         count++
-        sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", line)
+        prefix = key "="
+        if (index($0, prefix) != 1) invalid = 1
+        line = substr($0, length(prefix) + 1)
+        if (line ~ /[[:space:]]/ || index(line, "\"") ||
+          index(line, sprintf("%c", 39)) || index(line, "\\")) invalid = 1
         value = line
       }
     }
     END {
-      if (count == 1) {
+      if (count == 1 && !invalid) {
         print value
         exit 0
       }
@@ -107,17 +110,16 @@ env_value() {
   file_value "$ENV_FILE" "$1"
 }
 
-protected_regular() {
-  node -e '
-    const { lstatSync } = require("node:fs");
-    const status = lstatSync(process.argv[1]);
-    process.exit(status.isFile() && (status.mode & 0o077) === 0 ? 0 : 1);
-  ' "$1" >/dev/null 2>&1
+protected_root_env() {
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ] || return 1
+  metadata=$(stat -c '%u %a' -- "$1" 2>/dev/null) || return 1
+  [ "$metadata" = '0 600' ]
 }
 
 secret_valid() {
+  [ "${#1}" -ge 16 ] || return 1
   case "$1" in
-    ''|'change-me-please'|'change-me-too'|'replace-with-your-cloudflare-token'|'changeme'|'placeholder') return 1 ;;
+    'change-me-please'|'change-me-too'|'replace-with-your-cloudflare-token'|'changeme'|'placeholder'|'password'|'secret') return 1 ;;
     *) return 0 ;;
   esac
 }
@@ -141,6 +143,18 @@ valid_ipv4() {
   done
 }
 
+# The updater hold is intentionally the first external readiness observation.
+# No mutable release state is trusted until all three samples are quiescent.
+timer_enabled_state=$(systemctl is-enabled claude-rpg-autoupdate.timer 2>/dev/null) || true
+timer_active_state=$(systemctl is-active claude-rpg-autoupdate.timer 2>/dev/null) || true
+updater_service_state=$(systemctl is-active claude-rpg-autoupdate.service 2>/dev/null) || true
+if [ "$timer_enabled_state" != 'disabled' ] ||
+  [ "$timer_active_state" != 'inactive' ] ||
+  [ "$updater_service_state" != 'inactive' ]; then
+  fail 'systemd units'
+  exit 1
+fi
+
 paths_ok=1
 repo_actual=''
 if [ -d "$REPO" ]; then
@@ -152,9 +166,9 @@ fi
 [ -e "$REPO/.git" ] || paths_ok=0
 [ -f "$DB" ] && [ -r "$DB" ] || paths_ok=0
 [ "$DB" = "$REPO/data/claude-rpg.db" ] || paths_ok=0
-[ -r "$ENV_FILE" ] && protected_regular "$ENV_FILE" || paths_ok=0
+[ -r "$ENV_FILE" ] && protected_root_env "$ENV_FILE" || paths_ok=0
 [ -f "$CADDY_CONFIG" ] && [ ! -L "$CADDY_CONFIG" ] && [ -r "$CADDY_CONFIG" ] || paths_ok=0
-[ -r "$CADDY_ENV" ] && protected_regular "$CADDY_ENV" || paths_ok=0
+[ -r "$CADDY_ENV" ] && protected_root_env "$CADDY_ENV" || paths_ok=0
 if [ "$paths_ok" -eq 1 ]; then pass 'paths'; else fail 'paths'; fi
 
 integrity=''
@@ -169,34 +183,31 @@ if [ -f "$DB" ] && [ -r "$DB" ]; then
 fi
 if [ "$paused" = '1' ]; then pass 'game paused'; else fail 'game paused'; fi
 
+git_readiness() {
+  local git_root git_status target_commit local_commit
+  [ -d "$REPO" ] && [ -e "$REPO/.git" ] || return 1
+  [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$PRIOR_SHA" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ "$PRIOR_SHA" != "$RELEASE_SHA" ] || return 1
+  git_root=$(git --no-optional-locks -C "$REPO" rev-parse --show-toplevel 2>/dev/null) || return 1
+  local_commit=$(git --no-optional-locks -C "$REPO" rev-parse HEAD 2>/dev/null) || return 1
+  git_status=$(git --no-optional-locks -C "$REPO" status --porcelain 2>/dev/null) || return 1
+  target_commit=$(git --no-optional-locks -C "$REPO" rev-parse --verify 'origin/main^{commit}' 2>/dev/null) || return 1
+  [ "$git_root" = "$REPO" ] || return 1
+  [ -z "$git_status" ] || return 1
+  [ "$local_commit" = "$PRIOR_SHA" ] || return 1
+  [ "$target_commit" = "$RELEASE_SHA" ] || return 1
+  git --no-optional-locks -C "$REPO" merge-base --is-ancestor "$PRIOR_SHA" "$RELEASE_SHA" >/dev/null 2>&1
+}
+
 git_ok=1
-git_root=''
-git_status=''
-target_commit=''
-local_commit=''
-if [ -d "$REPO" ] && [ -e "$REPO/.git" ]; then
-  git_root=$(git --no-optional-locks -C "$REPO" rev-parse --show-toplevel 2>/dev/null) || git_ok=0
-  local_commit=$(git --no-optional-locks -C "$REPO" rev-parse HEAD 2>/dev/null) || git_ok=0
-  git_status=$(git --no-optional-locks -C "$REPO" status --porcelain 2>/dev/null) || git_ok=0
-  target_commit=$(git --no-optional-locks -C "$REPO" rev-parse --verify 'origin/main^{commit}' 2>/dev/null) || git_ok=0
-  git --no-optional-locks -C "$REPO" merge-base --is-ancestor "$PRIOR_SHA" "$RELEASE_SHA" >/dev/null 2>&1 || git_ok=0
-else
-  git_ok=0
-fi
-[ "$git_root" = "$REPO" ] || git_ok=0
-[ -z "$git_status" ] || git_ok=0
-case "$target_commit" in
-  *[!0-9a-fA-F]*|'') git_ok=0 ;;
-esac
-[[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || git_ok=0
-[[ "$PRIOR_SHA" =~ ^[0-9a-f]{40}$ ]] || git_ok=0
-[ "$PRIOR_SHA" != "$RELEASE_SHA" ] || git_ok=0
-[ "$local_commit" = "$PRIOR_SHA" ] || git_ok=0
-[ "$target_commit" = "$RELEASE_SHA" ] || git_ok=0
+git_readiness || git_ok=0
 if [ "$git_ok" -eq 1 ]; then pass 'Git readiness'; else fail 'Git readiness'; fi
 
 environment_ok=1
 configured_db=''
+port=''
+admin_username=''
 public_url=''
 scoring_mode=''
 cutover=''
@@ -204,8 +215,12 @@ policy_path=''
 enabled_surfaces=''
 admin_password=''
 session_secret=''
+sprites_dir=''
 if [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ]; then
+  port=$(env_value PORT 2>/dev/null) || environment_ok=0
+  admin_username=$(env_value ADMIN_USERNAME 2>/dev/null) || environment_ok=0
   configured_db=$(env_value DB_PATH 2>/dev/null) || environment_ok=0
+  sprites_dir=$(env_value SPRITES_DIR 2>/dev/null) || environment_ok=0
   public_url=$(env_value PUBLIC_URL 2>/dev/null) || environment_ok=0
   scoring_mode=$(env_value SCORING_MODE 2>/dev/null) || environment_ok=0
   cutover=$(env_value RUN_SCORING_CUTOVER_AT 2>/dev/null) || environment_ok=0
@@ -216,7 +231,13 @@ if [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ]; then
 else
   environment_ok=0
 fi
+[ "$port" = '8080' ] || environment_ok=0
+case "$admin_username" in
+  ''|*[!A-Za-z0-9._-]*) environment_ok=0 ;;
+esac
 [ "$configured_db" = "$DB" ] || environment_ok=0
+[ "$sprites_dir" = "$REPO/assets/oryx_16-bit_fantasy_1.1/Sliced" ] || environment_ok=0
+[ -d "$sprites_dir" ] && [ -r "$sprites_dir" ] && [ -x "$sprites_dir" ] || environment_ok=0
 [ "$public_url" = 'https://raiders.redlattice.com' ] || environment_ok=0
 [ "$scoring_mode" = 'runtime-raiders' ] || environment_ok=0
 [[ "$cutover" =~ ^[0-9]{13}$ ]] || environment_ok=0
@@ -269,28 +290,31 @@ fi
 if [ "$environment_ok" -eq 1 ]; then pass 'Runtime Raiders environment'; else fail 'Runtime Raiders environment'; fi
 
 caddy_ok=1
-caddy_unit=$(systemctl cat caddy.service 2>/dev/null) || caddy_ok=0
-caddy_unit_env=$(printf '%s\n' "$caddy_unit" | awk '
-  /^[[:space:]]*EnvironmentFile=/ {
-    count++
-    line = $0
-    sub("^[[:space:]]*EnvironmentFile=", "", line)
-    sub("^-", "", line)
-    value = line
-  }
+caddy_state=$(systemctl is-active caddy.service 2>/dev/null) || true
+caddy_exec=$(systemctl show caddy.service --property=ExecStart --value 2>/dev/null) || caddy_ok=0
+caddy_environment_files=$(systemctl show caddy.service --property=EnvironmentFiles --value 2>/dev/null) || caddy_ok=0
+[ "$caddy_state" = 'active' ] || caddy_ok=0
+caddy_unit_env=$(printf '%s\n' "$caddy_environment_files" | awk '
+  NF == 2 && $2 == "(ignore_errors=no)" { count++; value = $1 }
   END { if (count == 1 && value != "") print value; else exit 1 }
 ') || caddy_ok=0
-caddy_unit_config=$(printf '%s\n' "$caddy_unit" | awk '
-  /^[[:space:]]*ExecStart=/ {
-    lines++
-    for (field_index = 1; field_index <= NF; field_index++) {
-      if ($field_index == "--config" && field_index < NF) {
+caddy_unit_config=$(printf '%s\n' "$caddy_exec" | awk '
+  {
+    copy = $0
+    argv_count = gsub(/argv\[\]=/, "", copy)
+    if (argv_count != 1) next
+    line = $0
+    sub(/^.*argv\[\]=/, "", line)
+    sub(/[[:space:]]*;.*$/, "", line)
+    fields = split(line, words, /[[:space:]]+/)
+    for (field_index = 1; field_index <= fields; field_index++) {
+      if (words[field_index] == "--config" && field_index < fields) {
         configs++
-        value = $(field_index + 1)
+        value = words[field_index + 1]
       }
     }
   }
-  END { if (lines == 1 && configs == 1 && value != "") print value; else exit 1 }
+  END { if (NR == 1 && configs == 1 && value != "") print value; else exit 1 }
 ') || caddy_ok=0
 [ "$caddy_unit_env" = "$CADDY_ENV" ] || caddy_ok=0
 [ "$caddy_unit_config" = "$CADDY_CONFIG" ] || caddy_ok=0
@@ -347,9 +371,6 @@ fi
 
 units_ok=1
 server_state=$(systemctl is-active claude-rpg.service 2>/dev/null) || true
-timer_enabled_state=$(systemctl is-enabled claude-rpg-autoupdate.timer 2>/dev/null) || true
-timer_active_state=$(systemctl is-active claude-rpg-autoupdate.timer 2>/dev/null) || true
-updater_service_state=$(systemctl is-active claude-rpg-autoupdate.service 2>/dev/null) || true
 avahi_state=$(systemctl is-active avahi-daemon.service 2>/dev/null) || true
 [ "$server_state" = 'active' ] || units_ok=0
 [ "$avahi_state" = 'active' ] || units_ok=0
@@ -418,8 +439,12 @@ else
   fail 'final updater hold'
 fi
 
+final_git_ok=1
+git_readiness || final_git_ok=0
+if [ "$final_git_ok" -eq 1 ]; then pass 'final Git readiness'; else fail 'final Git readiness'; fi
+
 # This is intentionally the final external operation. A ready result is valid
-# only for the pause state observed after every slower readiness check.
+# only for the pause state observed after the final updater and Git checks.
 final_paused=''
 if [ -f "$DB" ] && [ -r "$DB" ]; then
   final_paused=$(sqlite3 -readonly "$DB" 'PRAGMA query_only=ON; SELECT paused FROM game_state WHERE id=1;' 2>/dev/null) || final_paused=''
