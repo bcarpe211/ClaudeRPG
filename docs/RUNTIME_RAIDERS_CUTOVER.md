@@ -60,7 +60,7 @@ certificate material, or environment contents in this document or a commit.
 | Retained-query and pre-cutover aggregate paths | `________________ / ________________` |
 | Cutover ID and root-only backup directory | `________________ / ________________` |
 | Root-only rollback record and detached seal paths | `________________ / ________________` |
-| SHA-256 written in the detached rollback-record seal | `________________` |
+| Independently copied expected rollback-record SHA-256 (`EXPECTED_ROLLBACK_RECORD_SHA256`) | `________________` |
 | Candidate environment path and SHA-256 | `________________` |
 | Manager-loaded Caddy config and env paths | `________________ / ________________` |
 | Manager-loaded game `User` / `WorkingDirectory` / `EnvironmentFiles` / `ExecStart` | `________________` |
@@ -86,7 +86,7 @@ not abbreviate or reconstruct any value during an incident.
 | Backup checksums | `DB_BACKUP_SHA256`, `PRIOR_ENV_SHA256` |
 | Database metadata | `DB_OWNER`, `DB_GROUP`, `DB_MODE` |
 | Unit contract | `GAME_EXEC_EXPECTED` |
-| Record identity | `ROLLBACK_RECORD`, `ROLLBACK_RECORD_SEAL` |
+| Record identity | `ROLLBACK_RECORD`, `ROLLBACK_RECORD_SEAL`, `ROLLBACK_GUARDS` |
 
 Use these compatibility paths and names throughout:
 
@@ -454,6 +454,7 @@ RETAINED_SQL=$BACKUP_DIR/retained-check.sql
 RETAINED_BEFORE=$BACKUP_DIR/retained-before.tsv
 ROLLBACK_RECORD=$BACKUP_DIR/rollback-record.sh
 ROLLBACK_RECORD_SEAL=$BACKUP_DIR/rollback-record.sha256
+ROLLBACK_GUARDS=$BACKUP_DIR/runtime-raiders-cutover-guards.sh
 DB_OWNER="$(stat -c '%U' "$DB")"
 DB_GROUP="$(stat -c '%G' "$DB")"
 DB_MODE="$(stat -c '%a' "$DB")"
@@ -525,6 +526,9 @@ sudo sqlite3 -readonly -separator $'\t' "$DB_BACKUP" \
 sudo install -o root -g root -m 0600 /tmp/retained-before.tsv "$RETAINED_BEFORE"
 sudo rm /tmp/retained-before.tsv
 sudo sha256sum "$RETAINED_BEFORE"
+sudo install -o root -g root -m 0600 "$CUTOVER_GUARDS" "$ROLLBACK_GUARDS"
+test "$(sudo stat -c '%U:%G:%a' "$ROLLBACK_GUARDS")" = root:root:600
+sudo bash -n "$ROLLBACK_GUARDS"
 
 write_rollback_field() {
   printf '%s=%q\n' "$1" "${!1}"
@@ -535,7 +539,7 @@ ROLLBACK_FIELDS=(
   BACKUP_DIR DB_BACKUP DB_BACKUP_SHA256
   PRIOR_ENV_BACKUP PRIOR_ENV_SHA256 RETAINED_SQL RETAINED_BEFORE
   DB_OWNER DB_GROUP DB_MODE GAME_EXEC_EXPECTED
-  ROLLBACK_RECORD ROLLBACK_RECORD_SEAL
+  ROLLBACK_RECORD ROLLBACK_RECORD_SEAL ROLLBACK_GUARDS
 )
 for field in "${ROLLBACK_FIELDS[@]}"; do
   test -n "${!field}"
@@ -564,7 +568,9 @@ assert_updater_held
 ```
 
 Copy the literal `ROLLBACK_RECORD`, `ROLLBACK_RECORD_SEAL`, and
-`ROLLBACK_RECORD_SHA256` values to the restricted operator record. The detached
+`ROLLBACK_RECORD_SHA256` values to the restricted operator record. During
+rollback, enter that independently copied checksum as
+`EXPECTED_ROLLBACK_RECORD_SHA256`. The detached
 seal avoids the impossible circular requirement for a file to contain its own
 hash. Do not stop the service unless the record and seal are complete,
 root-owned mode `0600`, and the seal verifies. If any query, backup, record, or
@@ -822,15 +828,16 @@ mismatch; non-idempotent outbox replay; or any unknown acceptance result.
 Do not attempt a destructive reverse migration. Use the recorded verified
 backup and prior SHA. First turn collection off on every enabled canary and
 office Mac and verify `raiders status` reports off. Then open a clean root Bash
-shell with `sudo -i`. Set only the two literal paths copied to the restricted
-operator record before cutover; do not restore, derive, or type any other
-rollback variable. Authenticate and validate the immutable record before any
-rollback mutation:
+shell with `sudo -i`. Set only the two literal paths and expected checksum
+copied to the restricted operator record before cutover; do not restore,
+derive, or type any other rollback variable. Authenticate and validate the
+immutable record before any rollback mutation:
 
 ```sh
 set -Eeuo pipefail
 ROLLBACK_RECORD=/var/backups/runtime-raiders/REPLACE_WITH_RECORDED_ID/rollback-record.sh
 ROLLBACK_RECORD_SEAL=/var/backups/runtime-raiders/REPLACE_WITH_RECORDED_ID/rollback-record.sha256
+EXPECTED_ROLLBACK_RECORD_SHA256=REPLACE_WITH_INDEPENDENTLY_RECORDED_64_LOWERCASE_HEX
 
 case "$ROLLBACK_RECORD" in
   /var/backups/runtime-raiders/*/rollback-record.sh) ;;
@@ -844,15 +851,20 @@ test ! -L "$ROLLBACK_RECORD_SEAL"
 test "$(stat -c '%U:%G:%a' "$ROLLBACK_RECORD")" = root:root:600
 test "$(stat -c '%U:%G:%a' "$ROLLBACK_RECORD_SEAL")" = root:root:600
 
-mapfile -t RECORD_SEAL_LINES <"$ROLLBACK_RECORD_SEAL"
-test "${#RECORD_SEAL_LINES[@]}" = 1
-SEALED_RECORD_SHA256="${RECORD_SEAL_LINES[0]}"
-[[ "$SEALED_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]
-ACTUAL_RECORD_SHA256="$(sha256sum "$ROLLBACK_RECORD" | awk '{print $1}')"
-test "$ACTUAL_RECORD_SHA256" = "$SEALED_RECORD_SHA256"
+BOOTSTRAP_ROLLBACK_GUARDS="${ROLLBACK_RECORD%/*}/runtime-raiders-cutover-guards.sh"
+test -f "$BOOTSTRAP_ROLLBACK_GUARDS"
+test ! -L "$BOOTSTRAP_ROLLBACK_GUARDS"
+test "$(stat -c '%U:%G:%a' "$BOOTSTRAP_ROLLBACK_GUARDS")" = root:root:600
+bash -n "$BOOTSTRAP_ROLLBACK_GUARDS"
+# shellcheck source=/dev/null
+source "$BOOTSTRAP_ROLLBACK_GUARDS"
+rr_authenticate_rollback_record \
+  "$ROLLBACK_RECORD" "$ROLLBACK_RECORD_SEAL" \
+  "$EXPECTED_ROLLBACK_RECORD_SHA256"
 
 BOOTSTRAP_ROLLBACK_RECORD=$ROLLBACK_RECORD
 BOOTSTRAP_ROLLBACK_RECORD_SEAL=$ROLLBACK_RECORD_SEAL
+BOOTSTRAP_EXPECTED_ROLLBACK_RECORD_SHA256=$EXPECTED_ROLLBACK_RECORD_SHA256
 # shellcheck source=/dev/null
 source "$ROLLBACK_RECORD"
 
@@ -862,7 +874,7 @@ REQUIRED_ROLLBACK_FIELDS=(
   BACKUP_DIR DB_BACKUP DB_BACKUP_SHA256
   PRIOR_ENV_BACKUP PRIOR_ENV_SHA256 RETAINED_SQL RETAINED_BEFORE
   DB_OWNER DB_GROUP DB_MODE GAME_EXEC_EXPECTED
-  ROLLBACK_RECORD ROLLBACK_RECORD_SEAL
+  ROLLBACK_RECORD ROLLBACK_RECORD_SEAL ROLLBACK_GUARDS
 )
 for field in "${REQUIRED_ROLLBACK_FIELDS[@]}"; do
   declare -p "$field" >/dev/null
@@ -887,21 +899,17 @@ test "$RETAINED_SQL" = "$BACKUP_DIR/retained-check.sql"
 test "$RETAINED_BEFORE" = "$BACKUP_DIR/retained-before.tsv"
 test "$ROLLBACK_RECORD" = "$BOOTSTRAP_ROLLBACK_RECORD"
 test "$ROLLBACK_RECORD_SEAL" = "$BOOTSTRAP_ROLLBACK_RECORD_SEAL"
+test "$ROLLBACK_GUARDS" = "$BOOTSTRAP_ROLLBACK_GUARDS"
+test "$EXPECTED_ROLLBACK_RECORD_SHA256" = \
+  "$BOOTSTRAP_EXPECTED_ROLLBACK_RECORD_SHA256"
 [[ "$DB_BACKUP_SHA256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$PRIOR_ENV_SHA256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$DB_OWNER" =~ ^[a-z_][a-z0-9_-]*$ ]]
 [[ "$DB_GROUP" =~ ^[a-z_][a-z0-9_-]*$ ]]
 [[ "$DB_MODE" =~ ^[0-7]{3,4}$ ]]
-test "$(sha256sum "$ROLLBACK_RECORD" | awk '{print $1}')" = \
-  "$SEALED_RECORD_SHA256"
-
-ROLLBACK_GUARDS="$(mktemp)"
-sudo -u rluser git --no-optional-locks -C "$REPO" show \
-  "$RELEASE_SHA:scripts/pi/runtime-raiders-cutover-guards.sh" >"$ROLLBACK_GUARDS"
-test -s "$ROLLBACK_GUARDS"
-bash -n "$ROLLBACK_GUARDS"
-# shellcheck source=/dev/null
-source "$ROLLBACK_GUARDS"
+rr_authenticate_rollback_record \
+  "$ROLLBACK_RECORD" "$ROLLBACK_RECORD_SEAL" \
+  "$EXPECTED_ROLLBACK_RECORD_SHA256"
 
 rollback_fail_closed() {
   local rc="${1:-1}"
@@ -931,10 +939,12 @@ sudo systemctl stop "$SERVICE"
 test "$(systemctl is-active "$SERVICE")" = inactive
 ```
 
-Any missing, empty, altered, extra-line-seal, wrong-owner, wrong-mode, or
-inconsistent record field aborts before rollback changes state. Never source an
-unsealed record and never substitute a current filesystem observation for a
-recorded rollback literal.
+Any missing, empty, altered, extra-line-seal, wrong-owner, wrong-mode,
+independently recorded checksum mismatch, or inconsistent record field aborts
+before rollback changes state. A self-consistent record and seal from another
+cutover cannot satisfy the independently entered expected checksum. Never
+source an unauthenticated record and never substitute a current filesystem
+observation for a recorded rollback literal.
 
 Verify the recorded logical backup **before moving the failed database**. The
 checksum comparison is exact, not a fresh checksum printed for a human to

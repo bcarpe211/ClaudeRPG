@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +38,7 @@ function fixture() {
   ]);
   const environment = {
     ...process.env,
-    PATH: `${bin}:/usr/bin:/bin`,
+    PATH: `${bin}:/usr/bin:/bin:/sbin`,
     FAKE_HEAD: prior,
     FAKE_ORIGIN: release,
     FAKE_STATUS_OUTPUT: '',
@@ -57,6 +58,28 @@ function run(repo: string, body: string, environment: NodeJS.ProcessEnv) {
     body,
     'printf "reached\\n"',
   ].join('\n'), 'bash', helper, repo, prior, release], {
+    env: environment,
+    encoding: 'utf8',
+  });
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function runRollbackAuthentication(
+  record: string,
+  seal: string,
+  expected: string,
+  environment: NodeJS.ProcessEnv,
+) {
+  return spawnSync('bash', ['-c', [
+    'set -Eeuo pipefail',
+    'source "$1"',
+    'rr_authenticate_rollback_record "$2" "$3" "$4"',
+    'source "$2"',
+    'printf "reached\\n"',
+  ].join('\n'), 'bash', helper, record, seal, expected], {
     env: environment,
     encoding: 'utf8',
   });
@@ -121,6 +144,82 @@ describe('Runtime Raiders executable cutover guards', () => {
       });
       expect(foreign.status).not.toBe(0);
       expect(foreign.stdout).not.toContain('reached');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a self-consistent record and seal from a different cutover before sourcing', () => {
+    const { root, environment } = fixture();
+    try {
+      const record = join(root, 'rollback-record.sh');
+      const seal = join(root, 'rollback-record.sha256');
+      const content = 'printf "record-sourced\\n"\n';
+      writeFileSync(record, content);
+      writeFileSync(seal, `${sha256(content)}\n`);
+
+      const result = runRollbackAuthentication(record, seal, 'a'.repeat(64), environment);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe('');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects malformed independently recorded expected hashes before sourcing', () => {
+    const { root, environment } = fixture();
+    try {
+      const record = join(root, 'rollback-record.sh');
+      const seal = join(root, 'rollback-record.sha256');
+      const content = 'printf "record-sourced\\n"\n';
+      const actual = sha256(content);
+      writeFileSync(record, content);
+      writeFileSync(seal, `${actual}\n`);
+
+      for (const malformed of [actual.slice(1), actual.toUpperCase(), `${actual}0`]) {
+        const result = runRollbackAuthentication(record, seal, malformed, environment);
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout).toBe('');
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts only a record and one-line seal matching the independently recorded hash', () => {
+    const { root, environment } = fixture();
+    try {
+      const record = join(root, 'rollback-record.sh');
+      const seal = join(root, 'rollback-record.sha256');
+      const content = 'printf "record-sourced\\n"\n';
+      const expected = sha256(content);
+      writeFileSync(record, content);
+      writeFileSync(seal, `${expected}\n`);
+
+      const result = runRollbackAuthentication(record, seal, expected, environment);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe('record-sourced\nreached\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an extra-line seal before sourcing the record', () => {
+    const { root, environment } = fixture();
+    try {
+      const record = join(root, 'rollback-record.sh');
+      const seal = join(root, 'rollback-record.sha256');
+      const content = 'printf "record-sourced\\n"\n';
+      const expected = sha256(content);
+      writeFileSync(record, content);
+      writeFileSync(seal, `${expected}\n${expected}\n`);
+
+      const result = runRollbackAuthentication(record, seal, expected, environment);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe('');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

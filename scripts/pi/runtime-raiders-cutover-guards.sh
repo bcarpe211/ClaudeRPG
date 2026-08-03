@@ -28,3 +28,26 @@ rr_assert_owned_tree() {
   foreign_path="$(sudo find "$root" -xdev ! -user rluser -print -quit)"
   test -z "$foreign_path"
 }
+
+rr_authenticate_rollback_record() {
+  local record="$1"
+  local seal="$2"
+  local expected="$3"
+  local sealed
+  local actual_line
+  local actual
+
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || return 1
+  sealed="$(awk '
+    NR == 1 && NF == 1 { value = $1; next }
+    { exit 1 }
+    END { if (NR != 1) exit 1; print value }
+  ' "$seal")" || return 1
+  [[ "$sealed" =~ ^[0-9a-f]{64}$ ]] || return 1
+  test "$sealed" = "$expected" || return 1
+
+  actual_line="$(sha256sum -- "$record")" || return 1
+  actual="${actual_line%% *}"
+  [[ "$actual" =~ ^[0-9a-f]{64}$ ]] || return 1
+  test "$actual" = "$expected" || return 1
+}
