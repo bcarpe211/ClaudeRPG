@@ -1,12 +1,15 @@
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -34,12 +37,16 @@ function fixture() {
   const policy = join(repo, 'config', 'raid-power-policy-v1.json');
   const caddyConfig = join(root, 'deployed-Caddyfile');
   const approvedCaddy = join(root, 'approved-Caddyfile');
+  const approvedPolicy = join(root, 'approved-policy.json');
+  const approvedPolicyLoader = join(root, 'approved-policy-loader.ts');
   const caddyEnv = join(root, 'caddy.env');
   const releaseSha = 'b'.repeat(40);
+  const priorSha = 'a'.repeat(40);
   const cutoverAt = '1790000000000';
   const fakes = join(root, 'fakes');
   const commandLog = join(root, 'commands.log');
   const pauseState = join(root, 'pause-state');
+  const updaterState = join(root, 'updater-state');
 
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(dirname(db), { recursive: true });
@@ -55,9 +62,13 @@ function fixture() {
   writeFileSync(join(repo, 'deploy', 'Caddyfile'), 'raiders.redlattice.com, clauderpg.redlattice.com {}\n');
   writeFileSync(caddyConfig, readFileSync(join(repo, 'deploy', 'Caddyfile')));
   writeFileSync(approvedCaddy, readFileSync(join(repo, 'deploy', 'Caddyfile')));
+  copyFileSync(policy, approvedPolicy);
+  copyFileSync(join(repo, 'src/domain/raid-power-policy.ts'), approvedPolicyLoader);
   writeFileSync(caddyEnv, 'CLOUDFLARE_API_TOKEN=top-secret-caddy-token\n');
+  chmodSync(caddyEnv, 0o600);
   writeFileSync(commandLog, '');
   writeFileSync(pauseState, '0\n');
+  writeFileSync(updaterState, '0\n');
 
   writeFileSync(envFile, [
     'ADMIN_PASSWORD=top-secret-password',
@@ -70,6 +81,7 @@ function fixture() {
     'RUN_ENABLED_SURFACES=codex_desktop,codex_cli',
     '',
   ].join('\n'));
+  chmodSync(envFile, 0o600);
 
   executable(join(fakes, 'sqlite3'), `
 case "$*" in
@@ -85,6 +97,8 @@ case "$*" in
 esac`);
 
   executable(join(fakes, 'git'), `
+[ "\${1:-}" = "--no-optional-locks" ] || exit 73
+shift
 [ "\${1:-}" = "-C" ] || exit 73
 shift 2
 case "$*" in
@@ -93,7 +107,10 @@ case "$*" in
   'status --porcelain') [ "\${FAKE_GIT_DIRTY:-0}" = 0 ] || printf '%s\\n' ' M local-change' ;;
   'rev-parse --verify origin/main^{commit}') printf '%s\\n' "\${FAKE_TARGET_SHA:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}" ;;
   show\\ *:deploy/Caddyfile) /bin/cat "$RUNTIME_RAIDERS_TEST_APPROVED_CADDY" ;;
-  'merge-base --is-ancestor HEAD origin/main') [ "\${FAKE_GIT_DIVERGED:-0}" = 0 ] ;;
+  show\\ *:config/raid-power-policy-v1.json) /bin/cat "$RUNTIME_RAIDERS_TEST_APPROVED_POLICY" ;;
+  show\\ *:src/domain/raid-power-policy.ts) /bin/cat "$RUNTIME_RAIDERS_TEST_APPROVED_POLICY_LOADER" ;;
+  ls-tree\\ -r\\ -l\\ *) printf '%s\\n' "100644 blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \${FAKE_TARGET_TREE_BYTES:-102400}\ttarget-file" ;;
+  merge-base\\ --is-ancestor\\ *) [ "\${FAKE_GIT_DIVERGED:-0}" = 0 ] ;;
   *) exit 74 ;;
 esac`);
 
@@ -116,10 +133,15 @@ esac`);
 name=\${2:-}
 if [ "$name" = 'raiders.local' ]; then
   [ "\${FAKE_TARGET_HOST_RESOLVES:-1}" = 1 ] || exit 1
+  addresses="\${FAKE_RESOLVED_IP:-192.0.2.10}"
+elif [ "$name" = 'raiders.redlattice.com' ]; then
+  addresses="\${FAKE_NEW_DNS_IP:-192.0.2.10}"
+elif [ "$name" = 'clauderpg.redlattice.com' ]; then
+  addresses="\${FAKE_OLD_DNS_IP:-192.0.2.10}"
 else
   exit 76
 fi
-printf '%s %s\\n' "\${FAKE_RESOLVED_IP:-192.0.2.10}" "$name"`);
+for address in $addresses; do printf '%s %s\\n' "$address" "$name"; done`);
   executable(join(fakes, 'systemctl'), `
 case "$*" in
   'is-active claude-rpg.service')
@@ -128,18 +150,76 @@ case "$*" in
     if [ "\${FAKE_TIMER_ENABLED:-0}" = 1 ]; then printf '%s\\n' enabled; else printf '%s\\n' disabled; exit 1; fi ;;
   'is-active claude-rpg-autoupdate.timer')
     if [ "\${FAKE_TIMER_ACTIVE:-0}" = 1 ]; then printf '%s\\n' active; else printf '%s\\n' inactive; exit 3; fi ;;
+  'is-active claude-rpg-autoupdate.service')
+    updater_count=0
+    if [ -f "$RUNTIME_RAIDERS_TEST_UPDATER_STATE" ]; then IFS= read -r updater_count < "$RUNTIME_RAIDERS_TEST_UPDATER_STATE"; fi
+    updater_count=$((updater_count + 1))
+    printf '%s\\n' "$updater_count" > "$RUNTIME_RAIDERS_TEST_UPDATER_STATE"
+    if [ "$updater_count" -gt 1 ]; then updater_active="\${FAKE_FINAL_UPDATER_SERVICE_ACTIVE:-\${FAKE_UPDATER_SERVICE_ACTIVE:-0}}"; else updater_active="\${FAKE_UPDATER_SERVICE_ACTIVE:-0}"; fi
+    if [ "$updater_active" = 1 ]; then printf '%s\\n' active; else printf '%s\\n' inactive; exit 3; fi ;;
   'is-active avahi-daemon.service')
     if [ "\${FAKE_AVAHI_ACTIVE:-1}" = 1 ]; then printf '%s\\n' active; else printf '%s\\n' inactive; exit 3; fi ;;
+  'cat caddy.service')
+    printf '%s\\n' '[Service]' \
+      "EnvironmentFile=\${FAKE_CADDY_UNIT_ENV:-$RUNTIME_RAIDERS_TEST_CADDY_ENV}" \
+      "ExecStart=/usr/bin/caddy run --config \${FAKE_CADDY_UNIT_CONFIG:-$RUNTIME_RAIDERS_TEST_CADDY_CONFIG}" ;;
   *) exit 77 ;;
 esac`);
-  executable(join(fakes, 'du'), 'printf \'%s\\t%s\\n\' "${FAKE_RELEASE_KB:-100}" "$RUNTIME_RAIDERS_TEST_REPO"');
-  executable(join(fakes, 'df'), `printf '%s\\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' 'fake 1000000 1 '"\${FAKE_FREE_KB:-1000}"' 1% /'`);
+  executable(join(fakes, 'du'), 'printf \'%s\\t%s\\n\' "${FAKE_NODE_MODULES_KB:-100}" "$1"');
+  executable(join(fakes, 'df'), `printf '%s\\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' 'fake 4000000 1 '"\${FAKE_FREE_KB:-2000000}"' 1% /'`);
   executable(join(fakes, 'cmp'), 'exec /usr/bin/cmp "$@"');
   for (const command of ['hostnamectl', 'rm', 'apt', 'apt-get', 'npm', 'tee', 'sed', 'cp', 'mv', 'install']) {
     executable(join(fakes, command), 'exit 91');
   }
 
-  return { root, repo, db, envFile, policy, caddyConfig, approvedCaddy, caddyEnv, releaseSha, cutoverAt, fakes, commandLog, pauseState };
+  return { root, repo, db, envFile, policy, caddyConfig, approvedCaddy, approvedPolicy, approvedPolicyLoader, caddyEnv, releaseSha, priorSha, cutoverAt, fakes, commandLog, pauseState, updaterState };
+}
+
+function git(repo: string, args: string[]): string {
+  const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+function realGitFixture(largeTargetBytes = 0): Fixture {
+  const f = fixture();
+  const canonicalRoot = realpathSync(f.root);
+  for (const key of [
+    'repo', 'db', 'envFile', 'policy', 'caddyConfig', 'approvedCaddy', 'approvedPolicy',
+    'approvedPolicyLoader', 'caddyEnv', 'fakes', 'commandLog', 'pauseState', 'updaterState',
+  ] as const) {
+    f[key] = f[key].replace(f.root, canonicalRoot);
+  }
+
+  rmSync(f.repo, { recursive: true, force: true });
+  mkdirSync(join(f.repo, 'deploy'), { recursive: true });
+  writeFileSync(join(f.repo, '.gitignore'), 'data/\nnode_modules\n');
+  writeFileSync(join(f.repo, 'tracked.txt'), 'prior release\n');
+  writeFileSync(join(f.repo, 'deploy/Caddyfile'), 'raiders.redlattice.com, clauderpg.redlattice.com {}\n');
+  git(f.repo, ['init', '-q']);
+  git(f.repo, ['add', '.gitignore', 'tracked.txt', 'deploy/Caddyfile']);
+  git(f.repo, ['-c', 'user.name=Preflight Test', '-c', 'user.email=preflight@example.invalid', 'commit', '-qm', 'prior']);
+  f.priorSha = git(f.repo, ['rev-parse', 'HEAD']);
+
+  mkdirSync(join(f.repo, 'config'), { recursive: true });
+  mkdirSync(join(f.repo, 'src/domain'), { recursive: true });
+  copyFileSync(resolve('config/raid-power-policy-v1.json'), join(f.repo, 'config/raid-power-policy-v1.json'));
+  copyFileSync(resolve('src/domain/raid-power-policy.ts'), join(f.repo, 'src/domain/raid-power-policy.ts'));
+  if (largeTargetBytes > 0) writeFileSync(join(f.repo, 'large-target.bin'), Buffer.alloc(largeTargetBytes, 0x41));
+  git(f.repo, ['add', 'config', 'src', ...(largeTargetBytes > 0 ? ['large-target.bin'] : [])]);
+  git(f.repo, ['-c', 'user.name=Preflight Test', '-c', 'user.email=preflight@example.invalid', 'commit', '-qm', 'release']);
+  f.releaseSha = git(f.repo, ['rev-parse', 'HEAD']);
+  git(f.repo, ['update-ref', 'refs/remotes/origin/main', f.releaseSha]);
+  git(f.repo, ['checkout', '-q', '--detach', f.priorSha]);
+
+  mkdirSync(dirname(f.db), { recursive: true });
+  writeFileSync(f.db, 'production-shaped-database');
+  symlinkSync(resolve('node_modules'), join(f.repo, 'node_modules'), 'dir');
+  replaceAssignment(f.envFile, 'DB_PATH', f.db);
+  replaceAssignment(f.envFile, 'RAID_POWER_POLICY_PATH', join(f.repo, 'config/raid-power-policy-v1.json'));
+  writeFileSync(f.caddyConfig, 'raiders.redlattice.com, clauderpg.redlattice.com {}\n');
+  rmSync(join(f.fakes, 'git'));
+  return f;
 }
 
 function run(testFixture: Fixture, overrides: NodeJS.ProcessEnv = {}) {
@@ -148,6 +228,7 @@ function run(testFixture: Fixture, overrides: NodeJS.ProcessEnv = {}) {
     '--db', testFixture.db,
     '--env', testFixture.envFile,
     '--repo', testFixture.repo,
+    '--prior-sha', testFixture.priorSha,
     '--release-sha', testFixture.releaseSha,
     '--cutover-at', testFixture.cutoverAt,
     '--caddy-config', testFixture.caddyConfig,
@@ -160,8 +241,11 @@ function run(testFixture: Fixture, overrides: NodeJS.ProcessEnv = {}) {
       RUNTIME_RAIDERS_TEST_COMMAND_LOG: testFixture.commandLog,
       RUNTIME_RAIDERS_TEST_REPO: testFixture.repo,
       RUNTIME_RAIDERS_TEST_PAUSE_STATE: testFixture.pauseState,
+      RUNTIME_RAIDERS_TEST_UPDATER_STATE: testFixture.updaterState,
       RUNTIME_RAIDERS_TEST_CADDY_CONFIG: testFixture.caddyConfig,
       RUNTIME_RAIDERS_TEST_APPROVED_CADDY: testFixture.approvedCaddy,
+      RUNTIME_RAIDERS_TEST_APPROVED_POLICY: testFixture.approvedPolicy,
+      RUNTIME_RAIDERS_TEST_APPROVED_POLICY_LOADER: testFixture.approvedPolicyLoader,
       RUNTIME_RAIDERS_TEST_CADDY_ENV: testFixture.caddyEnv,
       ...overrides,
     },
@@ -185,6 +269,176 @@ afterEach(() => {
 });
 
 describe('Runtime Raiders Pi preflight', () => {
+  it('requires local HEAD to equal the explicitly recorded prior SHA', () => {
+    const f = fixture();
+    f.priorSha = 'c'.repeat(40);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Git readiness');
+  });
+
+  it('rejects HEAD equal to the approved release as a partial deployment', () => {
+    const result = run(fixture(), { FAKE_LOCAL_SHA: 'b'.repeat(40) });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Git readiness');
+  });
+
+  it('requires the already-launched auto-updater service to be inactive', () => {
+    const result = run(fixture(), { FAKE_UPDATER_SERVICE_ACTIVE: '1' });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL systemd units');
+  });
+
+  it('fails when the updater service becomes active before READY', () => {
+    const result = run(fixture(), {
+      FAKE_UPDATER_SERVICE_ACTIVE: '0',
+      FAKE_FINAL_UPDATER_SERVICE_ACTIVE: '1',
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL final updater hold');
+  });
+
+  it.each([
+    ['new', { FAKE_NEW_DNS_IP: '198.51.100.20' }],
+    ['old', { FAKE_OLD_DNS_IP: '198.51.100.21' }],
+  ])('rejects the %s internal FQDN when real DNS omits the local Pi address', (_name, environment) => {
+    const result = run(fixture(), environment);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL internal DNS');
+  });
+
+  it('validates approved policy objects without release files in the prior checkout', () => {
+    const f = fixture();
+    rmSync(f.policy);
+    rmSync(join(f.repo, 'src/domain/raid-power-policy.ts'));
+    const result = run(f);
+    expect(result.status, result.output).toBe(0);
+  });
+
+  it('rejects an approved policy object that its approved loader rejects', () => {
+    const f = fixture();
+    const invalidPolicy = {
+      ...JSON.parse(readFileSync(f.approvedPolicy, 'utf8')),
+      unexpected_release_field: true,
+    };
+    writeFileSync(f.approvedPolicy, `${JSON.stringify(invalidPolicy)}\n`);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+  });
+
+  it('budgets the approved target tree when it is much larger than the prior checkout', () => {
+    const result = run(fixture(), {
+      FAKE_TARGET_TREE_BYTES: String(100 * 1024 * 1024),
+      FAKE_NODE_MODULES_KB: '100',
+      FAKE_FREE_KB: '600000',
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL disk capacity');
+  });
+
+  it('disables optional Git locks for every repository inspection', () => {
+    const result = run(fixture());
+    expect(result.status, result.output).toBe(0);
+    const gitCommands = result.commands.split('\n').filter((line) => line.startsWith('git '));
+    expect(gitCommands.length).toBeGreaterThan(0);
+    expect(gitCommands.every((line) => line.startsWith('git --no-optional-locks -C '))).toBe(true);
+  });
+
+  it('leaves a real repository index byte-for-byte and metadata unchanged', () => {
+    const f = realGitFixture();
+    const tracked = join(f.repo, 'tracked.txt');
+    const touched = new Date(statSync(tracked).mtimeMs + 2_000);
+    utimesSync(tracked, touched, touched);
+    const index = join(f.repo, '.git/index');
+    const beforeBytes = readFileSync(index);
+    const beforeMtime = statSync(index).mtimeMs;
+
+    const result = run(f);
+
+    expect(result.status, result.output).toBe(0);
+    expect(readFileSync(index)).toEqual(beforeBytes);
+    expect(statSync(index).mtimeMs).toBe(beforeMtime);
+  });
+
+  it('fails disk capacity for a large approved tree absent from the prior checkout', () => {
+    const f = realGitFixture(8 * 1024 * 1024);
+    expect(existsSync(join(f.repo, 'large-target.bin'))).toBe(false);
+    const result = run(f, { FAKE_NODE_MODULES_KB: '100', FAKE_FREE_KB: '530000' });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL disk capacity');
+  });
+
+  it.each([
+    ['admin placeholder', 'ADMIN_PASSWORD', 'change-me-please'],
+    ['session placeholder', 'SESSION_SECRET', 'change-me-too'],
+    ['empty admin secret', 'ADMIN_PASSWORD', ''],
+  ])('rejects a candidate game env with %s', (_name, key, value) => {
+    const f = fixture();
+    replaceAssignment(f.envFile, key, value);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+    expect(result.output).not.toContain(value || 'top-secret-password');
+  });
+
+  it('rejects duplicate secret assignments in the candidate game env', () => {
+    const f = fixture();
+    writeFileSync(f.envFile, `${readFileSync(f.envFile, 'utf8')}ADMIN_PASSWORD=second-secret\n`);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Runtime Raiders environment');
+    expect(result.output).not.toContain('second-secret');
+  });
+
+  it('rejects a candidate game env with group or other permissions', () => {
+    const f = fixture();
+    chmodSync(f.envFile, 0o644);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL paths');
+  });
+
+  it('rejects Caddy paths that differ from the active systemd unit definition', () => {
+    const f = fixture();
+    const result = run(f, {
+      FAKE_CADDY_UNIT_CONFIG: join(f.root, 'other-Caddyfile'),
+      FAKE_CADDY_UNIT_ENV: join(f.root, 'other-caddy.env'),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Caddy configuration');
+  });
+
+  it.each([
+    ['placeholder', 'replace-with-your-cloudflare-token'],
+    ['empty value', ''],
+  ])('rejects a Caddy environment with a %s token', (_name, token) => {
+    const f = fixture();
+    writeFileSync(f.caddyEnv, `CLOUDFLARE_API_TOKEN=${token}\n`);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Caddy configuration');
+    expect(result.output).not.toContain(token || 'top-secret-caddy-token');
+  });
+
+  it('rejects duplicate Cloudflare token assignments without exposing either token', () => {
+    const f = fixture();
+    writeFileSync(f.caddyEnv, 'CLOUDFLARE_API_TOKEN=first-secret\nCLOUDFLARE_API_TOKEN=second-secret\n');
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL Caddy configuration');
+    expect(result.output).not.toContain('first-secret');
+    expect(result.output).not.toContain('second-secret');
+  });
+
+  it('rejects a Caddy environment with group or other permissions', () => {
+    const f = fixture();
+    chmodSync(f.caddyEnv, 0o640);
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL paths');
+  });
+
   it('rejects origin/main when it is not the explicitly approved release SHA', () => {
     const result = run(fixture(), { FAKE_TARGET_SHA: 'c'.repeat(40) });
     expect(result.status).not.toBe(0);
@@ -217,10 +471,10 @@ describe('Runtime Raiders Pi preflight', () => {
   it('rejects a policy document that the application policy loader rejects', () => {
     const f = fixture();
     const invalidPolicy = {
-      ...JSON.parse(readFileSync(f.policy, 'utf8')),
+      ...JSON.parse(readFileSync(f.approvedPolicy, 'utf8')),
       unexpected_release_field: true,
     };
-    writeFileSync(f.policy, `${JSON.stringify(invalidPolicy)}\n`);
+    writeFileSync(f.approvedPolicy, `${JSON.stringify(invalidPolicy)}\n`);
     const result = run(f);
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('FAIL Runtime Raiders environment');
@@ -326,7 +580,7 @@ describe('Runtime Raiders Pi preflight', () => {
     ['repository', (f: Fixture) => rmSync(f.repo, { recursive: true }), 'FAIL paths'],
     ['database', (f: Fixture) => rmSync(f.db), 'FAIL paths'],
     ['environment', (f: Fixture) => rmSync(f.envFile), 'FAIL paths'],
-    ['policy', (f: Fixture) => rmSync(f.policy), 'FAIL Runtime Raiders environment'],
+    ['approved release policy object', (f: Fixture) => rmSync(f.approvedPolicy), 'FAIL Runtime Raiders environment'],
     ['deployed Caddy config', (f: Fixture) => rmSync(f.caddyConfig), 'FAIL paths'],
     ['protected Caddy environment', (f: Fixture) => rmSync(f.caddyEnv), 'FAIL paths'],
   ])('fails closed when the required %s path is missing', (_name, remove, message) => {
@@ -436,7 +690,16 @@ describe('Runtime Raiders Pi preflight', () => {
 
   it('uses only observed read-only commands and leaves DB, env, and policy fixtures unchanged', () => {
     const f = fixture();
-    const protectedFixtures = [f.db, f.envFile, f.policy, f.caddyConfig, f.caddyEnv];
+    const protectedFixtures = [
+      f.db,
+      f.envFile,
+      f.policy,
+      f.approvedPolicy,
+      f.approvedPolicyLoader,
+      f.approvedCaddy,
+      f.caddyConfig,
+      f.caddyEnv,
+    ];
     const before = protectedFixtures.map((path) => readFileSync(path, 'utf8'));
     const result = run(f);
     const after = protectedFixtures.map((path) => readFileSync(path, 'utf8'));
@@ -444,7 +707,7 @@ describe('Runtime Raiders Pi preflight', () => {
     expect(result.status, result.output).toBe(0);
     expect(after).toEqual(before);
     expect(result.commands).toContain('sqlite3 -readonly');
-    expect(result.commands).toContain('git -C');
+    expect(result.commands).toContain('git --no-optional-locks -C');
     expect(result.commands).toContain('caddy validate');
     expect(result.commands).toContain('cmp -s');
     expect(result.commands).toContain('curl');
