@@ -33,7 +33,7 @@ function artifact(root: string, marker = 'initial', stateful = true): { zip: str
     'printf "' + marker + ':%s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_BINARY_LOG"',
     ...(stateful ? [
       'collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
-      'running="$HOME/.runtime-raiders-test-running"',
+    'running="$HOME/.runtime-raiders-test-running"',
       'job="$HOME/.runtime-raiders-test-job"',
       'polls="$HOME/.runtime-raiders-test-polls"',
       'state_kind=missing; state_enabled=false',
@@ -251,6 +251,9 @@ describe('Runtime Raiders companion installer', () => {
       expect(binaryLog).toContain('installed:off\n');
       expect(binaryLog.indexOf('installed:off\n')).toBeLessThan(binaryLog.indexOf('replacement:status\n'));
       expect(JSON.parse(readFileSync(state, 'utf8'))).toMatchObject({ enabled: false });
+      const commands = readFileSync(join(home, 'commands.log'), 'utf8');
+      expect(commands).not.toContain('endpoint /api/runs/events');
+      expect(commands).not.toContain('endpoint /api/raiders/heartbeat');
       expect(readFileSync(
         join(home, 'Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'),
         'utf8',
