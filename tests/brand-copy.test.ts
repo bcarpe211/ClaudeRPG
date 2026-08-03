@@ -214,6 +214,19 @@ describe('Runtime Raiders brand copy', () => {
     expect(result.output).toBe('');
   });
 
+  it('allows an explicitly retired same-line pull-restart shortcut', () => {
+    const root = copyFixture();
+    writeFileSync(
+      join(root, 'docs/PI_SETUP.md'),
+      'The old git pull --ff-only && sudo systemctl restart claude-rpg release shortcut is retired.\n',
+    );
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe('');
+  });
+
   it('rejects restoring, enabling, or starting the moving-main updater in the cutover plan', () => {
     const root = copyFixture();
     const planDir = join(root, 'docs/superpowers/plans');

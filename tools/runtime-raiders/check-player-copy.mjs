@@ -61,6 +61,7 @@ const operatorInstructionRules = [
   {
     paths: [piSetupPath],
     pattern: /\bgit\s+pull(?:\s+--ff-only)?\b.*(?:&&|;)\s*(?:sudo\s+)?systemctl\s+restart\s+claude-rpg(?:\.service)?\b/i,
+    allowPattern: safeReleaseContextPattern,
     label: 'raw pull-restart release',
   },
   {
