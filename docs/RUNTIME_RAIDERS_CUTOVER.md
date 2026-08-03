@@ -53,9 +53,14 @@ certificate material, or environment contents in this document or a commit.
 | Persisted policy key / JSON document version | `raid-power-v1` / `1` |
 | Production DB path | `/home/rluser/ClaudeRPG/data/claude-rpg.db` |
 | Verified pre-cutover `.backup` path (`DB_BACKUP`) | `________________` |
+| SHA-256 of the verified pre-cutover backup (`DB_BACKUP_SHA256`) | `________________` |
 | Production DB owner, group, and mode | `________________` |
 | Prior root-owned environment backup path | `________________` |
 | Prior environment SHA-256 | `________________` |
+| Retained-query and pre-cutover aggregate paths | `________________ / ________________` |
+| Cutover ID and root-only backup directory | `________________ / ________________` |
+| Root-only rollback record and detached seal paths | `________________ / ________________` |
+| SHA-256 written in the detached rollback-record seal | `________________` |
 | Candidate environment path and SHA-256 | `________________` |
 | Manager-loaded Caddy config and env paths | `________________ / ________________` |
 | Manager-loaded game `User` / `WorkingDirectory` / `EnvironmentFiles` / `ExecStart` | `________________` |
@@ -67,6 +72,21 @@ certificate material, or environment contents in this document or a commit.
 | Exact user authorization and UTC timestamp | `________________` |
 | Final decision: accepted, aborted, or rolled back | `________________` |
 | Final updater timer/oneshot state | `________________` |
+
+Before the service is stopped, the root-only rollback record must contain every
+rollback-required literal below. The field names are part of the contract; do
+not abbreviate or reconstruct any value during an incident.
+
+| Rollback record group | Required literal fields |
+| --- | --- |
+| Version and identity | `ROLLBACK_RECORD_VERSION`, `PRIOR_SHA`, `RELEASE_SHA`, `CUTOVER_ID` |
+| Fixed production paths | `REPO`, `DB`, `CURRENT_ENV` |
+| Fixed unit names | `SERVICE`, `UPDATER_TIMER`, `UPDATER_SERVICE` |
+| Backup paths | `BACKUP_DIR`, `DB_BACKUP`, `PRIOR_ENV_BACKUP`, `RETAINED_SQL`, `RETAINED_BEFORE` |
+| Backup checksums | `DB_BACKUP_SHA256`, `PRIOR_ENV_SHA256` |
+| Database metadata | `DB_OWNER`, `DB_GROUP`, `DB_MODE` |
+| Unit contract | `GAME_EXEC_EXPECTED` |
+| Record identity | `ROLLBACK_RECORD`, `ROLLBACK_RECORD_SEAL` |
 
 Use these compatibility paths and names throughout:
 
@@ -143,7 +163,7 @@ matching authorization above.
   test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
   test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
     '/etc/claude-rpg.env (ignore_errors=no)'
-  GAME_EXEC=$(systemctl show "$SERVICE" --property=ExecStart --value)
+  GAME_EXEC="$(systemctl show "$SERVICE" --property=ExecStart --value)"
   case "$GAME_EXEC" in
     *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
     *) false ;;
@@ -163,11 +183,17 @@ matching authorization above.
   authorized action. Record the artifact checksum, signature/notarization
   result, and date, never signing credentials.
 - Install authorized canaries with the transactional installer. It persists
-  collection off before the first launchd bootstrap; on upgrade it turns an
-  enabled existing daemon off and verifies persisted state before replacing the
-  app or LaunchAgent; after bootstrap it verifies off again. Run `raiders
-  status` and `raiders doctor`; do not use `raiders on`. Complete the signed
-  artifact and deployed/Pi canary rows in
+  collection off before the first launchd bootstrap. On upgrade it distinguishes
+  a verified disabled state from missing, unreadable, or invalid state; safely
+  turns off the old daemon when available; boots out the old LaunchAgent; and
+  atomically seeds the reviewed off-state document when needed. It replaces and
+  bootstraps only after the candidate CLI reports the old daemon stopped and
+  persisted state disabled. After bootstrap it retries for a bounded interval
+  until the candidate reports the actual daemon live with
+  `daemonRunning=true`, `enabled=false`, and `persistedState=disabled`. A
+  timeout or any ambiguous state rolls the transaction back and provides no
+  collection or upload window. Run `raiders status` and `raiders doctor`; do
+  not use `raiders on`. Complete the signed artifact and deployed/Pi canary rows in
   `docs/runtime-raiders/canary-checklist.md` before launch.
 - The exact initial allowlist is
   `RUN_ENABLED_SURFACES=codex_desktop,codex_cli`. Both Codex Desktop and Codex
@@ -274,8 +300,9 @@ future `main` cannot enter the Pi checkout:
 ```sh
 sudo -u rluser -H git -C "$REPO" fetch --no-tags origin \
   "$RELEASE_SHA:refs/remotes/origin/main"
-test "$(sudo -u rluser git --no-optional-locks -C "$REPO" \
-  rev-parse origin/main)" = "$RELEASE_SHA"
+FETCHED_RELEASE_SHA="$(sudo -u rluser git --no-optional-locks -C "$REPO" \
+  rev-parse origin/main)"
+test "$FETCHED_RELEASE_SHA" = "$RELEASE_SHA"
 hold_updater
 ```
 
@@ -349,6 +376,14 @@ interrupt stops the game and reasserts the updater hold:
 
 ```sh
 set -Eeuo pipefail
+CUTOVER_GUARDS="$(mktemp)"
+sudo -u rluser git --no-optional-locks -C "$REPO" show \
+  "$RELEASE_SHA:scripts/pi/runtime-raiders-cutover-guards.sh" >"$CUTOVER_GUARDS"
+test -s "$CUTOVER_GUARDS"
+bash -n "$CUTOVER_GUARDS"
+# shellcheck source=/dev/null
+source "$CUTOVER_GUARDS"
+
 fail_closed() {
   local rc="${1:-1}"
   test "$rc" -ne 0 || rc=1
@@ -374,7 +409,7 @@ assert_game_unit() {
   test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
     '/etc/claude-rpg.env (ignore_errors=no)'
   local loaded_exec
-  loaded_exec=$(systemctl show "$SERVICE" --property=ExecStart --value)
+  loaded_exec="$(systemctl show "$SERVICE" --property=ExecStart --value)"
   case "$loaded_exec" in
     *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
     *) return 1 ;;
@@ -383,21 +418,20 @@ assert_game_unit() {
   test "$(printf '%s' "$loaded_exec" | grep -oF \
     "argv[]=$REPO/scripts/pi/run-server.sh" | wc -l)" = 1
 }
-assert_repo_owned() {
-  test "$(stat -c '%U' "$REPO")" = rluser
-  test -z "$(find "$REPO" -xdev ! -user rluser -print -quit)"
-}
 ```
+
+The sourced helper is read from the exact approved release object, not from the
+mutable checkout. Its Git and privileged ownership probes use standalone
+checked assignments, so a no-output command failure cannot be mistaken for a
+clean checkout or an all-`rluser` tree.
 
 ### 4.1 Reconfirm identity, pause, and updater hold
 
 ```sh
 assert_updater_held
 assert_game_unit
-assert_repo_owned
-test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = "$PRIOR_SHA"
-test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
-test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse origin/main)" = "$RELEASE_SHA"
+rr_assert_owned_tree "$REPO"
+rr_assert_checkout "$REPO" "$PRIOR_SHA" "$RELEASE_SHA"
 test "$(sqlite3 -readonly "$DB" \
   'PRAGMA query_only=ON; SELECT paused FROM game_state WHERE id=1;')" = 1
 ```
@@ -411,16 +445,19 @@ Choose one UTC `CUTOVER_ID` for artifact filenames. Record the literal paths as
 The example directory is root-readable only:
 
 ```sh
-CUTOVER_ID=$(date -u '+%Y%m%dT%H%M%SZ')
+ROLLBACK_RECORD_VERSION=1
+CUTOVER_ID="$(date -u '+%Y%m%dT%H%M%SZ')"
 BACKUP_DIR=/var/backups/runtime-raiders/$CUTOVER_ID
 DB_BACKUP=$BACKUP_DIR/claude-rpg.pre-cutover.db
 PRIOR_ENV_BACKUP=$BACKUP_DIR/claude-rpg.env.pre-cutover
 RETAINED_SQL=$BACKUP_DIR/retained-check.sql
 RETAINED_BEFORE=$BACKUP_DIR/retained-before.tsv
-DB_OWNER=$(stat -c '%U' "$DB")
-DB_GROUP=$(stat -c '%G' "$DB")
-DB_MODE=$(stat -c '%a' "$DB")
-PRIOR_ENV_SHA256=$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')
+ROLLBACK_RECORD=$BACKUP_DIR/rollback-record.sh
+ROLLBACK_RECORD_SEAL=$BACKUP_DIR/rollback-record.sha256
+DB_OWNER="$(stat -c '%U' "$DB")"
+DB_GROUP="$(stat -c '%G' "$DB")"
+DB_MODE="$(stat -c '%a' "$DB")"
+PRIOR_ENV_SHA256="$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')"
 sudo install -d -o root -g root -m 0700 "$BACKUP_DIR"
 
 sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD
@@ -430,8 +467,9 @@ sudo chown root:root "$DB_BACKUP"
 sudo chmod 0600 "$DB_BACKUP"
 test "$(sudo sqlite3 -readonly "$DB_BACKUP" \
   'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
-DB_BACKUP_SHA256=$(sudo sha256sum "$DB_BACKUP" | awk '{print $1}')
-test "$(printf '%s' "$DB_BACKUP_SHA256" | wc -c)" = 64
+DB_BACKUP_SHA256="$(sudo sha256sum "$DB_BACKUP" | awk '{print $1}')"
+[[ "$DB_BACKUP_SHA256" =~ ^[0-9a-f]{64}$ ]]
+[[ "$PRIOR_ENV_SHA256" =~ ^[0-9a-f]{64}$ ]]
 ```
 
 The integrity result must be exactly `ok`. A file copy of the live SQLite main
@@ -487,10 +525,50 @@ sudo sqlite3 -readonly -separator $'\t' "$DB_BACKUP" \
 sudo install -o root -g root -m 0600 /tmp/retained-before.tsv "$RETAINED_BEFORE"
 sudo rm /tmp/retained-before.tsv
 sudo sha256sum "$RETAINED_BEFORE"
+
+write_rollback_field() {
+  printf '%s=%q\n' "$1" "${!1}"
+}
+ROLLBACK_FIELDS=(
+  ROLLBACK_RECORD_VERSION PRIOR_SHA RELEASE_SHA CUTOVER_ID
+  REPO DB CURRENT_ENV SERVICE UPDATER_TIMER UPDATER_SERVICE
+  BACKUP_DIR DB_BACKUP DB_BACKUP_SHA256
+  PRIOR_ENV_BACKUP PRIOR_ENV_SHA256 RETAINED_SQL RETAINED_BEFORE
+  DB_OWNER DB_GROUP DB_MODE GAME_EXEC_EXPECTED
+  ROLLBACK_RECORD ROLLBACK_RECORD_SEAL
+)
+for field in "${ROLLBACK_FIELDS[@]}"; do
+  test -n "${!field}"
+done
+{
+  for field in "${ROLLBACK_FIELDS[@]}"; do
+    write_rollback_field "$field"
+  done
+} | sudo install -o root -g root -m 0600 /dev/stdin "$ROLLBACK_RECORD"
+
+ROLLBACK_RECORD_SHA256="$(sudo sha256sum "$ROLLBACK_RECORD" | awk '{print $1}')"
+[[ "$ROLLBACK_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]
+printf '%s\n' "$ROLLBACK_RECORD_SHA256" |
+  sudo install -o root -g root -m 0600 /dev/stdin "$ROLLBACK_RECORD_SEAL"
+test "$(sudo stat -c '%U:%G:%a' "$ROLLBACK_RECORD")" = root:root:600
+test "$(sudo stat -c '%U:%G:%a' "$ROLLBACK_RECORD_SEAL")" = root:root:600
+SEALED_RECORD_SHA256="$(sudo awk '
+  NR == 1 && NF == 1 { value = $1; next }
+  { exit 1 }
+  END { if (NR != 1) exit 1; print value }
+' "$ROLLBACK_RECORD_SEAL")"
+test "$SEALED_RECORD_SHA256" = "$ROLLBACK_RECORD_SHA256"
+test "$(sudo sha256sum "$ROLLBACK_RECORD" | awk '{print $1}')" = \
+  "$SEALED_RECORD_SHA256"
 assert_updater_held
 ```
 
-If any query or backup check fails, abort before stopping the service.
+Copy the literal `ROLLBACK_RECORD`, `ROLLBACK_RECORD_SEAL`, and
+`ROLLBACK_RECORD_SHA256` values to the restricted operator record. The detached
+seal avoids the impossible circular requirement for a file to contain its own
+hash. Do not stop the service unless the record and seal are complete,
+root-owned mode `0600`, and the seal verifies. If any query, backup, record, or
+seal check fails, abort before the planned service stop.
 
 ### 4.3 Stop at the mixed-state boundary
 
@@ -507,10 +585,9 @@ code with the new environment or new code with the old environment.
 ### 4.4 Install the exact release and environment while stopped
 
 ```sh
-assert_repo_owned
+rr_assert_owned_tree "$REPO"
 sudo -u rluser -H git -C "$REPO" merge --ff-only "$RELEASE_SHA"
-test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
-  "$RELEASE_SHA"
+rr_assert_checkout "$REPO" "$RELEASE_SHA" "$RELEASE_SHA"
 
 if ! sudo -u rluser git --no-optional-locks -C "$REPO" diff --quiet \
   "$PRIOR_SHA" "$RELEASE_SHA" -- package.json package-lock.json; then
@@ -521,10 +598,10 @@ sudo install -o root -g root -m 0600 "$CANDIDATE_ENV" "$CURRENT_ENV"
 test "$(sudo stat -c '%U:%G:%a' "$CURRENT_ENV")" = root:root:600
 test "$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')" = \
   "$CANDIDATE_ENV_SHA256"
-assert_repo_owned
+rr_assert_owned_tree "$REPO"
 sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
 test "$(stat -c '%U' "$REPO/node_modules")" = rluser
-test -z "$(find "$REPO/node_modules" -xdev ! -user rluser -print -quit)"
+rr_assert_owned_tree "$REPO/node_modules"
 assert_updater_held
 test "$(systemctl is-active "$SERVICE")" = inactive
 ```
@@ -544,10 +621,8 @@ Do not start if any checkout, dependency, environment, database, ownership,
 unit, or updater fact changed:
 
 ```sh
-test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
-  "$RELEASE_SHA"
-test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
-assert_repo_owned
+rr_assert_checkout "$REPO" "$RELEASE_SHA" "$RELEASE_SHA"
+rr_assert_owned_tree "$REPO"
 sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
 test "$(sudo stat -c '%U:%G:%a' "$CURRENT_ENV")" = root:root:600
 test "$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')" = \
@@ -746,12 +821,88 @@ mismatch; non-idempotent outbox replay; or any unknown acceptance result.
 
 Do not attempt a destructive reverse migration. Use the recorded verified
 backup and prior SHA. First turn collection off on every enabled canary and
-office Mac and verify `raiders status` reports off. Then open a clean Bash shell,
-restore the recorded variables, and install a rollback-specific fail-closed
-trap. Every failure keeps the updater held and game stopped:
+office Mac and verify `raiders status` reports off. Then open a clean root Bash
+shell with `sudo -i`. Set only the two literal paths copied to the restricted
+operator record before cutover; do not restore, derive, or type any other
+rollback variable. Authenticate and validate the immutable record before any
+rollback mutation:
 
 ```sh
 set -Eeuo pipefail
+ROLLBACK_RECORD=/var/backups/runtime-raiders/REPLACE_WITH_RECORDED_ID/rollback-record.sh
+ROLLBACK_RECORD_SEAL=/var/backups/runtime-raiders/REPLACE_WITH_RECORDED_ID/rollback-record.sha256
+
+case "$ROLLBACK_RECORD" in
+  /var/backups/runtime-raiders/*/rollback-record.sh) ;;
+  *) false ;;
+esac
+test "$ROLLBACK_RECORD_SEAL" = "${ROLLBACK_RECORD%/*}/rollback-record.sha256"
+test -f "$ROLLBACK_RECORD"
+test ! -L "$ROLLBACK_RECORD"
+test -f "$ROLLBACK_RECORD_SEAL"
+test ! -L "$ROLLBACK_RECORD_SEAL"
+test "$(stat -c '%U:%G:%a' "$ROLLBACK_RECORD")" = root:root:600
+test "$(stat -c '%U:%G:%a' "$ROLLBACK_RECORD_SEAL")" = root:root:600
+
+mapfile -t RECORD_SEAL_LINES <"$ROLLBACK_RECORD_SEAL"
+test "${#RECORD_SEAL_LINES[@]}" = 1
+SEALED_RECORD_SHA256="${RECORD_SEAL_LINES[0]}"
+[[ "$SEALED_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]
+ACTUAL_RECORD_SHA256="$(sha256sum "$ROLLBACK_RECORD" | awk '{print $1}')"
+test "$ACTUAL_RECORD_SHA256" = "$SEALED_RECORD_SHA256"
+
+BOOTSTRAP_ROLLBACK_RECORD=$ROLLBACK_RECORD
+BOOTSTRAP_ROLLBACK_RECORD_SEAL=$ROLLBACK_RECORD_SEAL
+# shellcheck source=/dev/null
+source "$ROLLBACK_RECORD"
+
+REQUIRED_ROLLBACK_FIELDS=(
+  ROLLBACK_RECORD_VERSION PRIOR_SHA RELEASE_SHA CUTOVER_ID
+  REPO DB CURRENT_ENV SERVICE UPDATER_TIMER UPDATER_SERVICE
+  BACKUP_DIR DB_BACKUP DB_BACKUP_SHA256
+  PRIOR_ENV_BACKUP PRIOR_ENV_SHA256 RETAINED_SQL RETAINED_BEFORE
+  DB_OWNER DB_GROUP DB_MODE GAME_EXEC_EXPECTED
+  ROLLBACK_RECORD ROLLBACK_RECORD_SEAL
+)
+for field in "${REQUIRED_ROLLBACK_FIELDS[@]}"; do
+  declare -p "$field" >/dev/null
+  test -n "${!field}"
+done
+
+test "$ROLLBACK_RECORD_VERSION" = 1
+test "$REPO" = /home/rluser/ClaudeRPG
+test "$DB" = "$REPO/data/claude-rpg.db"
+test "$CURRENT_ENV" = /etc/claude-rpg.env
+test "$SERVICE" = claude-rpg.service
+test "$UPDATER_TIMER" = claude-rpg-autoupdate.timer
+test "$UPDATER_SERVICE" = claude-rpg-autoupdate.service
+[[ "$PRIOR_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+test "$PRIOR_SHA" != "$RELEASE_SHA"
+[[ "$CUTOVER_ID" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]
+test "$BACKUP_DIR" = "/var/backups/runtime-raiders/$CUTOVER_ID"
+test "$DB_BACKUP" = "$BACKUP_DIR/claude-rpg.pre-cutover.db"
+test "$PRIOR_ENV_BACKUP" = "$BACKUP_DIR/claude-rpg.env.pre-cutover"
+test "$RETAINED_SQL" = "$BACKUP_DIR/retained-check.sql"
+test "$RETAINED_BEFORE" = "$BACKUP_DIR/retained-before.tsv"
+test "$ROLLBACK_RECORD" = "$BOOTSTRAP_ROLLBACK_RECORD"
+test "$ROLLBACK_RECORD_SEAL" = "$BOOTSTRAP_ROLLBACK_RECORD_SEAL"
+[[ "$DB_BACKUP_SHA256" =~ ^[0-9a-f]{64}$ ]]
+[[ "$PRIOR_ENV_SHA256" =~ ^[0-9a-f]{64}$ ]]
+[[ "$DB_OWNER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+[[ "$DB_GROUP" =~ ^[a-z_][a-z0-9_-]*$ ]]
+[[ "$DB_MODE" =~ ^[0-7]{3,4}$ ]]
+test "$(sha256sum "$ROLLBACK_RECORD" | awk '{print $1}')" = \
+  "$SEALED_RECORD_SHA256"
+
+ROLLBACK_GUARDS="$(mktemp)"
+sudo -u rluser git --no-optional-locks -C "$REPO" show \
+  "$RELEASE_SHA:scripts/pi/runtime-raiders-cutover-guards.sh" >"$ROLLBACK_GUARDS"
+test -s "$ROLLBACK_GUARDS"
+bash -n "$ROLLBACK_GUARDS"
+# shellcheck source=/dev/null
+source "$ROLLBACK_GUARDS"
+
 rollback_fail_closed() {
   local rc="${1:-1}"
   test "$rc" -ne 0 || rc=1
@@ -780,13 +931,18 @@ sudo systemctl stop "$SERVICE"
 test "$(systemctl is-active "$SERVICE")" = inactive
 ```
 
+Any missing, empty, altered, extra-line-seal, wrong-owner, wrong-mode, or
+inconsistent record field aborts before rollback changes state. Never source an
+unsealed record and never substitute a current filesystem observation for a
+recorded rollback literal.
+
 Verify the recorded logical backup **before moving the failed database**. The
 checksum comparison is exact, not a fresh checksum printed for a human to
 compare:
 
 ```sh
-test "$(sudo sha256sum "$DB_BACKUP" | awk '{print $1}')" = \
-  "$DB_BACKUP_SHA256"
+OBSERVED_DB_BACKUP_SHA256="$(sudo sha256sum "$DB_BACKUP" | awk '{print $1}')"
+test "$OBSERVED_DB_BACKUP_SHA256" = "$DB_BACKUP_SHA256"
 test "$(sudo sqlite3 -readonly "$DB_BACKUP" \
   'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
 ```
@@ -856,16 +1012,16 @@ Switch the clean checkout and dependencies as `rluser`; both package manifests
 trigger a deterministic development-dependency install:
 
 ```sh
-test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
+rr_assert_checkout "$REPO" "$RELEASE_SHA" "$RELEASE_SHA"
+rr_assert_owned_tree "$REPO"
 printf 'rollback target: %s\n' "$PRIOR_SHA"
 sudo -u rluser -H git -C "$REPO" reset --hard "$PRIOR_SHA"
-test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
-  "$PRIOR_SHA"
+rr_assert_checkout "$REPO" "$PRIOR_SHA" "$RELEASE_SHA"
 if ! sudo -u rluser git --no-optional-locks -C "$REPO" diff --quiet \
   "$PRIOR_SHA" "$RELEASE_SHA" -- package.json package-lock.json; then
   sudo -u rluser -H sh -c 'cd "$1" && npm ci --include=dev' sh "$REPO"
 fi
-test -z "$(find "$REPO" -xdev ! -user rluser -print -quit)"
+rr_assert_owned_tree "$REPO"
 sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
 ```
 
@@ -880,10 +1036,8 @@ sudo install -o root -g root -m 0600 "$PRIOR_ENV_BACKUP" "$CURRENT_ENV"
 test "$(sudo stat -c '%U:%G:%a' "$CURRENT_ENV")" = root:root:600
 test "$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')" = \
   "$PRIOR_ENV_SHA256"
-test "$(sudo -u rluser git --no-optional-locks -C "$REPO" rev-parse HEAD)" = \
-  "$PRIOR_SHA"
-test -z "$(sudo -u rluser git --no-optional-locks -C "$REPO" status --porcelain)"
-test -z "$(find "$REPO" -xdev ! -user rluser -print -quit)"
+rr_assert_checkout "$REPO" "$PRIOR_SHA" "$RELEASE_SHA"
+rr_assert_owned_tree "$REPO"
 sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
 test "$(stat -c '%U:%G:%a' "$DB")" = "$DB_OWNER:$DB_GROUP:$DB_MODE"
 test "$(sudo -u rluser sqlite3 -readonly "$DB" \
@@ -892,7 +1046,7 @@ test "$(systemctl show "$SERVICE" --property=User --value)" = rluser
 test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
 test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
   '/etc/claude-rpg.env (ignore_errors=no)'
-GAME_EXEC=$(systemctl show "$SERVICE" --property=ExecStart --value)
+GAME_EXEC="$(systemctl show "$SERVICE" --property=ExecStart --value)"
 case "$GAME_EXEC" in
   *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
   *) false ;;
