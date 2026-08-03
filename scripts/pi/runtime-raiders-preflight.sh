@@ -6,13 +6,17 @@ set -u
 set -o pipefail
 
 usage() {
-  echo "usage: runtime-raiders-preflight.sh --db PATH --env PATH --repo PATH" >&2
+  echo "usage: runtime-raiders-preflight.sh --db PATH --env PATH --repo PATH --release-sha SHA --cutover-at MS --caddy-config PATH --caddy-env PATH" >&2
   exit 64
 }
 
 DB=''
 ENV_FILE=''
 REPO=''
+RELEASE_SHA=''
+CUTOVER_AT=''
+CADDY_CONFIG=''
+CADDY_ENV=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -31,11 +35,33 @@ while [ "$#" -gt 0 ]; do
       REPO=$2
       shift 2
       ;;
+    --release-sha)
+      [ "$#" -ge 2 ] || usage
+      RELEASE_SHA=$2
+      shift 2
+      ;;
+    --cutover-at)
+      [ "$#" -ge 2 ] || usage
+      CUTOVER_AT=$2
+      shift 2
+      ;;
+    --caddy-config)
+      [ "$#" -ge 2 ] || usage
+      CADDY_CONFIG=$2
+      shift 2
+      ;;
+    --caddy-env)
+      [ "$#" -ge 2 ] || usage
+      CADDY_ENV=$2
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
 
-[ -n "$DB" ] && [ -n "$ENV_FILE" ] && [ -n "$REPO" ] || usage
+[ -n "$DB" ] && [ -n "$ENV_FILE" ] && [ -n "$REPO" ] &&
+  [ -n "$RELEASE_SHA" ] && [ -n "$CUTOVER_AT" ] &&
+  [ -n "$CADDY_CONFIG" ] && [ -n "$CADDY_ENV" ] || usage
 
 failures=0
 
@@ -77,6 +103,18 @@ numeric() {
   esac
 }
 
+valid_ipv4() {
+  old_ifs=$IFS
+  IFS=.
+  set -- $1
+  IFS=$old_ifs
+  [ "$#" -eq 4 ] || return 1
+  for octet in "$@"; do
+    numeric "$octet" || return 1
+    [ "$octet" -le 255 ] || return 1
+  done
+}
+
 paths_ok=1
 repo_actual=''
 if [ -d "$REPO" ]; then
@@ -90,6 +128,8 @@ fi
 [ "$DB" = "$REPO/data/claude-rpg.db" ] || paths_ok=0
 [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ] || paths_ok=0
 [ -f "$REPO/deploy/Caddyfile" ] && [ -r "$REPO/deploy/Caddyfile" ] || paths_ok=0
+[ -f "$CADDY_CONFIG" ] && [ -r "$CADDY_CONFIG" ] || paths_ok=0
+[ -f "$CADDY_ENV" ] && [ -r "$CADDY_ENV" ] || paths_ok=0
 if [ "$paths_ok" -eq 1 ]; then pass 'paths'; else fail 'paths'; fi
 
 integrity=''
@@ -108,11 +148,17 @@ git_ok=1
 git_root=''
 git_status=''
 target_commit=''
+local_commit=''
+release_ahead=0
 if [ -d "$REPO" ] && [ -e "$REPO/.git" ]; then
   git_root=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) || git_ok=0
+  local_commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null) || git_ok=0
   git_status=$(git -C "$REPO" status --porcelain 2>/dev/null) || git_ok=0
   target_commit=$(git -C "$REPO" rev-parse --verify 'origin/main^{commit}' 2>/dev/null) || git_ok=0
-  git -C "$REPO" merge-base --is-ancestor HEAD origin/main >/dev/null 2>&1 || git_ok=0
+  if [ "$local_commit" != "$target_commit" ]; then
+    release_ahead=1
+    git -C "$REPO" merge-base --is-ancestor HEAD origin/main >/dev/null 2>&1 || git_ok=0
+  fi
 else
   git_ok=0
 fi
@@ -121,6 +167,8 @@ fi
 case "$target_commit" in
   *[!0-9a-fA-F]*|'') git_ok=0 ;;
 esac
+[[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || git_ok=0
+[ "$target_commit" = "$RELEASE_SHA" ] || git_ok=0
 if [ "$git_ok" -eq 1 ]; then pass 'Git readiness'; else fail 'Git readiness'; fi
 
 environment_ok=1
@@ -144,80 +192,120 @@ fi
 [ "$public_url" = 'https://raiders.redlattice.com' ] || environment_ok=0
 [ "$scoring_mode" = 'runtime-raiders' ] || environment_ok=0
 [[ "$cutover" =~ ^[0-9]{13}$ ]] || environment_ok=0
+[[ "$CUTOVER_AT" =~ ^[0-9]{13}$ ]] || environment_ok=0
+[ "$cutover" = "$CUTOVER_AT" ] || environment_ok=0
+[ "$CUTOVER_AT" != '1800000000000' ] || environment_ok=0
 [ "$policy_path" = "$REPO/config/raid-power-policy-v1.json" ] || environment_ok=0
 [ "$enabled_surfaces" = 'codex_desktop,codex_cli' ] || environment_ok=0
 if [ -f "$policy_path" ] && [ -r "$policy_path" ] && [ -s "$policy_path" ]; then
-  node -e '
-    const fs = require("node:fs");
-    const policy = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    if (!Number.isSafeInteger(policy.policy_version) || policy.policy_version < 1 ||
-        !Array.isArray(policy.enabled_providers) || !policy.enabled_providers.includes("codex")) {
-      process.exit(1);
-    }
-  ' "$policy_path" >/dev/null 2>&1 || environment_ok=0
+  (
+    cd -- "$REPO" &&
+      node --import tsx --input-type=module -e '
+        const { loadRaidPowerPolicy } = await import("./src/domain/raid-power-policy.ts");
+        loadRaidPowerPolicy(process.argv[1]);
+      ' "$policy_path"
+  ) >/dev/null 2>&1 || environment_ok=0
 else
   environment_ok=0
 fi
 if [ "$environment_ok" -eq 1 ]; then pass 'Runtime Raiders environment'; else fail 'Runtime Raiders environment'; fi
 
-if [ "$paths_ok" -eq 1 ] && caddy validate --config "$REPO/deploy/Caddyfile" --adapter caddyfile --envfile "$ENV_FILE" >/dev/null 2>&1; then
+if [ "$paths_ok" -eq 1 ] &&
+  git -C "$REPO" show "$RELEASE_SHA:deploy/Caddyfile" 2>/dev/null | cmp -s - "$CADDY_CONFIG" &&
+  caddy validate --config "$CADDY_CONFIG" --adapter caddyfile --envfile "$CADDY_ENV" >/dev/null 2>&1; then
   pass 'Caddy configuration'
 else
   fail 'Caddy configuration'
 fi
 
-if curl --fail --silent --show-error --max-time 10 --output /dev/null 'https://raiders.redlattice.com/health' >/dev/null 2>&1; then
+hostname_ok=1
+current_hostname=$(hostname --short 2>/dev/null) || hostname_ok=0
+[ "$current_hostname" = 'raiders' ] || hostname_ok=0
+local_addresses=$(hostname -I 2>/dev/null) || hostname_ok=0
+resolved_local=$(getent ahostsv4 'raiders.local' 2>/dev/null | awk 'NR == 1 { print $1 }') || hostname_ok=0
+valid_ipv4 "$resolved_local" || hostname_ok=0
+address_is_local=0
+for local_address in $local_addresses; do
+  if [ "$local_address" = "$resolved_local" ]; then
+    address_is_local=1
+    break
+  fi
+done
+[ "$address_is_local" -eq 1 ] || hostname_ok=0
+if [ "$hostname_ok" -eq 1 ]; then pass 'hostname resolution'; else fail 'hostname resolution'; fi
+
+if [ "$hostname_ok" -eq 1 ] &&
+  curl --fail --silent --show-error --max-time 10 --output /dev/null --noproxy '*' \
+    --resolve "raiders.redlattice.com:443:$resolved_local" \
+    'https://raiders.redlattice.com/health' >/dev/null 2>&1; then
   pass 'HTTPS new host'
 else
   fail 'HTTPS new host'
 fi
 
-if curl --fail --silent --show-error --max-time 10 --output /dev/null 'https://clauderpg.redlattice.com/health' >/dev/null 2>&1; then
+if [ "$hostname_ok" -eq 1 ] &&
+  curl --fail --silent --show-error --max-time 10 --output /dev/null --noproxy '*' \
+    --resolve "clauderpg.redlattice.com:443:$resolved_local" \
+    'https://clauderpg.redlattice.com/health' >/dev/null 2>&1; then
   pass 'HTTPS old host'
 else
   fail 'HTTPS old host'
 fi
 
-hostname_ok=1
-current_hostname=$(hostname --short 2>/dev/null) || hostname_ok=0
-if [ -n "$current_hostname" ]; then
-  getent hosts "$current_hostname.local" >/dev/null 2>&1 || hostname_ok=0
-else
-  hostname_ok=0
-fi
-getent hosts 'raiders.local' >/dev/null 2>&1 || hostname_ok=0
-if [ "$hostname_ok" -eq 1 ]; then pass 'hostname resolution'; else fail 'hostname resolution'; fi
-
 units_ok=1
-systemctl is-active --quiet claude-rpg.service || units_ok=0
-systemctl is-enabled --quiet claude-rpg-autoupdate.timer || units_ok=0
-systemctl is-active --quiet claude-rpg-autoupdate.timer || units_ok=0
+server_state=$(systemctl is-active claude-rpg.service 2>/dev/null) || true
+timer_enabled_state=$(systemctl is-enabled claude-rpg-autoupdate.timer 2>/dev/null) || true
+timer_active_state=$(systemctl is-active claude-rpg-autoupdate.timer 2>/dev/null) || true
+avahi_state=$(systemctl is-active avahi-daemon.service 2>/dev/null) || true
+[ "$server_state" = 'active' ] || units_ok=0
+[ "$avahi_state" = 'active' ] || units_ok=0
+if [ "$release_ahead" -eq 1 ]; then
+  [ "$timer_enabled_state" = 'disabled' ] || units_ok=0
+  [ "$timer_active_state" = 'inactive' ] || units_ok=0
+fi
 if [ "$units_ok" -eq 1 ]; then pass 'systemd units'; else fail 'systemd units'; fi
 
 disk_ok=1
-db_bytes=''
+snapshot_geometry=''
+page_count=''
+page_size=''
 release_kb=''
 free_kb=''
 if [ -f "$DB" ] && [ -d "$REPO" ]; then
-  db_bytes=$(stat -c %s -- "$DB" 2>/dev/null) || disk_ok=0
+  snapshot_geometry=$(sqlite3 -readonly "$DB" 'PRAGMA query_only=ON; PRAGMA page_count; PRAGMA page_size;' 2>/dev/null) || disk_ok=0
+  page_count=$(printf '%s\n' "$snapshot_geometry" | awk 'NR == 1 { print }')
+  page_size=$(printf '%s\n' "$snapshot_geometry" | awk 'NR == 2 { print }')
+  [ "$(printf '%s\n' "$snapshot_geometry" | awk 'END { print NR }')" = '2' ] || disk_ok=0
   release_kb=$(du -sk -- "$REPO" 2>/dev/null | awk 'NR == 1 { print $1 }') || disk_ok=0
   free_kb=$(df -Pk -- "$REPO" 2>/dev/null | awk 'NR == 2 { print $4 }') || disk_ok=0
 else
   disk_ok=0
 fi
-numeric "$db_bytes" || disk_ok=0
+numeric "$page_count" || disk_ok=0
+numeric "$page_size" || disk_ok=0
 numeric "$release_kb" || disk_ok=0
 numeric "$free_kb" || disk_ok=0
 if [ "$disk_ok" -eq 1 ]; then
-  if [ "${#db_bytes}" -gt 15 ] || [ "${#release_kb}" -gt 15 ] || [ "${#free_kb}" -gt 15 ]; then
+  if [ "${#page_count}" -gt 10 ] || [ "${#page_size}" -gt 5 ] ||
+    [ "${#release_kb}" -gt 15 ] || [ "${#free_kb}" -gt 15 ]; then
     disk_ok=0
   else
-    backup_kb=$(((db_bytes + 1023) / 1024))
+    snapshot_bytes=$((page_count * page_size))
+    backup_bytes_with_margin=$(((snapshot_bytes * 110 + 99) / 100))
+    backup_kb=$(((backup_bytes_with_margin + 1023) / 1024))
     required_kb=$((release_kb + (2 * backup_kb)))
     [ "$free_kb" -ge "$required_kb" ] || disk_ok=0
   fi
 fi
 if [ "$disk_ok" -eq 1 ]; then pass 'disk capacity'; else fail 'disk capacity'; fi
+
+# This is intentionally the final external operation. A ready result is valid
+# only for the pause state observed after every slower readiness check.
+final_paused=''
+if [ -f "$DB" ] && [ -r "$DB" ]; then
+  final_paused=$(sqlite3 -readonly "$DB" 'PRAGMA query_only=ON; SELECT paused FROM game_state WHERE id=1;' 2>/dev/null) || final_paused=''
+fi
+if [ "$final_paused" = '1' ]; then pass 'final game paused'; else fail 'final game paused'; fi
 
 if [ "$failures" -eq 0 ]; then
   echo 'READY separately authorized cutover gates passed'
