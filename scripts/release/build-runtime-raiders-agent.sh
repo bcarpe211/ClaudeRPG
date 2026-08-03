@@ -21,13 +21,31 @@ case "$RUNTIME_RAIDERS_TEAM_ID" in *[!A-Z0-9]*|'') echo "RUNTIME_RAIDERS_TEAM_ID
 REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RUNTIME_RAIDERS_TEAM_ID"'"'
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)"
 OUTPUT="$ROOT/dist"
-if [ "$#" -gt 0 ]; then
-  [ "$#" -eq 2 ] && [ "$1" = '--output' ] || {
-    echo "usage: $0 [--output directory]" >&2
-    exit 64
-  }
-  OUTPUT="$2"
-fi
+SCRATCH=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || {
+        echo "usage: $0 [--output directory] [--scratch-path directory]" >&2
+        exit 64
+      }
+      OUTPUT="$2"
+      shift 2
+      ;;
+    --scratch-path)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || {
+        echo "usage: $0 [--output directory] [--scratch-path directory]" >&2
+        exit 64
+      }
+      SCRATCH="$2"
+      shift 2
+      ;;
+    *)
+      echo "usage: $0 [--output directory] [--scratch-path directory]" >&2
+      exit 64
+      ;;
+  esac
+done
 TEMP_ROOT=/tmp
 [ -n "$TMPDIR" ] && TEMP_ROOT="$TMPDIR"
 WORK="$(mktemp -d "$TEMP_ROOT/runtime-raiders-release.XXXXXX")"
@@ -61,8 +79,13 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 STAGED_OUTPUT="$(mktemp -d "$WORK/output.XXXXXX")"
 for arch in arm64 x86_64; do
-  (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product raiders)
-  cp "$ROOT/companion/.build/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
+  if [ -n "$SCRATCH" ]; then
+    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product raiders)
+    cp "$SCRATCH/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
+  else
+    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product raiders)
+    cp "$ROOT/companion/.build/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
+  fi
 done
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
 APP="$WORK/Runtime Raiders Agent.app"

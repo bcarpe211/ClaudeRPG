@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -193,6 +193,19 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
 
 function invoke(file: string, args: string[], environment: NodeJS.ProcessEnv) {
   return spawnSync('bash', [file, ...args], { env: environment, encoding: 'utf8' });
+}
+
+function buildCacheIdentity(path: string): string[] {
+  if (!existsSync(path)) return ['missing'];
+  const entries: string[] = [];
+  const visit = (current: string, relative: string): void => {
+    const entry = lstatSync(current);
+    entries.push([relative, entry.dev, entry.ino, entry.mode, entry.size, entry.mtimeMs, entry.ctimeMs].join(':'));
+    if (!entry.isDirectory()) return;
+    for (const child of readdirSync(current).sort()) visit(join(current, child), join(relative, child));
+  };
+  visit(path, '.');
+  return entries;
 }
 
 describe('Runtime Raiders companion installer', () => {
@@ -913,17 +926,18 @@ describe('Runtime Raiders release build', () => {
   });
 
   it('builds, signs, notarizes, staples, rezips, and checksums a universal app without publishing', () => {
-    // Catches a release that skips one architecture, a trust step, or publication isolation.
+    // Catches a release that writes its test build into the repository cache.
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-release-flow-'));
     try {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
       const log = join(root, 'commands.log');
       executable(join(fake, 'swift'), [
-        'arch=""',
-        'while [ "$#" -gt 0 ]; do if [ "$1" = "--arch" ]; then arch="$2"; shift 2; else shift; fi; done',
-        'mkdir -p "$PWD/.build/$arch-apple-macosx/release"',
-        'printf "%s" "$arch" > "$PWD/.build/$arch-apple-macosx/release/raiders"',
+        'arch=""; scratch=""',
+        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
+        '[ -n "$scratch" ] || scratch="$PWD/.build"',
+        'mkdir -p "$scratch/$arch-apple-macosx/release"',
+        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
         'printf "swift %s\\n" "$arch" >> "$RUNTIME_RAIDERS_TEST_LOG"',
       ]);
       executable(join(fake, 'lipo'), [
@@ -949,7 +963,9 @@ describe('Runtime Raiders release build', () => {
         'printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"',
       ]);
       const output = join(root, 'output');
-      const result = invoke(build, ['--output', output], {
+      const scratch = join(root, 'scratch');
+      const repositoryCacheBefore = buildCacheIdentity(join(process.cwd(), 'companion/.build'));
+      const result = invoke(build, ['--output', output, '--scratch-path', scratch], {
         ...process.env,
         PATH: fake + ':/usr/bin:/bin',
         RUNTIME_RAIDERS_TEST_LOG: log,
@@ -959,6 +975,9 @@ describe('Runtime Raiders release build', () => {
         FAKE_RELEASE_SHASUM_FAIL: '0',
       });
       expect(result.status, result.stderr).toBe(0);
+      expect(buildCacheIdentity(join(process.cwd(), 'companion/.build'))).toEqual(repositoryCacheBefore);
+      expect(readFileSync(join(scratch, 'arm64-apple-macosx/release/raiders'), 'utf8')).toBe('arm64');
+      expect(readFileSync(join(scratch, 'x86_64-apple-macosx/release/raiders'), 'utf8')).toBe('x86_64');
       expect(existsSync(join(output, 'runtime-raiders-agent.zip'))).toBe(true);
       expect(existsSync(join(output, 'runtime-raiders-agent.zip.sha256'))).toBe(true);
       expect(readFileSync(join(output, 'install.sh'), 'utf8')).toContain("TEAM_ID='" + teamId + "'");
@@ -987,10 +1006,11 @@ describe('Runtime Raiders release build', () => {
       mkdirSync(fake, { recursive: true });
       const log = join(root, 'commands.log');
       executable(join(fake, 'swift'), [
-        'arch=""',
-        'while [ "$#" -gt 0 ]; do if [ "$1" = "--arch" ]; then arch="$2"; shift 2; else shift; fi; done',
-        'mkdir -p "$PWD/.build/$arch-apple-macosx/release"',
-        'printf "%s" "$arch" > "$PWD/.build/$arch-apple-macosx/release/raiders"',
+        'arch=""; scratch=""',
+        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
+        '[ -n "$scratch" ] || scratch="$PWD/.build"',
+        'mkdir -p "$scratch/$arch-apple-macosx/release"',
+        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
       ]);
       executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
       executable(join(fake, 'codesign'), ['exit 0']);
@@ -1002,7 +1022,7 @@ describe('Runtime Raiders release build', () => {
       writeFileSync(join(output, 'runtime-raiders-agent.zip'), 'old zip');
       writeFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'old checksum');
       writeFileSync(join(output, 'install.sh'), 'old installer');
-      const result = invoke(build, ['--output', output], {
+      const result = invoke(build, ['--output', output, '--scratch-path', join(root, 'scratch')], {
         ...process.env, PATH: fake + ':/usr/bin:/bin', RUNTIME_RAIDERS_TEST_LOG: log,
         RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
         RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
@@ -1023,8 +1043,8 @@ describe('Runtime Raiders release build', () => {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
       executable(join(fake, 'swift'), [
-        'arch=""; while [ "$#" -gt 0 ]; do if [ "$1" = "--arch" ]; then arch="$2"; shift 2; else shift; fi; done',
-        'mkdir -p "$PWD/.build/$arch-apple-macosx/release"; printf "%s" "$arch" > "$PWD/.build/$arch-apple-macosx/release/raiders"',
+        'arch=""; scratch=""; while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
+        '[ -n "$scratch" ] || scratch="$PWD/.build"; mkdir -p "$scratch/$arch-apple-macosx/release"; printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
       ]);
       executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
       executable(join(fake, 'codesign'), ['exit 0']);
@@ -1048,7 +1068,7 @@ describe('Runtime Raiders release build', () => {
       writeFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'old checksum');
       writeFileSync(join(output, 'install.sh'), 'old installer');
       const moved = join(root, 'moves.log');
-      const failed = invoke(build, ['--output', output], {
+      const failed = invoke(build, ['--output', output, '--scratch-path', join(root, 'scratch')], {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: output, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '1',
       });
       expect(failed.status).not.toBe(0);
@@ -1061,7 +1081,7 @@ describe('Runtime Raiders release build', () => {
       const orphan = join(root, 'orphan');
       mkdirSync(orphan, { recursive: true });
       writeFileSync(join(orphan, 'install.sh'), 'user installer');
-      const orphanFailed = invoke(build, ['--output', orphan], {
+      const orphanFailed = invoke(build, ['--output', orphan, '--scratch-path', join(root, 'scratch-orphan')], {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: orphan, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '1',
       });
       expect(orphanFailed.status).not.toBe(0);
@@ -1070,7 +1090,7 @@ describe('Runtime Raiders release build', () => {
       const directoryTarget = join(root, 'directory-target');
       mkdirSync(join(directoryTarget, 'install.sh'), { recursive: true });
       writeFileSync(join(directoryTarget, 'install.sh', 'sentinel'), 'keep');
-      const directoryResult = invoke(build, ['--output', directoryTarget], {
+      const directoryResult = invoke(build, ['--output', directoryTarget, '--scratch-path', join(root, 'scratch-directory')], {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: directoryTarget, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '0',
       });
       expect(directoryResult.status).not.toBe(0);
@@ -1081,7 +1101,7 @@ describe('Runtime Raiders release build', () => {
       mkdirSync(symlinkTarget, { recursive: true });
       writeFileSync(outsideInstaller, 'outside');
       symlinkSync(outsideInstaller, join(symlinkTarget, 'install.sh'));
-      const symlinkResult = invoke(build, ['--output', symlinkTarget], {
+      const symlinkResult = invoke(build, ['--output', symlinkTarget, '--scratch-path', join(root, 'scratch-symlink')], {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: symlinkTarget, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '0',
       });
       expect(symlinkResult.status).not.toBe(0);
