@@ -268,6 +268,149 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testDaemonRestartWithMissingCollectorStateFailsClosedAcrossRuntimeComponents() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-missing-state-restart-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let providerRoot = root.appendingPathComponent("codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: providerRoot, withIntermediateDirectories: true)
+        let providerFile = providerRoot.appendingPathComponent("existing.jsonl")
+        try Data().write(to: providerFile)
+        let paths = AgentPaths(applicationSupportDirectory: root)
+        let registry = try AdapterRegistry.enabled(
+            surfaces: [.codexCLI],
+            codexRoot: providerRoot
+        )
+        let outbox = try Outbox(directory: paths.outboxDirectory)
+        let configuration = AgentConfiguration(
+            companionVersion: "0.1.0",
+            deviceID: "00000000-0000-4000-8000-000000000001",
+            dedupeSecret: Data("DO_NOT_EXPORT_LOCAL_SECRET".utf8)
+        )
+
+        var original: AgentController? = try AgentController(
+            registry: registry,
+            paths: paths,
+            outbox: outbox,
+            configuration: configuration,
+            clockMS: { self.now }
+        )
+        try original?.turnOn(existingFiles: [providerFile])
+        try original?.install(existingFiles: [providerFile])
+        try append(completedRun(nativeID: "queued-before-missing-state"), to: providerFile)
+        try original?.processChangedFiles([providerFile])
+        let queuedBeforeRestart = try outbox.queuedCount()
+        XCTAssertGreaterThan(queuedBeforeRestart, 0)
+        try original?.turnOff()
+        original = nil
+
+        let enrollmentFile = paths.stateDirectory.appendingPathComponent("enrollment.json")
+        let enrollmentData = Data(
+            """
+            {"version":1,"device_id":"00000000-0000-4000-8000-000000000001","device_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","dedupe_secret":"\(String(repeating: "ab", count: 32))","server_url":"http://127.0.0.1:8765","cutover_at":1700000000000,"enabled_surfaces":["codex_cli"]}
+            """.utf8
+        )
+        try enrollmentData.write(to: enrollmentFile)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: enrollmentFile.path
+        )
+        let enrollment = try EnrollmentConfiguration.load(
+            from: enrollmentFile,
+            allowsTestOrigin: true
+        )
+        try FileManager.default.removeItem(
+            at: paths.stateDirectory.appendingPathComponent("collector-state.json")
+        )
+        try append(
+            completedRun(nativeID: "DO_NOT_EXPORT_AFTER_MISSING_STATE"),
+            to: providerFile
+        )
+
+        let providerRead = expectation(description: "missing state must not read provider data")
+        providerRead.isInverted = true
+        let watcherStartRequested = expectation(
+            description: "missing state must not request file watcher startup"
+        )
+        watcherStartRequested.isInverted = true
+        let uploadStarted = expectation(description: "missing state must not drain outbox")
+        uploadStarted.isInverted = true
+        let heartbeatStarted = expectation(description: "missing state must not enable heartbeat")
+        heartbeatStarted.isInverted = true
+        let restarted = try AgentController(
+            registry: registry,
+            paths: paths,
+            outbox: outbox,
+            configuration: .init(
+                companionVersion: "0.1.0",
+                deviceID: enrollment.deviceID,
+                dedupeSecret: enrollment.dedupeSecret
+            ),
+            clockMS: { self.now },
+            afterProviderRead: { providerRead.fulfill() }
+        )
+        let uploadConfiguration = UploadConfiguration(
+            origin: enrollment.serverURL,
+            deviceToken: enrollment.deviceToken,
+            allowsTestOrigin: true
+        )
+        let uploader = try Uploader(
+            outbox: outbox,
+            configuration: uploadConfiguration,
+            transport: { _ in
+                uploadStarted.fulfill()
+                return .init(
+                    statusCode: 200,
+                    body: Data(
+                        "{\"accepted\":\(queuedBeforeRestart),\"duplicate\":0,\"ignored\":0}".utf8
+                    )
+                )
+            },
+            clockMS: { self.now }
+        )
+        let heartbeat = try Heartbeat(
+            configuration: uploadConfiguration,
+            companionVersion: "0.1.0",
+            transport: { _ in
+                heartbeatStarted.fulfill()
+                return .init(statusCode: 204, body: Data())
+            },
+            clockMS: { self.now }
+        )
+        let watcher = FileWatcher(registry: registry) { files in
+            try? restarted.processChangedFiles(files)
+        }
+        defer {
+            uploader.setEnabled(false)
+            heartbeat.setEnabled(false)
+            watcher.stop()
+        }
+
+        let existingFiles = try watcher.discoverProviderFiles()
+        try restarted.install(existingFiles: existingFiles)
+        uploader.schedule(enabled: restarted.enabled)
+        heartbeat.setEnabled(restarted.enabled)
+        if restarted.enabled {
+            watcherStartRequested.fulfill()
+            try? watcher.start()
+        }
+
+        XCTAssertFalse(restarted.enabled)
+        XCTAssertFalse(restarted.isAcceptingCollection)
+        XCTAssertEqual(
+            try AgentController.persistedCollectorState(
+                paths: paths,
+                surfaces: enrollment.enabledSurfaces
+            ),
+            .disabled
+        )
+        wait(
+            for: [providerRead, watcherStartRequested, uploadStarted, heartbeatStarted],
+            timeout: 0.5
+        )
+        XCTAssertEqual(try outbox.queuedCount(), queuedBeforeRestart)
+    }
+
     func testRestartRecoversPastPersistedOversizedLineAndCollectsLaterValidRun() throws {
         try withHarness { harness in
             let file = try harness.makeFile("oversized-restart.jsonl", contents: Data())
@@ -1323,6 +1466,7 @@ private final class ControllerHarness {
             readLimitBytes: readLimitBytes,
             clockMS: { fixedNow }
         )
+        try controller.turnOn(existingFiles: [])
     }
 
     func makeController(

@@ -352,6 +352,7 @@ public final class AgentController: @unchecked Sendable {
         try Self.createPrivateDirectory(paths.supportDirectory)
         let stateDirectoryDescriptor = try OwnerOnlyDirectory.openOrCreate(paths.stateDirectory)
         do {
+            let stateWasMissing: Bool
             if let data = try Self.readState(
                 directoryDescriptor: stateDirectoryDescriptor,
                 name: "collector-state.json",
@@ -362,11 +363,14 @@ public final class AgentController: @unchecked Sendable {
                     throw AgentControllerError.invalidState
                 }
                 state = decoded
+                stateWasMissing = false
             } else {
-                state = PersistedState(version: 1, enabled: true, files: [:])
+                state = PersistedState(version: 1, enabled: false, files: [:])
+                stateWasMissing = true
             }
             self.stateDirectoryDescriptor = stateDirectoryDescriptor
             acceptingCollection = state.enabled
+            if stateWasMissing { try persist() }
         } catch {
             Darwin.close(stateDirectoryDescriptor)
             throw error
