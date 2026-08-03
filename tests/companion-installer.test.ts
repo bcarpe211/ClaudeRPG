@@ -208,6 +208,16 @@ function buildCacheIdentity(path: string): string[] {
   return entries;
 }
 
+function disposableReleaseBuilder(root: string): string {
+  const fixtureBuild = join(root, 'scripts/release/build-runtime-raiders-agent.sh');
+  const fixtureInstaller = join(root, 'companion/packaging/install.sh');
+  mkdirSync(join(root, 'scripts/release'), { recursive: true });
+  mkdirSync(join(root, 'companion/packaging'), { recursive: true });
+  writeFileSync(fixtureBuild, readFileSync(build));
+  writeFileSync(fixtureInstaller, readFileSync(installer));
+  return fixtureBuild;
+}
+
 describe('Runtime Raiders companion installer', () => {
   it('persists collection off before the first launchd bootstrap and performs no upload', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-fresh-off-'));
@@ -920,6 +930,48 @@ describe('Runtime Raiders release build', () => {
       const result = invoke(build, ['--output', output], { ...process.env, RUNTIME_RAIDERS_CODESIGN_IDENTITY: '', RUNTIME_RAIDERS_TEAM_ID: '' });
       expect(result.status).not.toBe(0);
       expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves a relative scratch path against the caller before building', () => {
+    // Catches resolving one scratch argument from two different working directories.
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-relative-scratch-'));
+    try {
+      const fake = join(root, 'fakes');
+      mkdirSync(fake, { recursive: true });
+      executable(join(fake, 'swift'), [
+        'arch=""; scratch=""',
+        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
+        'mkdir -p "$scratch/$arch-apple-macosx/release"',
+        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
+      ]);
+      executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
+      executable(join(fake, 'codesign'), ['exit 0']);
+      executable(join(fake, 'ditto'), ['last=""; for argument in "$@"; do last="$argument"; done; printf x > "$last"']);
+      executable(join(fake, 'xcrun'), ['exit 0']);
+      executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+      const output = join(root, 'output');
+      const result = spawnSync('bash', [
+        disposableReleaseBuilder(root), '--output', output, '--scratch-path', 'relative-scratch',
+      ], {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: fake + ':/usr/bin:/bin',
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(root, 'relative-scratch/arm64-apple-macosx/release/raiders'), 'utf8')).toBe('arm64');
+      expect(readFileSync(join(root, 'relative-scratch/x86_64-apple-macosx/release/raiders'), 'utf8')).toBe('x86_64');
+      expect(existsSync(join(root, 'companion/relative-scratch'))).toBe(false);
+      expect(existsSync(join(output, 'runtime-raiders-agent.zip'))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

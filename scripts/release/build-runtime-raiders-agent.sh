@@ -37,7 +37,10 @@ while [ "$#" -gt 0 ]; do
         echo "usage: $0 [--output directory] [--scratch-path directory]" >&2
         exit 64
       }
-      SCRATCH="$2"
+      case "$2" in
+        /*) SCRATCH="$2" ;;
+        *) SCRATCH="$(pwd -P)/$2" ;;
+      esac
       shift 2
       ;;
     *)
