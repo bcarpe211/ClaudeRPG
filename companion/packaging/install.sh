@@ -40,7 +40,8 @@ SHIM="$SUPPORT/raiders"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 COMMAND_LINK_FILE="$STATE/command-link"
 MARKER_FLAG="$STATE/path-marker-owned"
-for path in "$HOME/Library" "$HOME/Library/Application Support" "$HOME/Library/LaunchAgents" "$SUPPORT" "$STATE" "$OUTBOX" "$APP" "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG"; do
+COLLECTOR_STATE="$STATE/collector-state.json"
+for path in "$HOME/Library" "$HOME/Library/Application Support" "$HOME/Library/LaunchAgents" "$SUPPORT" "$STATE" "$OUTBOX" "$APP" "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG" "$COLLECTOR_STATE"; do
   [ ! -L "$path" ] || { echo "Runtime Raiders refuses symlinked path: $path" >&2; exit 1; }
 done
 if [ -e "$APP" ] && { [ ! -d "$APP" ] || [ "$(stat -f %u "$APP")" != "$(id -u)" ]; }; then
@@ -57,7 +58,7 @@ if [ -e "$HOME/Library/LaunchAgents" ] && { [ ! -d "$HOME/Library/LaunchAgents" 
   echo "Runtime Raiders refuses unsafe LaunchAgents directory" >&2
   exit 1
 fi
-for path in "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG"; do
+for path in "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG" "$COLLECTOR_STATE"; do
   if [ -e "$path" ] && { [ ! -f "$path" ] || [ "$(stat -f %u "$path")" != "$(id -u)" ]; }; then
     echo "Runtime Raiders refuses unsafe file target: $path" >&2
     exit 1
@@ -82,6 +83,21 @@ if [ -f "$COMMAND_LINK_FILE" ]; then
       ;;
   esac
 fi
+
+status_is_off() {
+  status_output="$("$1" status)" || return 1
+  case "$status_output" in
+    *'"enabled":false'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+persist_fresh_off_state() {
+  temporary_state="$(mktemp "$STATE/.collector-state.XXXXXX")"
+  printf '{"enabled":false,"files":{},"version":1}\n' > "$temporary_state"
+  chmod 600 "$temporary_state"
+  mv "$temporary_state" "$COLLECTOR_STATE"
+}
 if [ -z "$command_path" ]; then
   old_ifs="$IFS"
   IFS=:
@@ -243,9 +259,30 @@ if [ ! -f "$ENROLLMENT" ]; then
   chmod 600 "$STAGED_ENROLLMENT"
 fi
 
+# The installer owns the activation boundary. A new install receives an
+# atomic, persisted-off state before launchd can start it. An upgrade uses the
+# still-installed, signed binary to drain the control command and persist off
+# before any app or LaunchAgent replacement begins.
+if [ -d "$APP" ]; then
+  codesign --verify --strict -R="$REQUIREMENT" "$APP"
+  if ! status_is_off "$EXECUTABLE"; then
+    "$EXECUTABLE" off
+    status_is_off "$EXECUTABLE" || {
+      echo "Runtime Raiders could not verify the existing collector is off" >&2
+      exit 1
+    }
+  fi
+elif [ -f "$COLLECTOR_STATE" ]; then
+  status_is_off "$CANDIDATE/Contents/MacOS/runtime-raiders-agent" || {
+    echo "Runtime Raiders found unverified collector state without an installed app" >&2
+    exit 1
+  }
+else
+  persist_fresh_off_state
+fi
+
 transaction_active=1
 if [ -e "$APP" ]; then
-  codesign --verify --strict -R="$REQUIREMENT" "$APP"
   mv "$APP" "$WORK/old.app"
   had_app=1
 fi
@@ -396,5 +433,9 @@ if ! launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
   echo "Runtime Raiders launchd bootstrap failed; prior installation restored" >&2
   exit 1
 fi
+status_is_off "$EXECUTABLE" || {
+  echo "Runtime Raiders launchd started without a verified off state" >&2
+  exit 1
+}
 transaction_committed=1
 echo "Runtime Raiders installed. Run 'raiders status' to check it."
