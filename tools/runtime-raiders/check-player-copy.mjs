@@ -23,7 +23,9 @@ const scanTargets = [
   'src/domain/shopview.ts',
   'README.md',
 ];
-const operatorGuideTargets = ['docs/PI_SETUP.md'];
+const piSetupPath = 'docs/PI_SETUP.md';
+const cutoverPlanPath = 'docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md';
+const operatorGuideTargets = [piSetupPath, cutoverPlanPath];
 const operatorInstructionRules = [
   {
     pattern: /sudo\s+install\b.*\bclaude-rpg-autoupdate\b/i,
@@ -40,6 +42,39 @@ const operatorInstructionRules = [
   {
     pattern: /sudo\s+systemctl\s+start\s+claude-rpg-autoupdate\b/i,
     label: 'force-run moving-main updater',
+  },
+  {
+    pattern: /\brestore\s+(?:the\s+)?(?:auto-update|updater)\s+timer\b/i,
+    allowPattern: /\b(?:do not|never|must not)\b/i,
+    label: 'restore moving-main updater',
+  },
+  {
+    pattern: /\b(?:enable|start)\s+(?:the\s+)?(?:current\s+)?(?:moving[- ](?:main|`main`)\s+)?(?:auto-update|updater)\s+(?:timer|oneshot|service)\b/i,
+    allowPattern: /\b(?:do not|never|must not|disabled|inactive)\b/i,
+    label: 'activate moving-main updater',
+  },
+  {
+    paths: [piSetupPath],
+    pattern: /\bgit\s+pull(?:\s+--ff-only)?\b.*(?:&&|;)\s*(?:sudo\s+)?systemctl\s+restart\s+claude-rpg(?:\.service)?\b/i,
+    label: 'raw pull-restart release',
+  },
+  {
+    paths: [piSetupPath],
+    pattern: /\b(?:pastes?|installs?|sources?|runs?|uses?)\b[^.\n]*\b(?:setup|telemetry|otel)\s+snippet\b/i,
+    allowPattern: /\b(?:do not|never|retired|remove|removed|unsupported|unavailable)\b/i,
+    label: 'install legacy telemetry snippet',
+  },
+  {
+    paths: [piSetupPath],
+    pattern: /\bClaude Code\b[^.\n]*\btoken usage\b[^.\n]*\bstreams?\b/i,
+    allowPattern: /\b(?:do not|never|retired|remove|removed|unsupported|unavailable)\b/i,
+    label: 'score Claude Code token stream',
+  },
+  {
+    paths: [piSetupPath],
+    pattern: /\brpg_(?:on|off)\b/i,
+    allowPattern: /\b(?:do not use|must not use|retired|remove|removed|unsupported|unavailable)\b/i,
+    label: 'use legacy rpg command',
   },
 ];
 const pathScopedRules = [
@@ -94,7 +129,8 @@ for (const target of operatorGuideTargets) {
     const lines = readFileSync(file, 'utf8').split(/\r?\n/);
     lines.forEach((line, index) => {
       for (const rule of operatorInstructionRules) {
-        if (rule.pattern.test(line)) {
+        if (rule.paths && !rule.paths.includes(relativeFile)) continue;
+        if (rule.pattern.test(line) && !(rule.allowPattern?.test(line))) {
           violations.push(`${relativeFile}:${index + 1}: stale operator instruction: ${rule.label}`);
         }
       }

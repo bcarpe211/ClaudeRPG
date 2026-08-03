@@ -16,6 +16,8 @@
 - Caddy serves the new name and retains the old host temporarily as a compatibility alias.
 - No step creates public ingress; Cloudflare DNS-01 certificate issuance is not public application exposure.
 - Keep the existing repository path, SQLite filename, `claude-rpg.service`, environment filename, and auto-update unit during this compatibility-first release.
+- Every terminal outcome—accepted, aborted, or rolled back—leaves the current updater timer disabled and inactive and its oneshot inactive.
+- Future release automation requires a separately designed and reviewed policy that consumes an explicitly approved pinned SHA and rechecks the full authorization and integrity contract before each checkout or start.
 - Never deploy unless `game_state.paused = 1` and remains paused at the final check.
 - Monday is the earliest target, not a deadline. Any failed gate reschedules the launch without a partial cutover.
 - Existing history is preserved; no progression reset is permitted.
@@ -220,7 +222,7 @@ Preparation occurs before launch day and changes no scoring:
 After explicit user approval and a final `paused=1` check:
 
 ```text
-stop/disable the auto-update timer temporarily
+disable the auto-update timer and confirm both timer and oneshot are inactive
 record prior SHA and current environment checksum
 create a SQLite .backup with timestamp and verify integrity
 stop the game service
@@ -230,7 +232,7 @@ start the service and wait for /health
 verify schema, retained Raider totals, policy version, and old OTLP no-op
 verify landing, Raider Hub, TV, Leaderboard, new/old HTTPS, mDNS, and SSE version
 enable canary companions, run Codex Desktop and CLI, then enable the office
-restore the auto-update timer only after acceptance
+leave the updater timer disabled/inactive and the oneshot inactive after acceptance
 ```
 
 The service stays stopped between old code and the complete new configuration,
@@ -394,8 +396,10 @@ Claude/Omp events. Only then have all players run `raiders on`.
 
 Watch at least one complete Fight plus a long Run, parallel Runs, a client
 restart, and a brief server-unavailable retry. On any rollback trigger, execute
-rollback immediately. Otherwise restore the updater timer and record the live
-SSE release SHA, policy version, cutover time, and verification results.
+rollback immediately. Whether the result is accepted, aborted, or rolled back,
+leave the updater timer disabled/inactive and the oneshot inactive. For an
+accepted release, record the live SSE release SHA, policy version, cutover time,
+and verification results.
 
 - [ ] **Step 6: Commit the content-free deployment record**
 
@@ -407,3 +411,7 @@ git commit -m "docs(raiders): record internal cutover verification"
 The old hostname remains temporarily compatible after launch. Retiring it,
 renaming the repository/service/database/environment identifiers, and performing
 the comprehensive internal rewrite require their own later design and migration.
+The current moving-`main` updater remains unauthorized. Future automation is a
+separate review and may operate only on an explicitly approved pinned SHA while
+rechecking that SHA, pause state, units, ownership, environment, and database
+integrity before every checkout or service start.

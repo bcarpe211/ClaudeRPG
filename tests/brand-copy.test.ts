@@ -167,6 +167,73 @@ describe('Runtime Raiders brand copy', () => {
     expect(result.output).toContain('docs/PI_SETUP.md:3: stale operator instruction: force-run moving-main updater');
   });
 
+  it('rejects legacy Pi onboarding and raw pull-restart release shortcuts', () => {
+    const root = copyFixture();
+    writeFileSync(join(root, 'docs/PI_SETUP.md'), [
+      'Paste the shown setup snippet into your shell and open a new terminal.',
+      'Their Claude Code token usage then streams to the Pi.',
+      '`rpg_off`/`rpg_on` toggle collection on-network.',
+      'cd ~/ClaudeRPG && git pull --ff-only && sudo systemctl restart claude-rpg',
+    ].join('\n'));
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('docs/PI_SETUP.md:1: stale operator instruction: install legacy telemetry snippet');
+    expect(result.output).toContain('docs/PI_SETUP.md:2: stale operator instruction: score Claude Code token stream');
+    expect(result.output).toContain('docs/PI_SETUP.md:3: stale operator instruction: use legacy rpg command');
+    expect(result.output).toContain('docs/PI_SETUP.md:4: stale operator instruction: raw pull-restart release');
+  });
+
+  it('rejects restoring, enabling, or starting the moving-main updater in the cutover plan', () => {
+    const root = copyFixture();
+    const planDir = join(root, 'docs/superpowers/plans');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(join(planDir, '2026-08-01-runtime-raiders-internal-deployment-cutover.md'), [
+      'restore the auto-update timer only after acceptance',
+      'sudo systemctl enable --now claude-rpg-autoupdate.timer',
+      'sudo systemctl start claude-rpg-autoupdate',
+    ].join('\n'));
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md:1: stale operator instruction: restore moving-main updater');
+    expect(result.output).toContain('docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md:2: stale operator instruction: enable moving-main updater');
+    expect(result.output).toContain('docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md:3: stale operator instruction: force-run moving-main updater');
+  });
+
+  it('allows explicit legacy retirement and compatibility wording', () => {
+    const root = copyFixture();
+    writeFileSync(join(root, 'docs/PI_SETUP.md'), [
+      'Compatibility identifiers retained: /home/rluser/ClaudeRPG and claude-rpg-autoupdate.*.',
+      'Claude Code and Omp are unavailable and unsupported.',
+      'Manually remove the legacy Claude OTel shell configuration and old `rpg_*` commands.',
+      'The current updater timer remains disabled and inactive; its oneshot remains inactive.',
+    ].join('\n'));
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe('');
+  });
+
+  it('accepts the current Pi guide and cutover plan', () => {
+    const root = copyFixture();
+    const planDir = join(root, 'docs/superpowers/plans');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(join(root, 'docs/PI_SETUP.md'), readFileSync(join(process.cwd(), 'docs/PI_SETUP.md')));
+    writeFileSync(
+      join(planDir, '2026-08-01-runtime-raiders-internal-deployment-cutover.md'),
+      readFileSync(join(process.cwd(), 'docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md')),
+    );
+
+    const result = runCopyCheck(root);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe('');
+  });
+
   it('scans Bazaar view-model copy that is rendered on active player pages', () => {
     const root = copyFixture();
     writeFileSync(

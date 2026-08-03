@@ -118,15 +118,14 @@ companion installer does not remove or change legacy shell configuration for you
   alone doesn't work: Chromium only hides the pointer once it moves over the
   page, which never happens on a kiosk; and `unclutter` is X11-only.)
 
-## Updating the game
+## Releasing an update
 
-**Manual:**
-```bash
-cd ~/ClaudeRPG && git pull --ff-only && sudo systemctl restart claude-rpg
-# add `npm ci` only if package-lock.json changed in the pull
-```
-(The kiosk page auto-reconnects via SSE; refresh isn't usually needed, but you
-can reboot for a clean slate.)
+Every release, including a routine update, must follow the exact recorded,
+pinned-SHA, and separately authorized procedure in
+[`docs/RUNTIME_RAIDERS_CUTOVER.md`](RUNTIME_RAIDERS_CUTOVER.md). That procedure
+rechecks the pause and updater holds, approved SHA, environment, ownership,
+database backup and integrity, service contract, and post-start verification.
+There is no raw pull-and-restart release shortcut.
 
 ### Release automation is disabled
 
