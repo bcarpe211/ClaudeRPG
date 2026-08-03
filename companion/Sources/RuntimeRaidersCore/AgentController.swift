@@ -19,9 +19,17 @@ public enum AdapterHealth: String, Codable, Equatable, Sendable {
     case unavailable
 }
 
+public enum PersistedCollectorState: String, Codable, Equatable, Sendable {
+    case missing
+    case invalid
+    case enabled
+    case disabled
+}
+
 public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable {
     public let enabled: Bool
     public let daemonRunning: Bool
+    public let persistedState: PersistedCollectorState
     public let serverEnabledSurfaces: [RunSurface]
     public let compiledAdapters: [RunSurface: AdapterHealth]
     public let queuedEventCount: Int
@@ -31,6 +39,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     public init(
         enabled: Bool,
         daemonRunning: Bool,
+        persistedState: PersistedCollectorState,
         serverEnabledSurfaces: [RunSurface],
         compiledAdapters: [RunSurface: AdapterHealth],
         queuedEventCount: Int,
@@ -39,6 +48,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     ) {
         self.enabled = enabled
         self.daemonRunning = daemonRunning
+        self.persistedState = persistedState
         self.serverEnabledSurfaces = serverEnabledSurfaces
         self.compiledAdapters = compiledAdapters
         self.queuedEventCount = queuedEventCount
@@ -379,20 +389,42 @@ public final class AgentController: @unchecked Sendable {
         paths: AgentPaths,
         surfaces: [RunSurface]
     ) throws -> Bool? {
-        guard let descriptor = try OwnerOnlyDirectory.openExisting(paths.stateDirectory) else {
-            return nil
+        switch try persistedCollectorState(paths: paths, surfaces: surfaces) {
+        case .missing: return nil
+        case .invalid: throw AgentControllerError.invalidState
+        case .enabled: return true
+        case .disabled: return false
+        }
+    }
+
+    public static func persistedCollectorState(
+        paths: AgentPaths,
+        surfaces: [RunSurface]
+    ) throws -> PersistedCollectorState {
+        let descriptor: Int32
+        do {
+            guard let existing = try OwnerOnlyDirectory.openExisting(paths.stateDirectory) else {
+                return .missing
+            }
+            descriptor = existing
+        } catch {
+            return .invalid
         }
         defer { Darwin.close(descriptor) }
-        guard let data = try readState(
-            directoryDescriptor: descriptor,
-            name: "collector-state.json",
-            maximumBytes: 4 * 1_024 * 1_024
-        ) else { return nil }
-        guard let decoded = try? JSONDecoder().decode(PersistedState.self, from: data),
-              valid(decoded, surfaces: surfaces) else {
-            throw AgentControllerError.invalidState
+        let data: Data?
+        do {
+            data = try readState(
+                directoryDescriptor: descriptor,
+                name: "collector-state.json",
+                maximumBytes: 4 * 1_024 * 1_024
+            )
+        } catch {
+            return .invalid
         }
-        return decoded.enabled
+        guard let data else { return .missing }
+        guard let decoded = try? JSONDecoder().decode(PersistedState.self, from: data),
+              valid(decoded, surfaces: surfaces) else { return .invalid }
+        return decoded.enabled ? .enabled : .disabled
     }
 
     public func install(existingFiles: [URL]) throws {
@@ -559,6 +591,7 @@ public final class AgentController: @unchecked Sendable {
             return AgentStatus(
                 enabled: state.enabled,
                 daemonRunning: daemonRunning,
+                persistedState: state.enabled ? .enabled : .disabled,
                 serverEnabledSurfaces: serverEnabledSurfaces.sorted { $0.rawValue < $1.rawValue },
                 compiledAdapters: health,
                 queuedEventCount: try outbox.queuedCount(),

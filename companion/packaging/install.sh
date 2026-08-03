@@ -84,10 +84,30 @@ if [ -f "$COMMAND_LINK_FILE" ]; then
   esac
 fi
 
-status_is_off() {
+status_from() {
   status_output="$("$1" status)" || return 1
+}
+
+status_reports_live() {
+  status_from "$1" || return 1
   case "$status_output" in
-    *'"enabled":false'*) return 0 ;;
+    *'"daemonRunning":true'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+status_is_offline_disabled() {
+  status_from "$1" || return 1
+  case "$status_output" in
+    *'"daemonRunning":false'*'"enabled":false'*'"persistedState":"disabled"'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+status_is_live_disabled() {
+  status_from "$1" || return 1
+  case "$status_output" in
+    *'"daemonRunning":true'*'"enabled":false'*'"persistedState":"disabled"'*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -97,6 +117,45 @@ persist_fresh_off_state() {
   printf '{"enabled":false,"files":{},"version":1}\n' > "$temporary_state"
   chmod 600 "$temporary_state"
   mv "$temporary_state" "$COLLECTOR_STATE"
+}
+
+launch_job_absent() {
+  launch_output="$(mktemp "$WORK/launchctl-print.XXXXXX")"
+  if launchctl print "gui/$(id -u)/$LABEL" >"$launch_output" 2>&1; then
+    rm -f "$launch_output"
+    return 1
+  else
+    launch_status=$?
+  fi
+  [ "$launch_status" -eq 113 ] || { rm -f "$launch_output"; return 1; }
+  grep -F 'Could not find service' "$launch_output" >/dev/null 2>&1
+  absent_status=$?
+  rm -f "$launch_output"
+  return "$absent_status"
+}
+
+wait_for_daemon_stopped() {
+  attempt=0
+  while [ "$attempt" -lt 40 ]; do
+    if status_from "$1"; then
+      case "$status_output" in
+        *'"daemonRunning":false'*) return 0 ;;
+      esac
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.25
+  done
+  return 1
+}
+
+wait_for_live_disabled() {
+  attempt=0
+  while [ "$attempt" -lt 40 ]; do
+    status_is_live_disabled "$1" && return 0
+    attempt=$((attempt + 1))
+    sleep 0.25
+  done
+  return 1
 }
 if [ -z "$command_path" ]; then
   old_ifs="$IFS"
@@ -259,27 +318,39 @@ if [ ! -f "$ENROLLMENT" ]; then
   chmod 600 "$STAGED_ENROLLMENT"
 fi
 
-# The installer owns the activation boundary. A new install receives an
-# atomic, persisted-off state before launchd can start it. An upgrade uses the
-# still-installed, signed binary to drain the control command and persist off
-# before any app or LaunchAgent replacement begins.
+# The installer owns the activation boundary. Quiesce any live prior daemon and
+# remove its launchd job before trusting persisted state. Missing or invalid
+# state is then replaced atomically with the reviewed disabled v1 state.
+CANDIDATE_EXECUTABLE="$CANDIDATE/Contents/MacOS/runtime-raiders-agent"
+CONTROL_EXECUTABLE="$CANDIDATE_EXECUTABLE"
 if [ -d "$APP" ]; then
   codesign --verify --strict -R="$REQUIREMENT" "$APP"
-  if ! status_is_off "$EXECUTABLE"; then
-    "$EXECUTABLE" off
-    status_is_off "$EXECUTABLE" || {
-      echo "Runtime Raiders could not verify the existing collector is off" >&2
-      exit 1
-    }
-  fi
-elif [ -f "$COLLECTOR_STATE" ]; then
-  status_is_off "$CANDIDATE/Contents/MacOS/runtime-raiders-agent" || {
-    echo "Runtime Raiders found unverified collector state without an installed app" >&2
+  CONTROL_EXECUTABLE="$EXECUTABLE"
+fi
+if status_reports_live "$CONTROL_EXECUTABLE"; then
+  "$CONTROL_EXECUTABLE" off >/dev/null 2>&1 || true
+fi
+if ! launch_job_absent; then
+  launchctl bootout "gui/$(id -u)/$LABEL" || {
+    echo "Runtime Raiders could not stop the existing launchd job" >&2
     exit 1
   }
-else
+fi
+launch_job_absent || {
+  echo "Runtime Raiders could not verify the existing launchd job is absent" >&2
+  exit 1
+}
+wait_for_daemon_stopped "$CANDIDATE_EXECUTABLE" || {
+  echo "Runtime Raiders could not verify the existing daemon is stopped" >&2
+  exit 1
+}
+if ! status_is_offline_disabled "$CANDIDATE_EXECUTABLE"; then
   persist_fresh_off_state
 fi
+status_is_offline_disabled "$CANDIDATE_EXECUTABLE" || {
+  echo "Runtime Raiders could not validate persisted disabled state" >&2
+  exit 1
+}
 
 transaction_active=1
 if [ -e "$APP" ]; then
@@ -433,8 +504,8 @@ if ! launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
   echo "Runtime Raiders launchd bootstrap failed; prior installation restored" >&2
   exit 1
 fi
-status_is_off "$EXECUTABLE" || {
-  echo "Runtime Raiders launchd started without a verified off state" >&2
+wait_for_live_disabled "$EXECUTABLE" || {
+  echo "Runtime Raiders launchd did not produce a live verified-off daemon" >&2
   exit 1
 }
 transaction_committed=1

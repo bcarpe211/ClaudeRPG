@@ -318,16 +318,17 @@ private func localStatus(paths: AgentPaths) -> AgentStatus {
     ]
     for surface in surfaces { health[surface] = .unavailable }
     for surface in registry?.surfaces ?? [] { health[surface] = .available }
-    let enabled = (try? AgentController.persistedEnabled(
+    let persistedState = (try? AgentController.persistedCollectorState(
         paths: paths,
         surfaces: surfaces
-    )) ?? nil
+    )) ?? .invalid
     let queuedCount = (try? Outbox.queuedCount(
         inExistingDirectory: paths.outboxDirectory
     )) ?? 0
     return AgentStatus(
-        enabled: enabled ?? false,
+        enabled: persistedState == .enabled,
         daemonRunning: false,
+        persistedState: persistedState,
         serverEnabledSurfaces: surfaces.sorted { $0.rawValue < $1.rawValue },
         compiledAdapters: health,
         queuedEventCount: queuedCount,

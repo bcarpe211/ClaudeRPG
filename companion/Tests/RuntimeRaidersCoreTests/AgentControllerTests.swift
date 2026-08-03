@@ -826,6 +826,47 @@ final class AgentControllerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: missingBase.path))
     }
 
+    func testPersistedCollectorStateDistinguishesMissingInvalidEnabledAndDisabled() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-persisted-status-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AgentPaths(applicationSupportDirectory: root)
+
+        XCTAssertEqual(
+            try AgentController.persistedCollectorState(paths: paths, surfaces: [.codexCLI]),
+            .missing
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.stateDirectory.path))
+
+        try FileManager.default.createDirectory(
+            at: paths.stateDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let stateFile = paths.stateDirectory.appendingPathComponent("collector-state.json")
+        try Data("not-json".utf8).write(to: stateFile)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: stateFile.path
+        )
+        XCTAssertEqual(
+            try AgentController.persistedCollectorState(paths: paths, surfaces: [.codexCLI]),
+            .invalid
+        )
+
+        try Data(#"{"enabled":true,"files":{},"version":1}"#.utf8).write(to: stateFile)
+        XCTAssertEqual(
+            try AgentController.persistedCollectorState(paths: paths, surfaces: [.codexCLI]),
+            .enabled
+        )
+
+        try Data(#"{"enabled":false,"files":{},"version":1}"#.utf8).write(to: stateFile)
+        XCTAssertEqual(
+            try AgentController.persistedCollectorState(paths: paths, surfaces: [.codexCLI]),
+            .disabled
+        )
+    }
+
     func testControllerAndControlSocketRejectSymlinkedOwnedDirectoriesWithoutChmodTarget() throws {
         let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-owned-links-\(UUID().uuidString)", isDirectory: true)
@@ -1054,6 +1095,8 @@ final class AgentControllerTests: XCTestCase {
                 serverEnabledSurfaces: [.codexCLI],
                 lastSuccessfulUploadMS: now
             )
+            XCTAssertEqual(status.persistedState, .enabled)
+            XCTAssertTrue(status.description.contains(#""persistedState":"enabled""#))
             XCTAssertEqual(status.compiledAdapters[.claudeCode], .unavailable)
             XCTAssertEqual(status.compiledAdapters[.omp], .unavailable)
             let doctor = harness.controller.doctor(

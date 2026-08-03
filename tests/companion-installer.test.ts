@@ -33,13 +33,38 @@ function artifact(root: string, marker = 'initial', stateful = true): { zip: str
     'printf "' + marker + ':%s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_BINARY_LOG"',
     ...(stateful ? [
       'collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
-      'if [ "${1:-}" = off ]; then printf \'{"enabled":false,"files":{},"version":1}\\n\' > "$collector_state"; fi',
-      'if [ "${1:-}" = status ]; then',
-      '  if grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1; then',
-      '    printf \'{"enabled":false}\\n\'',
+      'running="$HOME/.runtime-raiders-test-running"',
+      'job="$HOME/.runtime-raiders-test-job"',
+      'polls="$HOME/.runtime-raiders-test-polls"',
+      'state_kind=missing; state_enabled=false',
+      'if [ -f "$collector_state" ]; then',
+      '  if grep -F \'"version":1\' "$collector_state" >/dev/null 2>&1 && grep -F \'"files":\' "$collector_state" >/dev/null 2>&1 && grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1; then',
+      '    state_kind=disabled',
+      '  elif grep -F \'"version":1\' "$collector_state" >/dev/null 2>&1 && grep -F \'"files":\' "$collector_state" >/dev/null 2>&1 && grep -F \'"enabled":true\' "$collector_state" >/dev/null 2>&1; then',
+      '    state_kind=enabled; state_enabled=true',
       '  else',
-      '    printf \'{"enabled":true}\\n\'',
+      '    state_kind=invalid',
       '  fi',
+      'fi',
+      'if [ "${1:-}" = off ]; then',
+      '  [ -f "$running" ] || exit 69',
+      '  printf \'{"enabled":false,"files":{},"version":1}\\n\' > "$collector_state"',
+      '  rm -f "$running"',
+      '  printf \'daemon stopped; installed files and queued state preserved\\n\'',
+      'fi',
+      'if [ "${1:-}" = status ]; then',
+      '  daemon_running=false',
+      '  if [ -f "$running" ]; then',
+      '    count=0; [ ! -f "$polls" ] || count="$(cat "$polls")"',
+      '    count=$((count + 1)); printf \'%s\\n\' "$count" > "$polls"',
+      '    if [ "$FAKE_DAEMON_NEVER_READY" != 1 ] && [ "$count" -ge "$FAKE_DAEMON_READY_AFTER" ]; then',
+      '      daemon_running=true',
+      '      if [ "$state_kind" = missing ] || [ "$state_kind" = invalid ]; then',
+      '        state_kind=enabled; state_enabled=true',
+      '      fi',
+      '    fi',
+      '  fi',
+      '  printf \'{"activeRunCount":0,"compiledAdapters":{},"daemonRunning":%s,"enabled":%s,"lastSuccessfulUploadMS":null,"persistedState":"%s","queuedEventCount":0,"serverEnabledSurfaces":["codex_desktop","codex_cli"]}\\n\' "$daemon_running" "$state_enabled" "$state_kind"',
       'fi',
     ] : []),
   ]);
@@ -92,10 +117,15 @@ function fakes(root: string): string {
     'exec /bin/chmod "$@"',
   ]);
   executable(join(bin, 'launchctl'), [
+      'running="$HOME/.runtime-raiders-test-running"',
+    'job="$HOME/.runtime-raiders-test-job"',
+    'polls="$HOME/.runtime-raiders-test-polls"',
     'if [ "$1" = print ]; then',
     '  [ "$FAKE_LAUNCH_PRINT_PRESENT" = 1 ] && exit 0',
     '  [ "$FAKE_LAUNCH_PRINT_ABSENT" = 1 ] && { printf "Could not find service\\n" >&2; exit 113; }',
-    '  printf "launchctl print ambiguous failure\\n" >&2; exit 77',
+    '  [ "$FAKE_LAUNCH_PRINT_AMBIGUOUS" != 1 ] || { printf "launchctl print ambiguous failure\\n" >&2; exit 77; }',
+    '  [ -f "$job" ] && exit 0',
+    '  printf "Could not find service\\n" >&2; exit 113',
     'fi',
     'if [ "$1" = bootout ] && [ "$FAKE_LAUNCH_BOOTOUT_FAIL" = 1 ]; then printf "bootout ambiguous failure\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_LAUNCH_BOOTSTRAP_FAIL" = 1 ]; then printf "bootstrap failure\\n" >&2; exit 77; fi',
@@ -103,9 +133,18 @@ function fakes(root: string): string {
     '  collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
     '  grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1 || { printf "bootstrap observed collection enabled\\n" >&2; exit 78; }',
     'fi',
+    'if [ "$1" = bootout ]; then rm -f "$job" "$running" "$polls"; fi',
+    'if [ "$1" = bootstrap ]; then',
+    '  collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
+    '  if ! grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1; then',
+    '    printf "endpoint /api/runs/events\\nendpoint /api/raiders/heartbeat\\n" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+    '  fi',
+    '  : > "$job"; : > "$running"; rm -f "$polls"',
+    'fi',
     'printf "launchctl %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
   ]);
   executable(join(bin, 'uuidgen'), ['printf "%s\\n" "00000000-0000-4000-8000-000000000001"']);
+  executable(join(bin, 'sleep'), ['printf "sleep %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"']);
   executable(join(bin, 'plutil'), [
     'case "$2" in',
     'device_token) printf "%s\\n" "' + token + '";;',
@@ -134,10 +173,13 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     FAKE_LN_FAIL: '0',
     FAKE_CHMOD_FAIL_MARKER: '0',
     FAKE_LAUNCH_PRINT_PRESENT: '0',
-    FAKE_LAUNCH_PRINT_ABSENT: '1',
+    FAKE_LAUNCH_PRINT_ABSENT: '0',
+    FAKE_LAUNCH_PRINT_AMBIGUOUS: '0',
     FAKE_LAUNCH_BOOTOUT_FAIL: '0',
     FAKE_LAUNCH_BOOTSTRAP_FAIL: '0',
     FAKE_LAUNCH_REQUIRE_OFF: '0',
+    FAKE_DAEMON_READY_AFTER: '1',
+    FAKE_DAEMON_NEVER_READY: '0',
     RUNTIME_RAIDERS_TEST_LOG: join(home, 'commands.log'),
     RUNTIME_RAIDERS_TEST_BINARY_LOG: join(home, 'binary.log'),
     RUNTIME_RAIDERS_TEST_ZIP: files.zip,
@@ -176,7 +218,7 @@ describe('Runtime Raiders companion installer', () => {
       const commands = readFileSync(join(home, 'commands.log'), 'utf8');
       expect(commands).not.toContain('/api/runs/events');
       expect(commands).not.toContain('/api/raiders/heartbeat');
-      expect(readFileSync(join(home, 'binary.log'), 'utf8')).toBe('fresh-off:status\n');
+      expect(readFileSync(join(home, 'binary.log'), 'utf8')).toContain('fresh-off:status\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -205,14 +247,158 @@ describe('Runtime Raiders companion installer', () => {
       });
 
       expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(join(home, 'binary.log'), 'utf8')).toBe(
-        'installed:status\ninstalled:off\ninstalled:status\nreplacement:status\n',
-      );
+      const binaryLog = readFileSync(join(home, 'binary.log'), 'utf8');
+      expect(binaryLog).toContain('installed:off\n');
+      expect(binaryLog.indexOf('installed:off\n')).toBeLessThan(binaryLog.indexOf('replacement:status\n'));
       expect(JSON.parse(readFileSync(state, 'utf8'))).toMatchObject({ enabled: false });
       expect(readFileSync(
         join(home, 'Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'),
         'utf8',
       )).toContain('# replacement');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers an unavailable app-present install with missing state before replacement', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-missing-state-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const base = env(home, fakes(root), artifact(root, 'installed'), commandDir);
+      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      const state = join(home, 'Library/Application Support/Runtime Raiders/state/collector-state.json');
+      rmSync(state);
+      rmSync(join(home, '.runtime-raiders-test-running'), { force: true });
+      writeFileSync(join(home, 'commands.log'), '');
+      writeFileSync(join(home, 'binary.log'), '');
+
+      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+        ...base,
+        ...env(home, join(root, 'fakes'), artifact(root, 'replacement'), commandDir),
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(state, 'utf8'))).toEqual({ enabled: false, files: {}, version: 1 });
+      expect(readFileSync(join(home, 'binary.log'), 'utf8')).toContain('replacement:status');
+      const commands = readFileSync(join(home, 'commands.log'), 'utf8');
+      expect(commands).not.toContain('endpoint /api/runs/events');
+      expect(commands).not.toContain('endpoint /api/raiders/heartbeat');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers corrupt offline persisted state only after the old job is absent', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-invalid-state-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const base = env(home, fakes(root), artifact(root, 'installed'), commandDir);
+      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      const state = join(home, 'Library/Application Support/Runtime Raiders/state/collector-state.json');
+      writeFileSync(state, 'corrupt-state\n');
+      rmSync(join(home, '.runtime-raiders-test-running'), { force: true });
+      writeFileSync(join(home, 'commands.log'), '');
+
+      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+        ...base,
+        ...env(home, join(root, 'fakes'), artifact(root, 'replacement'), commandDir),
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(state, 'utf8'))).toEqual({ enabled: false, files: {}, version: 1 });
+      const commands = readFileSync(join(home, 'commands.log'), 'utf8');
+      expect(commands.indexOf('launchctl bootout')).toBeLessThan(commands.indexOf('launchctl bootstrap'));
+      expect(commands).not.toContain('endpoint /api/runs/events');
+      expect(commands).not.toContain('endpoint /api/raiders/heartbeat');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('waits through delayed launchd readiness until the live daemon reports off', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-delayed-daemon-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const environment = {
+        ...env(home, fakes(root), artifact(root, 'delayed'), commandDir),
+        FAKE_DAEMON_READY_AFTER: '3',
+      };
+
+      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(home, 'binary.log'), 'utf8').match(/delayed:status/g)?.length).toBeGreaterThanOrEqual(3);
+      const commands = readFileSync(join(home, 'commands.log'), 'utf8');
+      expect(commands.match(/sleep 0\.25/g)).toHaveLength(2);
+      expect(commands).not.toContain('endpoint /api/runs/events');
+      expect(commands).not.toContain('endpoint /api/raiders/heartbeat');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back when launchd never produces a live verified-off daemon', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-never-ready-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const environment = {
+        ...env(home, fakes(root), artifact(root, 'never-ready'), commandDir),
+        FAKE_DAEMON_NEVER_READY: '1',
+      };
+
+      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+
+      expect(result.status).not.toBe(0);
+      expect(existsSync(join(home, 'Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app'))).toBe(false);
+      const commands = readFileSync(join(home, 'commands.log'), 'utf8');
+      expect(commands).not.toContain('endpoint /api/runs/events');
+      expect(commands).not.toContain('endpoint /api/raiders/heartbeat');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('restores the prior off app after readiness failure and permits a safe retry', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-readiness-retry-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const initialFiles = artifact(root, 'initial');
+      const base = env(home, fakes(root), initialFiles, commandDir);
+      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      const installed = join(
+        home,
+        'Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent',
+      );
+
+      const failedFiles = artifact(root, 'failed-replacement');
+      const failed = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+        ...base,
+        ...env(home, join(root, 'fakes'), failedFiles, commandDir),
+        FAKE_DAEMON_NEVER_READY: '1',
+      });
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(installed, 'utf8')).toContain('# initial');
+
+      const retryFiles = artifact(root, 'retry-replacement');
+      const retry = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+        ...base,
+        ...env(home, join(root, 'fakes'), retryFiles, commandDir),
+      });
+      expect(retry.status, retry.stderr).toBe(0);
+      expect(readFileSync(installed, 'utf8')).toContain('# retry-replacement');
+      const commands = readFileSync(join(home, 'commands.log'), 'utf8');
+      expect(commands).not.toContain('endpoint /api/runs/events');
+      expect(commands).not.toContain('endpoint /api/raiders/heartbeat');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -374,8 +560,9 @@ describe('Runtime Raiders companion installer', () => {
       const home = join(root, 'home');
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
-      const environment = { ...env(home, fakes(root), artifact(root), commandDir), FAKE_LAUNCH_PRINT_PRESENT: '1' };
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
+      const base = env(home, fakes(root), artifact(root), commandDir);
+      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      const environment = { ...base, FAKE_LAUNCH_PRINT_PRESENT: '1' };
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       executable(join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'), ['exit 23']);
       const shim = join(support, 'raiders');
@@ -414,11 +601,13 @@ describe('Runtime Raiders companion installer', () => {
       const home = join(root, 'home');
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
-      const environment = { ...env(home, fakes(root), artifact(root), commandDir), FAKE_LAUNCH_PRINT_ABSENT: '0' };
+      const environment = env(home, fakes(root), artifact(root), commandDir);
       expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       executable(join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'), ['exit 23']);
-      const uninstall = spawnSync(join(support, 'raiders'), ['uninstall'], { env: environment, encoding: 'utf8' });
+      const uninstall = spawnSync(join(support, 'raiders'), ['uninstall'], {
+        env: { ...environment, FAKE_LAUNCH_PRINT_AMBIGUOUS: '1' }, encoding: 'utf8',
+      });
       expect(uninstall.status).not.toBe(0);
       expect(existsSync(support)).toBe(true);
     } finally {
@@ -437,7 +626,9 @@ describe('Runtime Raiders companion installer', () => {
       expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       executable(join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'), ['exit 23']);
-      const uninstall = spawnSync(join(support, 'raiders'), ['uninstall'], { env: environment, encoding: 'utf8' });
+      const uninstall = spawnSync(join(support, 'raiders'), ['uninstall'], {
+        env: { ...environment, FAKE_LAUNCH_PRINT_ABSENT: '1' }, encoding: 'utf8',
+      });
       expect(uninstall.status, uninstall.stderr).toBe(0);
       expect(existsSync(support)).toBe(false);
     } finally {
