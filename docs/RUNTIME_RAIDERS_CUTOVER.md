@@ -76,7 +76,7 @@ environment contents in this document or a commit.
 | Manager-loaded Caddy config and env paths | `________________ / ________________` |
 | Prior Caddy config backup path and SHA-256 | `________________ / ________________` |
 | Artifact root | `/var/lib/runtime-raiders` |
-| Manager-loaded game `User` / `WorkingDirectory` / `EnvironmentFiles` / `ExecStart` | `________________` |
+| Manager-loaded game-unit verification evidence | `________________` |
 | IT DNS evidence/date for both FQDNs | `________________` |
 | Caddy validation and TLS evidence/date for both FQDNs | `________________` |
 | `raiders.local`, SSH, Avahi, actual network-path evidence/date | `________________` |
@@ -99,7 +99,7 @@ not abbreviate or reconstruct any value during an incident.
 | Backup paths | `BACKUP_DIR`, `DB_BACKUP`, `PRIOR_ENV_BACKUP`, `RETAINED_SQL`, `RETAINED_BEFORE` |
 | Backup checksums | `DB_BACKUP_SHA256`, `PRIOR_ENV_SHA256` |
 | Database metadata | `DB_OWNER`, `DB_GROUP`, `DB_MODE` |
-| Unit contract | `GAME_EXEC_EXPECTED` |
+| Unit contract | `GAME_EXEC_PATH` |
 | Record identity | `ROLLBACK_RECORD`, `ROLLBACK_RECORD_SEAL`, `ROLLBACK_GUARDS` |
 
 Use these compatibility paths and names throughout:
@@ -113,10 +113,11 @@ ARTIFACT_ROOT=/var/lib/runtime-raiders
 SERVICE=claude-rpg.service
 UPDATER_TIMER=claude-rpg-autoupdate.timer
 UPDATER_SERVICE=claude-rpg-autoupdate.service
+GAME_EXEC_PATH=/home/rluser/ClaudeRPG/scripts/pi/run-server.sh
 ```
 
 In the operator shell, set `PRIOR_SHA`, `RELEASE_SHA`, `CUTOVER_AT`,
-`CANDIDATE_ENV_SHA256`, `GAME_EXEC_EXPECTED`, `CADDY_CONFIG`, `CADDY_ENV`, and
+`CANDIDATE_ENV_SHA256`, `CADDY_CONFIG`, `CADDY_ENV`, and
 `CADDY_BACKUP` to the recorded literal values. Do not derive or change them
 during the cutover. Confirm that both SHAs contain exactly 40 lowercase
 hexadecimal characters, are distinct, and that `CUTOVER_AT` contains exactly
@@ -127,6 +128,11 @@ git --no-optional-locks -C "$REPO" rev-parse --short "$PRIOR_SHA"
 git --no-optional-locks -C "$REPO" rev-parse --short "$RELEASE_SHA"
 date -u -d "@$((CUTOVER_AT / 1000))" '+%Y-%m-%dT%H:%M:%SZ'
 ```
+
+The systemd `start_time`, `stop_time`, `pid`, `code`, and `status` values are
+observations, not identity fields. The executable helper verifies the stable
+`GAME_EXEC_PATH` unit identity without authenticating a mutable full `ExecStart`
+rendering.
 
 ## 1. Preparation: complete before launch day
 
@@ -174,19 +180,11 @@ matching authorization above.
   and mechanically verify the manager-loaded game-service contract rather than
   trusting the unit file on disk:
 
+  Source the release-pinned helper before this check, as shown in section 4,
+  then run:
+
   ```sh
-  test "$(systemctl show "$SERVICE" --property=User --value)" = rluser
-  test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
-  test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
-    '/etc/claude-rpg.env (ignore_errors=no)'
-  GAME_EXEC="$(systemctl show "$SERVICE" --property=ExecStart --value)"
-  case "$GAME_EXEC" in
-    *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
-    *) false ;;
-  esac
-  test "$GAME_EXEC" = "$GAME_EXEC_EXPECTED"
-  test "$(printf '%s' "$GAME_EXEC" | grep -oF \
-    "argv[]=$REPO/scripts/pi/run-server.sh" | wc -l)" = 1
+  rr_assert_game_unit "$SERVICE" "$REPO" "$CURRENT_ENV" "$GAME_EXEC_PATH"
   ```
 
   Any mismatch blocks publication and cutover.
@@ -295,16 +293,16 @@ if one fails:
 
 ```sh
 set -Eeuo pipefail
-hold_updater() {
-  local rc=0
-  sudo systemctl disable --now "$UPDATER_TIMER" || rc=1
-  sudo systemctl stop "$UPDATER_SERVICE" || rc=1
-  test "$(systemctl is-enabled "$UPDATER_TIMER")" = disabled || rc=1
-  test "$(systemctl is-active "$UPDATER_TIMER")" = inactive || rc=1
-  test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive || rc=1
-  return "$rc"
-}
-hold_updater
+UPDATER_GUARDS="$(mktemp)"
+sudo -u rluser git --no-optional-locks -C "$REPO" show \
+  "$RELEASE_SHA:scripts/pi/runtime-raiders-cutover-guards.sh" >"$UPDATER_GUARDS"
+test -s "$UPDATER_GUARDS"
+bash -n "$UPDATER_GUARDS"
+# shellcheck source=/dev/null
+source "$UPDATER_GUARDS"
+sudo systemctl disable --now "$UPDATER_TIMER"
+sudo systemctl stop "$UPDATER_SERVICE"
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
 ```
 
 Failure is a NO-GO; do not publish, fetch, prepare Caddy, or deploy anything.
@@ -322,7 +320,7 @@ sudo -u rluser -H git -C "$REPO" fetch --no-tags origin \
 FETCHED_RELEASE_SHA="$(sudo -u rluser git --no-optional-locks -C "$REPO" \
   rev-parse origin/main)"
 test "$FETCHED_RELEASE_SHA" = "$RELEASE_SHA"
-hold_updater
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
 ```
 
 Any fetch mismatch or failure is an abort and the updater remains held. Do not
@@ -546,35 +544,15 @@ fail_closed() {
   test "$rc" -ne 0 || rc=1
   trap - ERR HUP INT TERM
   set +e
-  sudo systemctl disable --now "$UPDATER_TIMER"
-  sudo systemctl stop "$UPDATER_SERVICE"
-  sudo systemctl stop "$SERVICE"
+  sudo systemctl disable --now "$UPDATER_TIMER" >/dev/null 2>&1 || true
+  sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || true
+  sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || true
   echo "FAIL-CLOSED: game stopped; updater held; investigate before rollback" >&2
   exit "$rc"
 }
 trap 'fail_closed $?' ERR
 trap 'fail_closed 130' HUP INT TERM
 
-assert_updater_held() {
-  test "$(systemctl is-enabled "$UPDATER_TIMER")" = disabled
-  test "$(systemctl is-active "$UPDATER_TIMER")" = inactive
-  test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive
-}
-assert_game_unit() {
-  test "$(systemctl show "$SERVICE" --property=User --value)" = rluser
-  test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
-  test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
-    '/etc/claude-rpg.env (ignore_errors=no)'
-  local loaded_exec
-  loaded_exec="$(systemctl show "$SERVICE" --property=ExecStart --value)"
-  case "$loaded_exec" in
-    *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
-    *) return 1 ;;
-  esac
-  test "$loaded_exec" = "$GAME_EXEC_EXPECTED"
-  test "$(printf '%s' "$loaded_exec" | grep -oF \
-    "argv[]=$REPO/scripts/pi/run-server.sh" | wc -l)" = 1
-}
 ```
 
 The sourced helper is read from the exact approved release object, not from the
@@ -585,8 +563,8 @@ clean checkout or an all-`rluser` tree.
 ### 4.1 Reconfirm identity, pause, and updater hold
 
 ```sh
-assert_updater_held
-assert_game_unit
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
+rr_assert_game_unit "$SERVICE" "$REPO" "$CURRENT_ENV" "$GAME_EXEC_PATH"
 rr_assert_owned_tree "$REPO"
 rr_assert_checkout "$REPO" "$PRIOR_SHA" "$RELEASE_SHA"
 test "$(sqlite3 -readonly "$DB" \
@@ -602,7 +580,7 @@ Choose one UTC `CUTOVER_ID` for artifact filenames. Record the literal paths as
 The example directory is root-readable only:
 
 ```sh
-ROLLBACK_RECORD_VERSION=1
+ROLLBACK_RECORD_VERSION=2
 CUTOVER_ID="$(date -u '+%Y%m%dT%H%M%SZ')"
 BACKUP_DIR=/var/backups/runtime-raiders/$CUTOVER_ID
 DB_BACKUP=$BACKUP_DIR/claude-rpg.pre-cutover.db
@@ -615,6 +593,7 @@ ROLLBACK_GUARDS=$BACKUP_DIR/runtime-raiders-cutover-guards.sh
 DB_OWNER="$(stat -c '%U' "$DB")"
 DB_GROUP="$(stat -c '%G' "$DB")"
 DB_MODE="$(stat -c '%a' "$DB")"
+GAME_EXEC_PATH=/home/rluser/ClaudeRPG/scripts/pi/run-server.sh
 PRIOR_ENV_SHA256="$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')"
 sudo install -d -o root -g root -m 0700 "$BACKUP_DIR"
 
@@ -695,7 +674,7 @@ ROLLBACK_FIELDS=(
   REPO DB CURRENT_ENV SERVICE UPDATER_TIMER UPDATER_SERVICE
   BACKUP_DIR DB_BACKUP DB_BACKUP_SHA256
   PRIOR_ENV_BACKUP PRIOR_ENV_SHA256 RETAINED_SQL RETAINED_BEFORE
-  DB_OWNER DB_GROUP DB_MODE GAME_EXEC_EXPECTED
+  DB_OWNER DB_GROUP DB_MODE GAME_EXEC_PATH
   ROLLBACK_RECORD ROLLBACK_RECORD_SEAL ROLLBACK_GUARDS
 )
 for field in "${ROLLBACK_FIELDS[@]}"; do
@@ -721,7 +700,7 @@ SEALED_RECORD_SHA256="$(sudo awk '
 test "$SEALED_RECORD_SHA256" = "$ROLLBACK_RECORD_SHA256"
 test "$(sudo sha256sum "$ROLLBACK_RECORD" | awk '{print $1}')" = \
   "$SEALED_RECORD_SHA256"
-assert_updater_held
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
 ```
 
 Copy the literal `ROLLBACK_RECORD`, `ROLLBACK_RECORD_SEAL`, and
@@ -737,8 +716,9 @@ seal check fails, abort before the planned service stop.
 
 ```sh
 sudo systemctl stop "$SERVICE"
-test "$(systemctl is-active "$SERVICE")" = inactive
-assert_updater_held
+rr_observe_systemctl service_state is-active "$SERVICE"
+test "$service_state" = inactive
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
 ```
 
 From this point until the new checkout, dependencies, reviewed environment, and
@@ -765,8 +745,9 @@ rr_assert_owned_tree "$REPO"
 sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
 test "$(stat -c '%U' "$REPO/node_modules")" = rluser
 rr_assert_owned_tree "$REPO/node_modules"
-assert_updater_held
-test "$(systemctl is-active "$SERVICE")" = inactive
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
+rr_observe_systemctl service_state is-active "$SERVICE"
+test "$service_state" = inactive
 ```
 
 The installed SHA-256 must equal the reviewed candidate SHA-256. Confirm exactly
@@ -793,9 +774,10 @@ test "$(sudo sha256sum "$CURRENT_ENV" | awk '{print $1}')" = \
 test "$(stat -c '%U:%G:%a' "$DB")" = "$DB_OWNER:$DB_GROUP:$DB_MODE"
 test "$(sudo -u rluser sqlite3 -readonly "$DB" \
   'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
-assert_game_unit
-assert_updater_held
-test "$(systemctl is-active "$SERVICE")" = inactive
+rr_assert_game_unit "$SERVICE" "$REPO" "$CURRENT_ENV" "$GAME_EXEC_PATH"
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
+rr_observe_systemctl service_state is-active "$SERVICE"
+test "$service_state" = inactive
 
 sudo systemctl start "$SERVICE"
 for attempt in $(seq 1 30); do
@@ -1095,7 +1077,7 @@ After canary and office acceptance, keep the updater held and close the
 fail-closed cutover shell only after recording the accepted state:
 
 ```sh
-assert_updater_held
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
 test "$(systemctl is-active "$SERVICE")" = active
 trap - ERR HUP INT TERM
 ```
@@ -1185,7 +1167,7 @@ REQUIRED_ROLLBACK_FIELDS=(
   REPO DB CURRENT_ENV SERVICE UPDATER_TIMER UPDATER_SERVICE
   BACKUP_DIR DB_BACKUP DB_BACKUP_SHA256
   PRIOR_ENV_BACKUP PRIOR_ENV_SHA256 RETAINED_SQL RETAINED_BEFORE
-  DB_OWNER DB_GROUP DB_MODE GAME_EXEC_EXPECTED
+  DB_OWNER DB_GROUP DB_MODE GAME_EXEC_PATH
   ROLLBACK_RECORD ROLLBACK_RECORD_SEAL ROLLBACK_GUARDS
 )
 for field in "${REQUIRED_ROLLBACK_FIELDS[@]}"; do
@@ -1193,8 +1175,9 @@ for field in "${REQUIRED_ROLLBACK_FIELDS[@]}"; do
   test -n "${!field}"
 done
 
-test "$ROLLBACK_RECORD_VERSION" = 1
+test "$ROLLBACK_RECORD_VERSION" = 2
 test "$REPO" = /home/rluser/ClaudeRPG
+test "$GAME_EXEC_PATH" = "$REPO/scripts/pi/run-server.sh"
 test "$DB" = "$REPO/data/claude-rpg.db"
 test "$CURRENT_ENV" = /etc/claude-rpg.env
 test "$SERVICE" = claude-rpg.service
@@ -1228,27 +1211,19 @@ rollback_fail_closed() {
   test "$rc" -ne 0 || rc=1
   trap - ERR HUP INT TERM
   set +e
-  sudo systemctl disable --now "$UPDATER_TIMER"
-  sudo systemctl stop "$UPDATER_SERVICE"
-  sudo systemctl stop "$SERVICE"
+  sudo systemctl disable --now "$UPDATER_TIMER" >/dev/null 2>&1 || true
+  sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || true
+  sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || true
   echo "ROLLBACK FAIL-CLOSED: game stopped; updater held" >&2
   exit "$rc"
 }
 trap 'rollback_fail_closed $?' ERR
 trap 'rollback_fail_closed 130' HUP INT TERM
 
-hold_updater() {
-  local rc=0
-  sudo systemctl disable --now "$UPDATER_TIMER" || rc=1
-  sudo systemctl stop "$UPDATER_SERVICE" || rc=1
-  test "$(systemctl is-enabled "$UPDATER_TIMER")" = disabled || rc=1
-  test "$(systemctl is-active "$UPDATER_TIMER")" = inactive || rc=1
-  test "$(systemctl is-active "$UPDATER_SERVICE")" = inactive || rc=1
-  return "$rc"
-}
-hold_updater
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
 sudo systemctl stop "$SERVICE"
-test "$(systemctl is-active "$SERVICE")" = inactive
+rr_observe_systemctl service_state is-active "$SERVICE"
+test "$service_state" = inactive
 ```
 
 Any missing, empty, altered, extra-line-seal, wrong-owner, wrong-mode,
@@ -1364,18 +1339,10 @@ sudo -u rluser test -x "$REPO/node_modules/.bin/tsx"
 test "$(stat -c '%U:%G:%a' "$DB")" = "$DB_OWNER:$DB_GROUP:$DB_MODE"
 test "$(sudo -u rluser sqlite3 -readonly "$DB" \
   'PRAGMA query_only=ON; PRAGMA integrity_check;')" = ok
-test "$(systemctl show "$SERVICE" --property=User --value)" = rluser
-test "$(systemctl show "$SERVICE" --property=WorkingDirectory --value)" = "$REPO"
-test "$(systemctl show "$SERVICE" --property=EnvironmentFiles --value)" = \
-  '/etc/claude-rpg.env (ignore_errors=no)'
-GAME_EXEC="$(systemctl show "$SERVICE" --property=ExecStart --value)"
-case "$GAME_EXEC" in
-  *"argv[]=$REPO/scripts/pi/run-server.sh"*) ;;
-  *) false ;;
-esac
-test "$GAME_EXEC" = "$GAME_EXEC_EXPECTED"
-hold_updater
-test "$(systemctl is-active "$SERVICE")" = inactive
+rr_assert_game_unit "$SERVICE" "$REPO" "$CURRENT_ENV" "$GAME_EXEC_PATH"
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
+rr_observe_systemctl service_state is-active "$SERVICE"
+test "$service_state" = inactive
 
 sudo systemctl start "$SERVICE"
 curl -fsS --retry 30 --retry-delay 2 --retry-connrefused \
@@ -1385,7 +1352,7 @@ test "$(systemctl is-active "$SERVICE")" = active
 
 Verify retained pre-cutover aggregates, old internal HTTPS, physical localhost
 kiosk and Leaderboard, and a `/tv/stream` version equal to the recorded short
-`PRIOR_SHA`. Keep all companions off. Recheck `hold_updater`, record the unique
+`PRIOR_SHA`. Keep all companions off. Recheck `rr_assert_updater_held`, record the unique
 failed database directory and rollback result, then `trap - ERR HUP INT TERM`.
 Investigate only with copies of the failed DB, logs, and synthetic/offline
 fixtures. Any retry requires a new record, backup, preflight, and authorization.

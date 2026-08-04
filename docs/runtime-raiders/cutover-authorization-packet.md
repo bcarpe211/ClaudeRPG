@@ -63,6 +63,7 @@ into this packet.
 | Caddy file protection | `pending fresh verification` |
 | Artifact root / selector | `/var/lib/runtime-raiders` / `current must be absent before cutover` |
 | Game service contract | `pending fresh manager-loaded verification` |
+| Rollback record contract | version `2`; `GAME_EXEC_PATH=/home/rluser/ClaudeRPG/scripts/pi/run-server.sh` |
 | Runtime Raiders installation before cutover | `pending fresh absence check` |
 | Legacy ClaudeRPG OTel variables | `pending fresh absence check` |
 | Visual review | `pending final review; branded 404 explicitly deferred` |
@@ -70,6 +71,10 @@ into this packet.
 The branded Runtime Raiders 404 page is not an asset dependency for this
 release. The required unpublished state is the plain HTTP `404` behavior of the
 three exact artifact routes.
+
+Both aborted version-1 rollback sets are evidence only and cannot be used for
+the next cutover. Create and authenticate a new rollback record version `2` for
+the newly authorized cutover window.
 
 ## Current blockers before cutover authorization
 
