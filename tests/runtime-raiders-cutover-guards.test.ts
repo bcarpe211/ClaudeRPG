@@ -8,6 +8,9 @@ import { describe, expect, it } from 'vitest';
 const helper = join(process.cwd(), 'scripts/pi/runtime-raiders-cutover-guards.sh');
 const prior = '1'.repeat(40);
 const release = '2'.repeat(40);
+const service = 'claude-rpg.service';
+const envFile = '/etc/claude-rpg.env';
+const execPath = '/srv/runtime-raiders/scripts/pi/run-server.sh';
 
 function executable(path: string, lines: string[]): void {
   writeFileSync(path, ['#!/bin/sh', 'set -eu', ...lines, ''].join('\n'));
@@ -55,6 +58,16 @@ function fixture() {
     '      *) exit 4 ;;',
     '    esac',
     '    ;;',
+    '  show)',
+    '    case "$*" in',
+    '      *"--property=User --value"*) printf "%s\\n" "${FAKE_UNIT_USER:-rluser}" ;;',
+    '      *"--property=WorkingDirectory --value"*) printf "%s\\n" "${FAKE_UNIT_WORKING_DIRECTORY:-$FAKE_REPO}" ;;',
+    '      *"--property=EnvironmentFiles --value"*) printf "%s\\n" "${FAKE_UNIT_ENVIRONMENT_FILES:-$FAKE_ENV_FILE (ignore_errors=no)}" ;;',
+    '      *"--property=ExecStart --value"*) printf "%s\\n" "${FAKE_UNIT_EXEC_START-$FAKE_RUNNING_EXEC}" ;;',
+    '      *) exit 64 ;;',
+    '    esac',
+    '    exit "${FAKE_SHOW_STATUS:-0}"',
+    '    ;;',
     '  *) exit 64 ;;',
     'esac',
   ]);
@@ -71,6 +84,15 @@ function fixture() {
     FAKE_FIND_FAIL: '0',
   };
   return { root, repo, environment };
+}
+
+function gameUnitEnvironment(base: NodeJS.ProcessEnv, repo: string) {
+  return {
+    ...base,
+    FAKE_REPO: repo,
+    FAKE_ENV_FILE: envFile,
+    FAKE_RUNNING_EXEC: `{ path=${execPath} ; argv[]=${execPath} ; ignore_errors=no ; start_time=[Tue 2026-08-04 10:15:47 EDT] ; stop_time=[n/a] ; pid=71893 ; code=(null) ; status=0/0 }`,
+  };
 }
 
 function run(repo: string, body: string, environment: NodeJS.ProcessEnv) {
@@ -295,6 +317,50 @@ describe('Runtime Raiders executable cutover guards', () => {
         repo,
         'rr_assert_updater_held runtime-raiders.timer runtime-raiders.service',
         { ...environment, ...overrides },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('reached');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['running', `{ path=${execPath} ; argv[]=${execPath} ; ignore_errors=no ; start_time=[Tue 2026-08-04 10:15:47 EDT] ; stop_time=[n/a] ; pid=71893 ; code=(null) ; status=0/0 }`],
+    ['stopped', `{ path=${execPath} ; argv[]=${execPath} ; ignore_errors=no ; start_time=[Tue 2026-08-04 11:42:09 EDT] ; stop_time=[Tue 2026-08-04 12:03:51 EDT] ; pid=93217 ; code=killed ; status=15/TERM }`],
+  ])('accepts the stable game unit while %s', (_state, execStart) => {
+    const { root, repo, environment } = fixture();
+    try {
+      const result = runSystemdGuard(
+        repo,
+        `rr_assert_game_unit ${service} "$2" ${envFile} ${execPath}`,
+        { ...gameUnitEnvironment(environment, repo), FAKE_UNIT_EXEC_START: execStart },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe('reached\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['wrong user', { FAKE_UNIT_USER: 'root' }],
+    ['wrong working directory', { FAKE_UNIT_WORKING_DIRECTORY: '/srv/wrong' }],
+    ['wrong environment', { FAKE_UNIT_ENVIRONMENT_FILES: '/etc/wrong.env (ignore_errors=no)' }],
+    ['wrong path', { FAKE_UNIT_EXEC_START: '{ path=/bin/false ; argv[]=/bin/false ; status=0/0 }' }],
+    ['missing argv', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; status=0/0 }` }],
+    ['duplicate path', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; path=${execPath} ; argv[]=${execPath} ; status=0/0 }` }],
+    ['duplicate argv', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; argv[]=${execPath} ; argv[]=${execPath} ; status=0/0 }` }],
+    ['extra command', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; argv[]=${execPath} ; } { path=/bin/true ; argv[]=/bin/true ; }` }],
+    ['empty show result', { FAKE_UNIT_EXEC_START: '' }],
+    ['failed show', { FAKE_SHOW_STATUS: '5' }],
+  ])('rejects a game unit with %s', (_label, overrides) => {
+    const { root, repo, environment } = fixture();
+    try {
+      const result = runSystemdGuard(
+        repo,
+        `rr_assert_game_unit ${service} "$2" ${envFile} ${execPath}`,
+        { ...gameUnitEnvironment(environment, repo), ...overrides },
       );
       expect(result.status).not.toBe(0);
       expect(result.stdout).not.toContain('reached');

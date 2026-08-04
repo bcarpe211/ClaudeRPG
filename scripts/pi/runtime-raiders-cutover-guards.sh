@@ -96,3 +96,43 @@ rr_assert_updater_held() {
   test "$timer_active" = inactive
   test "$updater_active" = inactive
 }
+
+rr_assert_game_unit() {
+  local service="${1:-}"
+  local repo="${2:-}"
+  local env_file="${3:-}"
+  local exec_path="${4:-}"
+  test -n "$service" && test -n "$repo" &&
+    test -n "$env_file" && test -n "$exec_path" || return 64
+
+  local unit_user unit_working unit_environment loaded_exec
+  rr_observe_systemctl unit_user show "$service" --property=User --value
+  rr_observe_systemctl unit_working show "$service" --property=WorkingDirectory --value
+  rr_observe_systemctl unit_environment show "$service" --property=EnvironmentFiles --value
+  rr_observe_systemctl loaded_exec show "$service" --property=ExecStart --value
+
+  test "$unit_user" = rluser
+  test "$unit_working" = "$repo"
+  test "$unit_environment" = "$env_file (ignore_errors=no)"
+  [[ "$loaded_exec" != *$'\n'* ]]
+
+  local path_count=0
+  local argv_count=0
+  local token
+  local -a tokens=()
+  read -r -a tokens <<<"$loaded_exec"
+  for token in "${tokens[@]}"; do
+    case "$token" in
+      path=*)
+        path_count=$((path_count + 1))
+        test "$token" = "path=$exec_path"
+        ;;
+      'argv[]='*)
+        argv_count=$((argv_count + 1))
+        test "$token" = "argv[]=$exec_path"
+        ;;
+    esac
+  done
+  test "$path_count" -eq 1
+  test "$argv_count" -eq 1
+}
