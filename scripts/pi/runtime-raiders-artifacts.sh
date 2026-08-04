@@ -13,8 +13,9 @@ die() { printf 'runtime-raiders-artifacts: %s\n' "$1" >&2; exit 1; }
 require_root() { test "$(id -u)" = 0 || die 'root is required'; }
 require_release_sha() { [[ $1 =~ ^[0-9a-f]{40}$ ]] || die 'invalid release SHA'; }
 require_digest() { [[ $1 =~ ^[0-9a-f]{64}$ ]] || die "invalid $2 SHA-256"; }
-sha256_file() { sha256sum -- "$1" | awk 'NR == 1 && NF >= 1 { print $1; exit }'; }
-metadata() { stat -c '%u:%g:%a' -- "$1"; }
+sha256_file() { sha256sum -- "$1" 2>/dev/null | awk 'NR == 1 && NF >= 1 { print $1; exit }'; }
+metadata() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null; }
+ownership() { stat -c '%u:%g' -- "$1" 2>/dev/null; }
 
 require_directory() {
   test -d "$1" && test ! -L "$1" || die "$2 must be a nonsymlink directory"
@@ -23,6 +24,7 @@ require_directory() {
 
 require_regular_file() {
   test -f "$1" && test ! -L "$1" || die "$2 must be a regular file"
+  test -s "$1" || die "$2 must be nonempty"
 }
 
 canonicalize() {
@@ -62,10 +64,35 @@ validate_source() {
   require_beneath_artifact_root "$SOURCE_ZIP" 'source ZIP'
   require_beneath_artifact_root "$SOURCE_CHECKSUM" 'source checksum'
 
+  local artifact_url_count
+  local artifact_assignment_count
+  local checksum_url_count
+  local checksum_assignment_count
+  artifact_url_count=$(grep -Fxc -- \
+    "ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'" \
+    "$SOURCE_INSTALLER" 2>/dev/null || true)
+  artifact_assignment_count=$(grep -c -- '^ARTIFACT_URL=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  checksum_url_count=$(grep -Fxc -- \
+    "CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'" \
+    "$SOURCE_INSTALLER" 2>/dev/null || true)
+  checksum_assignment_count=$(grep -c -- '^CHECKSUM_URL=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  test "$artifact_url_count" = 1 || die 'installer artifact URL is invalid'
+  test "$artifact_assignment_count" = 1 || die 'installer artifact URL is invalid'
+  test "$checksum_url_count" = 1 || die 'installer checksum URL is invalid'
+  test "$checksum_assignment_count" = 1 || die 'installer checksum URL is invalid'
+  if grep -Fq -- '__RUNTIME_RAIDERS_TEAM_ID__' "$SOURCE_INSTALLER" 2>/dev/null; then
+    die 'installer Team ID is not rendered'
+  fi
+
   test "$(sha256_file "$SOURCE_INSTALLER")" = "$INSTALLER_SHA256" || die 'installer SHA-256 mismatch'
   test "$(sha256_file "$SOURCE_ZIP")" = "$ZIP_SHA256" || die 'ZIP SHA-256 mismatch'
   test "$(sha256_file "$SOURCE_CHECKSUM")" = "$CHECKSUM_SHA256" || die 'checksum SHA-256 mismatch'
-  printf '%s  runtime-raiders-agent.zip\n' "$ZIP_SHA256" | cmp -s - "$SOURCE_CHECKSUM" || die 'checksum file is not canonical'
+  if ! printf '%s  runtime-raiders-agent.zip\n' "$ZIP_SHA256" > "$STAGE/expected.sha256" 2>/dev/null; then
+    die 'failed to stage expected checksum'
+  fi
+  cmp -s -- "$STAGE/expected.sha256" "$SOURCE_CHECKSUM" ||
+    die 'checksum file does not match the approved ZIP'
+  rm -f -- "$STAGE/expected.sha256"
 }
 
 validate_release() {
@@ -100,7 +127,7 @@ validate_release() {
       IFS= read -r zip_line &&
       IFS= read -r checksum_line &&
       ! IFS= read -r extra_line
-  } < "$manifest" || die 'release manifest is invalid'
+  } < "$manifest" 2>/dev/null || die 'release manifest is invalid'
   test "$version_line" = 'version=1' || die 'release manifest is invalid'
   test "$release_line" = "release_sha=$expected_sha" || die 'release manifest is invalid'
   [[ $installer_line == installer_sha256=* ]] || die 'release manifest is invalid'
@@ -129,6 +156,22 @@ print_validated_status() {
     "checksum_sha256=$VALIDATED_CHECKSUM_SHA256"
 }
 
+select_release() {
+  local selected_sha=$1
+  local selector_candidate=$ARTIFACT_ROOT/.current.$$
+  if test -e "$selector_candidate" || test -L "$selector_candidate"; then
+    die 'temporary selector already exists'
+  fi
+  if ! ln -s -- "releases/$selected_sha" "$selector_candidate" 2>/dev/null; then
+    die 'failed to create temporary selector'
+  fi
+  TEMP_SELECTOR=$selector_candidate
+  if ! mv -T -- "$TEMP_SELECTOR" "$CURRENT" 2>/dev/null; then
+    die 'failed to select published release'
+  fi
+  TEMP_SELECTOR=''
+}
+
 status_command() {
   test "$#" -eq 0 || die 'status accepts no arguments'
   require_root
@@ -139,14 +182,69 @@ status_command() {
     return
   fi
   test -L "$CURRENT" || die 'current selector must be a symlink'
+  test "$(ownership "$CURRENT")" = '0:0' || die 'current selector must be owned by root:root'
 
   local selector
   local selected_sha
-  selector=$(readlink "$CURRENT")
+  selector=$(readlink "$CURRENT" 2>/dev/null) || die 'current selector could not be read'
   [[ $selector =~ ^releases/([0-9a-f]{40})$ ]] || die 'current selector is invalid'
   selected_sha=${BASH_REMATCH[1]}
   validate_release "$ARTIFACT_ROOT/$selector" "$selected_sha"
   print_validated_status
+}
+
+withdraw_command() {
+  test "$#" -eq 2 || die 'withdraw requires exactly --release-sha SHA'
+  test "$1" = '--release-sha' || die 'withdraw requires exactly --release-sha SHA'
+  local release_sha=$2
+  require_release_sha "$release_sha"
+  require_root
+  validate_store
+
+  LOCK=$ARTIFACT_ROOT/.publication.lock
+  OWNS_LOCK=0
+  if ! mkdir -- "$LOCK" 2>/dev/null; then
+    die 'publication is already in progress'
+  fi
+  OWNS_LOCK=1
+  withdraw_cleanup() {
+    local status=$?
+    trap - EXIT HUP INT TERM
+    if test "$OWNS_LOCK" = 1; then
+      if test "$LOCK" = "$ARTIFACT_ROOT/.publication.lock"; then
+        rmdir -- "$LOCK" 2>/dev/null || status=1
+      else
+        printf 'runtime-raiders-artifacts: refusing unsafe lock cleanup\n' >&2
+        status=1
+      fi
+    fi
+    exit "$status"
+  }
+  trap withdraw_cleanup EXIT
+  trap 'exit 1' HUP INT TERM
+
+  test -L "$CURRENT" || die 'current selector must be a symlink'
+  test "$(ownership "$CURRENT")" = '0:0' || die 'current selector must be owned by root:root'
+  local selector
+  selector=$(readlink "$CURRENT" 2>/dev/null) || die 'current selector could not be read'
+  test "$selector" = "releases/$release_sha" || die 'selected release does not match withdrawal SHA'
+
+  local tombstone=$ARTIFACT_ROOT/.withdrawn.$$
+  case "$tombstone" in
+    "$ARTIFACT_ROOT"/.withdrawn.*) ;;
+    *) die 'withdrawal tombstone is outside artifact root' ;;
+  esac
+  if test -e "$tombstone" || test -L "$tombstone"; then
+    die 'withdrawal tombstone already exists'
+  fi
+  if ! mv -T -- "$CURRENT" "$tombstone" 2>/dev/null; then
+    die 'failed to withdraw current selector'
+  fi
+  if ! unlink -- "$tombstone" 2>/dev/null; then
+    die 'release is withdrawn but tombstone cleanup is required'
+  fi
+
+  printf 'withdrawn_release=%s\n' "$release_sha"
 }
 
 publish_command() {
@@ -205,21 +303,48 @@ publish_command() {
   require_digest "$CHECKSUM_SHA256" 'checksum'
   require_root
   validate_store
-  validate_source
 
   LOCK=$ARTIFACT_ROOT/.publication.lock
-  mkdir -- "$LOCK" || die 'publication is already in progress'
   STAGE=''
+  TEMP_SELECTOR=''
+  OWNS_LOCK=0
+  if ! mkdir -- "$LOCK" 2>/dev/null; then
+    die 'publication is already in progress'
+  fi
+  OWNS_LOCK=1
   cleanup() {
-    status=$?
+    local status=$?
     trap - EXIT HUP INT TERM
-    if test -n "$STAGE"; then
-      case "$STAGE" in
-        "$ARTIFACT_ROOT"/.stage.*) rm -rf -- "$STAGE" ;;
-        *) printf 'refusing unsafe staging cleanup\n' >&2; status=1 ;;
+    if test -n "$TEMP_SELECTOR"; then
+      case "$TEMP_SELECTOR" in
+        "$ARTIFACT_ROOT"/.current.*)
+          rm -f -- "$TEMP_SELECTOR" 2>/dev/null || status=1
+          ;;
+        *)
+          printf 'runtime-raiders-artifacts: refusing unsafe selector cleanup\n' >&2
+          status=1
+          ;;
       esac
     fi
-    rmdir -- "$LOCK" 2>/dev/null || true
+    if test -n "$STAGE"; then
+      case "$STAGE" in
+        "$ARTIFACT_ROOT"/.stage.*)
+          rm -rf -- "$STAGE" 2>/dev/null || status=1
+          ;;
+        *)
+          printf 'runtime-raiders-artifacts: refusing unsafe staging cleanup\n' >&2
+          status=1
+          ;;
+      esac
+    fi
+    if test "$OWNS_LOCK" = 1; then
+      if test "$LOCK" = "$ARTIFACT_ROOT/.publication.lock"; then
+        rmdir -- "$LOCK" 2>/dev/null || status=1
+      else
+        printf 'runtime-raiders-artifacts: refusing unsafe lock cleanup\n' >&2
+        status=1
+      fi
+    fi
     exit "$status"
   }
   trap cleanup EXIT
@@ -227,44 +352,61 @@ publish_command() {
 
   local release_target=$RELEASES/$RELEASE_SHA
   if test -e "$release_target" || test -L "$release_target"; then
-    die 'release already exists'
+    validate_release "$release_target" "$RELEASE_SHA"
+    test "$VALIDATED_INSTALLER_SHA256" = "$INSTALLER_SHA256" ||
+      die 'existing release does not match approved digests'
+    test "$VALIDATED_ZIP_SHA256" = "$ZIP_SHA256" ||
+      die 'existing release does not match approved digests'
+    test "$VALIDATED_CHECKSUM_SHA256" = "$CHECKSUM_SHA256" ||
+      die 'existing release does not match approved digests'
+    select_release "$RELEASE_SHA"
+    print_validated_status
+    return
   fi
 
-  STAGE=$ARTIFACT_ROOT/.stage.$$
-  if test -e "$STAGE" || test -L "$STAGE"; then
-    die 'staging path already exists'
-  fi
+  local created_stage
+  created_stage=$(mktemp -d -- "$ARTIFACT_ROOT/.stage.XXXXXXXXXX" 2>/dev/null) ||
+    die 'failed to create staging directory'
+  STAGE=$created_stage
+  case "$STAGE" in
+    "$ARTIFACT_ROOT"/.stage.*) ;;
+    *) die 'staging directory is outside artifact root' ;;
+  esac
+  validate_source
+
   local staged_release=$STAGE/release
-  install -d -o root -g root -m 0755 "$STAGE"
-  install -d -o root -g root -m 0755 "$staged_release"
-  install -o root -g root -m 0644 -- "$SOURCE_INSTALLER" "$staged_release/install.sh"
-  install -o root -g root -m 0644 -- "$SOURCE_ZIP" "$staged_release/runtime-raiders-agent.zip"
-  install -o root -g root -m 0644 -- "$SOURCE_CHECKSUM" "$staged_release/runtime-raiders-agent.zip.sha256"
-  printf '%s\n' \
-    'version=1' \
-    "release_sha=$RELEASE_SHA" \
-    "installer_sha256=$INSTALLER_SHA256" \
-    "zip_sha256=$ZIP_SHA256" \
-    "checksum_sha256=$CHECKSUM_SHA256" > "$staged_release/.release-manifest"
-  chown root:root "$staged_release/.release-manifest"
-  chmod 0600 "$staged_release/.release-manifest"
+  install -d -o root -g root -m 0755 "$staged_release" 2>/dev/null ||
+    die 'failed to stage release directory'
+  install -o root -g root -m 0644 -- "$SOURCE_INSTALLER" "$staged_release/install.sh" 2>/dev/null ||
+    die 'failed to stage installer'
+  install -o root -g root -m 0644 -- "$SOURCE_ZIP" "$staged_release/runtime-raiders-agent.zip" 2>/dev/null ||
+    die 'failed to stage ZIP'
+  install -o root -g root -m 0644 -- "$SOURCE_CHECKSUM" "$staged_release/runtime-raiders-agent.zip.sha256" 2>/dev/null ||
+    die 'failed to stage checksum'
+  if ! printf '%s\n' \
+      'version=1' \
+      "release_sha=$RELEASE_SHA" \
+      "installer_sha256=$INSTALLER_SHA256" \
+      "zip_sha256=$ZIP_SHA256" \
+      "checksum_sha256=$CHECKSUM_SHA256" > "$staged_release/.release-manifest" 2>/dev/null; then
+    die 'failed to stage release manifest'
+  fi
+  chown root:root "$staged_release/.release-manifest" 2>/dev/null ||
+    die 'failed to set release manifest ownership'
+  chmod 0600 "$staged_release/.release-manifest" 2>/dev/null ||
+    die 'failed to set release manifest mode'
 
   validate_release "$staged_release" "$RELEASE_SHA"
-  mv -- "$staged_release" "$release_target"
-  rmdir -- "$STAGE"
+  mv -T -n -- "$staged_release" "$release_target" 2>/dev/null ||
+    die 'failed to publish immutable release'
+  if test -e "$staged_release" || test -L "$staged_release"; then
+    die 'release appeared during publication'
+  fi
+  rmdir -- "$STAGE" 2>/dev/null || die 'failed to remove empty staging directory'
   STAGE=''
 
-  local new_current=$ARTIFACT_ROOT/.current.$$
-  if test -e "$new_current" || test -L "$new_current"; then
-    die 'temporary selector already exists'
-  fi
-  ln -s "releases/$RELEASE_SHA" "$new_current"
-  if ! mv -- "$new_current" "$CURRENT"; then
-    rm -f -- "$new_current"
-    die 'failed to select published release'
-  fi
-
   validate_release "$release_target" "$RELEASE_SHA"
+  select_release "$RELEASE_SHA"
   print_validated_status
 }
 
@@ -274,5 +416,6 @@ shift
 case $command in
   publish) publish_command "$@" ;;
   status) status_command "$@" ;;
+  withdraw) withdraw_command "$@" ;;
   *) die 'unknown command' ;;
 esac
