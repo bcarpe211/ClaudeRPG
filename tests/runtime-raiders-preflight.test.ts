@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -41,6 +42,7 @@ function fixture() {
   const approvedPolicy = join(root, 'approved-policy.json');
   const approvedPolicyLoader = join(root, 'approved-policy-loader.ts');
   const caddyEnv = join(root, 'caddy.env');
+  const artifactRoot = join(root, 'artifact-store');
   const releaseSha = 'b'.repeat(40);
   const priorSha = 'a'.repeat(40);
   const cutoverAt = '1790000000000';
@@ -56,6 +58,9 @@ function fixture() {
   mkdirSync(spritesDir, { recursive: true });
   mkdirSync(join(repo, 'deploy'), { recursive: true });
   mkdirSync(join(repo, 'src', 'domain'), { recursive: true });
+  mkdirSync(join(artifactRoot, 'releases'), { recursive: true, mode: 0o755 });
+  chmodSync(artifactRoot, 0o755);
+  chmodSync(join(artifactRoot, 'releases'), 0o755);
   mkdirSync(fakes);
   writeFileSync(db, 'production-shaped-database');
   copyFileSync(resolve('config/raid-power-policy-v1.json'), policy);
@@ -143,6 +148,10 @@ esac`);
 [ "\${FAKE_CADDY_VALID:-1}" = 1 ]`);
   executable(join(fakes, 'curl'), `
 case "$*" in
+  *https://raiders.redlattice.com/install.sh*|\
+  *https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip*|\
+  *https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256*)
+    printf '%s' "\${FAKE_ARTIFACT_HTTP_STATUS:-404}" ;;
   *https://raiders.redlattice.com/health*) [ "\${FAKE_NEW_HTTPS:-1}" = 1 ] ;;
   *https://clauderpg.redlattice.com/health*) [ "\${FAKE_OLD_HTTPS:-1}" = 1 ] ;;
   *) exit 75 ;;
@@ -196,10 +205,14 @@ case "$*" in
   *) exit 77 ;;
 esac`);
   executable(join(fakes, 'stat'), `
-[ "\${1:-}" = '-c' ] && [ "\${2:-}" = '%u %a' ] && [ "\${3:-}" = '--' ] || exit 79
-case "\${4:-}" in
-  "$RUNTIME_RAIDERS_TEST_ENV") printf '%s %s\\n' "\${FAKE_GAME_ENV_UID:-0}" "\${FAKE_GAME_ENV_MODE:-600}" ;;
-  "$RUNTIME_RAIDERS_TEST_CADDY_ENV") printf '%s %s\\n' "\${FAKE_CADDY_ENV_UID:-0}" "\${FAKE_CADDY_ENV_MODE:-600}" ;;
+[ "\${1:-}" = '-c' ] && [ "\${3:-}" = '--' ] || exit 79
+case "\${2:-}:\${4:-}" in
+  "%u %a:$RUNTIME_RAIDERS_TEST_ENV") printf '%s %s\\n' "\${FAKE_GAME_ENV_UID:-0}" "\${FAKE_GAME_ENV_MODE:-600}" ;;
+  "%u %a:$RUNTIME_RAIDERS_TEST_CADDY_ENV") printf '%s %s\\n' "\${FAKE_CADDY_ENV_UID:-0}" "\${FAKE_CADDY_ENV_MODE:-600}" ;;
+  "%u:%g:%a:$RUNTIME_RAIDERS_TEST_ARTIFACT_ROOT"|"%u:%g:%a:$RUNTIME_RAIDERS_TEST_ARTIFACT_ROOT/releases")
+    mode=$("$RUNTIME_RAIDERS_TEST_NODE" -e 'const { statSync } = require("node:fs"); process.stdout.write((statSync(process.argv[1]).mode & 0o777).toString(8));' "\${4:-}") || exit 80
+    if [ "\${4:-}" = "$RUNTIME_RAIDERS_TEST_ARTIFACT_ROOT" ]; then mode="\${FAKE_ARTIFACT_ROOT_MODE:-$mode}"; fi
+    printf '0:0:%s\\n' "$mode" ;;
   *) exit 80 ;;
 esac`);
   executable(join(fakes, 'du'), 'printf \'%s\\t%s\\n\' "${FAKE_NODE_MODULES_KB:-100}" "$1"');
@@ -209,7 +222,7 @@ esac`);
     executable(join(fakes, command), 'exit 91');
   }
 
-  return { root, repo, db, spritesDir, envFile, policy, caddyConfig, approvedCaddy, approvedPolicy, approvedPolicyLoader, caddyEnv, releaseSha, priorSha, cutoverAt, fakes, commandLog, pauseState, updaterState, gitState };
+  return { root, repo, db, spritesDir, envFile, policy, caddyConfig, approvedCaddy, approvedPolicy, approvedPolicyLoader, caddyEnv, artifactRoot, releaseSha, priorSha, cutoverAt, fakes, commandLog, pauseState, updaterState, gitState };
 }
 
 function git(repo: string, args: string[]): string {
@@ -223,7 +236,7 @@ function realGitFixture(largeTargetBytes = 0): Fixture {
   const canonicalRoot = realpathSync(f.root);
   for (const key of [
     'repo', 'db', 'spritesDir', 'envFile', 'policy', 'caddyConfig', 'approvedCaddy', 'approvedPolicy',
-    'approvedPolicyLoader', 'caddyEnv', 'fakes', 'commandLog', 'pauseState', 'updaterState', 'gitState',
+    'approvedPolicyLoader', 'caddyEnv', 'artifactRoot', 'fakes', 'commandLog', 'pauseState', 'updaterState', 'gitState',
   ] as const) {
     f[key] = f[key].replace(f.root, canonicalRoot);
   }
@@ -272,6 +285,7 @@ function run(testFixture: Fixture, overrides: NodeJS.ProcessEnv = {}) {
     '--cutover-at', testFixture.cutoverAt,
     '--caddy-config', testFixture.caddyConfig,
     '--caddy-env', testFixture.caddyEnv,
+    '--artifact-root', testFixture.artifactRoot,
   ], {
     encoding: 'utf8',
     env: {
@@ -288,6 +302,8 @@ function run(testFixture: Fixture, overrides: NodeJS.ProcessEnv = {}) {
       RUNTIME_RAIDERS_TEST_APPROVED_POLICY: testFixture.approvedPolicy,
       RUNTIME_RAIDERS_TEST_APPROVED_POLICY_LOADER: testFixture.approvedPolicyLoader,
       RUNTIME_RAIDERS_TEST_CADDY_ENV: testFixture.caddyEnv,
+      RUNTIME_RAIDERS_TEST_ARTIFACT_ROOT: testFixture.artifactRoot,
+      RUNTIME_RAIDERS_TEST_NODE: process.execPath,
       ...overrides,
     },
   });
@@ -864,6 +880,39 @@ describe('Runtime Raiders Pi preflight', () => {
     expect(result.output).toContain('FAIL disk capacity');
   });
 
+  it('requires a root-owned empty artifact store before cutover', () => {
+    const f = fixture();
+    symlinkSync('releases/' + 'b'.repeat(40), join(f.artifactRoot, 'current'));
+    const result = run(f);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL artifact store');
+  });
+
+  it('rejects missing or symlinked artifact release directories', () => {
+    for (const kind of ['missing', 'symlink'] as const) {
+      const f = fixture();
+      rmSync(join(f.artifactRoot, 'releases'), { recursive: true });
+      if (kind === 'symlink') {
+        symlinkSync(f.root, join(f.artifactRoot, 'releases'));
+      }
+      const result = run(f);
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain('FAIL artifact store');
+    }
+  });
+
+  it('rejects a permission-widened artifact root', () => {
+    const result = run(fixture(), { FAKE_ARTIFACT_ROOT_MODE: '777' });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL artifact store');
+  });
+
+  it('requires artifact routes to remain unpublished before cutover', () => {
+    const result = run(fixture(), { FAKE_ARTIFACT_HTTP_STATUS: '200' });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('FAIL artifact routes unpublished');
+  });
+
   it('reports every gate ready only when all checks pass', () => {
     const result = run(fixture());
     expect(result.status, result.output).toBe(0);
@@ -873,6 +922,8 @@ describe('Runtime Raiders Pi preflight', () => {
     expect(result.output).toContain('PASS Git readiness');
     expect(result.output).toContain('PASS Runtime Raiders environment');
     expect(result.output).toContain('PASS Caddy configuration');
+    expect(result.output).toContain('PASS artifact store');
+    expect(result.output).toContain('PASS artifact routes unpublished');
     expect(result.output).toContain('PASS HTTPS new host');
     expect(result.output).toContain('PASS HTTPS old host');
     expect(result.output).toContain('PASS hostname resolution');
@@ -881,6 +932,7 @@ describe('Runtime Raiders Pi preflight', () => {
     expect(result.output).not.toContain('top-secret-password');
     expect(result.output).not.toContain('top-secret-session');
     expect(result.output).not.toContain('top-secret-caddy-token');
+    expect(result.output.trim().split('\n').at(-1)).toBe('READY separately authorized cutover gates passed');
   });
 
   it('uses only observed read-only commands and leaves DB, env, and policy fixtures unchanged', () => {
@@ -895,12 +947,37 @@ describe('Runtime Raiders Pi preflight', () => {
       f.caddyConfig,
       f.caddyEnv,
     ];
+    const protectedDirectories = [
+      f.artifactRoot,
+      join(f.artifactRoot, 'releases'),
+    ];
     const before = protectedFixtures.map((path) => readFileSync(path, 'utf8'));
+    const beforeDirectoryMetadata = protectedDirectories.map((path) => {
+      const metadata = statSync(path);
+      return {
+        mode: metadata.mode,
+        uid: metadata.uid,
+        gid: metadata.gid,
+        mtimeMs: metadata.mtimeMs,
+        entries: readdirSync(path),
+      };
+    });
     const result = run(f);
     const after = protectedFixtures.map((path) => readFileSync(path, 'utf8'));
+    const afterDirectoryMetadata = protectedDirectories.map((path) => {
+      const metadata = statSync(path);
+      return {
+        mode: metadata.mode,
+        uid: metadata.uid,
+        gid: metadata.gid,
+        mtimeMs: metadata.mtimeMs,
+        entries: readdirSync(path),
+      };
+    });
 
     expect(result.status, result.output).toBe(0);
     expect(after).toEqual(before);
+    expect(afterDirectoryMetadata).toEqual(beforeDirectoryMetadata);
     expect(result.commands).toContain('sqlite3 -readonly');
     expect(result.commands).toContain('git --no-optional-locks -C');
     expect(result.commands).toContain('caddy validate');

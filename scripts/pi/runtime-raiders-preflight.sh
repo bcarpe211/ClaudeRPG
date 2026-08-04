@@ -6,7 +6,7 @@ set -u
 set -o pipefail
 
 usage() {
-  echo "usage: runtime-raiders-preflight.sh --db PATH --env PATH --repo PATH --prior-sha SHA --release-sha SHA --cutover-at MS --caddy-config PATH --caddy-env PATH" >&2
+  echo "usage: runtime-raiders-preflight.sh --db PATH --env PATH --repo PATH --prior-sha SHA --release-sha SHA --cutover-at MS --caddy-config PATH --caddy-env PATH --artifact-root PATH" >&2
   exit 64
 }
 
@@ -18,6 +18,7 @@ RELEASE_SHA=''
 CUTOVER_AT=''
 CADDY_CONFIG=''
 CADDY_ENV=''
+ARTIFACT_ROOT=''
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -61,13 +62,23 @@ while [ "$#" -gt 0 ]; do
       CADDY_ENV=$2
       shift 2
       ;;
+    --artifact-root)
+      [ "$#" -ge 2 ] || usage
+      ARTIFACT_ROOT=$2
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
 
 [ -n "$DB" ] && [ -n "$ENV_FILE" ] && [ -n "$REPO" ] &&
   [ -n "$PRIOR_SHA" ] && [ -n "$RELEASE_SHA" ] && [ -n "$CUTOVER_AT" ] &&
-  [ -n "$CADDY_CONFIG" ] && [ -n "$CADDY_ENV" ] || usage
+  [ -n "$CADDY_CONFIG" ] && [ -n "$CADDY_ENV" ] &&
+  [ -n "$ARTIFACT_ROOT" ] || usage
+case "$ARTIFACT_ROOT" in
+  /*) ;;
+  *) usage ;;
+esac
 
 failures=0
 
@@ -178,6 +189,18 @@ fi
 [ -f "$CADDY_CONFIG" ] && [ ! -L "$CADDY_CONFIG" ] && [ -r "$CADDY_CONFIG" ] || paths_ok=0
 [ -r "$CADDY_ENV" ] && protected_root_env "$CADDY_ENV" || paths_ok=0
 if [ "$paths_ok" -eq 1 ]; then pass 'paths'; else fail 'paths'; fi
+
+artifact_store_ok=1
+test -d "$ARTIFACT_ROOT" && test ! -L "$ARTIFACT_ROOT" || artifact_store_ok=0
+test -d "$ARTIFACT_ROOT/releases" &&
+  test ! -L "$ARTIFACT_ROOT/releases" || artifact_store_ok=0
+test "$(stat -c '%u:%g:%a' -- "$ARTIFACT_ROOT" 2>/dev/null)" = '0:0:755' ||
+  artifact_store_ok=0
+test "$(stat -c '%u:%g:%a' -- "$ARTIFACT_ROOT/releases" 2>/dev/null)" = '0:0:755' ||
+  artifact_store_ok=0
+test ! -e "$ARTIFACT_ROOT/current" && test ! -L "$ARTIFACT_ROOT/current" ||
+  artifact_store_ok=0
+if [ "$artifact_store_ok" -eq 1 ]; then pass 'artifact store'; else fail 'artifact store'; fi
 
 integrity=''
 if [ -f "$DB" ] && [ -r "$DB" ]; then
@@ -359,6 +382,23 @@ for internal_name in raiders.redlattice.com clauderpg.redlattice.com; do
     awk -v expected="$resolved_local" '$1 == expected { found = 1 } END { exit(found ? 0 : 1) }' || dns_ok=0
 done
 if [ "$dns_ok" -eq 1 ]; then pass 'internal DNS'; else fail 'internal DNS'; fi
+
+artifact_routes_ok=1
+for artifact_path in \
+  /install.sh \
+  /downloads/runtime-raiders-agent.zip \
+  /downloads/runtime-raiders-agent.zip.sha256; do
+  artifact_status=$(curl --silent --show-error --max-time 10 --output /dev/null \
+    --write-out '%{http_code}' --noproxy '*' \
+    --resolve "raiders.redlattice.com:443:$resolved_local" \
+    "https://raiders.redlattice.com$artifact_path") || artifact_routes_ok=0
+  test "$artifact_status" = 404 || artifact_routes_ok=0
+done
+if [ "$artifact_routes_ok" -eq 1 ]; then
+  pass 'artifact routes unpublished'
+else
+  fail 'artifact routes unpublished'
+fi
 
 if [ "$hostname_ok" -eq 1 ] &&
   curl --fail --silent --show-error --max-time 10 --output /dev/null --noproxy '*' \
