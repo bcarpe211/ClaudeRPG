@@ -35,6 +35,21 @@ describe('Runtime Raiders stable cutover documentation contract', () => {
     expect(runbook).not.toMatch(/test "\$GAME_EXEC" =/);
   });
 
+  it('attempts both updater hold actions and the final assertion before failing', () => {
+    const updaterHoldBlock = runbook.match(
+      /### 2\.1 Hold the updater[\s\S]*?```sh\n([\s\S]*?)\n```/,
+    )?.[1];
+
+    expect(updaterHoldBlock).toBeDefined();
+    expect(updaterHoldBlock).toContain([
+      'hold_failed=0',
+      'sudo systemctl disable --now "$UPDATER_TIMER" || hold_failed=1',
+      'sudo systemctl stop "$UPDATER_SERVICE" || hold_failed=1',
+      'rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || hold_failed=1',
+      'test "$hold_failed" = 0',
+    ].join('\n'));
+  });
+
   it('keeps fail-closed cleanup non-recursive while accumulating failures', () => {
     expect(runbook).toContain(
       'sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || cleanup_failed=1',

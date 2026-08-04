@@ -326,6 +326,28 @@ describe('Runtime Raiders executable cutover guards', () => {
   });
 
   it.each([
+    ['enabled timer', { FAKE_TIMER_ENABLED_VALUE: 'enabled', FAKE_TIMER_ENABLED_STATUS: '0' }],
+    ['active timer', { FAKE_TIMER_ACTIVE_VALUE: 'active', FAKE_TIMER_ACTIVE_STATUS: '0' }],
+    ['failed updater', { FAKE_UPDATER_ACTIVE_VALUE: 'failed', FAKE_UPDATER_ACTIVE_STATUS: '3' }],
+    ['unknown updater', { FAKE_UPDATER_ACTIVE_VALUE: 'unknown', FAKE_UPDATER_ACTIVE_STATUS: '4' }],
+    ['empty observation', { FAKE_UPDATER_ACTIVE_VALUE: '', FAKE_UPDATER_ACTIVE_STATUS: '3' }],
+    ['unexpected systemctl failure', { FAKE_TIMER_ENABLED_VALUE: 'disabled', FAKE_TIMER_ENABLED_STATUS: '5' }],
+  ])('rejects %s when the updater assertion is used as a predicate', (_label, overrides) => {
+    const { root, repo, environment } = fixture();
+    try {
+      const result = runSystemdGuard(
+        repo,
+        'rr_assert_updater_held runtime-raiders.timer runtime-raiders.service || exit 1',
+        { ...environment, ...overrides },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('reached');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
     ['running', `{ path=${execPath} ; argv[]=${execPath} ; ignore_errors=no ; start_time=[Tue 2026-08-04 10:15:47 EDT] ; stop_time=[n/a] ; pid=71893 ; code=(null) ; status=0/0 }`],
     ['stopped', `{ path=${execPath} ; argv[]=${execPath} ; ignore_errors=no ; start_time=[Tue 2026-08-04 11:42:09 EDT] ; stop_time=[Tue 2026-08-04 12:03:51 EDT] ; pid=93217 ; code=killed ; status=15/TERM }`],
   ])('accepts the stable game unit while %s', (_state, execStart) => {
@@ -362,6 +384,28 @@ describe('Runtime Raiders executable cutover guards', () => {
         repo,
         `rr_assert_game_unit ${service} "$2" ${envFile} ${execPath}`,
         { ...gameUnitEnvironment(environment, repo), ...overrides },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('reached');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['unbalanced opening brace', `{ path=${execPath} ; argv[]=${execPath} ; status=0/0 ; { }`],
+    ['unbalanced closing brace', `{ path=${execPath} ; argv[]=${execPath} ; status=0/0 ; } }`],
+    ['nested record', `{ path=${execPath} ; argv[]=${execPath} ; { status=0/0 ; } }`],
+    ['trailing record material', `{ path=${execPath} ; argv[]=${execPath} ; status=0/0 ; } trailing }`],
+    ['missing closing delimiter', `{ path=${execPath} ; argv[]=${execPath} ; status=0/0`],
+    ['text after closing delimiter', `{ path=${execPath} ; argv[]=${execPath} ; status=0/0 ; } trailing`],
+  ])('rejects malformed ExecStart record shape: %s', (_label, execStart) => {
+    const { root, repo, environment } = fixture();
+    try {
+      const result = runSystemdGuard(
+        repo,
+        `rr_assert_game_unit ${service} "$2" ${envFile} ${execPath}`,
+        { ...gameUnitEnvironment(environment, repo), FAKE_UNIT_EXEC_START: execStart },
       );
       expect(result.status).not.toBe(0);
       expect(result.stdout).not.toContain('reached');

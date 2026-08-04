@@ -92,9 +92,9 @@ rr_assert_updater_held() {
   rr_observe_systemctl timer_enabled is-enabled "$timer" || return $?
   rr_observe_systemctl timer_active is-active "$timer" || return $?
   rr_observe_systemctl updater_active is-active "$service" || return $?
-  test "$timer_enabled" = disabled
-  test "$timer_active" = inactive
-  test "$updater_active" = inactive
+  test "$timer_enabled" = disabled || return $?
+  test "$timer_active" = inactive || return $?
+  test "$updater_active" = inactive || return $?
 }
 
 rr_assert_game_unit() {
@@ -118,6 +118,10 @@ rr_assert_game_unit() {
   [[ "$loaded_exec" == "{ path=$exec_path ;"* ]] || return $?
   [[ "$loaded_exec" == *" ; argv[]=$exec_path ;"* ]] || return $?
   [[ "$loaded_exec" == *" }" ]] || return $?
+
+  local record_body="${loaded_exec#\{ }"
+  record_body="${record_body% \}}"
+  [[ "$record_body" != *'{'* && "$record_body" != *'}'* ]] || return $?
 
   local path_count=0
   local argv_count=0

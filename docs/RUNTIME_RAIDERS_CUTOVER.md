@@ -300,9 +300,11 @@ test -s "$UPDATER_GUARDS"
 bash -n "$UPDATER_GUARDS"
 # shellcheck source=/dev/null
 source "$UPDATER_GUARDS"
-sudo systemctl disable --now "$UPDATER_TIMER"
-sudo systemctl stop "$UPDATER_SERVICE"
-rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"
+hold_failed=0
+sudo systemctl disable --now "$UPDATER_TIMER" || hold_failed=1
+sudo systemctl stop "$UPDATER_SERVICE" || hold_failed=1
+rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || hold_failed=1
+test "$hold_failed" = 0
 ```
 
 Failure is a NO-GO; do not publish, fetch, prepare Caddy, or deploy anything.
