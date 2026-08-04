@@ -25,13 +25,29 @@ require_regular_file() {
   test -f "$1" && test ! -L "$1" || die "$2 must be a regular file"
 }
 
+canonicalize() {
+  realpath -- "$1" 2>/dev/null || die "$2 could not be canonicalized"
+}
+
+require_beneath_artifact_root() {
+  case $1 in
+    "$ARTIFACT_ROOT"/*) ;;
+    *) die "$2 must resolve beneath artifact root" ;;
+  esac
+}
+
 validate_store() {
   require_directory "$ARTIFACT_ROOT" 'artifact root'
+  ARTIFACT_ROOT=$(canonicalize "$ARTIFACT_ROOT" 'artifact root')
+  RELEASES=$ARTIFACT_ROOT/releases
+  CURRENT=$ARTIFACT_ROOT/current
   require_directory "$RELEASES" 'releases directory'
 }
 
 validate_source() {
   test -d "$SOURCE" && test ! -L "$SOURCE" || die 'source must be a nonsymlink directory'
+  SOURCE=$(canonicalize "$SOURCE" 'source')
+  require_beneath_artifact_root "$SOURCE" 'source'
 
   SOURCE_INSTALLER=$SOURCE/install.sh
   SOURCE_ZIP=$SOURCE/runtime-raiders-agent.zip
@@ -39,6 +55,12 @@ validate_source() {
   require_regular_file "$SOURCE_INSTALLER" 'source installer'
   require_regular_file "$SOURCE_ZIP" 'source ZIP'
   require_regular_file "$SOURCE_CHECKSUM" 'source checksum'
+  SOURCE_INSTALLER=$(canonicalize "$SOURCE_INSTALLER" 'source installer')
+  SOURCE_ZIP=$(canonicalize "$SOURCE_ZIP" 'source ZIP')
+  SOURCE_CHECKSUM=$(canonicalize "$SOURCE_CHECKSUM" 'source checksum')
+  require_beneath_artifact_root "$SOURCE_INSTALLER" 'source installer'
+  require_beneath_artifact_root "$SOURCE_ZIP" 'source ZIP'
+  require_beneath_artifact_root "$SOURCE_CHECKSUM" 'source checksum'
 
   test "$(sha256_file "$SOURCE_INSTALLER")" = "$INSTALLER_SHA256" || die 'installer SHA-256 mismatch'
   test "$(sha256_file "$SOURCE_ZIP")" = "$ZIP_SHA256" || die 'ZIP SHA-256 mismatch'

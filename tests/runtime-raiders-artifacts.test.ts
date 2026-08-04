@@ -2,12 +2,14 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -93,7 +95,7 @@ if test "\${RUNTIME_RAIDERS_TEST_FAIL_MV:-0}" = 1; then exit 65; fi
 if test "\${1:-}" = --; then shift; fi
 exec /bin/mv "$@"`);
 
-  return { artifactRoot, fakes, commandLog };
+  return { root, artifactRoot, fakes, commandLog };
 }
 
 function runScript(
@@ -183,5 +185,22 @@ describe('Runtime Raiders artifact publication', () => {
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toBe('unpublished\n');
     expect(status.stderr).toBe('');
+  });
+
+  it('rejects an out-of-root source reached through a symlinked ancestor', () => {
+    const environment = fixture();
+    const files = sourceTriplet(environment.root);
+    symlinkSync(environment.root, join(environment.artifactRoot, 'linked-source'), 'dir');
+    const linkedFiles = {
+      ...files,
+      source: join(environment.artifactRoot, 'linked-source', 'source'),
+    };
+
+    const published = runScript(linkedFiles, environment, 'publish');
+
+    expect(published.status).not.toBe(0);
+    expect(published.stdout).toBe('');
+    expect(published.stderr).toContain('source must resolve beneath artifact root');
+    expect(existsSync(join(environment.artifactRoot, 'current'))).toBe(false);
   });
 });
