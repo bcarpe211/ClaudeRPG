@@ -66,16 +66,22 @@ validate_source() {
 
   local artifact_url_count
   local artifact_assignment_count
+  local artifact_append_count
   local checksum_url_count
   local checksum_assignment_count
+  local checksum_append_count
   artifact_url_count=$(grep -Fxc -- \
     "ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'" \
     "$SOURCE_INSTALLER" 2>/dev/null || true)
-  artifact_assignment_count=$(grep -c -- '^ARTIFACT_URL=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  artifact_assignment_count=$(grep -Foc -- 'ARTIFACT_URL=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  artifact_append_count=$(grep -Foc -- 'ARTIFACT_URL+=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  artifact_assignment_count=$((artifact_assignment_count + artifact_append_count))
   checksum_url_count=$(grep -Fxc -- \
     "CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'" \
     "$SOURCE_INSTALLER" 2>/dev/null || true)
-  checksum_assignment_count=$(grep -c -- '^CHECKSUM_URL=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  checksum_assignment_count=$(grep -Foc -- 'CHECKSUM_URL=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  checksum_append_count=$(grep -Foc -- 'CHECKSUM_URL+=' "$SOURCE_INSTALLER" 2>/dev/null || true)
+  checksum_assignment_count=$((checksum_assignment_count + checksum_append_count))
   test "$artifact_url_count" = 1 || die 'installer artifact URL is invalid'
   test "$artifact_assignment_count" = 1 || die 'installer artifact URL is invalid'
   test "$checksum_url_count" = 1 || die 'installer checksum URL is invalid'
@@ -108,6 +114,7 @@ validate_release() {
   local zip_line
   local checksum_line
   local extra_line
+  local entries
 
   require_release_sha "$expected_sha"
   require_directory "$directory" 'release directory'
@@ -115,6 +122,10 @@ validate_release() {
   require_regular_file "$zip" 'release ZIP'
   require_regular_file "$checksum" 'release checksum'
   require_regular_file "$manifest" 'release manifest'
+  shopt -s nullglob dotglob
+  entries=("$directory"/*)
+  shopt -u nullglob dotglob
+  test "${#entries[@]}" = 4 || die 'release directory contains unexpected entries'
   test "$(metadata "$installer")" = '0:0:644' || die 'release installer must be owned by root:root with mode 0644'
   test "$(metadata "$zip")" = '0:0:644' || die 'release ZIP must be owned by root:root with mode 0644'
   test "$(metadata "$checksum")" = '0:0:644' || die 'release checksum must be owned by root:root with mode 0644'
@@ -166,10 +177,14 @@ select_release() {
     die 'failed to create temporary selector'
   fi
   TEMP_SELECTOR=$selector_candidate
+  trap '' HUP INT TERM
   if ! mv -T -- "$TEMP_SELECTOR" "$CURRENT" 2>/dev/null; then
+    trap 'exit 1' HUP INT TERM
     die 'failed to select published release'
   fi
+  SELECTION_COMMITTED=1
   TEMP_SELECTOR=''
+  trap 'exit 0' HUP INT TERM
 }
 
 status_command() {
@@ -307,6 +322,7 @@ publish_command() {
   LOCK=$ARTIFACT_ROOT/.publication.lock
   STAGE=''
   TEMP_SELECTOR=''
+  SELECTION_COMMITTED=0
   OWNS_LOCK=0
   if ! mkdir -- "$LOCK" 2>/dev/null; then
     die 'publication is already in progress'
@@ -339,11 +355,16 @@ publish_command() {
     fi
     if test "$OWNS_LOCK" = 1; then
       if test "$LOCK" = "$ARTIFACT_ROOT/.publication.lock"; then
-        rmdir -- "$LOCK" 2>/dev/null || status=1
+        if ! rmdir -- "$LOCK" 2>/dev/null && test "$SELECTION_COMMITTED" = 0; then
+          status=1
+        fi
       else
         printf 'runtime-raiders-artifacts: refusing unsafe lock cleanup\n' >&2
         status=1
       fi
+    fi
+    if test "$SELECTION_COMMITTED" = 1; then
+      status=0
     fi
     exit "$status"
   }

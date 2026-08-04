@@ -152,6 +152,16 @@ if test "\${RUNTIME_RAIDERS_TEST_FAIL_UNLINK:-0}" = 1; then exit 65; fi
 if test "\${1:-}" = --; then shift; fi
 exec /bin/unlink "$@"`);
 
+  executable(join(fakes, 'rmdir'), `
+printf 'rmdir %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
+case "$*" in
+  */.publication.lock)
+    if test "\${RUNTIME_RAIDERS_TEST_FAIL_LOCK_CLEANUP:-0}" = 1; then exit 65; fi
+    ;;
+esac
+if test "\${1:-}" = --; then shift; fi
+exec /bin/rmdir "$@"`);
+
   return { root, artifactRoot, fakes, commandLog };
 }
 
@@ -306,6 +316,24 @@ describe('Runtime Raiders artifact publication', () => {
     ['second checksum URL assignment', (f: PublicationFixture) => {
       appendFileSync(f.files.installer, "CHECKSUM_URL='https://example.invalid/agent.zip.sha256'\n");
     }],
+    ['indented artifact URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, " ARTIFACT_URL='https://example.invalid/agent.zip'\n");
+    }],
+    ['exported artifact URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "export ARTIFACT_URL='https://example.invalid/agent.zip'\n");
+    }],
+    ['compound artifact URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "true; ARTIFACT_URL='https://example.invalid/agent.zip'\n");
+    }],
+    ['exported checksum URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "export CHECKSUM_URL='https://example.invalid/agent.zip.sha256'\n");
+    }],
+    ['appended artifact URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARTIFACT_URL+='/unexpected'\n");
+    }],
+    ['appended checksum URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "CHECKSUM_URL+='/unexpected'\n");
+    }],
     ['malformed checksum filename', (f: PublicationFixture) => {
       writeFileSync(f.files.checksum, `${sha256(f.files.zip)}  other.zip\n`);
     }],
@@ -432,6 +460,20 @@ describe('Runtime Raiders artifact publication', () => {
     const racedRelease = join(f.artifactRoot, 'releases', releaseSha);
     expect(readdirSync(racedRelease)).toEqual(['preexisting']);
     expect(readFileSync(join(racedRelease, 'preexisting'), 'utf8')).toBe('preexisting');
+  });
+
+  it('does not return nonzero after committing current when lock cleanup fails', () => {
+    const priorSha = 'a'.repeat(40);
+    const f = publicationFixture();
+    f.args[4] = priorSha;
+    expect(runPublish(f).status).toBe(0);
+
+    f.args[4] = releaseSha;
+    const published = runPublish(f, { RUNTIME_RAIDERS_TEST_FAIL_LOCK_CLEANUP: '1' });
+
+    expect(published.status, published.stderr).toBe(0);
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
+    expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(true);
   });
 
   it('does not alter a damaged existing release or the prior selector', () => {
@@ -578,6 +620,41 @@ describe('Runtime Raiders artifact status validation', () => {
     const status = runStatus(f);
 
     expectContentFreeFailure(f, status);
+  });
+
+  it.each([
+    ['file', (release: string) => writeFileSync(join(release, 'provider-user-secret.txt'), 'private-extra')],
+    ['directory', (release: string) => mkdirSync(join(release, 'provider-user-secret-dir'))],
+  ])('rejects an unexpected %s in an immutable release without naming it', (_name, addEntry) => {
+    const f = publicationFixture();
+    expect(runPublish(f).status).toBe(0);
+    const release = join(f.artifactRoot, 'releases', releaseSha);
+    addEntry(release);
+
+    const status = runStatus(f);
+
+    expectContentFreeFailure(f, status);
+    expect(status.stderr).not.toContain('provider-user-secret');
+    expect(status.stderr).not.toContain('private-extra');
+  });
+
+  it('refuses to reselect an immutable release containing an unexpected entry', () => {
+    const priorSha = 'a'.repeat(40);
+    const f = publicationFixture();
+    expect(runPublish(f).status).toBe(0);
+    const existingRelease = join(f.artifactRoot, 'releases', releaseSha);
+    writeFileSync(join(existingRelease, 'provider-user-secret.txt'), 'private-extra');
+    f.args[4] = priorSha;
+    expect(runPublish(f).status).toBe(0);
+
+    f.args[4] = releaseSha;
+    const refused = runPublish(f);
+
+    expectContentFreeFailure(f, refused);
+    expect(refused.stderr).not.toContain('provider-user-secret');
+    expect(refused.stderr).not.toContain('private-extra');
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
+    expect(readFileSync(join(existingRelease, 'provider-user-secret.txt'), 'utf8')).toBe('private-extra');
   });
 
   it.each([
