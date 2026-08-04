@@ -1,9 +1,10 @@
 # Runtime Raiders local canary checklist
 
-This is a local, synthetic-only release gate for the Codex Desktop and Codex
-CLI companion candidate. Record counts, outcome, and timestamp only. Do not
-record prompts, responses, source files, paths, native IDs, credentials, or
-provider configuration.
+This tracks local synthetic evidence, remote readiness, and the separately
+authorized release gates for the Codex Desktop and Codex CLI companion
+candidate. Record counts, outcome, and timestamp only. Do not record prompts,
+responses, source files, paths, native IDs, credentials, or provider
+configuration.
 
 ## Automated evidence
 
@@ -55,15 +56,36 @@ the current Codex contract has no verified terminal record for either outcome.
 They are not evidence of failed/cancelled completion support or completion
 credit.
 
+## Fresh final-release readiness inventory
+
+Every row here remains pending until it is freshly verified against the final
+`RELEASE_SHA`. Earlier preparation observations do not establish current Pi,
+network, Mac, or signed-artifact state and do not replace the installed-off
+canary or direct-network checks below.
+
+| Gate | Count | Status | Timestamp (UTC) |
+| --- | ---: | --- | --- |
+| Final signed/notarized package validation and three recorded digests | 0 | pending final build | — |
+| Runtime Raiders app, command, process, and LaunchAgent absent before cutover | 0 | pending fresh check | — |
+| Known legacy ClaudeRPG OTel variables absent | 0 | pending fresh check | — |
+| Direct-path `raiders.local` client check | 0 | pending fresh check | — |
+| Pi `sqlite3`, database integrity, pause, loopback health, and kiosk readiness | 0 | pending final preflight | — |
+| Final server and companion release suites | 0 | pending final release SHA | — |
+
 ## Release blockers and non-automated gates
 
 | Gate | Count | Status | Timestamp (UTC) |
 | --- | ---: | --- | --- |
 | Network/privacy fake-transport tests | 33 | verified | 2026-08-02T06:37:20Z |
 | Exact RuntimeRaidersCore 10-minute resource measurement | 1 | verified | 2026-08-02T06:57:00Z–2026-08-02T07:07:39Z |
-| Signed artifact canary | 0 | not run | — |
-| Deployed/Pi canary | 0 | not run | — |
-| Production cutover | 0 | not run | — |
+| Caddy release store prepared, selector absent | 0 | pending separate approval; `/var/lib/runtime-raiders/current` must remain absent | — |
+| Artifact routes unpublished, 3/3 return 404 | 0/3 | waits for fail-closed Caddy preparation | — |
+| Production cutover | 0 | not run; separately authorized action | — |
+| Deployed server acceptance | 0 | waits for authorized cutover and section 5 | — |
+| Signed triplet published, 3/3 digests verified | 0/3 | waits for server acceptance and separate publication approval | — |
+| Installed signed artifact, daemon live and persistently off | 0 | waits for verified publication and separate installation approval | — |
+| Live canary activation | 0 | waits for installed-off acceptance and separate approval | — |
+| Office activation | 0 | waits for live-canary acceptance and separate approval | — |
 
 The exact RuntimeRaidersCore measurement ran for five idle minutes plus five
 synthetic active minutes: idle CPU `0.0040%`, active CPU `0.9807%`, peak RSS
@@ -74,10 +96,11 @@ the checked read-only provider fixture preserved its size and modification
 timestamp. Current uploader tests also verify the two-second request timeout,
 bounded retry delay, exact destination guard, and outage banking.
 
-The installed-CLI measurement remains blocked: this macOS environment did not
-redirect Application Support with `CFFIXED_USER_HOME`, and the local
-network-denial sandbox prevented the daemon's Unix control socket from
-starting. No unsandboxed daemon was run because it could attempt the configured
-origin. The verified measurement is an exact RuntimeRaidersCore build with
-injected local paths and fake transport, not a signed or installed LaunchAgent
-canary; that separate canary remains pending.
+The pre-cutover measurement is an exact RuntimeRaidersCore build with injected
+local paths and fake transport. The signed LaunchAgent canary intentionally
+remains uninstalled until the production server passes section 5 and the exact
+signed triplet is separately published. Installation must prove the daemon is
+live but collection remains persistently off before any activation approval.
+For that canary, execute only a locally downloaded installer whose SHA-256
+matches the restricted release record; do not pipe the remote installer into a
+shell.

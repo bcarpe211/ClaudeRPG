@@ -20,8 +20,10 @@ not authorize another.
 | Caddy config/reload and Pi hostname | User-approved Pi administrator | Application cutover |
 | Holding the updater | User-approved Pi administrator | Publishing, fetching, or deploying a release |
 | Publishing/fetching the approved SHA to tracked `origin/main` | Repository/release owner, after verified updater hold | Pi checkout, service start, or future SHAs |
+| Preparing fail-closed Caddy artifact routes | User-approved Pi administrator, after exact release publication | Artifact publication, application cutover, or companion installation |
 | Production cutover and rollback | Explicit user approval for the recorded release and window | Future deployments |
-| Companion install and old OTel cleanup | Mac owner or authorized administrator | Editing provider configuration |
+| Publishing the signed companion triplet | Explicit release-owner approval after section 5 server acceptance | Installing, enabling, or office activation |
+| Companion install and old OTel cleanup | Mac owner or authorized administrator | Editing provider configuration or enabling collection |
 | Enabling canaries, then the office | Explicit canary/office activation approval | Enabling any unverified provider |
 
 Cloudflare DNS-01 certificate issuance does not make the application public.
@@ -37,11 +39,20 @@ arguments, source contents, project names, local/native IDs, local provider
 paths, credentials, enrollment codes, tokens, shell configuration contents, or
 provider configuration.
 
+## Current preparation status
+
+Every mutable production, network-path, final-build, and installed-companion
+observation is pending fresh verification against the final `RELEASE_SHA`.
+Approved design and local test evidence dated 2026-08-03 or earlier may support
+preparation, but does not authorize or prove a later operational gate.
+
 ## Record of truth
 
-Create one restricted operator record outside the repository and fill every
-value before requesting cutover approval. Do not put secrets, internal IPs,
-certificate material, or environment contents in this document or a commit.
+Create one restricted operator record outside the repository. Fill every
+pre-cutover value before requesting cutover approval; explicitly post-cutover
+publication and canary fields remain blank until their separately authorized
+boundary is reached. Do not put secrets, internal IPs, certificate material, or
+environment contents in this document or a commit.
 
 | Required value | Exact recorded value/evidence |
 | --- | --- |
@@ -63,11 +74,14 @@ certificate material, or environment contents in this document or a commit.
 | Independently copied expected rollback-record SHA-256 (`EXPECTED_ROLLBACK_RECORD_SHA256`) | `________________` |
 | Candidate environment path and SHA-256 | `________________` |
 | Manager-loaded Caddy config and env paths | `________________ / ________________` |
+| Prior Caddy config backup path and SHA-256 | `________________ / ________________` |
+| Artifact root | `/var/lib/runtime-raiders` |
 | Manager-loaded game `User` / `WorkingDirectory` / `EnvironmentFiles` / `ExecStart` | `________________` |
 | IT DNS evidence/date for both FQDNs | `________________` |
 | Caddy validation and TLS evidence/date for both FQDNs | `________________` |
 | `raiders.local`, SSH, Avahi, actual network-path evidence/date | `________________` |
-| Signed/notarized companion artifact checksum and canary record | `________________` |
+| Signed triplet SHA-256 values and pre-cutover validation | `________________` |
+| Post-cutover publication and installed-off canary record | `________________` |
 | Migration/e2e/preflight/config test evidence | `________________` |
 | Exact user authorization and UTC timestamp | `________________` |
 | Final decision: accepted, aborted, or rolled back | `________________` |
@@ -95,16 +109,18 @@ REPO=/home/rluser/ClaudeRPG
 DB=/home/rluser/ClaudeRPG/data/claude-rpg.db
 CURRENT_ENV=/etc/claude-rpg.env
 CANDIDATE_ENV=/etc/claude-rpg.env.runtime-raiders-candidate
+ARTIFACT_ROOT=/var/lib/runtime-raiders
 SERVICE=claude-rpg.service
 UPDATER_TIMER=claude-rpg-autoupdate.timer
 UPDATER_SERVICE=claude-rpg-autoupdate.service
 ```
 
 In the operator shell, set `PRIOR_SHA`, `RELEASE_SHA`, `CUTOVER_AT`,
-`CANDIDATE_ENV_SHA256`, `GAME_EXEC_EXPECTED`, `CADDY_CONFIG`, and `CADDY_ENV` to the recorded literal
-values. Do not derive or change them during the cutover. Confirm that both SHAs contain exactly 40
-lowercase hexadecimal characters, are distinct, and that `CUTOVER_AT` contains
-exactly 13 decimal digits. Record the output of:
+`CANDIDATE_ENV_SHA256`, `GAME_EXEC_EXPECTED`, `CADDY_CONFIG`, `CADDY_ENV`, and
+`CADDY_BACKUP` to the recorded literal values. Do not derive or change them
+during the cutover. Confirm that both SHAs contain exactly 40 lowercase
+hexadecimal characters, are distinct, and that `CUTOVER_AT` contains exactly
+13 decimal digits. Record the output of:
 
 ```sh
 git --no-optional-locks -C "$REPO" rev-parse --short "$PRIOR_SHA"
@@ -180,21 +196,19 @@ matching authorization above.
 - Build, sign, notarize, staple, and validate the universal companion with
   `scripts/release/build-runtime-raiders-agent.sh` as documented in
   `docs/runtime-raiders/companion-operations.md`. Publication is a separate
-  authorized action. Record the artifact checksum, signature/notarization
-  result, and date, never signing credentials.
-- Install authorized canaries with the transactional installer. It persists
-  collection off before the first launchd bootstrap. On upgrade it distinguishes
-  a verified disabled state from missing, unreadable, or invalid state; safely
-  turns off the old daemon when available; boots out the old LaunchAgent; and
-  atomically seeds the reviewed off-state document when needed. It replaces and
-  bootstraps only after the candidate CLI reports the old daemon stopped and
-  persisted state disabled. After bootstrap it retries for a bounded interval
-  until the candidate reports the actual daemon live with
-  `daemonRunning=true`, `enabled=false`, and `persistedState=disabled`. A
-  timeout or any ambiguous state rolls the transaction back and provides no
-  collection or upload window. Run `raiders status` and `raiders doctor`; do
-  not use `raiders on`. Complete the signed artifact and deployed/Pi canary rows in
-  `docs/runtime-raiders/canary-checklist.md` before launch.
+  authorized action. Record separate SHA-256 values for the rendered installer,
+  ZIP, and checksum file plus the signature/notarization result and date, never
+  signing credentials.
+- Before cutover, require the exact signed-artifact validation, full automated
+  server and companion suites, and fake-transport privacy evidence. Do not
+  install the production-locked companion yet: its installer, download, and
+  enrollment URLs intentionally cannot succeed until the Runtime Raiders server
+  has passed section 5 and the signed triplet has been separately published.
+  An installed canary is therefore a **post-cutover, pre-activation** gate, not
+  a prerequisite for changing the server while every collector is absent.
+- Implement and test the fail-closed publication mechanism before freezing the
+  final `RELEASE_SHA`, then rebuild and revalidate the signed triplet from that
+  final candidate. Keep the files unpublished until section 5.3.
 - The exact initial allowlist is
   `RUN_ENABLED_SURFACES=codex_desktop,codex_cli`. Both Codex Desktop and Codex
   CLI need controlled canaries. `claude_code` and `omp` are disabled and
@@ -269,7 +283,9 @@ sudo stat -c '%U %G %a %n' "$CANDIDATE_ENV"
 sudo sha256sum "$CANDIDATE_ENV"
 ```
 
-## 2. Hold the updater before touching tracked `origin/main`
+## 2. Ordered pre-cutover authority gates
+
+### 2.1 Hold the updater before touching tracked `origin/main`
 
 This ordering is an authorization boundary. The release owner must not publish
 the candidate to tracked `main`, and the Pi must not fetch or update tracked
@@ -291,11 +307,14 @@ hold_updater() {
 hold_updater
 ```
 
-Failure is a NO-GO; do not publish, fetch, or deploy anything. After the exact
-hold has been recorded, the repository owner may separately authorize
-publishing only `RELEASE_SHA` to `main`. Fetch the approved object into the
-tracked remote ref as `rluser` using the literal SHA refspec, so a moving or
-future `main` cannot enter the Pi checkout:
+Failure is a NO-GO; do not publish, fetch, prepare Caddy, or deploy anything.
+
+### 2.2 Publish and fetch only the exact release SHA
+
+After the exact hold has been recorded, the repository owner may separately
+authorize publishing only `RELEASE_SHA` to `main`. Fetch the approved object
+into the tracked remote ref as `rluser` using the literal SHA refspec, so a
+moving or future `main` cannot enter the Pi checkout:
 
 ```sh
 sudo -u rluser -H git -C "$REPO" fetch --no-tags origin \
@@ -307,9 +326,91 @@ hold_updater
 ```
 
 Any fetch mismatch or failure is an abort and the updater remains held. Do not
-restore it merely because cutover was cancelled. While deployed `HEAD` still
-equals `PRIOR_SHA`, run the approved release's script directly from its Git
-object. The preflight never fetches, checks out, installs, writes configuration,
+restore it merely because cutover was cancelled. Exact repository publication
+does not authorize Caddy preparation, preflight, checkout, or cutover.
+
+### 2.3 Prepare the fail-closed Caddy routes
+
+After exact release publication, obtain a separate Caddy-preparation approval.
+Before changing the loaded config, record a root-only backup of
+`CADDY_CONFIG` and its SHA-256 in the restricted operator record outside Git.
+Do not print, copy into Git, or otherwise expose `CADDY_ENV`, its token, or any
+environment contents.
+
+Create only the empty fixed release store; no `current` selector or release
+file is created by this gate:
+
+```sh
+sudo install -d -o root -g root -m 0755 \
+  /var/lib/runtime-raiders \
+  /var/lib/runtime-raiders/releases
+sudo test ! -e /var/lib/runtime-raiders/current
+sudo test ! -L /var/lib/runtime-raiders/current
+```
+
+Materialize the reviewed `deploy/Caddyfile` from the exact `RELEASE_SHA` in an
+owner-controlled temporary file. Back up the prior loaded config, record its
+path and digest outside Git, install the reviewed file as `root:root:0644`, and
+validate it with the manager-loaded environment file before reloading:
+
+```sh
+REVIEWED_CADDY="$(mktemp)"
+case "$CADDY_BACKUP" in
+  /var/backups/runtime-raiders/*/Caddyfile.before-artifacts) ;;
+  *) false ;;
+esac
+sudo install -d -o root -g root -m 0700 "${CADDY_BACKUP%/*}"
+sudo install -o root -g root -m 0600 "$CADDY_CONFIG" "$CADDY_BACKUP"
+sudo sha256sum "$CADDY_BACKUP"
+sudo -u rluser git --no-optional-locks -C "$REPO" show \
+  "$RELEASE_SHA:deploy/Caddyfile" > "$REVIEWED_CADDY"
+sudo install -o root -g root -m 0644 "$REVIEWED_CADDY" "$CADDY_CONFIG"
+sudo caddy validate --config "$CADDY_CONFIG" --adapter caddyfile \
+  --envfile "$CADDY_ENV"
+sudo systemctl reload caddy.service
+test "$(systemctl is-active caddy.service)" = active
+```
+
+Verify `200` for both internal health routes and `404` for all three exact
+artifact URLs. Also require the Node game service to remain active and healthy:
+
+```sh
+for url in \
+  https://raiders.redlattice.com/health \
+  https://clauderpg.redlattice.com/health; do
+  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 200
+done
+for url in \
+  https://raiders.redlattice.com/install.sh \
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip \
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256; do
+  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 404
+done
+test "$(systemctl is-active "$SERVICE")" = active
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  http://localhost:8080/health)" = 200
+```
+
+If validation, reload, health, or any unpublished-route check fails, reinstall
+`CADDY_BACKUP` as `root:root:0644`, validate it with the same `--envfile`, reload
+Caddy, and recheck both health routes:
+
+```sh
+sudo install -o root -g root -m 0644 "$CADDY_BACKUP" "$CADDY_CONFIG"
+sudo caddy validate --config "$CADDY_CONFIG" --adapter caddyfile \
+  --envfile "$CADDY_ENV"
+sudo systemctl reload caddy.service
+test "$(systemctl is-active caddy.service)" = active
+```
+
+Leave `current` absent and stop. Caddy preparation does not authorize artifact
+publication or production cutover.
+
+### 2.4 Run the final read-only preflight
+
+Only after Caddy preparation passes, while deployed `HEAD` still equals
+`PRIOR_SHA`, run the approved release's script directly from its Git object.
+The preflight never fetches, checks out, installs, writes configuration,
 migrates, or changes service state.
 
 ```sh
@@ -328,7 +429,8 @@ git --no-optional-locks -C "$REPO" show \
     --release-sha "$RELEASE_SHA" \
     --cutover-at "$CUTOVER_AT" \
     --caddy-config "$CADDY_CONFIG" \
-    --caddy-env "$CADDY_ENV"
+    --caddy-env "$CADDY_ENV" \
+    --artifact-root /var/lib/runtime-raiders
 ```
 
 Proceed only if the command exits 0, every named gate says `PASS`, and the final
@@ -336,9 +438,10 @@ line is exactly `READY separately authorized cutover gates passed`. In
 particular, confirm both initial and final updater holds, initial and final Git
 readiness, active manager-loaded Caddy inputs, root/`0600` env protection,
 internal DNS for both FQDNs, pinned HTTPS for both FQDNs, exact `raiders.local`
-identity, active server/Caddy/Avahi, disk capacity for two logical DB snapshots
-plus release files, database integrity, exact environment/policy/allowlist, and
-the **final** `game_state.paused = 1` read.
+identity, active server/Caddy/Avahi, the root-owned empty artifact store with
+`current` absent and all three artifact URLs returning `404`, disk capacity for
+two logical DB snapshots plus release files, database integrity, exact
+environment/policy/allowlist, and the **final** `game_state.paused = 1` read.
 
 Preflight is a read-only readiness observation, not authorization. Any elapsed
 window, repository change, updater state change, Caddy/env change, DNS/mDNS
@@ -346,10 +449,11 @@ change, service change, or game wake makes the result stale: stop and rerun it.
 
 ## 3. Explicit authorization or NO-GO
 
-Present the completed record of truth, fresh preflight result, test evidence,
-visual approval, signed canary evidence, exact prior/release SHAs, exact backup
-target, persisted policy key `raid-power-v1`, JSON policy document version `1`,
-exact `CUTOVER_AT`, DNS/TLS/mDNS evidence, current
+Present the completed pre-cutover record of truth, fresh preflight result, test
+evidence, visual approval, signed/notarized artifact validation, exact
+prior/release SHAs, exact backup target, persisted policy key
+`raid-power-v1`, JSON policy document version `1`, exact `CUTOVER_AT`,
+DNS/TLS/mDNS evidence, current
 `paused=1`, rollback order, and post-rollback loss semantics to the user.
 
 The user must explicitly authorize this release SHA, timestamp, backup target,
@@ -357,14 +461,17 @@ and cutover window. Record the approval and UTC time. Silence, staging approval,
 a target day, earlier authorization, or preflight success is **not** cutover
 authorization.
 
-NO-GO and reschedule if any value is missing; any gate is failed, unknown,
-pending, or stale; the game is not paused; the updater is not fully held; the
-checkout is dirty/diverged; signing, canaries, old OTel cleanup, internal DNS,
-TLS, mDNS, kiosk, migration rehearsal, backup capacity, or visual approval is
-incomplete; or explicit user authorization is absent. An abort leaves both
-updater units held. Returning to normal prior-release operation requires a
-separate recorded authorization, a verified `HEAD=PRIOR_SHA`, and a pinned
-updater design; the current moving-`main` updater is not safe to re-enable.
+NO-GO and reschedule if any required pre-cutover value is missing; any
+pre-cutover gate is failed, unknown, pending, or stale; the game is not paused;
+the updater is not fully held; the checkout is dirty/diverged; signing,
+pre-cutover automated evidence, old OTel
+cleanup, internal DNS, TLS, mDNS, kiosk, migration rehearsal, backup capacity,
+or visual approval is incomplete; or explicit user authorization is absent.
+The installed production companion is intentionally absent at this boundary.
+An abort leaves both updater units held. Returning to normal prior-release
+operation requires a separate recorded authorization, a verified
+`HEAD=PRIOR_SHA`, and a pinned updater design; the current moving-`main` updater
+is not safe to re-enable.
 
 ## 4. Coordinated cutover
 
@@ -728,11 +835,135 @@ From the Pi, the actual office path, and the TV as appropriate, verify:
 Record pass/fail and UTC time only. Do not record a Raider Key, page content, or
 SSE state payload.
 
+### 5.3 Publish the exact signed triplet
+
+Only after sections 5.1 and 5.2 pass may the release owner separately authorize
+publication of the exact validated `install.sh`, ZIP, and adjacent checksum.
+Record `INSTALLER_SHA256`, `ZIP_SHA256`, and `CHECKSUM_SHA256` separately in the
+restricted operator record. Copy exactly those three reviewed files into one
+root-controlled, nonsymlink `SOURCE_DIR` beneath `/var/lib/runtime-raiders` on
+the Pi. That directory contains exactly `install.sh`,
+`runtime-raiders-agent.zip`, and `runtime-raiders-agent.zip.sha256`. A build
+output directory by itself is not a publication path, and copying does not
+authorize selection or serving.
+
+From the exact deployed checkout, publish only after the separate approval:
+
+```sh
+cd "$REPO"
+sudo scripts/pi/runtime-raiders-artifacts.sh publish \
+  --source "$SOURCE_DIR" \
+  --release-sha "$RELEASE_SHA" \
+  --installer-sha256 "$INSTALLER_SHA256" \
+  --zip-sha256 "$ZIP_SHA256" \
+  --checksum-sha256 "$CHECKSUM_SHA256"
+sudo scripts/pi/runtime-raiders-artifacts.sh status
+```
+
+Download each HTTPS response independently into an owner-only temporary
+directory. Compare all three bytestrings with their separately recorded
+digests, require `Cache-Control: no-store` and
+`X-Content-Type-Options: nosniff` on every response, and confirm `/health`
+remains `200`:
+
+```sh
+VERIFY_DIR="$(mktemp -d)"
+chmod 0700 "$VERIFY_DIR"
+curl -fsS -D "$VERIFY_DIR/install.headers" \
+  -o "$VERIFY_DIR/install.sh" \
+  https://raiders.redlattice.com/install.sh
+curl -fsS -D "$VERIFY_DIR/zip.headers" \
+  -o "$VERIFY_DIR/runtime-raiders-agent.zip" \
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip
+curl -fsS -D "$VERIFY_DIR/checksum.headers" \
+  -o "$VERIFY_DIR/runtime-raiders-agent.zip.sha256" \
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256
+test "$(sha256sum "$VERIFY_DIR/install.sh" | awk '{print $1}')" = \
+  "$INSTALLER_SHA256"
+test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.zip" | awk '{print $1}')" = \
+  "$ZIP_SHA256"
+test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.zip.sha256" | awk '{print $1}')" = \
+  "$CHECKSUM_SHA256"
+for headers in "$VERIFY_DIR"/*.headers; do
+  tr -d '\r' < "$headers" | grep -Fxi 'Cache-Control: no-store'
+  tr -d '\r' < "$headers" | grep -Fxi 'X-Content-Type-Options: nosniff'
+done
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  https://raiders.redlattice.com/health)" = 200
+```
+
+Any publication, status, digest, header, or health failure blocks installation
+and requires exact-SHA withdrawal:
+
+```sh
+sudo scripts/pi/runtime-raiders-artifacts.sh withdraw \
+  --release-sha "$RELEASE_SHA"
+```
+
+After withdrawal, `sudo scripts/pi/runtime-raiders-artifacts.sh status` must
+report `unpublished`. Verify all three artifact URLs return `404` and both
+internal health URLs remain `200`:
+
+```sh
+sudo scripts/pi/runtime-raiders-artifacts.sh status
+for url in \
+  https://raiders.redlattice.com/install.sh \
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip \
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256; do
+  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 404
+done
+for url in \
+  https://raiders.redlattice.com/health \
+  https://clauderpg.redlattice.com/health; do
+  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 200
+done
+```
+
+Publication and withdrawal do not reload Caddy or restart Node. The immutable
+release directory remains for inspection; deleting it is not part of
+withdrawal.
+
+Publication acceptance completes only when the active full release SHA, all
+three expected and independently downloaded digests, three response status and
+header results, health status, and UTC timestamp are recorded without file
+contents, source paths, tokens, enrollment codes, or environment contents.
+Publication does not authorize installation.
+
+### 5.4 Install one verified-off canary
+
+Only after publication acceptance and a separate installation-specific
+approval may the authorized Mac owner obtain a fresh one-time enrollment code.
+Download the rendered installer locally into an owner-only temporary file,
+verify its SHA-256 before execution, and run that verified local file. Do not
+pipe a mutable remote response directly into a shell for this first canary:
+
+```sh
+CANARY_INSTALLER="$(mktemp)"
+chmod 0600 "$CANARY_INSTALLER"
+curl -fsS https://raiders.redlattice.com/install.sh -o "$CANARY_INSTALLER"
+test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = \
+  "$INSTALLER_SHA256"
+sh "$CANARY_INSTALLER" --code "$ONE_TIME_CODE"
+```
+
+The transactional installer must finish with the real daemon live and all
+three off-state facts present: `daemonRunning=true`, `enabled=false`, and
+`persistedState=disabled`. Run `raiders status` and `raiders doctor`; do not run
+`raiders on`. Confirm there are no Run uploads or server progression mutations.
+Any ambiguous state, unexpected destination, signature/checksum mismatch,
+daemon failure, or upload is a rollback trigger.
+
+Complete the deployed-server, publication, and installed-off rows in
+`docs/runtime-raiders/canary-checklist.md`. Installing off does not authorize
+canary activation.
+
 ## 6. Canary activation, office activation, and acceptance
 
-Only after section 5 passes may the activation owner enable canaries.
+Only after section 5, including the installed-off canary, passes may the
+activation owner separately authorize canary enablement.
 
-1. On one approved canary, run `raiders status`, then `raiders on`.
+1. Reconfirm the approved canary reports the exact live-disabled state, then run
+   `raiders on` only after explicit canary-activation approval.
 2. Run one harmless Codex Desktop Run and one Codex CLI Run that both begin
    after `CUTOVER_AT`. Record only aggregate status/count/timestamp.
 3. Verify one Run per surface, expected version-1 Raid Power, additive parallel
@@ -1099,12 +1330,20 @@ handle their local queues.
       user approval are recorded.
 - [ ] Updater timer and oneshot were held before preflight and throughout
       cutover.
+- [ ] Exact repository publication and fail-closed Caddy preparation had
+      separate approvals; the prior Caddy config backup/checksum was recorded.
+- [ ] `/var/lib/runtime-raiders/current` was absent and all three artifact URLs
+      returned `404` before final preflight.
 - [ ] Fresh preflight ended READY with a final paused read.
 - [ ] Logical `.backup` integrity and retained-state baseline were verified.
 - [ ] Service stayed stopped across checkout/dependencies/env installation.
 - [ ] Migration, integrity, retained state, scoring exclusivity, policy,
       routes, both FQDNs, mDNS, physical kiosk, Leaderboard, and SSE SHA passed.
 - [ ] Old OTel is removed manually; no content or secrets were reported.
+- [ ] Signed publication was separately approved; manager `status`, all three
+      independently downloaded digests, `no-store`, `nosniff`, and health passed.
+- [ ] The first canary used a locally downloaded, hash-verified installer and
+      was daemon-live and persistently off before activation approval.
 - [ ] Only Codex Desktop and Codex CLI canaries passed; Claude Code and Omp
       stayed disabled and rejected.
 - [ ] Office activation occurred only after separate approval and canary

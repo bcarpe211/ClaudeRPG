@@ -471,3 +471,24 @@ to the office-idle deadline before advancing combat-active potion time. If new
 activity resumes after an idle gap but before the delayed tick runs, the engine
 credits the old and resumed active windows without filling the gap. Regression
 tests cover both cases across the 15-minute boundary.
+
+## 27. Verify `raiders.local` from a direct network path
+
+Fresh verification against the final release remains pending. Record only the
+network-path class, result, and UTC date in the restricted cutover evidence; do
+not commit the internal IP.
+
+- [ ] Confirm `raiders.local` resolves to the same Pi as the internal FQDN.
+- [ ] Verify SSH host identity and login through `raiders.local`.
+- [ ] Verify `http://raiders.local:8080/health` and the loopback kiosk route on
+      that same network path.
+- [ ] Verify the Pi-side advertisement, loopback health, and kiosk route without
+      treating a remote process that cannot receive multicast as office-path
+      evidence.
+
+## 28. Release-host follow-ups
+
+- [ ] Branded Runtime Raiders 404 page — design a later human-friendly response
+      while preserving HTTP `404`, the three exact artifact matchers,
+      `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and the
+      unpublished-state tests. This is not an asset dependency for this release.
