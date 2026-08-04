@@ -346,6 +346,9 @@ describe('Runtime Raiders artifact publication', () => {
     ['continued artifact URL assignment', (f: PublicationFixture) => {
       appendFileSync(f.files.installer, "ARTIFACT_URL\\\n='https://example.invalid/agent.zip'\n");
     }],
+    ['continued artifact URL identifier assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARTIFACT_\\\nURL='https://example.invalid/agent.zip'\n");
+    }],
     ['artifact URL array-element assignment', (f: PublicationFixture) => {
       appendFileSync(f.files.installer, "ARTIFACT_URL[0]='https://example.invalid/agent.zip'\n");
     }],

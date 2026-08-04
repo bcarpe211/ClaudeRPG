@@ -64,18 +64,23 @@ validate_source() {
   require_beneath_artifact_root "$SOURCE_ZIP" 'source ZIP'
   require_beneath_artifact_root "$SOURCE_CHECKSUM" 'source checksum'
 
+  local normalized_installer=$STAGE/normalized-installer
+  if ! awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' \
+      "$SOURCE_INSTALLER" > "$normalized_installer" 2>/dev/null; then
+    die 'installer could not be normalized'
+  fi
   local artifact_url_count
   local artifact_identifier_count
   local checksum_url_count
   local checksum_identifier_count
   artifact_url_count=$(grep -Fxc -- \
     "ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'" \
-    "$SOURCE_INSTALLER" 2>/dev/null || true)
-  artifact_identifier_count=$(grep -Foc -- 'ARTIFACT_URL' "$SOURCE_INSTALLER" 2>/dev/null || true)
+    "$normalized_installer" 2>/dev/null || true)
+  artifact_identifier_count=$(grep -Foc -- 'ARTIFACT_URL' "$normalized_installer" 2>/dev/null || true)
   checksum_url_count=$(grep -Fxc -- \
     "CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'" \
-    "$SOURCE_INSTALLER" 2>/dev/null || true)
-  checksum_identifier_count=$(grep -Foc -- 'CHECKSUM_URL' "$SOURCE_INSTALLER" 2>/dev/null || true)
+    "$normalized_installer" 2>/dev/null || true)
+  checksum_identifier_count=$(grep -Foc -- 'CHECKSUM_URL' "$normalized_installer" 2>/dev/null || true)
   test "$artifact_url_count" = 1 || die 'installer artifact URL is invalid'
   test "$artifact_identifier_count" = 1 || die 'installer artifact URL is invalid'
   test "$checksum_url_count" = 1 || die 'installer checksum URL is invalid'
@@ -83,6 +88,7 @@ validate_source() {
   if grep -Fq -- '__RUNTIME_RAIDERS_TEAM_ID__' "$SOURCE_INSTALLER" 2>/dev/null; then
     die 'installer Team ID is not rendered'
   fi
+  rm -f -- "$normalized_installer"
 
   test "$(sha256_file "$SOURCE_INSTALLER")" = "$INSTALLER_SHA256" || die 'installer SHA-256 mismatch'
   test "$(sha256_file "$SOURCE_ZIP")" = "$ZIP_SHA256" || die 'ZIP SHA-256 mismatch'
