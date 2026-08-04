@@ -46,6 +46,42 @@ describe('Runtime Raiders internal deployment configuration', () => {
     expect(reverseProxyTargets).toEqual(['localhost:8080']);
   });
 
+  const artifactPaths = [
+    '/install.sh',
+    '/downloads/runtime-raiders-agent.zip',
+    '/downloads/runtime-raiders-agent.zip.sha256',
+  ];
+
+  it('serves only the three literal companion paths from the managed selector', () => {
+    for (const path of artifactPaths) {
+      expect(caddy).toContain(`handle ${path} {`);
+    }
+    expect(caddy.match(/root \* \/var\/lib\/runtime-raiders\/current/g))
+      .toHaveLength(3);
+    expect(caddy.match(/\bfile_server\b/g)).toHaveLength(3);
+    expect(caddy).not.toMatch(/handle(?:_path)?\s+\/downloads\/\*/);
+    expect(caddy).not.toMatch(/\bfile_server\s+browse\b/);
+  });
+
+  it('marks every companion response non-cacheable and non-sniffable', () => {
+    expect(caddy.match(/header Cache-Control "no-store"/g)).toHaveLength(3);
+    expect(caddy.match(/header X-Content-Type-Options "nosniff"/g))
+      .toHaveLength(3);
+    expect(caddy).toContain('header Content-Type "text/x-shellscript; charset=utf-8"');
+    expect(caddy).toContain('header Content-Type "application/zip"');
+    expect(caddy).toContain('header Content-Type "text/plain; charset=utf-8"');
+  });
+
+  it('keeps artifact handling ahead of one matcherless app fallback', () => {
+    const fallback = caddy.indexOf('handle {\n\t\treverse_proxy localhost:8080');
+    expect(fallback).toBeGreaterThan(caddy.indexOf('handle /install.sh {'));
+    expect(fallback).toBeGreaterThan(
+      caddy.indexOf('handle /downloads/runtime-raiders-agent.zip.sha256 {'),
+    );
+    expect(caddy.match(/handle \{\n\t\treverse_proxy localhost:8080/g))
+      .toHaveLength(1);
+  });
+
   it('targets the Runtime Raiders scoring configuration', () => {
     expect(env).toContain('PUBLIC_URL=https://raiders.redlattice.com');
     expect(env).toContain('SCORING_MODE=runtime-raiders');

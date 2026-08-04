@@ -2,7 +2,33 @@
 # Both records resolve internally. DNS-01 works without public application
 # exposure; Caddy serves HTTPS and proxies to the local Node app on :8080.
 raiders.redlattice.com, clauderpg.redlattice.com {
-	reverse_proxy localhost:8080
+	handle /install.sh {
+		header Cache-Control "no-store"
+		header X-Content-Type-Options "nosniff"
+		header Content-Type "text/x-shellscript; charset=utf-8"
+		root * /var/lib/runtime-raiders/current
+		file_server
+	}
+
+	handle /downloads/runtime-raiders-agent.zip {
+		header Cache-Control "no-store"
+		header X-Content-Type-Options "nosniff"
+		header Content-Type "application/zip"
+		root * /var/lib/runtime-raiders/current
+		file_server
+	}
+
+	handle /downloads/runtime-raiders-agent.zip.sha256 {
+		header Cache-Control "no-store"
+		header X-Content-Type-Options "nosniff"
+		header Content-Type "text/plain; charset=utf-8"
+		root * /var/lib/runtime-raiders/current
+		file_server
+	}
+
+	handle {
+		reverse_proxy localhost:8080
+	}
 	tls {
 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
 		# redlattice.com is split-horizon: the Pi's default resolver returns the
