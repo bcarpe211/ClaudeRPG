@@ -542,6 +542,7 @@ source "$CUTOVER_GUARDS"
 fail_closed() {
   local rc="${1:-1}"
   local cleanup_failed=0
+  local service_state=''
   test "$rc" -ne 0 || rc=1
   trap - ERR HUP INT TERM
   set +e
@@ -1217,6 +1218,7 @@ rr_authenticate_rollback_record \
 rollback_fail_closed() {
   local rc="${1:-1}"
   local cleanup_failed=0
+  local service_state=''
   test "$rc" -ne 0 || rc=1
   trap - ERR HUP INT TERM
   set +e

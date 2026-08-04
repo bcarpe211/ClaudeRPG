@@ -52,6 +52,7 @@ describe('Runtime Raiders stable cutover documentation contract', () => {
 
     expect(handlers).toHaveLength(2);
     for (const handler of handlers) {
+      expect(handler).toContain("local service_state=''");
       expect(handler).toContain(
         'rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || cleanup_failed=1',
       );
