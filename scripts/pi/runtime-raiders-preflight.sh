@@ -384,16 +384,20 @@ done
 if [ "$dns_ok" -eq 1 ]; then pass 'internal DNS'; else fail 'internal DNS'; fi
 
 artifact_routes_ok=1
-for artifact_path in \
-  /install.sh \
-  /downloads/runtime-raiders-agent.zip \
-  /downloads/runtime-raiders-agent.zip.sha256; do
-  artifact_status=$(curl --silent --show-error --max-time 10 --output /dev/null \
-    --write-out '%{http_code}' --noproxy '*' \
-    --resolve "raiders.redlattice.com:443:$resolved_local" \
-    "https://raiders.redlattice.com$artifact_path") || artifact_routes_ok=0
-  test "$artifact_status" = 404 || artifact_routes_ok=0
-done
+if [ "$hostname_ok" -eq 1 ] && [ "$dns_ok" -eq 1 ]; then
+  for artifact_path in \
+    /install.sh \
+    /downloads/runtime-raiders-agent.zip \
+    /downloads/runtime-raiders-agent.zip.sha256; do
+    artifact_status=$(curl --silent --show-error --max-time 10 --output /dev/null \
+      --write-out '%{http_code}' --noproxy '*' \
+      --resolve "raiders.redlattice.com:443:$resolved_local" \
+      "https://raiders.redlattice.com$artifact_path") || artifact_routes_ok=0
+    test "$artifact_status" = 404 || artifact_routes_ok=0
+  done
+else
+  artifact_routes_ok=0
+fi
 if [ "$artifact_routes_ok" -eq 1 ]; then
   pass 'artifact routes unpublished'
 else

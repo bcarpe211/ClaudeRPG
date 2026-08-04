@@ -861,6 +861,20 @@ describe('Runtime Raiders Pi preflight', () => {
   });
 
   it.each([
+    ['hostname/local-address verification', { FAKE_LOCAL_ADDRESSES: '198.51.100.20' }],
+    ['internal DNS verification', { FAKE_NEW_DNS_IP: '198.51.100.20' }],
+  ])('does not probe artifact routes when %s fails', (_name, environment) => {
+    const result = run(fixture(), environment);
+    const artifactRouteRequests = result.commands.split('\n').filter((command) =>
+      command.includes('https://raiders.redlattice.com/install.sh') ||
+      command.includes('https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'),
+    );
+    expect(result.status).not.toBe(0);
+    expect(artifactRouteRequests).toHaveLength(0);
+    expect(result.output).toContain('FAIL artifact routes unpublished');
+  });
+
+  it.each([
     ['server', { FAKE_SERVER_ACTIVE: '0' }],
     ['enabled updater timer', { FAKE_TIMER_ENABLED: '1' }],
     ['active updater timer', { FAKE_TIMER_ACTIVE: '1' }],
