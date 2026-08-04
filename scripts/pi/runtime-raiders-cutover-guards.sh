@@ -106,33 +106,36 @@ rr_assert_game_unit() {
     test -n "$env_file" && test -n "$exec_path" || return 64
 
   local unit_user unit_working unit_environment loaded_exec
-  rr_observe_systemctl unit_user show "$service" --property=User --value
-  rr_observe_systemctl unit_working show "$service" --property=WorkingDirectory --value
-  rr_observe_systemctl unit_environment show "$service" --property=EnvironmentFiles --value
-  rr_observe_systemctl loaded_exec show "$service" --property=ExecStart --value
+  rr_observe_systemctl unit_user show "$service" --property=User --value || return $?
+  rr_observe_systemctl unit_working show "$service" --property=WorkingDirectory --value || return $?
+  rr_observe_systemctl unit_environment show "$service" --property=EnvironmentFiles --value || return $?
+  rr_observe_systemctl loaded_exec show "$service" --property=ExecStart --value || return $?
 
-  test "$unit_user" = rluser
-  test "$unit_working" = "$repo"
-  test "$unit_environment" = "$env_file (ignore_errors=no)"
-  [[ "$loaded_exec" != *$'\n'* ]]
+  test "$unit_user" = rluser || return $?
+  test "$unit_working" = "$repo" || return $?
+  test "$unit_environment" = "$env_file (ignore_errors=no)" || return $?
+  [[ "$loaded_exec" != *$'\n'* ]] || return $?
+  [[ "$loaded_exec" == "{ path=$exec_path ;"* ]] || return $?
+  [[ "$loaded_exec" == *" ; argv[]=$exec_path ;"* ]] || return $?
+  [[ "$loaded_exec" == *" }" ]] || return $?
 
   local path_count=0
   local argv_count=0
   local token
   local -a tokens=()
-  read -r -a tokens <<<"$loaded_exec"
+  read -r -a tokens <<<"$loaded_exec" || return $?
   for token in "${tokens[@]}"; do
     case "$token" in
       path=*)
         path_count=$((path_count + 1))
-        test "$token" = "path=$exec_path"
+        test "$token" = "path=$exec_path" || return $?
         ;;
       'argv[]='*)
         argv_count=$((argv_count + 1))
-        test "$token" = "argv[]=$exec_path"
+        test "$token" = "argv[]=$exec_path" || return $?
         ;;
     esac
   done
-  test "$path_count" -eq 1
-  test "$argv_count" -eq 1
+  test "$path_count" -eq 1 || return $?
+  test "$argv_count" -eq 1 || return $?
 }

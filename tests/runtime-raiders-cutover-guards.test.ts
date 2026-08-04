@@ -352,6 +352,7 @@ describe('Runtime Raiders executable cutover guards', () => {
     ['duplicate path', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; path=${execPath} ; argv[]=${execPath} ; status=0/0 }` }],
     ['duplicate argv', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; argv[]=${execPath} ; argv[]=${execPath} ; status=0/0 }` }],
     ['extra command', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; argv[]=${execPath} ; } { path=/bin/true ; argv[]=/bin/true ; }` }],
+    ['missing record delimiters', { FAKE_UNIT_EXEC_START: `path=${execPath} argv[]=${execPath}` }],
     ['empty show result', { FAKE_UNIT_EXEC_START: '' }],
     ['failed show', { FAKE_SHOW_STATUS: '5' }],
   ])('rejects a game unit with %s', (_label, overrides) => {
@@ -360,6 +361,31 @@ describe('Runtime Raiders executable cutover guards', () => {
       const result = runSystemdGuard(
         repo,
         `rr_assert_game_unit ${service} "$2" ${envFile} ${execPath}`,
+        { ...gameUnitEnvironment(environment, repo), ...overrides },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('reached');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['wrong user', { FAKE_UNIT_USER: 'root' }],
+    ['wrong working directory', { FAKE_UNIT_WORKING_DIRECTORY: '/srv/wrong' }],
+    ['wrong environment', { FAKE_UNIT_ENVIRONMENT_FILES: '/etc/wrong.env (ignore_errors=no)' }],
+    ['wrong path', { FAKE_UNIT_EXEC_START: '{ path=/bin/false ; argv[]=/bin/false ; status=0/0 }' }],
+    ['missing argv', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; status=0/0 }` }],
+    ['duplicate path', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; path=${execPath} ; argv[]=${execPath} ; status=0/0 }` }],
+    ['duplicate argv', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; argv[]=${execPath} ; argv[]=${execPath} ; status=0/0 }` }],
+    ['extra command', { FAKE_UNIT_EXEC_START: `{ path=${execPath} ; argv[]=${execPath} ; } { path=/bin/true ; argv[]=/bin/true ; }` }],
+    ['failed show', { FAKE_SHOW_STATUS: '5' }],
+  ])('rejects an invalid game unit used as a predicate: %s', (_label, overrides) => {
+    const { root, repo, environment } = fixture();
+    try {
+      const result = runSystemdGuard(
+        repo,
+        `if rr_assert_game_unit ${service} "$2" ${envFile} ${execPath}; then exit 0; else exit 1; fi`,
         { ...gameUnitEnvironment(environment, repo), ...overrides },
       );
       expect(result.status).not.toBe(0);
