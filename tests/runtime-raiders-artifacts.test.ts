@@ -82,6 +82,11 @@ esac`);
 
   executable(join(fakes, 'install'), `
 printf 'install %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
+if test -n "\${RUNTIME_RAIDERS_TEST_PRECOMMIT_SIGNAL:-}"; then
+  kill "-\${RUNTIME_RAIDERS_TEST_PRECOMMIT_SIGNAL}" "$PPID"
+  /bin/sleep 0.05
+  exit 65
+fi
 if test "\${RUNTIME_RAIDERS_TEST_FAIL_INSTALL:-0}" = 1; then
   printf '%s\\n' "\${RUNTIME_RAIDERS_TEST_SENSITIVE:-unexpected install failure}" >&2
   exit 65
@@ -156,6 +161,10 @@ exec /bin/unlink "$@"`);
 printf 'rmdir %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
 case "$*" in
   */.publication.lock)
+    if test -n "\${RUNTIME_RAIDERS_TEST_POSTCOMMIT_SIGNAL:-}"; then
+      kill "-\${RUNTIME_RAIDERS_TEST_POSTCOMMIT_SIGNAL}" "$PPID"
+      /bin/sleep 0.05
+    fi
     if test "\${RUNTIME_RAIDERS_TEST_FAIL_LOCK_CLEANUP:-0}" = 1; then exit 65; fi
     ;;
 esac
@@ -334,6 +343,12 @@ describe('Runtime Raiders artifact publication', () => {
     ['appended checksum URL assignment', (f: PublicationFixture) => {
       appendFileSync(f.files.installer, "CHECKSUM_URL+='/unexpected'\n");
     }],
+    ['continued artifact URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARTIFACT_URL\\\n='https://example.invalid/agent.zip'\n");
+    }],
+    ['artifact URL array-element assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARTIFACT_URL[0]='https://example.invalid/agent.zip'\n");
+    }],
     ['malformed checksum filename', (f: PublicationFixture) => {
       writeFileSync(f.files.checksum, `${sha256(f.files.zip)}  other.zip\n`);
     }],
@@ -475,6 +490,42 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
     expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(true);
   });
+
+  it.each(['HUP', 'INT', 'TERM'])(
+    'does not return nonzero when %s arrives during post-commit cleanup',
+    (signal) => {
+      const priorSha = 'a'.repeat(40);
+      const f = publicationFixture();
+      f.args[4] = priorSha;
+      expect(runPublish(f).status).toBe(0);
+
+      f.args[4] = releaseSha;
+      const published = runPublish(f, { RUNTIME_RAIDERS_TEST_POSTCOMMIT_SIGNAL: signal });
+
+      expect(published.status, published.stderr).toBe(0);
+      expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
+      expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(false);
+    },
+  );
+
+  it.each(['HUP', 'INT', 'TERM'])(
+    'returns nonzero and preserves current when %s arrives before commit',
+    (signal) => {
+      const priorSha = 'a'.repeat(40);
+      const f = publicationFixture();
+      f.args[4] = priorSha;
+      expect(runPublish(f).status).toBe(0);
+      const priorBytes = releaseBytes(f.artifactRoot, priorSha);
+
+      f.args[4] = releaseSha;
+      const interrupted = runPublish(f, { RUNTIME_RAIDERS_TEST_PRECOMMIT_SIGNAL: signal });
+
+      expectContentFreeFailure(f, interrupted);
+      expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
+      expect(releaseBytes(f.artifactRoot, priorSha)).toEqual(priorBytes);
+      expect(existsSync(join(f.artifactRoot, 'releases', releaseSha))).toBe(false);
+    },
+  );
 
   it('does not alter a damaged existing release or the prior selector', () => {
     const priorSha = 'a'.repeat(40);
