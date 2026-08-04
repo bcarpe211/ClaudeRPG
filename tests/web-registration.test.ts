@@ -11,7 +11,10 @@ beforeEach(() => {
   db = openDb(':memory:');
   app = createApp({
     db,
-    config: loadConfig({ RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli' }),
+    config: loadConfig({
+      PUBLIC_URL: 'https://raiders.test',
+      RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli',
+    }),
   });
 });
 
@@ -128,11 +131,22 @@ describe('registration', () => {
     expect(enrollments[0].created_at).toBeGreaterThanOrEqual(before);
     expect(enrollments[0].created_at).toBeLessThanOrEqual(after);
 
-    const installCommand = res.text.match(/curl -fsSL (?:'|&#39;)[^'&]+(?:'|&#39;) \| sh -s -- --code (?:'|&#39;)([A-Za-z0-9_-]{43})(?:'|&#39;)/)?.[0];
-    const oneTimeCode = res.text.match(/--code (?:'|&#39;)([A-Za-z0-9_-]{43})(?:'|&#39;)/)?.[1];
+    const encodedInstallCommand = res.text.match(/<pre class="install-command">([^<]+)<\/pre>/)?.[1];
+    const installCommand = encodedInstallCommand
+      ?.replaceAll('&#34;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('&amp;', '&');
+    const oneTimeCode = res.text.match(/<pre class="enrollment-code">([A-Za-z0-9_-]{43})<\/pre>/)?.[1];
     expect(installCommand).toBeDefined();
     expect(oneTimeCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(installCommand).not.toContain(players[0].auth_token);
+    expect(installCommand).not.toContain(oneTimeCode);
+    expect(installCommand).toContain("'https://raiders.redlattice.com/install.sh'");
+    expect(installCommand).toContain('--output "$installer"');
+    expect(installCommand).toContain('[ "$status" = 200 ]');
+    expect(installCommand).toContain('sh "$installer"');
+    expect(installCommand).not.toContain('| sh');
+    expect(res.text).not.toContain('--code');
   });
 
   it('POST /register rolls back a forced enrollment failure before a retry creates its first Raider', async () => {

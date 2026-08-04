@@ -173,7 +173,7 @@ export function exchangeEnrollment(
   return exchange();
 }
 
-/** Validate an active device credential and record the successful contact time. */
+/** Validate an active device credential without mutating device state. */
 export function authenticateDevice(
   db: Database.Database,
   bearerToken: string,
@@ -182,33 +182,39 @@ export function authenticateDevice(
   requireTimestamp(now);
   if (!validCredential(bearerToken)) return null;
 
-  const authenticate = db.transaction((): AuthenticatedDevice | null => {
-    const device = db.prepare(`
-      SELECT device_id, player_id, companion_version
-      FROM raider_devices
-      WHERE token_hash = ? AND revoked_at IS NULL
-    `).get(sha256(bearerToken)) as {
-      device_id: string;
-      player_id: number;
-      companion_version: string;
-    } | undefined;
-    if (!device) return null;
+  const device = db.prepare(`
+    SELECT device_id, player_id, companion_version
+    FROM raider_devices
+    WHERE token_hash = ? AND revoked_at IS NULL
+  `).get(sha256(bearerToken)) as {
+    device_id: string;
+    player_id: number;
+    companion_version: string;
+  } | undefined;
+  if (!device) return null;
 
-    const updated = db.prepare(`
-      UPDATE raider_devices
-      SET last_seen_at = CASE
-        WHEN last_seen_at IS NULL OR last_seen_at < ? THEN ?
-        ELSE last_seen_at
-      END
-      WHERE device_id = ? AND revoked_at IS NULL
-    `).run(now, now, device.device_id);
-    if (updated.changes !== 1) return null;
+  return {
+    deviceId: device.device_id,
+    playerId: device.player_id,
+    companionVersion: device.companion_version,
+  };
+}
 
-    return {
-      deviceId: device.device_id,
-      playerId: device.player_id,
-      companionVersion: device.companion_version,
-    };
-  });
-  return authenticate();
+/** Record contact only after route-level quotas and request validation accept the request. */
+export function recordDeviceContact(
+  db: Database.Database,
+  deviceId: string,
+  now: number,
+): boolean {
+  requireTimestamp(now);
+  if (!validDeviceId(deviceId)) return false;
+  const updated = db.prepare(`
+    UPDATE raider_devices
+    SET last_seen_at = CASE
+      WHEN last_seen_at IS NULL OR last_seen_at < ? THEN ?
+      ELSE last_seen_at
+    END
+    WHERE device_id = ? AND revoked_at IS NULL
+  `).run(now, now, deviceId);
+  return updated.changes === 1;
 }

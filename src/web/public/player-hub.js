@@ -51,6 +51,7 @@
   const potionCanvas = byId('hub-potion-fx');
   const companionGenerate = byId('hub-companion-generate');
   const companionCommand = byId('hub-companion-command');
+  const companionCode = byId('hub-companion-code');
   const companionStatus = byId('hub-companion-status');
   const companionError = byId('hub-companion-error');
   const potionContext = potionCanvas?.getContext?.('2d') ?? null;
@@ -527,7 +528,7 @@
   }
 
   async function generateCompanionCommand() {
-    if (!companionGenerate || !companionCommand || !companionStatus || !companionError
+    if (!companionGenerate || !companionCommand || !companionCode || !companionStatus || !companionError
         || companionRequestInFlight) return;
     companionRequestInFlight = true;
     companionGenerate.disabled = true;
@@ -544,8 +545,12 @@
       const installCommand = typeof result.install_command === 'string'
         ? result.install_command.trim()
         : '';
+      const enrollmentCode = typeof result.enrollment_code === 'string'
+        ? result.enrollment_code.trim()
+        : '';
       const expiresAtMs = result.expires_at;
       if (!response.ok || installCommand.length === 0
+          || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentCode)
           || typeof expiresAtMs !== 'number' || !Number.isFinite(expiresAtMs)
           || expiresAtMs <= Date.now()) {
         throw new Error('enrollment rejected');
@@ -555,14 +560,16 @@
       }).format(new Date(expiresAtMs));
       companionCommand.textContent = installCommand;
       companionCommand.hidden = false;
-      companionStatus.textContent = `Fresh one-time command generated. Expires at ${expiresAt}.`;
+      companionCode.textContent = enrollmentCode;
+      companionCode.hidden = false;
+      companionStatus.textContent = `Fresh installer and one-time code generated. Expires at ${expiresAt}.`;
     } catch {
       companionError.textContent = 'Could not generate a command. Try again.';
       companionError.hidden = false;
     } finally {
       companionRequestInFlight = false;
       companionGenerate.disabled = false;
-      companionGenerate.textContent = 'Generate one-time command';
+      companionGenerate.textContent = 'Generate installer and code';
     }
   }
 

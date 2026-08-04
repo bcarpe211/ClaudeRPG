@@ -4,26 +4,62 @@ set -eu
 ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'
 CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'
 ENROLL_URL='https://raiders.redlattice.com/api/raiders/enroll'
+RUNTIME_RAIDERS_ORIGIN='https://raiders.redlattice.com'
 VERSION='0.1.0'
 LABEL='com.redlattice.runtime-raiders-agent'
 MARKER='export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path'
 TEAM_ID='__RUNTIME_RAIDERS_TEAM_ID__'
 
 usage() {
-  echo "usage: install.sh --code <one-time-code>" >&2
+  echo "usage: install.sh [--code-file <owner-only-file>]" >&2
   exit 64
 }
-code=''
+code_file=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --code) [ "$#" -ge 2 ] || usage; code="$2"; shift 2 ;;
+    --code-file) [ "$#" -ge 2 ] && [ -z "$code_file" ] || usage; code_file="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
-[ -n "$code" ] || usage
+if [ -n "$code_file" ]; then
+  [ -f "$code_file" ] && [ ! -L "$code_file" ] || {
+    echo "Runtime Raiders refuses unsafe one-time code file" >&2
+    exit 1
+  }
+  [ "$(stat -f %u "$code_file")" = "$(id -u)" ] &&
+    [ "$(stat -f %Lp "$code_file")" = 600 ] || {
+      echo "Runtime Raiders refuses unsafe one-time code file" >&2
+      exit 1
+    }
+  code_file_bytes="$(wc -c < "$code_file" | tr -d ' ')"
+  case "$code_file_bytes" in 43|44) ;; *) usage ;; esac
+  code="$(cat "$code_file")"
+else
+  [ -r /dev/tty ] && [ -w /dev/tty ] || usage
+  tty_state="$(stty -g < /dev/tty)" || usage
+  restore_tty() {
+    stty "$tty_state" < /dev/tty 2>/dev/null || true
+  }
+  trap 'restore_tty; exit 1' HUP INT TERM
+  printf 'Runtime Raiders one-time code: ' > /dev/tty
+  stty -echo < /dev/tty
+  if ! IFS= read -r code < /dev/tty; then
+    restore_tty
+    usage
+  fi
+  restore_tty
+  printf '\n' > /dev/tty
+  trap - HUP INT TERM
+fi
 case "$code" in *[!A-Za-z0-9_-]*|'') usage ;; esac
 code_length="$(printf '%s' "$code" | wc -c | tr -d ' ')"
 [ "$code_length" -eq 43 ] || usage
+[ "$ARTIFACT_URL" = "$RUNTIME_RAIDERS_ORIGIN/downloads/runtime-raiders-agent.zip" ] &&
+  [ "$CHECKSUM_URL" = "$RUNTIME_RAIDERS_ORIGIN/downloads/runtime-raiders-agent.zip.sha256" ] &&
+  [ "$ENROLL_URL" = "$RUNTIME_RAIDERS_ORIGIN/api/raiders/enroll" ] || {
+    echo "Runtime Raiders installer origin is invalid" >&2
+    exit 1
+  }
 UNRENDERED_TEAM_ID='__RUNTIME_RAIDERS_''TEAM_ID__'
 [ "$TEAM_ID" != "$UNRENDERED_TEAM_ID" ] || { echo "Runtime Raiders installer has no rendered signing Team ID" >&2; exit 1; }
 case "$TEAM_ID" in *[!A-Z0-9]*|'') echo "Runtime Raiders installer has no rendered signing Team ID" >&2; exit 1 ;; esac
@@ -255,8 +291,22 @@ trap 'exit 1' HUP INT TERM
 
 ARCHIVE="$WORK/runtime-raiders-agent.zip"
 CHECKSUM="$WORK/runtime-raiders-agent.zip.sha256"
-curl -fsSL "$ARTIFACT_URL" -o "$ARCHIVE"
-curl -fsSL "$CHECKSUM_URL" -o "$CHECKSUM"
+artifact_status="$(curl --silent --show-error \
+  --proto '=https' --proto-redir '=https' --max-redirs 0 \
+  --connect-timeout 10 --max-time 120 --max-filesize 134217728 \
+  -o "$ARCHIVE" -w '%{http_code}' "$ARTIFACT_URL")"
+[ "$artifact_status" = 200 ] || {
+  echo "Runtime Raiders artifact download was not accepted" >&2
+  exit 1
+}
+checksum_status="$(curl --silent --show-error \
+  --proto '=https' --proto-redir '=https' --max-redirs 0 \
+  --connect-timeout 10 --max-time 30 --max-filesize 4096 \
+  -o "$CHECKSUM" -w '%{http_code}' "$CHECKSUM_URL")"
+[ "$checksum_status" = 200 ] || {
+  echo "Runtime Raiders checksum download was not accepted" >&2
+  exit 1
+}
 expected="$(awk 'NR == 1 { print $1 }' "$CHECKSUM")"
 actual="$(shasum -a 256 "$ARCHIVE" | awk '{ print $1 }')"
 expected_length="$(printf '%s' "$expected" | wc -c | tr -d ' ')"
@@ -284,8 +334,20 @@ if [ ! -f "$ENROLLMENT" ]; then
   new_enrollment=1
   device_id="$(uuidgen)"
   response="$WORK/enrollment-response.json"
-  request="$(printf '{"code":"%s","device_id":"%s","companion_version":"%s"}' "$code" "$device_id" "$VERSION")"
-  enrollment_status="$(curl -fsSL -X POST -H 'Content-Type: application/json' --data "$request" "$ENROLL_URL" -w '%{http_code}' -o "$response")"
+  request="$WORK/enrollment-request.json"
+  printf '{"code":"%s","device_id":"%s","companion_version":"%s"}' \
+    "$code" "$device_id" "$VERSION" > "$request"
+  chmod 600 "$request"
+  if ! enrollment_status="$(curl --silent --show-error \
+      --proto '=https' --proto-redir '=https' --max-redirs 0 \
+      --connect-timeout 10 --max-time 30 --max-filesize 65536 \
+      -X POST -H 'Content-Type: application/json' --data-binary @- \
+      -w '%{http_code}' -o "$response" "$ENROLL_URL" < "$request")"; then
+    rm -f "$request"
+    echo "Runtime Raiders enrollment was not accepted" >&2
+    exit 1
+  fi
+  rm -f "$request"
   [ "$enrollment_status" = 201 ] || {
     echo "Runtime Raiders enrollment was not accepted" >&2
     exit 1

@@ -34,12 +34,14 @@ bash scripts/pi/setup.sh
 This installs Node 22, Chromium, Avahi and build tools; runs `npm install`; sets
 the hostname to `raiders`; installs the systemd service + `/etc/claude-rpg.env`;
 enables desktop autologin; and installs the Chromium kiosk autostart. It is safe
-to re-run.
+to re-run. Fresh setup leaves `SCORING_MODE=disabled`. On the first run, setup
+also refuses to restart the service while the shipped admin password or any
+unsafe Runtime Raiders value remains; edit the environment and rerun setup.
 
-## 4. Set the admin password, then reboot
+## 4. Set the admin password, rerun setup, then reboot
 ```bash
-sudo nano /etc/claude-rpg.env     # set ADMIN_PASSWORD (and PORT if you like)
-sudo systemctl restart claude-rpg
+sudo nano /etc/claude-rpg.env     # set ADMIN_PASSWORD; keep SCORING_MODE=disabled
+bash scripts/pi/setup.sh           # validates the env before service restart
 sudo reboot
 ```
 After reboot the TV should show the dungeon. From your laptop:
@@ -49,11 +51,24 @@ After reboot the TV should show the dungeon. From your laptop:
 
 Both names are for internal-network access only; neither creates public ingress.
 
-## 5. Onboard players
-Each teammate registers a character at `http://raiders.local:8080/`. Registration
-provides a private, one-time companion installer for that Raider; run it once on
-the owner's Mac. The installer starts collection **off** and never edits shell or
-provider configuration.
+## 5. Do not onboard players from fresh setup
+
+Fresh Pi setup does not authorize Runtime Raiders cutover, artifact publication,
+companion installation, or activation. Follow
+[`docs/RUNTIME_RAIDERS_CUTOVER.md`](RUNTIME_RAIDERS_CUTOVER.md) and record these
+separate gates in order before onboarding anyone:
+
+1. signed companion publication;
+2. installed-off canary acceptance;
+3. live canary activation and acceptance;
+4. separate office activation approval.
+
+Only after all four gates pass may onboarding begin. Each teammate registers a character at
+`http://raiders.local:8080/`. Registration provides a hardened installer command
+and a separate private one-time code for that Raider. The owner runs the command
+on their Mac and enters the code only at the installer's private prompt. The
+installer starts collection **off** and never edits shell or provider
+configuration.
 
 Before opting in, run `raiders status` (and `raiders doctor` if it reports a
 problem) and confirm collection is disabled. Consent is explicit: run

@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
+const enrollmentCode = 'c'.repeat(43);
+
 type Listener = (event: FakeEvent) => unknown;
 
 class FakeEvent {
@@ -210,7 +212,7 @@ function interactionHarness(options: {
     'potion-confirm-inventory', 'potion-confirm-doses', 'hub-potion-feedback',
     'hub-bottle-burst', 'hub-leaders', 'hub-today-tokens', 'hub-today-damage',
     'hub-today-rank', 'hub-today-gold', 'hub-today-active', 'hub-today-potions',
-    'hub-potion-fx', 'hub-companion-generate', 'hub-companion-command',
+    'hub-potion-fx', 'hub-companion-generate', 'hub-companion-command', 'hub-companion-code',
     'hub-companion-status', 'hub-companion-error',
   ];
   ids.forEach((id) => register(
@@ -410,11 +412,13 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     const h = interactionHarness({ responses: [
       { ok: true, json: async () => ({
         install_command: 'curl first-one-time-command',
+        enrollment_code: enrollmentCode,
         expires_at: now + 10 * 60_000,
       }) },
     ] });
     const generate = h.document.getElementById('hub-companion-generate')!;
     const command = h.document.getElementById('hub-companion-command')!;
+    const code = h.document.getElementById('hub-companion-code')!;
     const status = h.document.getElementById('hub-companion-status')!;
 
     await generate.dispatchAsync('click');
@@ -430,11 +434,15 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(h.fetchCalls[0].options.body).not.toContain('device_token');
     expect(command.textContent).toBe('curl first-one-time-command');
     expect(command.hidden).toBe(false);
-    expect(status.textContent).toContain('one-time command');
+    expect(code.textContent).toBe(enrollmentCode);
+    expect(code.hidden).toBe(false);
+    expect(command.textContent).not.toContain(enrollmentCode);
+    expect(status.textContent).toContain('one-time code');
     expect(h.document.getElementById('hub-companion-error')!.hidden).toBe(true);
 
     h.responses.push({ ok: true, json: async () => ({
       install_command: 'curl fresh-replacement-command',
+      enrollment_code: 'd'.repeat(43),
       expires_at: now + 20 * 60_000,
     }) });
     await generate.dispatchAsync('click');
@@ -442,31 +450,39 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(h.fetchCalls).toHaveLength(2);
     expect(command.textContent).toBe('curl fresh-replacement-command');
     expect(command.textContent).not.toContain('first-one-time-command');
+    expect(code.textContent).toBe('d'.repeat(43));
   });
 
   it.each([
-    ['empty command', { install_command: '   ', expires_at: Date.now() + 60_000 }],
-    ['non-finite expiry', { install_command: 'curl malformed-command', expires_at: Infinity }],
-    ['past expiry', { install_command: 'curl expired-command', expires_at: Date.now() - 1 }],
+    ['empty command', { install_command: '   ', enrollment_code: enrollmentCode, expires_at: Date.now() + 60_000 }],
+    ['missing code', { install_command: 'curl missing-code', expires_at: Date.now() + 60_000 }],
+    ['invalid code', { install_command: 'curl invalid-code', enrollment_code: 'short', expires_at: Date.now() + 60_000 }],
+    ['non-finite expiry', { install_command: 'curl malformed-command', enrollment_code: enrollmentCode, expires_at: Infinity }],
+    ['past expiry', { install_command: 'curl expired-command', enrollment_code: enrollmentCode, expires_at: Date.now() - 1 }],
   ])('preserves the current command and status for a malformed enrollment: %s', async (_label, payload) => {
     const h = interactionHarness({ responses: [{ ok: true, json: async () => payload }] });
     const generate = h.document.getElementById('hub-companion-generate')!;
     const command = h.document.getElementById('hub-companion-command')!;
     const status = h.document.getElementById('hub-companion-status')!;
+    const code = h.document.getElementById('hub-companion-code')!;
     const error = h.document.getElementById('hub-companion-error')!;
     command.textContent = 'curl retained-command';
     command.hidden = false;
     status.textContent = 'Current command expires later.';
+    code.textContent = enrollmentCode;
+    code.hidden = false;
 
     await generate.dispatchAsync('click');
 
     expect(command.textContent).toBe('curl retained-command');
     expect(command.hidden).toBe(false);
     expect(status.textContent).toBe('Current command expires later.');
+    expect(code.textContent).toBe(enrollmentCode);
+    expect(code.hidden).toBe(false);
     expect(error.textContent).toBe('Could not generate a command. Try again.');
     expect(error.hidden).toBe(false);
     expect(generate.disabled).toBe(false);
-    expect(generate.textContent).toBe('Generate one-time command');
+    expect(generate.textContent).toBe('Generate installer and code');
   });
 
   it('allows retry after malformed enrollment and suppresses duplicate in-flight requests', async () => {
@@ -476,6 +492,7 @@ describe('player hub inventory, effects, and refresh behavior', () => {
       { ok: true, json: async () => firstJson },
       { ok: true, json: async () => ({
         install_command: 'curl retry-command',
+        enrollment_code: enrollmentCode,
         expires_at: Date.now() + 60_000,
       }) },
     ] });
@@ -487,7 +504,7 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(h.fetchCalls).toHaveLength(1);
     expect(generate.disabled).toBe(true);
 
-    resolveFirst({ install_command: '', expires_at: Date.now() + 60_000 });
+    resolveFirst({ install_command: '', enrollment_code: enrollmentCode, expires_at: Date.now() + 60_000 });
     await Promise.all([first, duplicate]);
     expect(error.textContent).toContain('Try again');
     expect(generate.disabled).toBe(false);
@@ -496,6 +513,7 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(h.fetchCalls).toHaveLength(2);
     expect(h.document.getElementById('hub-companion-command')!.textContent)
       .toBe('curl retry-command');
+    expect(h.document.getElementById('hub-companion-code')!.textContent).toBe(enrollmentCode);
     expect(error.textContent).toBe('');
     expect(error.hidden).toBe(true);
   });

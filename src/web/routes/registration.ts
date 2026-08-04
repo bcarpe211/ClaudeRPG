@@ -8,6 +8,7 @@ import { createPlayerWithEnrollment } from '../../domain/raider-enrollment';
 import { buildTvState } from '../tvview';
 import { formatCompact } from '../../domain/format';
 import type { RunSurface } from '../../domain/run-events';
+import { buildCompanionInstallCommand } from '../companion-install';
 
 const RegisterInput = z.object({
   name: z.string().trim().min(1).max(40),
@@ -54,14 +55,6 @@ function landingRunSupport(surfaces: readonly RunSurface[]): LandingRunSupport |
     line: `Supported Run surfaces: ${supportList}.`,
     runStep: `Use ${stepList}; your Runs generate Raid Power.`,
   };
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `"'"'`)}'`;
-}
-
-function buildInstallCommand(publicUrl: string, oneTimeCode: string): string {
-  return `curl -fsSL ${shellQuote(`${publicUrl}/install.sh`)} | sh -s -- --code ${shellQuote(oneTimeCode)}`;
 }
 
 export function registerRegistrationRoutes(
@@ -132,7 +125,8 @@ export function registerRegistrationRoutes(
         title: 'Your Raider',
         player,
         className: getClass(player.class_key)!.name,
-        installCommand: buildInstallCommand(config.publicUrl, enrollment.code),
+        installCommand: buildCompanionInstallCommand(),
+        oneTimeCode: enrollment.code,
       }),
     );
   }));

@@ -337,70 +337,120 @@ Before changing the loaded config, record a root-only backup of
 Do not print, copy into Git, or otherwise expose `CADDY_ENV`, its token, or any
 environment contents.
 
-Create only the empty fixed release store; no `current` selector or release
-file is created by this gate:
+Run the following as one transactional block. It creates only the empty fixed
+release store, records the exact prior-config digest, and arms automatic
+restoration before replacing the loaded config. The rollback path verifies the
+recorded backup digest, restores and validates that exact config with the
+manager-loaded environment, reloads Caddy, and rechecks both HTTPS health names.
+It reports rollback trouble but always preserves the status that triggered the
+rollback.
 
 ```sh
-sudo install -d -o root -g root -m 0755 \
-  /var/lib/runtime-raiders \
-  /var/lib/runtime-raiders/releases
-sudo test ! -e /var/lib/runtime-raiders/current
-sudo test ! -L /var/lib/runtime-raiders/current
-```
+prepare_caddy_routes() (
+  set -Eeuo pipefail
+  umask 077
 
-Materialize the reviewed `deploy/Caddyfile` from the exact `RELEASE_SHA` in an
-owner-controlled temporary file. Back up the prior loaded config, record its
-path and digest outside Git, install the reviewed file as `root:root:0644`, and
-validate it with the manager-loaded environment file before reloading:
+  REVIEWED_CADDY="$(mktemp)"
+  case "$CADDY_BACKUP" in
+    /var/backups/runtime-raiders/*/Caddyfile.before-artifacts) ;;
+    *) false ;;
+  esac
+  sudo install -d -o root -g root -m 0700 "${CADDY_BACKUP%/*}"
+  sudo install -o root -g root -m 0600 "$CADDY_CONFIG" "$CADDY_BACKUP"
+  sudo test "$(sudo stat -c '%U:%G:%a' "$CADDY_BACKUP")" = root:root:600
+  CADDY_BACKUP_SHA256="$(sudo sha256sum "$CADDY_BACKUP" | awk '{print $1}')"
+  [[ "$CADDY_BACKUP_SHA256" =~ ^[0-9a-f]{64}$ ]]
+  printf 'Record prior Caddy SHA-256 outside Git: %s\n' "$CADDY_BACKUP_SHA256"
 
-```sh
-REVIEWED_CADDY="$(mktemp)"
-case "$CADDY_BACKUP" in
-  /var/backups/runtime-raiders/*/Caddyfile.before-artifacts) ;;
-  *) false ;;
-esac
-sudo install -d -o root -g root -m 0700 "${CADDY_BACKUP%/*}"
-sudo install -o root -g root -m 0600 "$CADDY_CONFIG" "$CADDY_BACKUP"
-sudo sha256sum "$CADDY_BACKUP"
-sudo -u rluser git --no-optional-locks -C "$REPO" show \
-  "$RELEASE_SHA:deploy/Caddyfile" > "$REVIEWED_CADDY"
-sudo install -o root -g root -m 0644 "$REVIEWED_CADDY" "$CADDY_CONFIG"
-sudo caddy validate --config "$CADDY_CONFIG" --adapter caddyfile \
-  --envfile "$CADDY_ENV"
-sudo systemctl reload caddy.service
-test "$(systemctl is-active caddy.service)" = active
-```
+  sudo -u rluser git --no-optional-locks -C "$REPO" show \
+    "$RELEASE_SHA:deploy/Caddyfile" > "$REVIEWED_CADDY"
 
-Verify `200` for both internal health routes and `404` for all three exact
-artifact URLs. Also require the Node game service to remain active and healthy:
+  restore_prior_caddy() {
+    original_status=$1
+    test "$original_status" -ne 0 || original_status=1
+    trap - EXIT HUP INT TERM
+    set +e
+    rollback_status=0
+    observed_backup_sha256="$(sudo sha256sum "$CADDY_BACKUP" | awk '{print $1}')" \
+      || rollback_status=1
+    test "$observed_backup_sha256" = "$CADDY_BACKUP_SHA256" || rollback_status=1
+    sudo test "$(sudo stat -c '%U:%G:%a' "$CADDY_BACKUP")" = root:root:600 \
+      || rollback_status=1
+    if test "$rollback_status" = 0; then
+      sudo install -o root -g root -m 0644 "$CADDY_BACKUP" "$CADDY_CONFIG" \
+        || rollback_status=1
+    fi
+    if test "$rollback_status" = 0; then
+      test "$(sudo sha256sum "$CADDY_CONFIG" | awk '{print $1}')" = \
+        "$CADDY_BACKUP_SHA256" || rollback_status=1
+    fi
+    if test "$rollback_status" = 0; then
+      sudo caddy validate --config "$CADDY_CONFIG" --adapter caddyfile \
+        --envfile "$CADDY_ENV" || rollback_status=1
+    fi
+    if test "$rollback_status" = 0; then
+      sudo systemctl reload caddy.service || rollback_status=1
+    fi
+    if test "$rollback_status" != 0; then
+      sudo systemctl stop caddy.service || true
+    fi
+    test "$(systemctl is-active caddy.service)" = active || rollback_status=1
+    for url in \
+      https://raiders.redlattice.com/health \
+      https://clauderpg.redlattice.com/health; do
+      test "$(curl --silent --show-error --proto '=https' --max-redirs 0 \
+        --connect-timeout 10 --max-time 30 --output /dev/null \
+        --write-out '%{http_code}' "$url")" = 200 || rollback_status=1
+    done
+    test "$rollback_status" = 0 \
+      || printf 'Caddy rollback verification failed; investigate immediately.\n' >&2
+    rm -f "$REVIEWED_CADDY"
+    exit "$original_status"
+  }
 
-```sh
-for url in \
-  https://raiders.redlattice.com/health \
-  https://clauderpg.redlattice.com/health; do
-  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 200
-done
-for url in \
-  https://raiders.redlattice.com/install.sh \
-  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip \
-  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256; do
-  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 404
-done
-test "$(systemctl is-active "$SERVICE")" = active
-test "$(curl -sS -o /dev/null -w '%{http_code}' \
-  http://localhost:8080/health)" = 200
-```
+  trap 'restore_prior_caddy $?' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
-If validation, reload, health, or any unpublished-route check fails, reinstall
-`CADDY_BACKUP` as `root:root:0644`, validate it with the same `--envfile`, reload
-Caddy, and recheck both health routes:
+  sudo install -d -o root -g root -m 0755 \
+    /var/lib/runtime-raiders \
+    /var/lib/runtime-raiders/releases
+  sudo test ! -e /var/lib/runtime-raiders/current
+  sudo test ! -L /var/lib/runtime-raiders/current
 
-```sh
-sudo install -o root -g root -m 0644 "$CADDY_BACKUP" "$CADDY_CONFIG"
-sudo caddy validate --config "$CADDY_CONFIG" --adapter caddyfile \
-  --envfile "$CADDY_ENV"
-sudo systemctl reload caddy.service
-test "$(systemctl is-active caddy.service)" = active
+  sudo install -o root -g root -m 0644 "$REVIEWED_CADDY" "$CADDY_CONFIG"
+  sudo caddy validate --config "$CADDY_CONFIG" --adapter caddyfile \
+    --envfile "$CADDY_ENV"
+  sudo systemctl reload caddy.service
+  test "$(systemctl is-active caddy.service)" = active
+
+  for url in \
+    https://raiders.redlattice.com/health \
+    https://clauderpg.redlattice.com/health; do
+    test "$(curl --silent --show-error --proto '=https' --max-redirs 0 \
+      --connect-timeout 10 --max-time 30 --output /dev/null \
+      --write-out '%{http_code}' "$url")" = 200
+  done
+  for url in \
+    https://raiders.redlattice.com/install.sh \
+    https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip \
+    https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256; do
+    test "$(curl --silent --show-error --proto '=https' --max-redirs 0 \
+      --connect-timeout 10 --max-time 30 --output /dev/null \
+      --write-out '%{http_code}' "$url")" = 404
+  done
+  test "$(systemctl is-active "$SERVICE")" = active
+  test "$(curl --silent --show-error --max-redirs 0 --connect-timeout 10 \
+    --max-time 30 --output /dev/null --write-out '%{http_code}' \
+    http://localhost:8080/health)" = 200
+  sudo test ! -e /var/lib/runtime-raiders/current
+  sudo test ! -L /var/lib/runtime-raiders/current
+
+  trap - EXIT HUP INT TERM
+  rm -f "$REVIEWED_CADDY"
+)
+prepare_caddy_routes
 ```
 
 Leave `current` absent and stop. Caddy preparation does not authorize artifact
@@ -867,17 +917,29 @@ digests, require `Cache-Control: no-store` and
 remains `200`:
 
 ```sh
+umask 077
 VERIFY_DIR="$(mktemp -d)"
 chmod 0700 "$VERIFY_DIR"
-curl -fsS -D "$VERIFY_DIR/install.headers" \
-  -o "$VERIFY_DIR/install.sh" \
-  https://raiders.redlattice.com/install.sh
-curl -fsS -D "$VERIFY_DIR/zip.headers" \
-  -o "$VERIFY_DIR/runtime-raiders-agent.zip" \
-  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip
-curl -fsS -D "$VERIFY_DIR/checksum.headers" \
-  -o "$VERIFY_DIR/runtime-raiders-agent.zip.sha256" \
-  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256
+download_exact_https() {
+  max_bytes=$1
+  output=$2
+  headers=$3
+  url=$4
+  status="$(curl --silent --show-error --proto '=https' \
+    --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 120 \
+    --max-filesize "$max_bytes" --dump-header "$headers" --output "$output" \
+    --write-out '%{http_code}' "$url")" || return 1
+  test "$status" = 200
+}
+download_exact_https 1048576 \
+  "$VERIFY_DIR/install.sh" "$VERIFY_DIR/install.headers" \
+  'https://raiders.redlattice.com/install.sh'
+download_exact_https 134217728 \
+  "$VERIFY_DIR/runtime-raiders-agent.zip" "$VERIFY_DIR/zip.headers" \
+  'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'
+download_exact_https 4096 \
+  "$VERIFY_DIR/runtime-raiders-agent.zip.sha256" "$VERIFY_DIR/checksum.headers" \
+  'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'
 test "$(sha256sum "$VERIFY_DIR/install.sh" | awk '{print $1}')" = \
   "$INSTALLER_SHA256"
 test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.zip" | awk '{print $1}')" = \
@@ -888,8 +950,8 @@ for headers in "$VERIFY_DIR"/*.headers; do
   tr -d '\r' < "$headers" | grep -Fxi 'Cache-Control: no-store'
   tr -d '\r' < "$headers" | grep -Fxi 'X-Content-Type-Options: nosniff'
 done
-test "$(curl -sS -o /dev/null -w '%{http_code}' \
-  https://raiders.redlattice.com/health)" = 200
+download_exact_https 4096 /dev/null /dev/null \
+  'https://raiders.redlattice.com/health'
 ```
 
 Any publication, status, digest, header, or health failure blocks installation
@@ -906,16 +968,21 @@ internal health URLs remain `200`:
 
 ```sh
 sudo scripts/pi/runtime-raiders-artifacts.sh status
+exact_https_status() {
+  curl --silent --show-error --proto '=https' --proto-redir '=https' \
+    --max-redirs 0 --connect-timeout 10 --max-time 30 --max-filesize 4096 \
+    --output /dev/null --write-out '%{http_code}' "$1"
+}
 for url in \
   https://raiders.redlattice.com/install.sh \
   https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip \
   https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256; do
-  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 404
+  test "$(exact_https_status "$url")" = 404
 done
 for url in \
   https://raiders.redlattice.com/health \
   https://clauderpg.redlattice.com/health; do
-  test "$(curl -sS -o /dev/null -w '%{http_code}' "$url")" = 200
+  test "$(exact_https_status "$url")" = 200
 done
 ```
 
@@ -938,12 +1005,26 @@ verify its SHA-256 before execution, and run that verified local file. Do not
 pipe a mutable remote response directly into a shell for this first canary:
 
 ```sh
+umask 077
 CANARY_INSTALLER="$(mktemp)"
+CANARY_CODE_FILE="$(mktemp)"
+cleanup_canary_files() { rm -f "$CANARY_INSTALLER" "$CANARY_CODE_FILE"; }
+trap cleanup_canary_files EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 chmod 0600 "$CANARY_INSTALLER"
-curl -fsS https://raiders.redlattice.com/install.sh -o "$CANARY_INSTALLER"
+chmod 0600 "$CANARY_CODE_FILE"
+CANARY_STATUS="$(curl --fail --silent --show-error --proto '=https' \
+  --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
+  --max-filesize 1048576 --output "$CANARY_INSTALLER" \
+  --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh')"
+test "$CANARY_STATUS" = 200
 test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = \
   "$INSTALLER_SHA256"
-sh "$CANARY_INSTALLER" --code "$ONE_TIME_CODE"
+printf 'Enter only the one-time code, save, and close the owner-only file.\n' >&2
+/usr/bin/vi "$CANARY_CODE_FILE"
+sh "$CANARY_INSTALLER" --code-file "$CANARY_CODE_FILE"
 ```
 
 The transactional installer must finish with the real daemon live and all

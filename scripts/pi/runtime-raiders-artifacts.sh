@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 PRODUCTION_ROOT=/var/lib/runtime-raiders
 ARTIFACT_ROOT=$PRODUCTION_ROOT
@@ -44,6 +45,23 @@ validate_store() {
   RELEASES=$ARTIFACT_ROOT/releases
   CURRENT=$ARTIFACT_ROOT/current
   require_directory "$RELEASES" 'releases directory'
+}
+
+acquire_publication_lock() {
+  LOCK=$ARTIFACT_ROOT/.publication.lock
+  if test -e "$LOCK" || test -L "$LOCK"; then
+    test -f "$LOCK" && test ! -L "$LOCK" || die 'publication lock is unsafe'
+    test "$(ownership "$LOCK")" = '0:0' || die 'publication lock is unsafe'
+  fi
+  if ! exec 9>"$LOCK"; then
+    die 'publication lock could not be opened'
+  fi
+  test -f "$LOCK" && test ! -L "$LOCK" || die 'publication lock is unsafe'
+  chmod 0600 "$LOCK" 2>/dev/null || die 'publication lock could not be protected'
+  test "$(ownership "$LOCK")" = '0:0' || die 'publication lock is unsafe'
+  if ! flock -n 9; then
+    die 'publication is already in progress'
+  fi
 }
 
 validate_source() {
@@ -220,27 +238,7 @@ withdraw_command() {
   require_release_sha "$release_sha"
   require_root
   validate_store
-
-  LOCK=$ARTIFACT_ROOT/.publication.lock
-  OWNS_LOCK=0
-  if ! mkdir -- "$LOCK" 2>/dev/null; then
-    die 'publication is already in progress'
-  fi
-  OWNS_LOCK=1
-  withdraw_cleanup() {
-    local status=$?
-    trap - EXIT HUP INT TERM
-    if test "$OWNS_LOCK" = 1; then
-      if test "$LOCK" = "$ARTIFACT_ROOT/.publication.lock"; then
-        rmdir -- "$LOCK" 2>/dev/null || status=1
-      else
-        printf 'runtime-raiders-artifacts: refusing unsafe lock cleanup\n' >&2
-        status=1
-      fi
-    fi
-    exit "$status"
-  }
-  trap withdraw_cleanup EXIT
+  acquire_publication_lock
   trap 'exit 1' HUP INT TERM
 
   test -L "$CURRENT" || die 'current selector must be a symlink'
@@ -323,24 +321,14 @@ publish_command() {
   require_digest "$CHECKSUM_SHA256" 'checksum'
   require_root
   validate_store
-
-  LOCK=$ARTIFACT_ROOT/.publication.lock
+  acquire_publication_lock
   STAGE=''
   TEMP_SELECTOR=''
   SELECTION_COMMITTED=0
-  OWNS_LOCK=0
-  if ! mkdir -- "$LOCK" 2>/dev/null; then
-    die 'publication is already in progress'
-  fi
-  OWNS_LOCK=1
   cleanup() {
     local status=$?
     trap - EXIT
-    if test "$SELECTION_COMMITTED" = 1; then
-      trap '' HUP INT TERM
-    else
-      trap - HUP INT TERM
-    fi
+    trap '' HUP INT TERM
     if test -n "$TEMP_SELECTOR"; then
       case "$TEMP_SELECTOR" in
         "$ARTIFACT_ROOT"/.current.*)
@@ -362,19 +350,6 @@ publish_command() {
           status=1
           ;;
       esac
-    fi
-    if test "$OWNS_LOCK" = 1; then
-      if test "$LOCK" = "$ARTIFACT_ROOT/.publication.lock"; then
-        if ! rmdir -- "$LOCK" 2>/dev/null && test "$SELECTION_COMMITTED" = 0; then
-          status=1
-        fi
-      else
-        printf 'runtime-raiders-artifacts: refusing unsafe lock cleanup\n' >&2
-        status=1
-      fi
-    fi
-    if test "$SELECTION_COMMITTED" = 1; then
-      status=0
     fi
     exit "$status"
   }

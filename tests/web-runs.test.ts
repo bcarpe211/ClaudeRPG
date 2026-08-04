@@ -187,9 +187,11 @@ async function createEnrollment() {
     .post('/api/raiders/enrollments')
     .send({ raider_key: player.auth_token });
   expect(response.status).toBe(201);
-  const code = response.body.install_command.match(/--code '([A-Za-z0-9_-]{43})'$/)?.[1];
-  expect(code).toBeDefined();
-  return { response, code: code! };
+  const code = response.body.enrollment_code as unknown;
+  expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(response.body.install_command).not.toContain(code);
+  expect(response.body.install_command).not.toContain('--code');
+  return { response, code: code as string };
 }
 
 async function enrollDevice(deviceId = randomUUID()) {
@@ -216,7 +218,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  db.close();
+  if (db.open) db.close();
   vi.restoreAllMocks();
 });
 
@@ -343,9 +345,17 @@ describe('Raider enrollment routes', () => {
   it('creates a private one-time install command and exchanges it exactly once', async () => {
     const { response: created, code } = await createEnrollment();
     expect(created.body).toEqual({
-      install_command: `curl -fsSL 'https://raiders.test/install.sh' | sh -s -- --code '${code}'`,
+      install_command: expect.stringContaining("'https://raiders.redlattice.com/install.sh'"),
+      enrollment_code: code,
       expires_at: NOW + 10 * 60_000,
     });
+    expect(created.body.install_command).toContain('--proto-redir');
+    expect(created.body.install_command).toContain('--output "$installer"');
+    expect(created.body.install_command).toContain("--write-out '%{http_code}'");
+    expect(created.body.install_command).toContain('[ "$status" = 200 ]');
+    expect(created.body.install_command).toContain('test -s "$installer"');
+    expect(created.body.install_command).toContain('sh "$installer"');
+    expect(created.body.install_command).not.toContain('| sh');
 
     const deviceId = randomUUID();
     const exchanged = await request(app)
@@ -432,6 +442,31 @@ describe('Raider enrollment routes', () => {
 });
 
 describe('Run event authentication and ingestion', () => {
+  it('rate-limits an IP before parsing or credential database work', async () => {
+    const authorization = `Bearer ${'A'.repeat(43)}`;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await request(app)
+        .post('/api/runs/events')
+        .set('Authorization', authorization)
+        .send({ events: [] });
+      expect(response.status).toBe(401);
+    }
+
+    db.close();
+    const malformed = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', authorization)
+      .set('Content-Type', 'application/json')
+      .send('{"events":');
+    const valid = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', authorization)
+      .send({ events: [] });
+
+    expect(malformed.status).toBe(429);
+    expect(valid.status).toBe(429);
+  });
+
   it('returns the same private 401 for missing, malformed, and invalid Bearer credentials', async () => {
     const event = runEvent(randomUUID());
     const credentials = [undefined, 'Basic private', 'Bearer', 'Bearer malformed', `Bearer ${'A'.repeat(43)}`];
@@ -473,6 +508,7 @@ describe('Run event authentication and ingestion', () => {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const response = await request(app)
         .post('/api/runs/events')
+        .set('X-Forwarded-For', `198.51.100.${attempt + 1}`)
         .set('Authorization', `Bearer ${first.deviceToken}`)
         .send({ events: [] });
       if (response.status === 429) {
@@ -486,9 +522,36 @@ describe('Run event authentication and ingestion', () => {
 
     const isolated = await request(app)
       .post('/api/runs/events')
+      .set('X-Forwarded-For', '203.0.113.1')
       .set('Authorization', `Bearer ${second.deviceToken}`)
       .send({ events: [] });
     expect(isolated.status).toBe(200);
+  });
+
+  it('does not record contact or ingest when the authenticated device quota is exhausted', async () => {
+    const device = await enrollDevice();
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await request(app)
+        .post('/api/runs/events')
+        .set('X-Forwarded-For', `198.51.100.${attempt + 1}`)
+        .set('Authorization', `Bearer ${device.deviceToken}`)
+        .send({ events: [] });
+      expect(response.status).toBe(200);
+    }
+    db.prepare('UPDATE raider_devices SET last_seen_at = NULL WHERE device_id = ?')
+      .run(device.deviceId);
+
+    const limited = await request(app)
+      .post('/api/runs/events')
+      .set('X-Forwarded-For', '198.51.100.100')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .send({ events: [runEvent(device.deviceId)] });
+
+    expect(limited.status).toBe(429);
+    expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
+      .get(device.deviceId)).toEqual({ last_seen_at: null });
+    expect(countRows('runs')).toBe(0);
+    expect(countRows('run_events')).toBe(0);
   });
 
   it('authenticates heartbeat, updates the companion version, and sends an empty 204', async () => {

@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 const caddy = readFileSync(resolve('deploy/Caddyfile'), 'utf8');
@@ -8,6 +10,7 @@ const setup = readFileSync(resolve('scripts/pi/setup.sh'), 'utf8');
 const service = readFileSync(resolve('deploy/claude-rpg.service'), 'utf8');
 const labwcAutostart = readFileSync(resolve('deploy/labwc-autostart'), 'utf8');
 const kiosk = readFileSync(resolve('scripts/pi/kiosk.sh'), 'utf8');
+const validatorPath = resolve('scripts/pi/validate-runtime-raiders-env.sh');
 
 function assignments(key: string): string[] {
   return [...env.matchAll(new RegExp(`^${key}=(.*)$`, 'gm'))]
@@ -84,9 +87,45 @@ describe('Runtime Raiders internal deployment configuration', () => {
 
   it('targets the Runtime Raiders scoring configuration', () => {
     expect(env).toContain('PUBLIC_URL=https://raiders.redlattice.com');
-    expect(env).toContain('SCORING_MODE=runtime-raiders');
+    expect(env).toContain('SCORING_MODE=disabled');
     expect(env).toMatch(/^RAID_POWER_POLICY_PATH=__REPO__\/config\/raid-power-policy-v1\.json$/m);
     expect(env).not.toContain('OTEL_ENDPOINT_HOST=');
+  });
+
+  it('validates the installed environment before any service restart', () => {
+    const validation = setup.indexOf('validate-runtime-raiders-env.sh');
+    const restart = setup.indexOf('systemctl restart claude-rpg.service');
+
+    expect(validation).toBeGreaterThan(-1);
+    expect(restart).toBeGreaterThan(validation);
+    expect(setup.slice(validation, restart)).toMatch(/exit 1/);
+  });
+
+  it('rejects a placeholder runtime cutover and accepts an explicitly safe one', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-env-validation-'));
+    try {
+      const envFile = join(root, 'claude-rpg.env');
+      const base = env
+        .replaceAll('__REPO__', resolve('.'))
+        .replace('ADMIN_PASSWORD=change-me-please', 'ADMIN_PASSWORD=long-private-admin-password')
+        .replace('SESSION_SECRET=change-me-too', `SESSION_SECRET=${'s'.repeat(32)}`)
+        .replace('SCORING_MODE=disabled', 'SCORING_MODE=runtime-raiders');
+      writeFileSync(envFile, base, { mode: 0o600 });
+
+      const rejected = spawnSync('bash', [validatorPath, '--env-file', envFile, '--repo-dir', resolve('.')], {
+        encoding: 'utf8',
+      });
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toMatch(/placeholder.*RUN_SCORING_CUTOVER_AT/i);
+
+      writeFileSync(envFile, base.replace('1800000000000', '1800000000001'), { mode: 0o600 });
+      const accepted = spawnSync('bash', [validatorPath, '--env-file', envFile, '--repo-dir', resolve('.')], {
+        encoding: 'utf8',
+      });
+      expect(accepted.status, accepted.stderr).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('has exactly one 13-digit millisecond cutover timestamp', () => {

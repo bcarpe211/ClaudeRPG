@@ -97,6 +97,10 @@ public enum AgentControllerError: Error, Equatable {
     case invalidState
 }
 
+public enum CollectorDiagnostic: String, Equatable, Sendable {
+    case deterministicRecordRejected = "deterministic_record_rejected"
+}
+
 public enum EnrollmentConfigurationError: Error, Equatable {
     case invalidFile
     case invalidConfiguration
@@ -316,6 +320,7 @@ public final class AgentController: @unchecked Sendable {
     private let readLimitBytes: Int
     private let clockMS: Clock
     private let afterProviderRead: @Sendable () -> Void
+    private let diagnosticHandler: (CollectorDiagnostic) -> Void
     private let stateDirectoryDescriptor: Int32
     private let lock = NSRecursiveLock()
     private let acceptanceLock = NSLock()
@@ -332,7 +337,8 @@ public final class AgentController: @unchecked Sendable {
         configuration: AgentConfiguration,
         readLimitBytes: Int = JSONLReader.maximumReadBytes,
         clockMS: @escaping Clock = { Int64(Date().timeIntervalSince1970 * 1_000) },
-        afterProviderRead: @escaping @Sendable () -> Void = {}
+        afterProviderRead: @escaping @Sendable () -> Void = {},
+        diagnosticHandler: @escaping (CollectorDiagnostic) -> Void = { _ in }
     ) throws {
         guard !configuration.companionVersion.isEmpty,
               UUID(uuidString: configuration.deviceID) != nil,
@@ -349,6 +355,7 @@ public final class AgentController: @unchecked Sendable {
         self.readLimitBytes = readLimitBytes
         self.clockMS = clockMS
         self.afterProviderRead = afterProviderRead
+        self.diagnosticHandler = diagnosticHandler
         try Self.createPrivateDirectory(paths.supportDirectory)
         let stateDirectoryDescriptor = try OwnerOnlyDirectory.openOrCreate(paths.stateDirectory)
         do {
@@ -899,15 +906,22 @@ public final class AgentController: @unchecked Sendable {
                     )
                     for observation in observations {
                         guard bypassAcceptance || isAcceptingCollection else { return }
-                        let event = try registry.event(
-                            from: observation,
-                            dedupeSecret: configuration.dedupeSecret,
-                            companionVersion: configuration.companionVersion,
-                            deviceID: configuration.deviceID
-                        )
-                        _ = try PrivacyEncoder().encode(event)
-                        try outbox.enqueue(event)
-                        runRegistry.observe(event)
+                        do {
+                            let event = try registry.event(
+                                from: observation,
+                                dedupeSecret: configuration.dedupeSecret,
+                                companionVersion: configuration.companionVersion,
+                                deviceID: configuration.deviceID
+                            )
+                            _ = try PrivacyEncoder().encode(event)
+                            try outbox.enqueue(event)
+                            runRegistry.observe(event)
+                        } catch {
+                            guard Self.isDeterministicRecordRejection(error) else {
+                                throw error
+                            }
+                            diagnosticHandler(.deterministicRecordRejected)
+                        }
                     }
                 }
             }
@@ -1059,6 +1073,17 @@ public final class AgentController: @unchecked Sendable {
     private func normalized(_ files: [URL]) -> [URL] {
         Array(Set(files.map { URL(fileURLWithPath: $0.path) }))
             .sorted { $0.path < $1.path }
+    }
+
+    private static func isDeterministicRecordRejection(_ error: Error) -> Bool {
+        if error is PrivacyEncoderError { return true }
+        if error as? AdapterRegistryError == .invalidObservation { return true }
+        switch error as? RunIdentityError {
+        case .invalidNativeID, .invalidRunKey, .invalidSequence:
+            return true
+        case .invalidDedupeSecret, .none:
+            return false
+        }
     }
 
     private func persist() throws {

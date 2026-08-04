@@ -83,12 +83,26 @@ stored in an owner-only temporary file; verify its SHA-256 against
 installer. Do not use the routine pipe-to-shell command for the first canary.
 
 ```sh
+umask 077
 CANARY_INSTALLER="$(mktemp)"
+CANARY_CODE_FILE="$(mktemp)"
+cleanup_canary_files() { rm -f "$CANARY_INSTALLER" "$CANARY_CODE_FILE"; }
+trap cleanup_canary_files EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 chmod 0600 "$CANARY_INSTALLER"
-curl -fsS https://raiders.redlattice.com/install.sh -o "$CANARY_INSTALLER"
+chmod 0600 "$CANARY_CODE_FILE"
+CANARY_STATUS="$(curl --fail --silent --show-error --proto '=https' \
+  --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
+  --max-filesize 1048576 --output "$CANARY_INSTALLER" \
+  --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh')"
+test "$CANARY_STATUS" = 200
 test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = \
   "$INSTALLER_SHA256"
-sh "$CANARY_INSTALLER" --code "$ONE_TIME_CODE"
+printf 'Enter only the one-time code, save, and close the owner-only file.\n' >&2
+/usr/bin/vi "$CANARY_CODE_FILE"
+sh "$CANARY_INSTALLER" --code-file "$CANARY_CODE_FILE"
 ```
 
 The installer downloads only
@@ -125,15 +139,33 @@ directories, provider configuration, telemetry, or environment edits.
 
 ## Routine office installation after every prior gate passes
 
-The following convenience form is allowed only after Caddy preparation,
+The following private prompt convenience form is allowed only after Caddy preparation,
 production cutover, deployed-server acceptance, three-digest publication,
 installed-off acceptance, live-canary acceptance, and separate office
 activation approval have all passed:
 
 ```sh
-curl -fsSL https://raiders.redlattice.com/install.sh | \
-  sh -s -- --code "$ONE_TIME_CODE"
+(
+  set -eu
+  umask 077
+  ROUTINE_INSTALLER="$(mktemp)"
+  cleanup_routine_installer() { rm -f "$ROUTINE_INSTALLER"; }
+  trap cleanup_routine_installer EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  ROUTINE_STATUS="$(curl --fail --silent --show-error --proto '=https' \
+    --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
+    --max-filesize 1048576 --output "$ROUTINE_INSTALLER" \
+    --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh')"
+  test "$ROUTINE_STATUS" = 200
+  test -s "$ROUTINE_INSTALLER"
+  sh "$ROUTINE_INSTALLER"
+)
 ```
+
+The installer reads the one-time code with echo disabled from `/dev/tty`; the
+code is never placed in the shell command or process arguments.
 
 Office activation remains independent: installation alone does not authorize
 `raiders on`. Claude Code and Omp remain disabled and unsupported.

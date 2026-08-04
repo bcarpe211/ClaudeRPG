@@ -6,6 +6,7 @@ import {
   authenticateDevice,
   createEnrollment,
   exchangeEnrollment,
+  recordDeviceContact,
 } from '../src/domain/raider-enrollment';
 
 const NOW = 1_700_000_000_000;
@@ -134,7 +135,7 @@ describe('raider enrollment', () => {
     }
   });
 
-  it('authenticates active devices without reducing their last seen timestamp', () => {
+  it('keeps credential lookup read-only and records contact monotonically when requested', () => {
     const db = enrollmentDb();
     try {
       const enrollment = createEnrollment(db, 1, NOW);
@@ -148,8 +149,13 @@ describe('raider enrollment', () => {
         companionVersion: '0.1.0',
       });
       expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
+        .get(deviceId)).toEqual({ last_seen_at: null });
+
+      expect(recordDeviceContact(db, deviceId, NOW + 2)).toBe(true);
+      expect(recordDeviceContact(db, deviceId, NOW + 1)).toBe(true);
+      expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
         .get(deviceId)).toEqual({ last_seen_at: NOW + 2 });
-      expect(authenticateDevice(db, exchanged!.deviceToken, NOW + 1)).toEqual({
+      expect(authenticateDevice(db, exchanged!.deviceToken, NOW + 3)).toEqual({
         deviceId,
         playerId: 1,
         companionVersion: '0.1.0',

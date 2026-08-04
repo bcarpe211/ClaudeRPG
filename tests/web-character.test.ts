@@ -43,7 +43,8 @@ describe('character sheet', () => {
     expect(res.text).toContain('Raid time');
     expect(res.text).toContain('Companion Setup');
     expect(res.text).toContain('Raider settings');
-    expect(res.text).toContain('Generate one-time command');
+    expect(res.text).toContain('Generate installer and code');
+    expect(res.text).toContain('id="hub-companion-code"');
     expect(res.text).toContain('id="hub-companion-error"');
     expect(res.text).toMatch(/id="hub-companion-error"[^>]*hidden/);
     expect(res.text).not.toContain('claude_rpg_token=');

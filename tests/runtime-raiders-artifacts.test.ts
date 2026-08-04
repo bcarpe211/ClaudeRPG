@@ -68,6 +68,18 @@ test "$1" = -u && printf '0\\n'`);
   executable(join(fakes, 'sha256sum'), `
 exec /usr/bin/shasum -a 256 "$@"`);
 
+  executable(join(fakes, 'flock'), `
+printf 'flock %s\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
+if test "\${RUNTIME_RAIDERS_TEST_FLOCK_BUSY:-0}" = 1; then exit 1; fi
+test "\${1:-}" = -n
+fd=\${2:-}
+case "$fd" in *[!0-9]*|'') exit 64;; esac
+exec /usr/bin/perl -MFcntl=:flock -e '
+  my $fd = shift;
+  open(my $handle, ">&=$fd") or exit 64;
+  flock($handle, LOCK_EX | LOCK_NB) or exit 1;
+' "$fd"`);
+
   executable(join(fakes, 'stat'), `
 test "$1" = -c && test "$3" = --
 case "$2" in
@@ -233,6 +245,23 @@ function runWithdraw(
   extraEnvironment: NodeJS.ProcessEnv = {},
 ) {
   return run(f, ['withdraw', '--release-sha', selectedReleaseSha], extraEnvironment);
+}
+
+function postCommitBashEnv(f: PublicationFixture, action: 'fail-output' | 'signal'): string {
+  const bashEnv = join(f.root, `post-commit-${action}.sh`);
+  const actionLine = action === 'fail-output'
+    ? 'return 74'
+    : 'kill "-$RUNTIME_RAIDERS_TEST_POSTCOMMIT_SIGNAL" "$$"';
+  writeFileSync(bashEnv, [
+    'printf() {',
+    '  case "${2:-}" in',
+    '    active_release=*) ' + actionLine + ';;',
+    '  esac',
+    '  builtin printf "$@"',
+    '}',
+    '',
+  ].join('\n'));
+  return bashEnv;
 }
 
 function expectRejectedBeforeSelection(f: PublicationFixture, result: ReturnType<typeof run>) {
@@ -407,20 +436,18 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
     expect(releaseBytes(f.artifactRoot, priorSha)).toEqual(priorBytes);
     expectNoTemporaryPublicationPaths(f.artifactRoot);
-    expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(false);
+    expect(lstatSync(join(f.artifactRoot, '.publication.lock')).isFile()).toBe(true);
   });
 
-  it('refuses concurrent publication without changing selected state', () => {
+  it('refuses concurrent publication when the fd lock is busy without changing selected state', () => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
     f.args[4] = priorSha;
     const priorPublication = runPublish(f);
     expect(priorPublication.status, priorPublication.stderr).toBe(0);
     const priorBytes = releaseBytes(f.artifactRoot, priorSha);
-    mkdirSync(join(f.artifactRoot, '.publication.lock'));
-
     f.args[4] = releaseSha;
-    const concurrent = runPublish(f);
+    const concurrent = runPublish(f, { RUNTIME_RAIDERS_TEST_FLOCK_BUSY: '1' });
 
     expect(concurrent.status).not.toBe(0);
     expect(concurrent.stdout).toBe('');
@@ -428,7 +455,7 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
     expect(releaseBytes(f.artifactRoot, priorSha)).toEqual(priorBytes);
     expect(existsSync(join(f.artifactRoot, 'releases', releaseSha))).toBe(false);
-    expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(true);
+    expect(readFileSync(f.commandLog, 'utf8')).toContain('flock -n 9');
   });
 
   it('reselects an existing exact immutable release', () => {
@@ -485,7 +512,7 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readFileSync(join(racedRelease, 'preexisting'), 'utf8')).toBe('preexisting');
   });
 
-  it('does not return nonzero after committing current when lock cleanup fails', () => {
+  it('automatically releases the lock and permits withdrawal after committed publication', () => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
     f.args[4] = priorSha;
@@ -496,7 +523,22 @@ describe('Runtime Raiders artifact publication', () => {
 
     expect(published.status, published.stderr).toBe(0);
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
-    expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(true);
+    expect(lstatSync(join(f.artifactRoot, '.publication.lock')).isFile()).toBe(true);
+    const withdrawn = runWithdraw(f);
+    expect(withdrawn.status, withdrawn.stderr).toBe(0);
+  });
+
+  it('returns nonzero after post-commit output failure and leaves withdrawal available', () => {
+    const f = publicationFixture();
+    const failed = runPublish(f, {
+      BASH_ENV: postCommitBashEnv(f, 'fail-output'),
+      RUNTIME_RAIDERS_TEST_FAIL_LOCK_CLEANUP: '1',
+    });
+
+    expect(failed.status).not.toBe(0);
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
+    const withdrawn = runWithdraw(f);
+    expect(withdrawn.status, withdrawn.stderr).toBe(0);
   });
 
   it.each(['HUP', 'INT', 'TERM'])(
@@ -508,11 +550,16 @@ describe('Runtime Raiders artifact publication', () => {
       expect(runPublish(f).status).toBe(0);
 
       f.args[4] = releaseSha;
-      const published = runPublish(f, { RUNTIME_RAIDERS_TEST_POSTCOMMIT_SIGNAL: signal });
+      const published = runPublish(f, {
+        BASH_ENV: postCommitBashEnv(f, 'signal'),
+        RUNTIME_RAIDERS_TEST_POSTCOMMIT_SIGNAL: signal,
+        RUNTIME_RAIDERS_TEST_FAIL_LOCK_CLEANUP: '1',
+      });
 
       expect(published.status, published.stderr).toBe(0);
       expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
-      expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(false);
+      const withdrawn = runWithdraw(f);
+      expect(withdrawn.status, withdrawn.stderr).toBe(0);
     },
   );
 
@@ -883,16 +930,15 @@ describe('Runtime Raiders exact-SHA withdrawal', () => {
     expect(existsSync(join(f.artifactRoot, 'releases', releaseSha))).toBe(true);
   });
 
-  it('refuses withdrawal while publication is locked without changing current', () => {
+  it('refuses withdrawal while the fd lock is busy without changing current', () => {
     const f = publicationFixture();
     expect(runPublish(f).status).toBe(0);
-    mkdirSync(join(f.artifactRoot, '.publication.lock'));
 
-    const locked = runWithdraw(f);
+    const locked = runWithdraw(f, releaseSha, { RUNTIME_RAIDERS_TEST_FLOCK_BUSY: '1' });
 
     expectContentFreeFailure(f, locked);
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
-    expect(existsSync(join(f.artifactRoot, '.publication.lock'))).toBe(true);
+    expect(readFileSync(f.commandLog, 'utf8')).toContain('flock -n 9');
   });
 
   it('refuses withdrawal when current is not owned by root', () => {

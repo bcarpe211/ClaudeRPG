@@ -12,6 +12,7 @@ import {
   authenticateDevice,
   createEnrollment,
   exchangeEnrollment,
+  recordDeviceContact,
   type AuthenticatedDevice,
 } from '../../domain/raider-enrollment';
 import {
@@ -26,6 +27,7 @@ import {
   createRunRateLimiter,
   type RunRateLimitScope,
 } from '../run-rate-limit';
+import { buildCompanionInstallCommand } from '../companion-install';
 
 const MAX_BODY_BYTES = 256 * 1_024;
 const CREDENTIAL_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -142,10 +144,6 @@ function bearerToken(req: Request): string | null {
   return match?.[1] ?? null;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
 function hasDisabledSurface(
   input: unknown,
   enabledSurfaces: ReadonlySet<RunSurface>,
@@ -202,18 +200,30 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
   const authenticate = (
     req: Request,
     res: Response,
-    unauthenticatedScope: RunRateLimitScope,
     deviceScope: RunRateLimitScope,
   ): AuthenticatedDevice | null => {
     const token = bearerToken(req);
     const device = token === null ? null : authenticateDevice(db, token, Date.now());
     if (!device) {
-      if (!applyRateLimit(req, res, unauthenticatedScope, clientIp(req))) return null;
       res.status(401).json({ reason: 'unauthorized' });
       return null;
     }
     if (!applyRateLimit(req, res, deviceScope, device.deviceId)) return null;
     return device;
+  };
+
+  const limitClientIp = (scope: RunRateLimitScope) => (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): void => {
+    if (applyRateLimit(req, res, scope, clientIp(req))) next();
+  };
+
+  const recordContact = (device: AuthenticatedDevice, res: Response): boolean => {
+    if (recordDeviceContact(db, device.deviceId, Date.now())) return true;
+    res.status(401).json({ reason: 'unauthorized' });
+    return false;
   };
 
   const requireRuntimeScoring = (
@@ -228,8 +238,7 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     next();
   };
 
-  router.post('/raiders/enrollments', ...parseJson, (req, res) => {
-    if (!applyRateLimit(req, res, 'enrollment-create', clientIp(req))) return;
+  router.post('/raiders/enrollments', limitClientIp('enrollment-create'), ...parseJson, (req, res) => {
     const parsed = raiderKeyBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ reason: 'invalid_request' });
@@ -241,15 +250,14 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       return;
     }
     const enrollment = createEnrollment(db, player.id, Date.now());
-    const installUrl = `${config.publicUrl}/install.sh`;
     res.status(201).json({
-      install_command: `curl -fsSL ${shellQuote(installUrl)} | sh -s -- --code ${shellQuote(enrollment.code)}`,
+      install_command: buildCompanionInstallCommand(),
+      enrollment_code: enrollment.code,
       expires_at: enrollment.expiresAt,
     });
   });
 
-  router.post('/raiders/enroll', ...parseJson, (req, res) => {
-    if (!applyRateLimit(req, res, 'enrollment-exchange', clientIp(req))) return;
+  router.post('/raiders/enroll', limitClientIp('enrollment-exchange'), ...parseJson, (req, res) => {
     const parsed = enrollmentBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ reason: 'invalid_request' });
@@ -275,11 +283,15 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     });
   });
 
-  router.post('/runs/events', requireRuntimeScoring, ...parseJson, (req, res) => {
+  router.post(
+    '/runs/events',
+    requireRuntimeScoring,
+    limitClientIp('unauthenticated-events'),
+    ...parseJson,
+    (req, res) => {
     const device = authenticate(
       req,
       res,
-      'unauthenticated-events',
       'device-events',
     );
     if (!device) return;
@@ -300,6 +312,7 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       res.status(400).json({ reason: 'invalid_request' });
       return;
     }
+    if (!recordContact(device, res)) return;
 
     const result = ingestRunEvents(
       db,
@@ -310,9 +323,10 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       Date.now(),
     );
     res.status(200).json(result);
-  });
+    },
+  );
 
-  router.post('/runs/heartbeat', ...parseJson, (req, res) => {
+  router.post('/runs/heartbeat', limitClientIp('unauthenticated-heartbeat'), ...parseJson, (req, res) => {
     const parsed = heartbeatBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ reason: 'invalid_request' });
@@ -321,10 +335,10 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     const device = authenticate(
       req,
       res,
-      'unauthenticated-heartbeat',
       'device-heartbeat',
     );
     if (!device) return;
+    if (!recordContact(device, res)) return;
 
     db.prepare(`
       UPDATE raider_devices SET companion_version = ? WHERE device_id = ?

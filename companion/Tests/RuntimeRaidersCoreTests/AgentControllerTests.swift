@@ -460,6 +460,44 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testDeterministicPrivacyRejectionAdvancesCursorAndContinuesAfterRestart() throws {
+        try withHarness { harness in
+            let file = try harness.makeFile("privacy-rejection.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [file])
+
+            var diagnostics: [CollectorDiagnostic] = []
+            harness.controller = try harness.makeController(diagnosticHandler: { diagnostic in
+                diagnostics.append(diagnostic)
+            })
+            var firstAppend = overSevenDayRun(nativeID: "rejected-duration")
+            firstAppend.append(completedRun(nativeID: "valid-after-rejection"))
+            try append(firstAppend, to: file)
+
+            try harness.controller.processChangedFiles([file])
+
+            XCTAssertEqual(diagnostics, [.deterministicRecordRejected])
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+
+            var restartedDiagnostics: [CollectorDiagnostic] = []
+            let restarted = try harness.makeController(diagnosticHandler: { diagnostic in
+                restartedDiagnostics.append(diagnostic)
+            })
+            try append(completedRun(nativeID: "valid-after-restart"), to: file)
+            try restarted.processChangedFiles([file])
+
+            XCTAssertEqual(restartedDiagnostics, [])
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                2
+            )
+        }
+    }
+
     func testEachCallbackReadsAtMostConfiguredBoundAndPreservesProviderFileOrder() throws {
         try withHarness(readLimitBytes: 96) { harness in
             let file = try harness.makeFile("bounded.jsonl", contents: Data())
@@ -1396,6 +1434,15 @@ final class AgentControllerTests: XCTestCase {
         return prefix
     }
 
+    private func overSevenDayRun(nativeID: String) -> Data {
+        lines([
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            "{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"\(nativeID)\",\"model\":\"synthetic\"}}",
+            #"{"timestamp":"2026-01-09T00:00:03Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ])
+    }
+
     private func turnWithoutSessionMeta(nativeID: String) -> Data {
         lines([
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
@@ -1470,7 +1517,8 @@ private final class ControllerHarness {
     }
 
     func makeController(
-        afterProviderRead: @escaping @Sendable () -> Void = {}
+        afterProviderRead: @escaping @Sendable () -> Void = {},
+        diagnosticHandler: @escaping (CollectorDiagnostic) -> Void = { _ in }
     ) throws -> AgentController {
         try AgentController(
             registry: registry,
@@ -1483,7 +1531,8 @@ private final class ControllerHarness {
             ),
             readLimitBytes: readLimitBytes,
             clockMS: { self.now },
-            afterProviderRead: afterProviderRead
+            afterProviderRead: afterProviderRead,
+            diagnosticHandler: diagnosticHandler
         )
     }
 

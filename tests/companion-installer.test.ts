@@ -83,18 +83,33 @@ function fakes(root: string): string {
     'printf "curl %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
     'output=""',
     'last=""',
+    'write_status=0',
+    'follow_redirects=0',
     'while [ "$#" -gt 0 ]; do',
+    '  case "$1" in *L*|--location|--location-trusted) follow_redirects=1;; esac',
     '  if [ "$1" = "-o" ]; then output="$2"; shift 2; continue; fi',
-    '  if [ "$1" = "-w" ]; then shift 2; continue; fi',
+    '  if [ "$1" = "-w" ]; then write_status=1; shift 2; continue; fi',
     '  if [ "$1" = "--data" ]; then printf "request %s\\n" "$2" >> "$RUNTIME_RAIDERS_TEST_LOG"; shift 2; continue; fi',
+    '  if [ "$1" = "--data-binary" ]; then [ "$2" = "@-" ] || exit 64; cat >/dev/null; shift 2; continue; fi',
     '  last="$1"; shift',
     'done',
     'case "$last" in',
-    '  */runtime-raiders-agent.zip) cp "$RUNTIME_RAIDERS_TEST_ZIP" "$output";;',
-    '  */runtime-raiders-agent.zip.sha256) cp "$RUNTIME_RAIDERS_TEST_CHECKSUM" "$output";;',
-    '  */api/raiders/enroll) printf "%s" "$RUNTIME_RAIDERS_TEST_ENROLLMENT" > "$output"; printf "201";;',
+    '  */runtime-raiders-agent.zip)',
+    '    if [ "$FAKE_CURL_REDIRECT" = artifact ]; then [ "$follow_redirects" = 0 ] || printf "followed redirect\\n" >> "$RUNTIME_RAIDERS_TEST_LOG"; [ "$follow_redirects" = 1 ] || { [ "$write_status" = 0 ] || printf 307; exit 0; }; fi',
+    '    cp "$RUNTIME_RAIDERS_TEST_ZIP" "$output"; [ "$write_status" = 0 ] || printf 200;;',
+    '  */runtime-raiders-agent.zip.sha256) cp "$RUNTIME_RAIDERS_TEST_CHECKSUM" "$output"; [ "$write_status" = 0 ] || printf 200;;',
+    '  */api/raiders/enroll)',
+    '    if [ "$FAKE_CURL_REDIRECT" = enrollment ]; then [ "$follow_redirects" = 0 ] || printf "followed redirect\\n" >> "$RUNTIME_RAIDERS_TEST_LOG"; [ "$follow_redirects" = 1 ] || { [ "$write_status" = 0 ] || printf 307; exit 0; }; fi',
+    '    printf "%s" "$RUNTIME_RAIDERS_TEST_ENROLLMENT" > "$output"; [ "$write_status" = 0 ] || printf 201;;',
     '  *) exit 64;;',
     'esac',
+  ]);
+  executable(join(bin, 'stat'), [
+    'if [ "${1:-}" = -f ] && [ "${2:-}" = %u ] && [ "${3:-}" = "$RUNTIME_RAIDERS_TEST_CODE_FILE" ] && [ -n "$FAKE_CODE_FILE_OWNER" ]; then',
+    '  printf "%s\\n" "$FAKE_CODE_FILE_OWNER"',
+    '  exit 0',
+    'fi',
+    'exec /usr/bin/stat "$@"',
   ]);
   executable(join(bin, 'shasum'), [
     'if [ "$FAKE_SHASUM_FAIL" = 1 ]; then exit 1; fi',
@@ -180,6 +195,9 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     FAKE_LAUNCH_REQUIRE_OFF: '0',
     FAKE_DAEMON_READY_AFTER: '1',
     FAKE_DAEMON_NEVER_READY: '0',
+    FAKE_CURL_REDIRECT: '',
+    FAKE_CODE_FILE_OWNER: '',
+    RUNTIME_RAIDERS_TEST_CODE_FILE: '',
     RUNTIME_RAIDERS_TEST_LOG: join(home, 'commands.log'),
     RUNTIME_RAIDERS_TEST_BINARY_LOG: join(home, 'binary.log'),
     RUNTIME_RAIDERS_TEST_ZIP: files.zip,
@@ -193,6 +211,17 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
 
 function invoke(file: string, args: string[], environment: NodeJS.ProcessEnv) {
   return spawnSync('bash', [file, ...args], { env: environment, encoding: 'utf8' });
+}
+
+function oneTimeCodeFile(root: string, code = enrollmentCode, fileMode = 0o600): string {
+  const path = join(root, 'one-time-code');
+  writeFileSync(path, `${code}\n`);
+  chmodSync(path, fileMode);
+  return path;
+}
+
+function installerArgs(root: string, code = enrollmentCode, fileMode = 0o600): string[] {
+  return ['--code-file', oneTimeCodeFile(root, code, fileMode)];
 }
 
 function buildCacheIdentity(path: string): string[] {
@@ -225,12 +254,12 @@ describe('Runtime Raiders companion installer', () => {
       const home = join(root, 'home');
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
-      const environment = {
+      const environment: NodeJS.ProcessEnv = {
         ...env(home, fakes(root), artifact(root, 'fresh-off', true), commandDir),
         FAKE_LAUNCH_REQUIRE_OFF: '1',
       };
 
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root), environment);
 
       expect(result.status, result.stderr).toBe(0);
       const state = JSON.parse(readFileSync(join(
@@ -254,7 +283,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root, 'installed', true), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const state = join(
         home,
         'Library/Application Support/Runtime Raiders/state/collector-state.json',
@@ -263,7 +292,7 @@ describe('Runtime Raiders companion installer', () => {
       writeFileSync(join(home, 'binary.log'), '');
       const upgradeFiles = artifact(root, 'replacement', true);
 
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+      const result = invoke(renderedInstaller(root), installerArgs(root), {
         ...base,
         ...env(home, join(root, 'fakes'), upgradeFiles, commandDir),
         FAKE_LAUNCH_REQUIRE_OFF: '1',
@@ -293,14 +322,14 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root, 'installed'), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const state = join(home, 'Library/Application Support/Runtime Raiders/state/collector-state.json');
       rmSync(state);
       rmSync(join(home, '.runtime-raiders-test-running'), { force: true });
       writeFileSync(join(home, 'commands.log'), '');
       writeFileSync(join(home, 'binary.log'), '');
 
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+      const result = invoke(renderedInstaller(root), installerArgs(root), {
         ...base,
         ...env(home, join(root, 'fakes'), artifact(root, 'replacement'), commandDir),
       });
@@ -323,13 +352,13 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root, 'installed'), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const state = join(home, 'Library/Application Support/Runtime Raiders/state/collector-state.json');
       writeFileSync(state, 'corrupt-state\n');
       rmSync(join(home, '.runtime-raiders-test-running'), { force: true });
       writeFileSync(join(home, 'commands.log'), '');
 
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+      const result = invoke(renderedInstaller(root), installerArgs(root), {
         ...base,
         ...env(home, join(root, 'fakes'), artifact(root, 'replacement'), commandDir),
       });
@@ -356,7 +385,7 @@ describe('Runtime Raiders companion installer', () => {
         FAKE_DAEMON_READY_AFTER: '3',
       };
 
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root), environment);
 
       expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(join(home, 'binary.log'), 'utf8').match(/delayed:status/g)?.length).toBeGreaterThanOrEqual(3);
@@ -380,7 +409,7 @@ describe('Runtime Raiders companion installer', () => {
         FAKE_DAEMON_NEVER_READY: '1',
       };
 
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root), environment);
 
       expect(result.status).not.toBe(0);
       expect(existsSync(join(home, 'Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app'))).toBe(false);
@@ -400,14 +429,14 @@ describe('Runtime Raiders companion installer', () => {
       mkdirSync(commandDir, { recursive: true });
       const initialFiles = artifact(root, 'initial');
       const base = env(home, fakes(root), initialFiles, commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const installed = join(
         home,
         'Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent',
       );
 
       const failedFiles = artifact(root, 'failed-replacement');
-      const failed = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+      const failed = invoke(renderedInstaller(root), installerArgs(root), {
         ...base,
         ...env(home, join(root, 'fakes'), failedFiles, commandDir),
         FAKE_DAEMON_NEVER_READY: '1',
@@ -416,7 +445,7 @@ describe('Runtime Raiders companion installer', () => {
       expect(readFileSync(installed, 'utf8')).toContain('# initial');
 
       const retryFiles = artifact(root, 'retry-replacement');
-      const retry = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+      const retry = invoke(renderedInstaller(root), installerArgs(root), {
         ...base,
         ...env(home, join(root, 'fakes'), retryFiles, commandDir),
       });
@@ -444,7 +473,7 @@ describe('Runtime Raiders companion installer', () => {
       }
       const files = artifact(root);
       const environment = env(home, fakes(root), files, commandDir);
-      const first = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const first = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(first.status, first.stderr).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       const state = join(support, 'state');
@@ -467,13 +496,14 @@ describe('Runtime Raiders companion installer', () => {
       mkdirSync(join(support, 'outbox'), { recursive: true });
       writeFileSync(join(state, 'cursor.json'), 'cursor');
       writeFileSync(join(support, 'outbox', 'event.json'), 'event');
-      const second = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const second = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(second.status, second.stderr).toBe(0);
       expect(readFileSync(join(state, 'cursor.json'), 'utf8')).toBe('cursor');
       expect(readFileSync(join(support, 'outbox', 'event.json'), 'utf8')).toBe('event');
       const log = readFileSync(join(home, 'commands.log'), 'utf8');
       expect(log.match(/api\/raiders\/enroll/g)).toHaveLength(1);
-      expect(log).toContain('request {"code":"' + enrollmentCode + '","device_id":"00000000-0000-4000-8000-000000000001","companion_version":"0.1.0"}');
+      expect(log).toContain('--data-binary @-');
+      expect(log).not.toContain(enrollmentCode);
       expect(log).toContain('launchctl bootstrap gui/' + (process.getuid?.() ?? 0) + ' ' + plist);
       expect(log).not.toContain('banned ');
     } finally {
@@ -489,7 +519,7 @@ describe('Runtime Raiders companion installer', () => {
       try {
         const home = join(root, 'home');
         const environment = { ...env(home, fakes(root), artifact(root)), ...extra };
-        const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+        const result = invoke(renderedInstaller(root), installerArgs(root), environment);
         expect(result.status).not.toBe(0);
         expect(existsSync(join(home, 'Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app'))).toBe(false);
         expect(existsSync(join(home, 'Library/Application Support/Runtime Raiders/state/enrollment.json'))).toBe(false);
@@ -509,7 +539,8 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const environment = env(home, fakes(root), artifact(root), commandDir);
-      const result = spawnSync('/bin/sh', ['-s', '--', '--code', enrollmentCode], {
+      const codeFile = oneTimeCodeFile(root);
+      const result = spawnSync('/bin/sh', ['-s', '--', '--code-file', codeFile], {
         env: environment,
         input: readFileSync(renderedInstaller(root), 'utf8'),
         encoding: 'utf8',
@@ -532,13 +563,13 @@ describe('Runtime Raiders companion installer', () => {
       const environment = env(home, fake, artifact(root));
       const profile = join(home, '.zprofile');
       writeFileSync(profile, '# before\nexport OTHER=1\n# after\n');
-      const install = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const install = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(install.status, install.stderr).toBe(0);
       const marker = 'export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path';
       expect(readFileSync(profile, 'utf8')).toBe('# before\nexport OTHER=1\n# after\n' + marker + '\n');
       const command = join(home, '.local/bin/raiders');
       expect(lstatSync(command).isSymbolicLink()).toBe(true);
-      const reinstall = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const reinstall = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(reinstall.status, reinstall.stderr).toBe(0);
       expect(readFileSync(profile, 'utf8')).toBe('# before\nexport OTHER=1\n# after\n' + marker + '\n');
       const uninstall = spawnSync(command, ['uninstall'], { env: environment, encoding: 'utf8' });
@@ -563,7 +594,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const environment = env(home, fakes(root), artifact(root), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), environment).status).toBe(0);
       const command = join(commandDir, 'raiders');
       const replacement = join(root, 'user-command');
       executable(replacement, ['exit 0']);
@@ -587,7 +618,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const environment = { ...base, FAKE_LAUNCH_PRINT_PRESENT: '1' };
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       executable(join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'), ['exit 23']);
@@ -609,7 +640,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const environment = { ...env(home, fakes(root), artifact(root), commandDir), FAKE_LAUNCH_BOOTOUT_FAIL: '1' };
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), environment).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       const shim = join(support, 'raiders');
       const uninstall = spawnSync(shim, ['uninstall'], { env: environment, encoding: 'utf8' });
@@ -628,7 +659,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const environment = env(home, fakes(root), artifact(root), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), environment).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       executable(join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'), ['exit 23']);
       const uninstall = spawnSync(join(support, 'raiders'), ['uninstall'], {
@@ -649,7 +680,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const environment = env(home, fakes(root), artifact(root), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), environment).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       executable(join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent'), ['exit 23']);
       const uninstall = spawnSync(join(support, 'raiders'), ['uninstall'], {
@@ -662,13 +693,119 @@ describe('Runtime Raiders companion installer', () => {
     }
   });
 
+  it('keeps the enrollment code and complete request JSON out of curl argv and logs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-secret-argv-'));
+    try {
+      const home = join(root, 'home');
+      const codeFile = oneTimeCodeFile(root);
+      const environment: NodeJS.ProcessEnv = {
+        ...env(home, fakes(root), artifact(root)),
+        RUNTIME_RAIDERS_TEST_CODE_FILE: codeFile,
+      };
+
+      const result = invoke(
+        renderedInstaller(root),
+        ['--code-file', codeFile],
+        environment,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const commands = readFileSync(environment.RUNTIME_RAIDERS_TEST_LOG!, 'utf8');
+      expect(commands).toContain('--data-binary @-');
+      expect(commands).not.toContain(enrollmentCode);
+      expect(commands).not.toContain('{"code"');
+      expect(commands).not.toContain('"device_id"');
+      expect(commands).toContain('--proto =https');
+      expect(commands).toContain('--max-redirs 0');
+      expect(commands).toContain('--connect-timeout 10');
+      expect(commands).toContain('--max-time');
+      expect(commands).toContain('--max-filesize');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['artifact', 'enrollment'] as const)(
+    'refuses a %s redirect without forwarding enrollment secrets',
+    (redirect) => {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-${redirect}-redirect-`));
+      try {
+        const home = join(root, 'home');
+        mkdirSync(home, { recursive: true });
+        const codeFile = oneTimeCodeFile(root);
+        const environment: NodeJS.ProcessEnv = {
+          ...env(home, fakes(root), artifact(root)),
+          FAKE_CURL_REDIRECT: redirect,
+          RUNTIME_RAIDERS_TEST_CODE_FILE: codeFile,
+        };
+        writeFileSync(environment.RUNTIME_RAIDERS_TEST_LOG!, '');
+
+        const result = invoke(
+          renderedInstaller(root),
+          ['--code-file', codeFile],
+          environment,
+        );
+
+        expect(result.status).not.toBe(0);
+        const commands = readFileSync(environment.RUNTIME_RAIDERS_TEST_LOG!, 'utf8');
+        expect(commands).toContain('curl ');
+        expect(commands).not.toContain('followed redirect');
+        expect(commands).not.toContain(enrollmentCode);
+        expect(commands).not.toContain('{"code"');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ['group-readable mode', (root: string) => oneTimeCodeFile(root, enrollmentCode, 0o640), {}],
+    ['directory', (root: string) => {
+      const path = join(root, 'one-time-code');
+      mkdirSync(path);
+      return path;
+    }, {}],
+    ['symlink', (root: string) => {
+      const target = join(root, 'actual-code');
+      writeFileSync(target, `${enrollmentCode}\n`);
+      chmodSync(target, 0o600);
+      const path = join(root, 'one-time-code');
+      symlinkSync(target, path);
+      return path;
+    }, {}],
+    ['different owner', (root: string) => oneTimeCodeFile(root), { FAKE_CODE_FILE_OWNER: '65534' }],
+  ] as const)('rejects an unsafe one-time code file: %s', (_name, makeCodeFile, overrides) => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-unsafe-code-file-'));
+    try {
+      const home = join(root, 'home');
+      const codeFile = makeCodeFile(root);
+      const environment: NodeJS.ProcessEnv = {
+        ...env(home, fakes(root), artifact(root)),
+        ...overrides,
+        RUNTIME_RAIDERS_TEST_CODE_FILE: codeFile,
+      };
+
+      const result = invoke(
+        renderedInstaller(root),
+        ['--code-file', codeFile],
+        environment,
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(existsSync(environment.RUNTIME_RAIDERS_TEST_LOG!)).toBe(false);
+      expect(result.stderr).not.toContain(enrollmentCode);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a non-wire-safe enrollment code before any download or exchange', () => {
     // Catches JSON injection into the enrollment request.
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-code-validation-'));
     try {
       const home = join(root, 'home');
       const environment = env(home, fakes(root), artifact(root));
-      const result = invoke(renderedInstaller(root), ['--code', 'bad"code'], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root, 'bad"code'), environment);
       expect(result.status).not.toBe(0);
       expect(existsSync(join(home, 'commands.log'))).toBe(false);
     } finally {
@@ -682,7 +819,7 @@ describe('Runtime Raiders companion installer', () => {
     try {
       const home = join(root, 'home');
       const environment = env(home, fakes(root), artifact(root));
-      const result = invoke(installer, ['--code', enrollmentCode], environment);
+      const result = invoke(installer, installerArgs(root), environment);
       expect(result.status).not.toBe(0);
       expect(existsSync(join(home, 'commands.log'))).toBe(false);
     } finally {
@@ -698,7 +835,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const environment = { ...env(home, fakes(root), artifact(root), commandDir), RUNTIME_RAIDERS_TEAM_ID: 'WRONGTEAM' };
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(result.status, result.stderr).toBe(0);
       const log = readFileSync(join(home, 'commands.log'), 'utf8');
       expect(log).toContain('codesign --verify --strict -R=identifier');
@@ -719,7 +856,7 @@ describe('Runtime Raiders companion installer', () => {
       mkdirSync(commandDir, { recursive: true });
       writeFileSync(join(commandDir, 'raiders'), 'user command');
       const environment = env(home, fakes(root), artifact(root), commandDir);
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(result.status).not.toBe(0);
       expect(readFileSync(join(commandDir, 'raiders'), 'utf8')).toBe('user command');
       expect(existsSync(join(home, 'commands.log'))).toBe(false);
@@ -736,7 +873,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       const appBinary = join(support, 'Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent');
       const plist = join(home, 'Library/LaunchAgents', label + '.plist');
@@ -744,7 +881,7 @@ describe('Runtime Raiders companion installer', () => {
       const config = join(support, 'state/enrollment.json');
       const command = join(commandDir, 'raiders');
       const before = [readFileSync(appBinary, 'utf8'), readFileSync(plist, 'utf8'), readFileSync(shim, 'utf8'), readFileSync(config, 'utf8'), readFileSync(join(support, 'state/command-link'), 'utf8'), readFileSync(command)];
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+      const result = invoke(renderedInstaller(root), installerArgs(root), {
         ...base, ...env(home, join(root, 'fakes'), artifact(root, 'replacement'), commandDir), FAKE_LAUNCH_BOOTSTRAP_FAIL: '1',
       });
       expect(result.status).not.toBe(0);
@@ -762,7 +899,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root), commandDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       const plist = join(home, 'Library/LaunchAgents', label + '.plist');
       const command = join(commandDir, 'raiders');
@@ -771,7 +908,7 @@ describe('Runtime Raiders companion installer', () => {
         plist, join(support, 'raiders'), join(support, 'state/enrollment.json'), join(support, 'state/command-link'),
       ];
       const before = files.map((file) => readFileSync(file, 'utf8'));
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], {
+      const result = invoke(renderedInstaller(root), installerArgs(root), {
         ...base, ...env(home, join(root, 'fakes'), artifact(root, 'replacement'), commandDir), FAKE_LN_FAIL: '1',
       });
       expect(result.status).not.toBe(0);
@@ -789,7 +926,7 @@ describe('Runtime Raiders companion installer', () => {
       const commandDir = join(home, 'bin');
       mkdirSync(commandDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root), commandDir);
-      const first = invoke(renderedInstaller(root), ['--code', enrollmentCode], { ...base, FAKE_LAUNCH_BOOTSTRAP_FAIL: '1' });
+      const first = invoke(renderedInstaller(root), installerArgs(root), { ...base, FAKE_LAUNCH_BOOTSTRAP_FAIL: '1' });
       expect(first.status).not.toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       expect(existsSync(join(support, 'state/enrollment.json'))).toBe(true);
@@ -798,7 +935,7 @@ describe('Runtime Raiders companion installer', () => {
       expect(existsSync(join(support, 'raiders'))).toBe(false);
       expect(existsSync(join(commandDir, 'raiders'))).toBe(false);
       expect(existsSync(join(support, 'state/command-link'))).toBe(false);
-      const retry = invoke(renderedInstaller(root), ['--code', enrollmentCode], base);
+      const retry = invoke(renderedInstaller(root), installerArgs(root), base);
       expect(retry.status, retry.stderr).toBe(0);
       expect(readFileSync(join(home, 'commands.log'), 'utf8').match(/api\/raiders\/enroll/g)).toHaveLength(1);
     } finally {
@@ -815,17 +952,17 @@ describe('Runtime Raiders companion installer', () => {
       mkdirSync(oldDir, { recursive: true });
       mkdirSync(newDir, { recursive: true });
       const base = env(home, fakes(root), artifact(root), oldDir);
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], base).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
       const support = join(home, 'Library/Application Support/Runtime Raiders');
       const oldCommand = join(oldDir, 'raiders');
       unlinkSync(oldCommand);
       writeFileSync(oldCommand, 'user replacement');
       const newEnvironment = env(home, join(root, 'fakes'), artifact(root, 'replacement'), newDir);
-      const failed = invoke(renderedInstaller(root), ['--code', enrollmentCode], { ...newEnvironment, FAKE_LAUNCH_BOOTSTRAP_FAIL: '1' });
+      const failed = invoke(renderedInstaller(root), installerArgs(root), { ...newEnvironment, FAKE_LAUNCH_BOOTSTRAP_FAIL: '1' });
       expect(failed.status).not.toBe(0);
       expect(readFileSync(oldCommand, 'utf8')).toBe('user replacement');
       expect(readFileSync(join(support, 'state/command-link'), 'utf8')).toBe(oldCommand + '\n');
-      const upgraded = invoke(renderedInstaller(root), ['--code', enrollmentCode], newEnvironment);
+      const upgraded = invoke(renderedInstaller(root), installerArgs(root), newEnvironment);
       expect(upgraded.status, upgraded.stderr).toBe(0);
       expect(readFileSync(oldCommand, 'utf8')).toBe('user replacement');
       expect(readFileSync(join(support, 'state/command-link'), 'utf8')).toBe(join(newDir, 'raiders') + '\n');
@@ -845,7 +982,7 @@ describe('Runtime Raiders companion installer', () => {
       const profile = join(home, '.zprofile');
       writeFileSync(profile, '# user profile\nexport KEEP=1\n');
       const environment = { ...env(home, fake, artifact(root)), FAKE_CHMOD_FAIL_MARKER: '1' };
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(result.status).not.toBe(0);
       expect(readFileSync(profile, 'utf8')).toBe('# user profile\nexport KEEP=1\n');
       expect(existsSync(join(home, 'Library/Application Support/Runtime Raiders/state/path-marker-owned'))).toBe(false);
@@ -865,7 +1002,7 @@ describe('Runtime Raiders companion installer', () => {
       mkdirSync(commandDir, { recursive: true });
       const fake = fakes(root);
       const environment = env(home, fake, artifact(root), 'relative:' + commandDir);
-      const result = spawnSync('bash', [renderedInstaller(root), '--code', enrollmentCode], {
+      const result = spawnSync('bash', [renderedInstaller(root), ...installerArgs(root)], {
         cwd: root, env: environment, encoding: 'utf8',
       });
       expect(result.status, result.stderr).toBe(0);
@@ -889,7 +1026,7 @@ describe('Runtime Raiders companion installer', () => {
       writeFileSync(join(outside, 'sentinel'), 'untouched');
       symlinkSync(outside, join(home, 'Library/Application Support'));
       const environment = env(home, fakes(root), artifact(root));
-      const result = invoke(renderedInstaller(root), ['--code', enrollmentCode], environment);
+      const result = invoke(renderedInstaller(root), installerArgs(root), environment);
       expect(result.status).not.toBe(0);
       expect(readFileSync(join(outside, 'sentinel'), 'utf8')).toBe('untouched');
       expect(existsSync(join(outside, 'Runtime Raiders'))).toBe(false);
@@ -910,7 +1047,7 @@ describe('Runtime Raiders companion installer', () => {
       const marker = 'export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path';
       writeFileSync(profile, '# before\n' + marker + '\n# after\n');
       const environment = env(home, fake, artifact(root));
-      expect(invoke(renderedInstaller(root), ['--code', enrollmentCode], environment).status).toBe(0);
+      expect(invoke(renderedInstaller(root), installerArgs(root), environment).status).toBe(0);
       const shim = join(home, 'Library/Application Support/Runtime Raiders/raiders');
       expect(spawnSync(shim, ['uninstall'], { env: environment, encoding: 'utf8' }).status).toBe(0);
       expect(readFileSync(profile, 'utf8')).toBe('# before\n' + marker + '\n# after\n');

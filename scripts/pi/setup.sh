@@ -73,6 +73,12 @@ fi
 echo "-- installing systemd service --"
 sudo sed -e "s#__USER__#$KIOSK_USER#g" -e "s#__REPO__#$REPO_DIR#g" \
   "$REPO_DIR/deploy/claude-rpg.service" | sudo tee "$UNIT_DST" >/dev/null
+if ! sudo "$REPO_DIR/scripts/pi/validate-runtime-raiders-env.sh" \
+  --env-file "$ENV_FILE" --repo-dir "$REPO_DIR"; then
+  echo "Refusing to restart claude-rpg.service with placeholder or unsafe environment values." >&2
+  echo "Edit $ENV_FILE, then rerun setup." >&2
+  exit 1
+fi
 sudo systemctl daemon-reload
 sudo systemctl enable claude-rpg.service
 sudo systemctl restart claude-rpg.service

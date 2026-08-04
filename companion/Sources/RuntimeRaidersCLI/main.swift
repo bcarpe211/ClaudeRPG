@@ -75,7 +75,12 @@ private final class DaemonRuntime: @unchecked Sendable {
                 companionVersion: inputs.companionVersion,
                 deviceID: inputs.deviceID,
                 dedupeSecret: inputs.dedupeSecret
-            )
+            ),
+            diagnosticHandler: { diagnostic in
+                FileHandle.standardError.write(
+                    Data("Runtime Raiders collector: \(diagnostic.rawValue)\n".utf8)
+                )
+            }
         )
         let uploadConfiguration = UploadConfiguration(
             origin: inputs.serverURL,

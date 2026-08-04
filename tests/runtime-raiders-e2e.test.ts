@@ -87,9 +87,10 @@ function post(path: string, body: object, token?: string) {
 async function enrollDevice(): Promise<{ deviceId: string; deviceToken: string }> {
   const issued = await post('/api/raiders/enrollments', { raider_key: player.auth_token });
   expect(issued.status).toBe(201);
-  const issuedBody = issued.body as { install_command: string };
-  const code = issuedBody.install_command.match(/--code '([A-Za-z0-9_-]{43})'$/)?.[1];
-  expect(code).toBeDefined();
+  const issuedBody = issued.body as { install_command: string; enrollment_code: string };
+  const code = issuedBody.enrollment_code;
+  expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(issuedBody.install_command).not.toContain(code);
 
   const deviceId = randomUUID();
   const enrolled = await post('/api/raiders/enroll', {
