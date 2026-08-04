@@ -51,3 +51,48 @@ rr_authenticate_rollback_record() {
   [[ "$actual" =~ ^[0-9a-f]{64}$ ]] || return 1
   test "$actual" = "$expected" || return 1
 }
+
+rr_observe_systemctl() {
+  local destination="${1:-}"
+  shift || return 64
+  [[ "$destination" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 64
+  test "$#" -ge 2 || return 64
+
+  local action="$1"
+  local observed=''
+  local status=0
+  if observed="$(trap - ERR; systemctl "$@" 2>/dev/null)"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  case "$action" in
+    is-active)
+      case "$status" in 0|3|4) ;; *) return "$status" ;; esac
+      ;;
+    is-enabled)
+      case "$status" in 0|1) ;; *) return "$status" ;; esac
+      ;;
+    show)
+      test "$status" -eq 0 || return "$status"
+      ;;
+    *) return 64 ;;
+  esac
+  test -n "$observed" || return 1
+  printf -v "$destination" '%s' "$observed"
+}
+
+rr_assert_updater_held() {
+  local timer="${1:-}"
+  local service="${2:-}"
+  test -n "$timer" && test -n "$service" || return 64
+
+  local timer_enabled timer_active updater_active
+  rr_observe_systemctl timer_enabled is-enabled "$timer" || return $?
+  rr_observe_systemctl timer_active is-active "$timer" || return $?
+  rr_observe_systemctl updater_active is-active "$service" || return $?
+  test "$timer_enabled" = disabled
+  test "$timer_active" = inactive
+  test "$updater_active" = inactive
+}

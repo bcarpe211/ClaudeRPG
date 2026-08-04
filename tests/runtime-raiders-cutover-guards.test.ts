@@ -36,6 +36,28 @@ function fixture() {
     '[ "$FAKE_FIND_FAIL" != 1 ] || exit 9',
     'printf "%s" "$FAKE_FIND_OUTPUT"',
   ]);
+  executable(join(bin, 'systemctl'), [
+    'case "${1:-}" in',
+    '  is-enabled)',
+    '    printf "%s\\n" "${FAKE_TIMER_ENABLED_VALUE-disabled}"',
+    '    exit "${FAKE_TIMER_ENABLED_STATUS:-1}"',
+    '    ;;',
+    '  is-active)',
+    '    case "${2:-}" in',
+    '      runtime-raiders.timer)',
+    '        printf "%s\\n" "${FAKE_TIMER_ACTIVE_VALUE-inactive}"',
+    '        exit "${FAKE_TIMER_ACTIVE_STATUS:-3}"',
+    '        ;;',
+    '      runtime-raiders.service)',
+    '        printf "%s\\n" "${FAKE_UPDATER_ACTIVE_VALUE-inactive}"',
+    '        exit "${FAKE_UPDATER_ACTIVE_STATUS:-3}"',
+    '        ;;',
+    '      *) exit 4 ;;',
+    '    esac',
+    '    ;;',
+    '  *) exit 64 ;;',
+    'esac',
+  ]);
   const environment = {
     ...process.env,
     PATH: `${bin}:/usr/bin:/bin:/sbin`,
@@ -58,6 +80,24 @@ function run(repo: string, body: string, environment: NodeJS.ProcessEnv) {
     body,
     'printf "reached\\n"',
   ].join('\n'), 'bash', helper, repo, prior, release], {
+    env: environment,
+    encoding: 'utf8',
+  });
+}
+
+function runSystemdGuard(
+  repo: string,
+  body: string,
+  environment: NodeJS.ProcessEnv,
+) {
+  return spawnSync('bash', ['-c', [
+    'set -Eeuo pipefail',
+    `trap 'printf "unexpected-err:%s\\n" "$BASH_COMMAND" >&2; exit 97' ERR`,
+    'source "$1"',
+    body,
+    'trap - ERR',
+    'printf "reached\\n"',
+  ].join('\n'), 'bash', helper, repo], {
     env: environment,
     encoding: 'utf8',
   });
@@ -220,6 +260,44 @@ describe('Runtime Raiders executable cutover guards', () => {
 
       expect(result.status, result.stderr).toBe(1);
       expect(result.stdout).toBe('');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts disabled and inactive updater states without invoking inherited ERR', () => {
+    const { root, repo, environment } = fixture();
+    try {
+      const result = runSystemdGuard(
+        repo,
+        'rr_assert_updater_held runtime-raiders.timer runtime-raiders.service',
+        environment,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('reached\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['enabled timer', { FAKE_TIMER_ENABLED_VALUE: 'enabled', FAKE_TIMER_ENABLED_STATUS: '0' }],
+    ['active timer', { FAKE_TIMER_ACTIVE_VALUE: 'active', FAKE_TIMER_ACTIVE_STATUS: '0' }],
+    ['failed updater', { FAKE_UPDATER_ACTIVE_VALUE: 'failed', FAKE_UPDATER_ACTIVE_STATUS: '3' }],
+    ['unknown updater', { FAKE_UPDATER_ACTIVE_VALUE: 'unknown', FAKE_UPDATER_ACTIVE_STATUS: '4' }],
+    ['empty observation', { FAKE_UPDATER_ACTIVE_VALUE: '', FAKE_UPDATER_ACTIVE_STATUS: '3' }],
+    ['unexpected systemctl failure', { FAKE_UPDATER_ACTIVE_VALUE: 'inactive', FAKE_UPDATER_ACTIVE_STATUS: '5' }],
+  ])('rejects %s', (_label, overrides) => {
+    const { root, repo, environment } = fixture();
+    try {
+      const result = runSystemdGuard(
+        repo,
+        'rr_assert_updater_held runtime-raiders.timer runtime-raiders.service',
+        { ...environment, ...overrides },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('reached');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
