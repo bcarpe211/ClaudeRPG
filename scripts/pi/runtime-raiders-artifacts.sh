@@ -105,8 +105,9 @@ validate_release() {
   local directory=$1
   local expected_sha=$2
   local installer=$directory/install.sh
-  local zip=$directory/runtime-raiders-agent.zip
-  local checksum=$directory/runtime-raiders-agent.zip.sha256
+  local downloads=$directory/downloads
+  local zip=$downloads/runtime-raiders-agent.zip
+  local checksum=$downloads/runtime-raiders-agent.zip.sha256
   local manifest=$directory/.release-manifest
   local version_line
   local release_line
@@ -114,18 +115,22 @@ validate_release() {
   local zip_line
   local checksum_line
   local extra_line
-  local entries
+  local release_entries
+  local download_entries
 
   require_release_sha "$expected_sha"
   require_directory "$directory" 'release directory'
+  require_directory "$downloads" 'release downloads directory'
   require_regular_file "$installer" 'release installer'
   require_regular_file "$zip" 'release ZIP'
   require_regular_file "$checksum" 'release checksum'
   require_regular_file "$manifest" 'release manifest'
   shopt -s nullglob dotglob
-  entries=("$directory"/*)
+  release_entries=("$directory"/*)
+  download_entries=("$downloads"/*)
   shopt -u nullglob dotglob
-  test "${#entries[@]}" = 4 || die 'release directory contains unexpected entries'
+  test "${#release_entries[@]}" = 3 || die 'release directory contains unexpected entries'
+  test "${#download_entries[@]}" = 2 || die 'release downloads directory contains unexpected entries'
   test "$(metadata "$installer")" = '0:0:644' || die 'release installer must be owned by root:root with mode 0644'
   test "$(metadata "$zip")" = '0:0:644' || die 'release ZIP must be owned by root:root with mode 0644'
   test "$(metadata "$checksum")" = '0:0:644' || die 'release checksum must be owned by root:root with mode 0644'
@@ -401,13 +406,16 @@ publish_command() {
   validate_source
 
   local staged_release=$STAGE/release
+  local staged_downloads=$staged_release/downloads
   install -d -o root -g root -m 0755 "$staged_release" 2>/dev/null ||
     die 'failed to stage release directory'
+  install -d -o root -g root -m 0755 "$staged_downloads" 2>/dev/null ||
+    die 'failed to stage downloads directory'
   install -o root -g root -m 0644 -- "$SOURCE_INSTALLER" "$staged_release/install.sh" 2>/dev/null ||
     die 'failed to stage installer'
-  install -o root -g root -m 0644 -- "$SOURCE_ZIP" "$staged_release/runtime-raiders-agent.zip" 2>/dev/null ||
+  install -o root -g root -m 0644 -- "$SOURCE_ZIP" "$staged_downloads/runtime-raiders-agent.zip" 2>/dev/null ||
     die 'failed to stage ZIP'
-  install -o root -g root -m 0644 -- "$SOURCE_CHECKSUM" "$staged_release/runtime-raiders-agent.zip.sha256" 2>/dev/null ||
+  install -o root -g root -m 0644 -- "$SOURCE_CHECKSUM" "$staged_downloads/runtime-raiders-agent.zip.sha256" 2>/dev/null ||
     die 'failed to stage checksum'
   if ! printf '%s\n' \
       'version=1' \

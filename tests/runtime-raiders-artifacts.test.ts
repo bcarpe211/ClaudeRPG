@@ -4,6 +4,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -244,10 +245,14 @@ function expectRejectedBeforeSelection(f: PublicationFixture, result: ReturnType
 
 function releaseBytes(artifactRoot: string, sha: string) {
   const release = join(artifactRoot, 'releases', sha);
+  const zip = join(release, 'downloads', 'runtime-raiders-agent.zip');
+  const checksum = join(release, 'downloads', 'runtime-raiders-agent.zip.sha256');
+  expect(existsSync(zip), 'nested release ZIP must exist').toBe(true);
+  expect(existsSync(checksum), 'nested release checksum must exist').toBe(true);
   return {
     installer: readFileSync(join(release, 'install.sh')),
-    zip: readFileSync(join(release, 'runtime-raiders-agent.zip')),
-    checksum: readFileSync(join(release, 'runtime-raiders-agent.zip.sha256')),
+    zip: readFileSync(zip),
+    checksum: readFileSync(checksum),
     manifest: readFileSync(join(release, '.release-manifest')),
   };
 }
@@ -575,17 +580,27 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readlinkSync(join(environment.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
 
     const release = join(environment.artifactRoot, 'releases', releaseSha);
+    const downloads = join(release, 'downloads');
+    const current = join(environment.artifactRoot, 'current');
     expect(readFileSync(join(release, 'install.sh'))).toEqual(readFileSync(files.installer));
-    expect(readFileSync(join(release, 'runtime-raiders-agent.zip'))).toEqual(readFileSync(files.zip));
-    expect(readFileSync(join(release, 'runtime-raiders-agent.zip.sha256'))).toEqual(readFileSync(files.checksum));
+    expect(readFileSync(join(current, 'install.sh'))).toEqual(readFileSync(files.installer));
+    expect(readFileSync(join(downloads, 'runtime-raiders-agent.zip'))).toEqual(readFileSync(files.zip));
+    expect(readFileSync(join(downloads, 'runtime-raiders-agent.zip.sha256'))).toEqual(readFileSync(files.checksum));
+    expect(readFileSync(join(current, 'downloads/runtime-raiders-agent.zip'))).toEqual(readFileSync(files.zip));
+    expect(readFileSync(join(current, 'downloads/runtime-raiders-agent.zip.sha256'))).toEqual(readFileSync(files.checksum));
+    expect(existsSync(join(release, 'runtime-raiders-agent.zip'))).toBe(false);
+    expect(existsSync(join(release, 'runtime-raiders-agent.zip.sha256'))).toBe(false);
     expect(mode(release)).toBe(0o755);
     expect(mode(join(release, 'install.sh'))).toBe(0o644);
-    expect(mode(join(release, 'runtime-raiders-agent.zip'))).toBe(0o644);
-    expect(mode(join(release, 'runtime-raiders-agent.zip.sha256'))).toBe(0o644);
+    expect(lstatSync(downloads).isDirectory()).toBe(true);
+    expect(lstatSync(downloads).isSymbolicLink()).toBe(false);
+    expect(mode(downloads)).toBe(0o755);
+    expect(mode(join(downloads, 'runtime-raiders-agent.zip'))).toBe(0o644);
+    expect(mode(join(downloads, 'runtime-raiders-agent.zip.sha256'))).toBe(0o644);
     expect(mode(join(release, '.release-manifest'))).toBe(0o600);
 
     const commands = readFileSync(environment.commandLog, 'utf8');
-    expect(commands).toContain('install -d -o root -g root -m 0755');
+    expect(commands.match(/install -d -o root -g root -m 0755/g)).toHaveLength(2);
     expect(commands.match(/install -o root -g root -m 0644/g)).toHaveLength(3);
     expect(commands).toContain('chown root:root');
 
@@ -692,12 +707,32 @@ describe('Runtime Raiders artifact status validation', () => {
     expect(status.stderr).not.toContain('private-extra');
   });
 
-  it('refuses to reselect an immutable release containing an unexpected entry', () => {
+  it.each([
+    ['file', (downloads: string) => writeFileSync(join(downloads, 'provider-user-secret.txt'), 'private-extra')],
+    ['directory', (downloads: string) => mkdirSync(join(downloads, 'provider-user-secret-dir'))],
+  ])('rejects an unexpected %s in downloads without naming it', (_name, addEntry) => {
+    const f = publicationFixture();
+    expect(runPublish(f).status).toBe(0);
+    const downloads = join(f.artifactRoot, 'releases', releaseSha, 'downloads');
+    addEntry(downloads);
+
+    const status = runStatus(f);
+
+    expectContentFreeFailure(f, status);
+    expect(status.stderr).not.toContain('provider-user-secret');
+    expect(status.stderr).not.toContain('private-extra');
+  });
+
+  it.each([
+    ['release root', (release: string) => join(release, 'provider-user-secret.txt')],
+    ['downloads', (release: string) => join(release, 'downloads', 'provider-user-secret.txt')],
+  ])('refuses to reselect an immutable release containing an unexpected entry in %s', (_name, extraPath) => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
     expect(runPublish(f).status).toBe(0);
     const existingRelease = join(f.artifactRoot, 'releases', releaseSha);
-    writeFileSync(join(existingRelease, 'provider-user-secret.txt'), 'private-extra');
+    const extra = extraPath(existingRelease);
+    writeFileSync(extra, 'private-extra');
     f.args[4] = priorSha;
     expect(runPublish(f).status).toBe(0);
 
@@ -708,14 +743,53 @@ describe('Runtime Raiders artifact status validation', () => {
     expect(refused.stderr).not.toContain('provider-user-secret');
     expect(refused.stderr).not.toContain('private-extra');
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
-    expect(readFileSync(join(existingRelease, 'provider-user-secret.txt'), 'utf8')).toBe('private-extra');
+    expect(readFileSync(extra, 'utf8')).toBe('private-extra');
+  });
+
+  it.each([
+    ['missing', (f: PublicationFixture, downloads: string) => rmSync(downloads, { recursive: true })],
+    ['regular file', (f: PublicationFixture, downloads: string) => {
+      rmSync(downloads, { recursive: true });
+      writeFileSync(downloads, 'wrong-type');
+    }],
+    ['symlink', (f: PublicationFixture, downloads: string) => {
+      rmSync(downloads, { recursive: true });
+      const target = join(f.artifactRoot, 'downloads-symlink-target');
+      mkdirSync(target);
+      symlinkSync(target, downloads, 'dir');
+    }],
+  ])('rejects a %s downloads directory', (_name, corrupt) => {
+    const f = publicationFixture();
+    expect(runPublish(f).status).toBe(0);
+    const downloads = join(f.artifactRoot, 'releases', releaseSha, 'downloads');
+    corrupt(f, downloads);
+
+    const status = runStatus(f);
+
+    expectContentFreeFailure(f, status);
+  });
+
+  it.each([
+    ['ZIP', 'runtime-raiders-agent.zip'],
+    ['checksum', 'runtime-raiders-agent.zip.sha256'],
+  ])('rejects a symlinked nested %s', (_name, filename) => {
+    const f = publicationFixture();
+    expect(runPublish(f).status).toBe(0);
+    const file = join(f.artifactRoot, 'releases', releaseSha, 'downloads', filename);
+    unlinkSync(file);
+    symlinkSync(f.files.installer, file);
+
+    const status = runStatus(f);
+
+    expectContentFreeFailure(f, status);
   });
 
   it.each([
     ['release directory', '.', 0o700],
+    ['downloads directory', 'downloads', 0o700],
     ['installer', 'install.sh', 0o600],
-    ['ZIP', 'runtime-raiders-agent.zip', 0o600],
-    ['checksum', 'runtime-raiders-agent.zip.sha256', 0o600],
+    ['ZIP', 'downloads/runtime-raiders-agent.zip', 0o600],
+    ['checksum', 'downloads/runtime-raiders-agent.zip.sha256', 0o600],
     ['manifest', '.release-manifest', 0o644],
   ])('rejects the wrong mode on the %s', (_name, relativePath, wrongMode) => {
     const f = publicationFixture();
@@ -729,8 +803,8 @@ describe('Runtime Raiders artifact status validation', () => {
 
   it.each([
     ['installer', 'install.sh'],
-    ['ZIP', 'runtime-raiders-agent.zip'],
-    ['checksum', 'runtime-raiders-agent.zip.sha256'],
+    ['ZIP', 'downloads/runtime-raiders-agent.zip'],
+    ['checksum', 'downloads/runtime-raiders-agent.zip.sha256'],
     ['manifest', '.release-manifest'],
   ])('rejects a release missing its %s', (_name, relativePath) => {
     const f = publicationFixture();
@@ -744,8 +818,8 @@ describe('Runtime Raiders artifact status validation', () => {
 
   it.each([
     ['installer', 'install.sh'],
-    ['ZIP', 'runtime-raiders-agent.zip'],
-    ['checksum', 'runtime-raiders-agent.zip.sha256'],
+    ['ZIP', 'downloads/runtime-raiders-agent.zip'],
+    ['checksum', 'downloads/runtime-raiders-agent.zip.sha256'],
   ])('rejects a calculated %s digest mismatch', (_name, relativePath) => {
     const f = publicationFixture();
     expect(runPublish(f).status).toBe(0);
@@ -774,7 +848,7 @@ describe('Runtime Raiders exact-SHA withdrawal', () => {
     expect(runPublish(f).status).toBe(0);
     const current = join(f.artifactRoot, 'current');
     const releaseDirectory = join(f.artifactRoot, 'releases', releaseSha);
-    writeFileSync(join(releaseDirectory, 'runtime-raiders-agent.zip'), 'damaged after publication');
+    writeFileSync(join(releaseDirectory, 'downloads', 'runtime-raiders-agent.zip'), 'damaged after publication');
 
     const withdrawn = runWithdraw(f);
 
