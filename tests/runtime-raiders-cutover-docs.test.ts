@@ -35,12 +35,32 @@ describe('Runtime Raiders stable cutover documentation contract', () => {
     expect(runbook).not.toMatch(/test "\$GAME_EXEC" =/);
   });
 
-  it('keeps fail-closed cleanup non-recursive', () => {
+  it('keeps fail-closed cleanup non-recursive while accumulating failures', () => {
     expect(runbook).toContain(
-      'sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || true',
+      'sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || cleanup_failed=1',
     );
     expect(runbook).toContain(
-      'sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || true',
+      'sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || cleanup_failed=1',
     );
+  });
+
+  it('verifies final updater and game-service state before each safe-state claim', () => {
+    const handlers = [
+      runbook.match(/fail_closed\(\) \{[\s\S]*?^\}/m)?.[0],
+      runbook.match(/rollback_fail_closed\(\) \{[\s\S]*?^\}/m)?.[0],
+    ];
+
+    expect(handlers).toHaveLength(2);
+    for (const handler of handlers) {
+      expect(handler).toContain(
+        'rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || cleanup_failed=1',
+      );
+      expect(handler).toContain(
+        'rr_observe_systemctl service_state is-active "$SERVICE" || cleanup_failed=1',
+      );
+      expect(handler).toContain('test "$service_state" = inactive || cleanup_failed=1');
+      expect(handler).toContain('if test "$cleanup_failed" = 0; then');
+      expect(handler).toContain('safe state could not be verified');
+    }
   });
 });

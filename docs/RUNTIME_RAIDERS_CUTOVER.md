@@ -541,13 +541,21 @@ source "$CUTOVER_GUARDS"
 
 fail_closed() {
   local rc="${1:-1}"
+  local cleanup_failed=0
   test "$rc" -ne 0 || rc=1
   trap - ERR HUP INT TERM
   set +e
-  sudo systemctl disable --now "$UPDATER_TIMER" >/dev/null 2>&1 || true
-  sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || true
-  sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || true
-  echo "FAIL-CLOSED: game stopped; updater held; investigate before rollback" >&2
+  sudo systemctl disable --now "$UPDATER_TIMER" >/dev/null 2>&1 || cleanup_failed=1
+  sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || cleanup_failed=1
+  sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || cleanup_failed=1
+  rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || cleanup_failed=1
+  rr_observe_systemctl service_state is-active "$SERVICE" || cleanup_failed=1
+  test "$service_state" = inactive || cleanup_failed=1
+  if test "$cleanup_failed" = 0; then
+    echo "FAIL-CLOSED: game stopped; updater held; investigate before rollback" >&2
+  else
+    echo "FAIL-CLOSED: safe state could not be verified; investigate before rollback" >&2
+  fi
   exit "$rc"
 }
 trap 'fail_closed $?' ERR
@@ -1208,13 +1216,21 @@ rr_authenticate_rollback_record \
 
 rollback_fail_closed() {
   local rc="${1:-1}"
+  local cleanup_failed=0
   test "$rc" -ne 0 || rc=1
   trap - ERR HUP INT TERM
   set +e
-  sudo systemctl disable --now "$UPDATER_TIMER" >/dev/null 2>&1 || true
-  sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || true
-  sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || true
-  echo "ROLLBACK FAIL-CLOSED: game stopped; updater held" >&2
+  sudo systemctl disable --now "$UPDATER_TIMER" >/dev/null 2>&1 || cleanup_failed=1
+  sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || cleanup_failed=1
+  sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || cleanup_failed=1
+  rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || cleanup_failed=1
+  rr_observe_systemctl service_state is-active "$SERVICE" || cleanup_failed=1
+  test "$service_state" = inactive || cleanup_failed=1
+  if test "$cleanup_failed" = 0; then
+    echo "ROLLBACK FAIL-CLOSED: game stopped; updater held" >&2
+  else
+    echo "ROLLBACK FAIL-CLOSED: safe state could not be verified" >&2
+  fi
   exit "$rc"
 }
 trap 'rollback_fail_closed $?' ERR
