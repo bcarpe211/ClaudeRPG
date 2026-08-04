@@ -44,13 +44,22 @@ describe('Runtime Raiders stable cutover documentation contract', () => {
     );
   });
 
+  it('does not select a rollback handler as the ordinary fail-closed handler', () => {
+    const rollbackOnly = 'rollback_fail_closed() {\n}\n';
+    const ordinaryHandler = rollbackOnly.match(/^fail_closed\(\) \{[\s\S]*?^\}/m)?.[0];
+
+    expect(ordinaryHandler).toBeUndefined();
+  });
+
   it('verifies final updater and game-service state before each safe-state claim', () => {
-    const handlers = [
-      runbook.match(/fail_closed\(\) \{[\s\S]*?^\}/m)?.[0],
-      runbook.match(/rollback_fail_closed\(\) \{[\s\S]*?^\}/m)?.[0],
-    ];
+    const ordinaryHandler = runbook.match(/^fail_closed\(\) \{[\s\S]*?^\}/m)?.[0];
+    const rollbackHandler = runbook.match(/^rollback_fail_closed\(\) \{[\s\S]*?^\}/m)?.[0];
+    const handlers = [ordinaryHandler, rollbackHandler];
 
     expect(handlers).toHaveLength(2);
+    expect(ordinaryHandler).toBeDefined();
+    expect(rollbackHandler).toBeDefined();
+    expect(ordinaryHandler).not.toBe(rollbackHandler);
     for (const handler of handlers) {
       expect(handler).toContain("local service_state=''");
       expect(handler).toContain(
