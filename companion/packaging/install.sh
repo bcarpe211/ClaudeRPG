@@ -5,7 +5,10 @@ ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip
 CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'
 ENROLL_URL='https://raiders.redlattice.com/api/raiders/enroll'
 RUNTIME_RAIDERS_ORIGIN='https://raiders.redlattice.com'
-VERSION='0.1.0'
+VERSION='__RUNTIME_RAIDERS_COMPANION_VERSION__'
+RELEASE_SEQUENCE='__RUNTIME_RAIDERS_RELEASE_SEQUENCE__'
+RELEASE_SHA='__RUNTIME_RAIDERS_RELEASE_SHA__'
+UPDATE_PROTOCOL_VERSION='__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__'
 LABEL='com.redlattice.runtime-raiders-agent'
 MARKER='export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path'
 TEAM_ID='__RUNTIME_RAIDERS_TEAM_ID__'
@@ -60,8 +63,6 @@ code_length="$(printf '%s' "$code" | wc -c | tr -d ' ')"
     echo "Runtime Raiders installer origin is invalid" >&2
     exit 1
   }
-UNRENDERED_TEAM_ID='__RUNTIME_RAIDERS_''TEAM_ID__'
-[ "$TEAM_ID" != "$UNRENDERED_TEAM_ID" ] || { echo "Runtime Raiders installer has no rendered signing Team ID" >&2; exit 1; }
 case "$TEAM_ID" in *[!A-Z0-9]*|'') echo "Runtime Raiders installer has no rendered signing Team ID" >&2; exit 1 ;; esac
 [ "$(printf '%s' "$TEAM_ID" | wc -c | tr -d ' ')" -eq 10 ] || { echo "Runtime Raiders installer has an invalid signing Team ID" >&2; exit 1; }
 REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
@@ -319,6 +320,27 @@ ditto -x -k "$ARCHIVE" "$WORK/unpacked"
 CANDIDATE="$WORK/unpacked/Runtime Raiders Agent.app"
 [ -f "$CANDIDATE/Contents/MacOS/runtime-raiders-agent" ] || {
   echo "Runtime Raiders archive is missing its app executable" >&2
+  exit 1
+}
+INFO_PLIST="$CANDIDATE/Contents/Info.plist"
+[ -f "$INFO_PLIST" ] && [ ! -L "$INFO_PLIST" ] || {
+  echo "Runtime Raiders candidate release identity is invalid" >&2
+  exit 1
+}
+candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$INFO_PLIST")" &&
+  candidate_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$INFO_PLIST")" &&
+  candidate_sequence="$(/usr/bin/plutil -extract RuntimeRaidersReleaseSequence raw -o - "$INFO_PLIST")" &&
+  candidate_sha="$(/usr/bin/plutil -extract RuntimeRaidersReleaseSHA raw -o - "$INFO_PLIST")" &&
+  candidate_protocol="$(/usr/bin/plutil -extract RuntimeRaidersUpdateProtocolVersion raw -o - "$INFO_PLIST")" || {
+  echo "Runtime Raiders candidate release identity is invalid" >&2
+  exit 1
+}
+[ "$candidate_bundle_id" = 'com.redlattice.runtime-raiders-agent' ] &&
+  [ "$candidate_version" = "$VERSION" ] &&
+  [ "$candidate_sequence" = "$RELEASE_SEQUENCE" ] &&
+  [ "$candidate_sha" = "$RELEASE_SHA" ] &&
+  [ "$candidate_protocol" = "$UPDATE_PROTOCOL_VERSION" ] || {
+  echo "Runtime Raiders candidate release identity is invalid" >&2
   exit 1
 }
 codesign --verify --strict -R="$REQUIREMENT" "$CANDIDATE"
