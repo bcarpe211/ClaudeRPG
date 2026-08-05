@@ -483,12 +483,15 @@ public final class AgentController: @unchecked Sendable {
         valid(decoded, surfaces: surfaces) else {
             throw AgentControllerError.invalidState
         }
-        guard decoded.enabled else { return }
         let disabled = try replacingTopLevelEnabledWithFalse(in: data)
         guard let verified = try? JSONDecoder().decode(PersistedState.self, from: disabled),
               !verified.enabled,
               valid(verified, surfaces: surfaces) else {
             throw AgentControllerError.invalidState
+        }
+        guard decoded.enabled else {
+            guard disabled == data else { throw AgentControllerError.invalidState }
+            return
         }
         try writeStateAtomically(
             disabled,
@@ -1393,6 +1396,7 @@ public final class AgentController: @unchecked Sendable {
         let bytes = [UInt8](data)
         var index = 0
         var match: Range<Int>?
+        var enabledValue: Bool?
 
         func skipWhitespace(_ cursor: inout Int) {
             while cursor < bytes.count, [0x20, 0x09, 0x0a, 0x0d].contains(bytes[cursor]) {
@@ -1505,13 +1509,17 @@ public final class AgentController: @unchecked Sendable {
             index += 1
             skipWhitespace(&index)
             if key == "enabled" {
+                guard encodedKey == Data(#""enabled""#.utf8) else {
+                    throw AgentControllerError.invalidState
+                }
+                guard enabledValue == nil else { throw AgentControllerError.invalidState }
                 let trueBytes = Array("true".utf8)
                 let falseBytes = Array("false".utf8)
-                if bytes[index...].starts(with: trueBytes) {
-                    guard match == nil else { throw AgentControllerError.invalidState }
+                if index < bytes.count, bytes[index...].starts(with: trueBytes) {
+                    enabledValue = true
                     match = index..<(index + trueBytes.count)
-                } else if bytes[index...].starts(with: falseBytes) {
-                    return data
+                } else if index < bytes.count, bytes[index...].starts(with: falseBytes) {
+                    enabledValue = false
                 } else {
                     throw AgentControllerError.invalidState
                 }
@@ -1528,7 +1536,10 @@ public final class AgentController: @unchecked Sendable {
         }
 
         skipWhitespace(&index)
-        guard index == bytes.count, let match else { throw AgentControllerError.invalidState }
+        guard index == bytes.count, let enabledValue else {
+            throw AgentControllerError.invalidState
+        }
+        guard enabledValue, let match else { return data }
         var output = data
         output.replaceSubrange(match, with: Data("false".utf8))
         return output

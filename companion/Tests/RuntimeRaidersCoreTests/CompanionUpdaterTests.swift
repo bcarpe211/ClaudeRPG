@@ -147,6 +147,57 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
+    func testAcceptedPreparationBootoutFailureRestartsUnchangedApplicationWithoutTerminalRecovery() throws {
+        try withHarness { harness in
+            harness.healthStatuses = [harness.oldStatus()]
+            harness.bootoutSideEffect = { call in
+                if call == 0 { throw InjectedUpdaterFailure.responseLost }
+            }
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
+                XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
+            }
+
+            XCTAssertEqual(try harness.installedMarker(), "old")
+            XCTAssertEqual(harness.bootstrapCallCount, 1)
+            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
+            XCTAssertEqual(
+                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
+                true
+            )
+            XCTAssertFalse(harness.hasUpdateWorkspace)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+        }
+    }
+
+    func testPreSwapRefusalRestartsUnchangedApplicationAndRetainsUnownedBlocker() throws {
+        try withHarness { harness in
+            harness.healthStatuses = [harness.oldStatus()]
+            harness.beforeSwap = {
+                try FileManager.default.createDirectory(
+                    at: harness.paths.rollbackApplication,
+                    withIntermediateDirectories: false
+                )
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: harness.paths.rollbackApplication.path
+                )
+            }
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
+                XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
+            }
+
+            XCTAssertEqual(try harness.installedMarker(), "old")
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path)
+            )
+            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
+            XCTAssertFalse(harness.hasUpdateWorkspace)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+        }
+    }
+
     func testRollbackFailurePreservesBothBundlesAndPersistsDisabled() throws {
         try withHarness { harness in
             harness.healthStatuses = [harness.newStatus(enabled: false)]
@@ -604,6 +655,9 @@ final class CompanionUpdaterTests: XCTestCase {
                     )
                 )
                 XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
+                XCTAssertEqual(harness.bootoutCallCount, 3, "failure: \(failure)")
+                XCTAssertEqual(harness.stoppedProofCallCount, 1, "failure: \(failure)")
+                XCTAssertFalse(harness.daemonRunning, "failure: \(failure)")
             }
         }
     }
@@ -622,6 +676,71 @@ final class CompanionUpdaterTests: XCTestCase {
                 XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
             }
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
+            XCTAssertEqual(harness.stoppedProofCallCount, 1)
+            XCTAssertFalse(harness.daemonRunning)
+        }
+    }
+
+    func testTerminalRecoveryPersistsDisabledButEmitsNoCommandWithoutStoppedProof() throws {
+        try withHarness { harness in
+            harness.healthStatuses = [harness.newStatus(enabled: false)]
+            harness.bootoutSideEffect = { call in
+                if call == 2 { throw InjectedUpdaterFailure.responseLost }
+            }
+            harness.stoppedProofOverride = false
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
+                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
+            }
+
+            XCTAssertEqual(
+                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
+                false
+            )
+            XCTAssertTrue(harness.daemonRunning)
+            XCTAssertEqual(harness.stoppedProofCallCount, 1)
+            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
+        }
+    }
+
+    func testTerminalRecoveryAcceptsLostBootoutResponseOnlyWithPositiveStoppedProof() throws {
+        try withHarness { harness in
+            harness.healthStatuses = [harness.newStatus(enabled: false)]
+            harness.bootoutSideEffect = { call in
+                guard call == 2 else { return }
+                harness.markDaemonStopped()
+                throw InjectedUpdaterFailure.responseLost
+            }
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
+                XCTAssertEqual(
+                    error as? CompanionUpdaterError,
+                    .rollbackFailed(recoveryCommand: CompanionUpdater.recoveryCommand)
+                )
+            }
+
+            XCTAssertFalse(harness.daemonRunning)
+            XCTAssertEqual(harness.stoppedProofCallCount, 1)
+            XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
+        }
+    }
+
+    func testTerminalRecoveryEmitsNoCommandWhenStoppedProofThrows() throws {
+        try withHarness { harness in
+            harness.healthStatuses = [harness.newStatus(enabled: false)]
+            harness.stoppedProofSideEffect = { throw InjectedUpdaterFailure.responseLost }
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
+                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
+            }
+
+            XCTAssertFalse(harness.daemonRunning)
+            XCTAssertEqual(harness.stoppedProofCallCount, 1)
+            XCTAssertEqual(
+                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
+                false
+            )
+            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
         }
     }
 
@@ -635,6 +754,30 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertThrowsError(try transaction.sealValidatedCandidate()) { error in
                 XCTAssertEqual(error as? CompanionUpdaterError, .unsafeFilesystem)
             }
+        }
+    }
+
+    func testNoSwapCleanupAcceptsSealedCandidatePromotedBeforePriorMove() throws {
+        try withTransaction { transaction, paths in
+            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
+            try transaction.sealValidatedCandidate()
+            try FileManager.default.moveItem(
+                at: transaction.candidateApplication,
+                to: transaction.promotedCandidateApplication
+            )
+
+            try transaction.cleanupAfterNoSwap()
+
+            XCTAssertEqual(try marker(paths.installedApplication), "installed")
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: transaction.promotedCandidateApplication.path
+                )
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: transaction.workspaceDirectory.path)
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.failedApplication.path))
         }
     }
 
@@ -698,18 +841,25 @@ private final class UpdaterHarness: @unchecked Sendable {
     var bootoutSideEffect: (Int) throws -> Void = { _ in }
     var bootstrapSideEffect: (Int) throws -> Void = { _ in }
     var healthSideEffect: (Int) throws -> Void = { _ in }
+    var stoppedProofSideEffect: () throws -> Void = {}
+    var stoppedProofOverride: Bool?
+    var beforeSwap: () throws -> Void = {}
     var beforeCleanup: () -> Void = {}
     var assertFrozenState: () throws -> Void = {}
     private var statusCalls = 0
     private var healthCalls = 0
     private var bootoutCalls = 0
     private var bootstrapCalls = 0
+    private var stoppedProofCalls = 0
+    private var daemonIsRunning = true
     private var healthNow: TimeInterval = 0
     private var releaseCheckNow: Int64 = 1_800_000_000_000
     private let variableLock = NSLock()
 
     var bootoutCallCount: Int { variableLock.withLock { bootoutCalls } }
     var bootstrapCallCount: Int { variableLock.withLock { bootstrapCalls } }
+    var stoppedProofCallCount: Int { variableLock.withLock { stoppedProofCalls } }
+    var daemonRunning: Bool { variableLock.withLock { daemonIsRunning } }
 
     init() throws {
         paths = AgentPaths(applicationSupportDirectory: root)
@@ -890,6 +1040,7 @@ private final class UpdaterHarness: @unchecked Sendable {
                         return self.bootoutCalls
                     }
                     try self.bootoutSideEffect(call)
+                    self.variableLock.withLock { self.daemonIsRunning = false }
                     try self.assertFrozenState()
                 },
                 bootstrap: {
@@ -897,8 +1048,14 @@ private final class UpdaterHarness: @unchecked Sendable {
                         defer { self.bootstrapCalls += 1 }
                         return self.bootstrapCalls
                     }
+                    self.variableLock.withLock { self.daemonIsRunning = true }
                     try self.bootstrapSideEffect(call)
                     try self.assertFrozenState()
+                },
+                proveDaemonStopped: {
+                    self.variableLock.withLock { self.stoppedProofCalls += 1 }
+                    try self.stoppedProofSideEffect()
+                    return self.stoppedProofOverride ?? !self.daemonRunning
                 },
                 healthStatus: {
                     let index = self.variableLock.withLock { () -> Int in
@@ -912,6 +1069,7 @@ private final class UpdaterHarness: @unchecked Sendable {
                 },
                 emitRecoveryCommand: { self.recoveryCommands.append($0) },
                 observe: {
+                    if $0 == .swap { try? self.beforeSwap() }
                     if $0 == .cleanup { self.beforeCleanup() }
                     self.log.append($0.rawValue)
                 },
@@ -924,6 +1082,15 @@ private final class UpdaterHarness: @unchecked Sendable {
     }
 
     func installedMarker() throws -> String { try marker(paths.installedApplication) }
+
+    func markDaemonStopped() {
+        variableLock.withLock { daemonIsRunning = false }
+    }
+
+    var hasUpdateWorkspace: Bool {
+        (try? FileManager.default.contentsOfDirectory(atPath: paths.supportDirectory.path))?
+            .contains(where: { $0.hasPrefix(".runtime-raiders-update-") }) == true
+    }
 
     func protectedBytes() throws -> [String: Data] {
         var bytes = [

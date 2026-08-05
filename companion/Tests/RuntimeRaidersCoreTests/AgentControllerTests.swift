@@ -75,6 +75,73 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testPersistDisabledForRecoveryRejectsAmbiguousOrMissingTopLevelEnabled() throws {
+        let invalidFixtures = [
+            #"{"version":1,"enabled":false,"enabled":true,"files":{}}"#,
+            #"{"version":1,"enabled":true,"enabled":false,"files":{}}"#,
+            #"{"version":1,"enabled":false,"enabled":false,"files":{}}"#,
+            #"{"version":1,"files":{}}"#,
+            #"{"version":1,"enabled":"false","files":{}}"#,
+            #"{"version":1,"files":{},"nested":{"enabled":false}}"#,
+            #"{"version":1,"\u0065nabled":true,"files":{}}"#,
+            #"{"version":1,"\u0065nabled":true,"enabled":false,"files":{}}"#,
+        ]
+
+        for fixture in invalidFixtures {
+            try withHarness { harness in
+                let stateFile = harness.paths.stateDirectory
+                    .appendingPathComponent("collector-state.json")
+                let before = Data(fixture.utf8)
+                try before.write(to: stateFile)
+
+                XCTAssertThrowsError(
+                    try AgentController.persistDisabledForRecovery(
+                        paths: harness.paths,
+                        surfaces: harness.registry.surfaces
+                    ),
+                    "fixture: \(fixture)"
+                ) { error in
+                    XCTAssertEqual(error as? AgentControllerError, .invalidState)
+                }
+                XCTAssertEqual(try Data(contentsOf: stateFile), before)
+            }
+        }
+    }
+
+    func testPersistDisabledForRecoveryIgnoresNestedEnabledMembersAndPreservesBytes() throws {
+        try withHarness { harness in
+            let stateFile = harness.paths.stateDirectory
+                .appendingPathComponent("collector-state.json")
+            let fixture = #"{"version":1,"extra":{"enabled":false,"items":[{"enabled":true},"enabled"]},"enabled":true,"files":{}}"#
+            let expected = #"{"version":1,"extra":{"enabled":false,"items":[{"enabled":true},"enabled"]},"enabled":false,"files":{}}"#
+            try Data(fixture.utf8).write(to: stateFile)
+
+            try AgentController.persistDisabledForRecovery(
+                paths: harness.paths,
+                surfaces: harness.registry.surfaces
+            )
+
+            XCTAssertEqual(try Data(contentsOf: stateFile), Data(expected.utf8))
+        }
+    }
+
+    func testPersistDisabledForRecoveryValidatesUniqueFalseBeforeReturningByteIdentically() throws {
+        try withHarness { harness in
+            let stateFile = harness.paths.stateDirectory
+                .appendingPathComponent("collector-state.json")
+            let fixture = #" { "version" : 1, "enabled" : false, "files" : {}, "nested" : [{"enabled":true}] } "#
+            let before = Data(fixture.utf8)
+            try before.write(to: stateFile)
+
+            try AgentController.persistDisabledForRecovery(
+                paths: harness.paths,
+                surfaces: harness.registry.surfaces
+            )
+
+            XCTAssertEqual(try Data(contentsOf: stateFile), before)
+        }
+    }
+
     func testStatusShowsInstalledAvailableAndExactUpdateCommand() throws {
         try withHarness { harness in
             let installed = CompanionReleaseIdentity(

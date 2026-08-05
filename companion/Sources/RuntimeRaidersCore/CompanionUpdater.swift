@@ -104,6 +104,7 @@ public struct CompanionUpdaterOperations {
     let prepareDaemon: Status
     let bootout: () throws -> Void
     let bootstrap: () throws -> Void
+    let proveDaemonStopped: () throws -> Bool
     let healthStatus: Status
     let emitRecoveryCommand: (String) -> Void
     let observe: (CompanionUpdaterStage) -> Void
@@ -120,6 +121,7 @@ public struct CompanionUpdaterOperations {
         prepareDaemon: @escaping Status,
         bootout: @escaping () throws -> Void,
         bootstrap: @escaping () throws -> Void,
+        proveDaemonStopped: @escaping () throws -> Bool,
         healthStatus: @escaping Status,
         emitRecoveryCommand: @escaping (String) -> Void,
         observe: @escaping (CompanionUpdaterStage) -> Void = { _ in },
@@ -135,6 +137,7 @@ public struct CompanionUpdaterOperations {
         self.prepareDaemon = prepareDaemon
         self.bootout = bootout
         self.bootstrap = bootstrap
+        self.proveDaemonStopped = proveDaemonStopped
         self.healthStatus = healthStatus
         self.emitRecoveryCommand = emitRecoveryCommand
         self.observe = observe
@@ -405,11 +408,12 @@ public final class CompanionUpdater {
         initial: CompanionUpdateStatus,
         frozen: ProtectedStateSnapshot
     ) throws -> CompanionUpdateResult {
+        let hadSwapped = transaction.hasSwapped
         do {
             try withFrozenBoundary(frozen, allowNewOutboxEntries: true) {
                 try operations.bootout()
             }
-            if transaction.hasSwapped {
+            if hadSwapped {
                 try withFrozenBoundary(frozen, allowNewOutboxEntries: true) {
                     try transaction.rollback()
                 }
@@ -430,7 +434,11 @@ public final class CompanionUpdater {
             try withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
                 try transaction.assertPriorInstalledUnchanged()
             }) {
-                try transaction.cleanupAfterRollback()
+                if hadSwapped {
+                    try transaction.cleanupAfterRollback()
+                } else {
+                    try transaction.cleanupAfterNoSwap()
+                }
             }
             throw CompanionUpdaterError.updateRolledBack
         } catch let recoveryError as CompanionUpdaterError where recoveryError == .updateRolledBack {
@@ -482,12 +490,19 @@ public final class CompanionUpdater {
         } catch {
             stableRecoveryAvailable = false
         }
+        let disabledPersisted: Bool
         do {
             try AgentController.persistDisabledForRecovery(paths: paths, surfaces: surfaces)
+            disabledPersisted = true
         } catch {
-            throw CompanionUpdaterError.terminalSafetyFailure
+            disabledPersisted = false
         }
-        guard stableRecoveryAvailable else {
+        // A bootout response is not itself proof either way: launchd may have
+        // completed the stop before the response channel failed. The separate
+        // positive proof is the only condition that authorizes a recovery command.
+        try? operations.bootout()
+        let daemonStopped = (try? operations.proveDaemonStopped()) == true
+        guard stableRecoveryAvailable, disabledPersisted, daemonStopped else {
             throw CompanionUpdaterError.terminalSafetyFailure
         }
         operations.emitRecoveryCommand(Self.recoveryCommand)
@@ -1022,6 +1037,40 @@ public final class UpdateFileTransaction {
         try assertPriorInstalledUnchanged()
         try assertFailedCandidateUnchanged()
         try Self.requireMissing(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent)
+        try removeWorkspace()
+    }
+
+    public func cleanupAfterNoSwap() throws {
+        guard !hasSwapped else { throw CompanionUpdaterError.unsafeFilesystem }
+        try assertPriorInstalledUnchanged()
+        try Self.requireMissing(
+            descriptor: supportDescriptor,
+            name: paths.failedApplication.lastPathComponent
+        )
+
+        let candidateIsStaged = Self.exists(
+            descriptor: stagingDescriptor,
+            name: candidateApplication.lastPathComponent
+        )
+        let candidateIsPromoted = Self.exists(
+            descriptor: supportDescriptor,
+            name: promotedName
+        )
+        guard candidateIsStaged != candidateIsPromoted else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        if candidateIsStaged {
+            try assertCandidateUnchanged()
+        } else {
+            guard let candidateSeal,
+                  try Self.sealTree(
+                      parentDescriptor: supportDescriptor,
+                      name: promotedName
+                  ) == candidateSeal else {
+                throw CompanionUpdaterError.unsafeFilesystem
+            }
+            try Self.removeTree(parentDescriptor: supportDescriptor, name: promotedName)
+        }
         try removeWorkspace()
     }
 
