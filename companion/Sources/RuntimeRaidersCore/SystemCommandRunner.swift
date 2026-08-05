@@ -31,6 +31,7 @@ public struct SystemCommandRunner: Sendable {
     private static let terminationGraceNanoseconds: UInt64 = 100_000_000
     private static let killDrainNanoseconds: UInt64 = 300_000_000
     private static let maximumPollMilliseconds: Int32 = 20
+    private static let maximumReadsPerPipePerPump = 8
 
     public init() {}
 
@@ -104,11 +105,21 @@ public struct SystemCommandRunner: Sendable {
             closePair(stdoutPipe)
             throw SystemCommandRunnerError.launchFailed
         }
+        let nullInput = Darwin.open("/dev/null", O_RDONLY | O_CLOEXEC)
+        guard nullInput > STDERR_FILENO,
+              stdoutPipe.allSatisfy({ $0 > STDERR_FILENO && makeCloseOnExec($0) }),
+              stderrPipe.allSatisfy({ $0 > STDERR_FILENO && makeCloseOnExec($0) }) else {
+            closePair(stdoutPipe)
+            closePair(stderrPipe)
+            if nullInput >= 0 { Darwin.close(nullInput) }
+            throw SystemCommandRunnerError.launchFailed
+        }
 
         var fileActions: posix_spawn_file_actions_t?
         guard posix_spawn_file_actions_init(&fileActions) == 0 else {
             closePair(stdoutPipe)
             closePair(stderrPipe)
+            Darwin.close(nullInput)
             throw SystemCommandRunnerError.launchFailed
         }
         defer { posix_spawn_file_actions_destroy(&fileActions) }
@@ -116,6 +127,7 @@ public struct SystemCommandRunner: Sendable {
         guard posix_spawnattr_init(&attributes) == 0 else {
             closePair(stdoutPipe)
             closePair(stderrPipe)
+            Darwin.close(nullInput)
             throw SystemCommandRunnerError.launchFailed
         }
         defer {
@@ -125,17 +137,20 @@ public struct SystemCommandRunner: Sendable {
         let actionResults = [
             posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDOUT_FILENO),
             posix_spawn_file_actions_adddup2(&fileActions, stderrPipe[1], STDERR_FILENO),
+            posix_spawn_file_actions_adddup2(&fileActions, nullInput, STDIN_FILENO),
             posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[0]),
             posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[1]),
             posix_spawn_file_actions_addclose(&fileActions, stderrPipe[0]),
             posix_spawn_file_actions_addclose(&fileActions, stderrPipe[1]),
+            posix_spawn_file_actions_addclose(&fileActions, nullInput),
         ]
-        let spawnFlags = Int16(POSIX_SPAWN_SETPGROUP)
+        let spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
         guard actionResults.allSatisfy({ $0 == 0 }),
               posix_spawnattr_setpgroup(&attributes, 0) == 0,
               posix_spawnattr_setflags(&attributes, spawnFlags) == 0 else {
             closePair(stdoutPipe)
             closePair(stderrPipe)
+            Darwin.close(nullInput)
             throw SystemCommandRunnerError.launchFailed
         }
 
@@ -168,9 +183,11 @@ public struct SystemCommandRunner: Sendable {
         guard spawnResult == 0, pid > 0 else {
             closePair(stdoutPipe)
             closePair(stderrPipe)
+            Darwin.close(nullInput)
             throw SystemCommandRunnerError.launchFailed
         }
 
+        Darwin.close(nullInput)
         Darwin.close(stdoutPipe[1])
         Darwin.close(stderrPipe[1])
         guard makeNonblocking(stdoutPipe[0]), makeNonblocking(stderrPipe[0]) else {
@@ -191,8 +208,14 @@ public struct SystemCommandRunner: Sendable {
         until deadline: UInt64
     ) -> Bool {
         while true {
-            stdout.drain()
-            stderr.drain()
+            stdout.drain(
+                until: deadline,
+                maximumReads: Self.maximumReadsPerPipePerPump
+            )
+            stderr.drain(
+                until: deadline,
+                maximumReads: Self.maximumReadsPerPipePerPump
+            )
             reap(pid, status: &waitStatus)
             if waitStatus != nil,
                stdout.isClosed,
@@ -257,6 +280,11 @@ public struct SystemCommandRunner: Sendable {
         return flags >= 0 && Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0
     }
 
+    private func makeCloseOnExec(_ descriptor: Int32) -> Bool {
+        let flags = Darwin.fcntl(descriptor, F_GETFD)
+        return flags >= 0 && Darwin.fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0
+    }
+
     private func closePair(_ descriptors: [Int32]) {
         for descriptor in descriptors where descriptor >= 0 {
             Darwin.close(descriptor)
@@ -298,12 +326,15 @@ private struct BoundedPipe {
         descriptor.map { pollfd(fd: $0, events: Int16(POLLIN | POLLHUP | POLLERR), revents: 0) }
     }
 
-    mutating func drain() {
+    mutating func drain(until deadline: UInt64, maximumReads: Int) {
         guard let descriptor else { return }
         var bytes = [UInt8](repeating: 0, count: 8_192)
-        while true {
+        var reads = 0
+        while reads < maximumReads,
+              DispatchTime.now().uptimeNanoseconds < deadline {
             let count = Darwin.read(descriptor, &bytes, bytes.count)
             if count > 0 {
+                reads += 1
                 let remaining = SystemCommandRunner.maximumOutputBytes - data.count
                 if remaining > 0 {
                     data.append(contentsOf: bytes.prefix(min(remaining, count)))

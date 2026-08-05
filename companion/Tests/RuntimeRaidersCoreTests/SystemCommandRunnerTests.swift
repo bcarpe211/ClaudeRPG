@@ -60,7 +60,7 @@ final class SystemCommandRunnerTests: XCTestCase {
     }
 
     func testTimeoutKillsOwnedProcessGroupWhenDescendantInheritsPipes() throws {
-        try withDescendantPipeFixture { executable, directory in
+        try withProcessFixture { executable, directory in
             let pidFile = directory.appendingPathComponent("descendant.pid")
             let start = Date()
             let result = try SystemCommandRunner().run(
@@ -78,6 +78,46 @@ final class SystemCommandRunnerTests: XCTestCase {
         }
     }
 
+    func testContinuousManyWriterFloodCannotStarveTimeoutControl() throws {
+        try withProcessFixture { executable, _ in
+            let start = Date()
+            let result = try SystemCommandRunner().run(
+                executable: executable,
+                arguments: ["continuous-writers"],
+                timeout: 0.05
+            )
+
+            XCTAssertEqual(result.exitStatus, .timedOut)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 0.8)
+            XCTAssertLessThanOrEqual(result.stdout.count, 65_536)
+            XCTAssertLessThanOrEqual(result.stderr.count, 65_536)
+        }
+    }
+
+    func testChildReceivesOnlyMappedStandardDescriptorsNotUnrelatedCallerFD() throws {
+        try withProcessFixture { executable, directory in
+            let unrelated = directory.appendingPathComponent("unrelated")
+            try Data("caller-owned".utf8).write(to: unrelated)
+            let descriptor = unrelated.path.withCString { Darwin.open($0, O_RDONLY) }
+            XCTAssertGreaterThanOrEqual(descriptor, 0)
+            defer { if descriptor >= 0 { Darwin.close(descriptor) } }
+            let descriptorFlags = Darwin.fcntl(descriptor, F_GETFD)
+            XCTAssertGreaterThanOrEqual(descriptorFlags, 0)
+            XCTAssertEqual(Darwin.fcntl(descriptor, F_SETFD, descriptorFlags & ~FD_CLOEXEC), 0)
+
+            let result = try SystemCommandRunner().run(
+                executable: executable,
+                arguments: ["probe-fd", "\(descriptor)"],
+                timeout: 1
+            )
+
+            XCTAssertEqual(result.exitStatus, .exited(0))
+            XCTAssertEqual(String(decoding: result.stdout, as: UTF8.self), "stdin-open\nfd-closed\n")
+            XCTAssertEqual(String(decoding: result.stderr, as: UTF8.self), "stderr-open\n")
+            XCTAssertGreaterThanOrEqual(Darwin.fcntl(descriptor, F_GETFD), 0)
+        }
+    }
+
     func testNonzeroExitIsReturnedAsTypedExitStatus() throws {
         let result = try SystemCommandRunner().run(
             executable: URL(fileURLWithPath: "/usr/bin/false"),
@@ -89,7 +129,7 @@ final class SystemCommandRunnerTests: XCTestCase {
     }
 }
 
-private func withDescendantPipeFixture<T>(_ body: (URL, URL) throws -> T) throws -> T {
+private func withProcessFixture<T>(_ body: (URL, URL) throws -> T) throws -> T {
     let directory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
         .appendingPathComponent("rr-process-group-fixture-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -102,9 +142,56 @@ private func withDescendantPipeFixture<T>(_ body: (URL, URL) throws -> T) throws
     #include <signal.h>
     #include <stdio.h>
     #include <stdlib.h>
+    #include <string.h>
     #include <unistd.h>
 
     int main(int argc, char **argv) {
+        if (argc == 2 && strcmp(argv[1], "continuous-writers") == 0) {
+            char output[4096];
+            memset(output, 'x', sizeof(output));
+            int ready[2];
+            int start[2];
+            if (pipe(ready) != 0 || pipe(start) != 0) return 9;
+            for (int index = 0; index < 32; index++) {
+                pid_t writer = fork();
+                if (writer < 0) return 10;
+                if (writer == 0) {
+                    close(ready[0]);
+                    close(start[1]);
+                    char marker = 'x';
+                    if (write(ready[1], &marker, 1) != 1) _exit(11);
+                    if (read(start[0], &marker, 1) != 1) _exit(12);
+                    close(ready[1]);
+                    close(start[0]);
+                    signal(SIGTERM, SIG_IGN);
+                    alarm(2);
+                    for (;;) {
+                        if (write(STDOUT_FILENO, output, sizeof(output)) < 0) _exit(13);
+                    }
+                }
+            }
+            close(ready[1]);
+            close(start[0]);
+            char markers[32];
+            int received = 0;
+            while (received < 32) {
+                ssize_t count = read(ready[0], markers + received, sizeof(markers) - received);
+                if (count <= 0) return 14;
+                received += (int)count;
+            }
+            close(ready[0]);
+            dprintf(STDERR_FILENO, "stderr-marker\n");
+            if (write(start[1], markers, sizeof(markers)) != sizeof(markers)) return 15;
+            close(start[1]);
+            _exit(0);
+        }
+        if (argc == 3 && strcmp(argv[1], "probe-fd") == 0) {
+            int probe_fd = atoi(argv[2]);
+            dprintf(STDOUT_FILENO, "%s\n", fcntl(STDIN_FILENO, F_GETFD) >= 0 ? "stdin-open" : "stdin-closed");
+            dprintf(STDOUT_FILENO, "%s\n", fcntl(probe_fd, F_GETFD) >= 0 ? "fd-open" : "fd-closed");
+            dprintf(STDERR_FILENO, "stderr-open\n");
+            return 0;
+        }
         if (argc != 3) return 1;
         unsigned int seconds = (unsigned int)strtoul(argv[1], NULL, 10);
         int ready[2];
