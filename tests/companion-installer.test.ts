@@ -11,6 +11,7 @@ const token = 'A'.repeat(43);
 const secret = 'b'.repeat(64);
 const enrollmentCode = 'c'.repeat(43);
 const teamId = 'ABCDE12345';
+const releaseSHA = 'd'.repeat(40);
 
 function executable(path: string, lines: string[]): void {
   writeFileSync(path, ['#!/bin/sh', 'set -eu', ...lines, ''].join('\n'));
@@ -244,7 +245,12 @@ function disposableReleaseBuilder(root: string): string {
   mkdirSync(join(root, 'companion/packaging'), { recursive: true });
   writeFileSync(fixtureBuild, readFileSync(build));
   writeFileSync(fixtureInstaller, readFileSync(installer));
+  writeFileSync(join(root, 'companion/RELEASE'), readFileSync(join(process.cwd(), 'companion/RELEASE')));
   return fixtureBuild;
+}
+
+function releaseBuildArgs(...args: string[]): string[] {
+  return ['--release-sha', releaseSHA, ...args];
 }
 
 describe('Runtime Raiders companion installer', () => {
@@ -1059,6 +1065,120 @@ describe('Runtime Raiders companion installer', () => {
 });
 
 describe('Runtime Raiders release build', () => {
+  it('seals the exact reviewed release identity into the app before signing', () => {
+    // Catches a signed bundle whose runtime identity cannot pass CompanionReleaseIdentity parsing.
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-sealed-release-'));
+    try {
+      const fake = join(root, 'fakes');
+      mkdirSync(fake, { recursive: true });
+      const capturedPlist = join(root, 'Info.plist');
+      executable(join(fake, 'swift'), [
+        'arch=""; scratch=""',
+        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
+        'mkdir -p "$scratch/$arch-apple-macosx/release"',
+        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
+      ]);
+      executable(join(fake, 'lipo'), [
+        'output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done',
+        'printf universal > "$output"',
+      ]);
+      executable(join(fake, 'codesign'), [
+        'signing=0; last=""',
+        'for argument in "$@"; do [ "$argument" = --force ] && signing=1; last="$argument"; done',
+        '[ "$signing" = 0 ] || { /usr/bin/plutil -lint "$last/Contents/Info.plist" >/dev/null && /bin/cp "$last/Contents/Info.plist" "$RUNTIME_RAIDERS_TEST_PLIST"; }',
+      ]);
+      executable(join(fake, 'ditto'), ['last=""; for argument in "$@"; do last="$argument"; done; printf x > "$last"']);
+      executable(join(fake, 'xcrun'), ['exit 0']);
+      executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+
+      const result = invoke(
+        disposableReleaseBuilder(root),
+        releaseBuildArgs('--output', join(root, 'output'), '--scratch-path', join(root, 'scratch')),
+        {
+          ...process.env,
+          PATH: fake + ':/usr/bin:/bin',
+          RUNTIME_RAIDERS_TEST_PLIST: capturedPlist,
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const value = (key: string) => execFileSync(
+        '/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', capturedPlist], { encoding: 'utf8' },
+      ).trim();
+      expect(value('CFBundleIdentifier')).toBe('com.redlattice.runtime-raiders-agent');
+      expect(value('CFBundleShortVersionString')).toBe('0.2.0');
+      expect(value('RuntimeRaidersReleaseSequence')).toBe('1');
+      expect(value('RuntimeRaidersReleaseSHA')).toBe(releaseSHA);
+      expect(value('RuntimeRaidersUpdateProtocolVersion')).toBe('1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects absent or malformed release identity before invoking the build', () => {
+    // Catches ambiguous, unsafe, or synthesized metadata reaching Swift build or signing.
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-release-contract-'));
+    try {
+      const fake = join(root, 'fakes');
+      const invoked = join(root, 'build-invoked');
+      mkdirSync(fake, { recursive: true });
+      executable(join(fake, 'swift'), ['printf invoked > "$RUNTIME_RAIDERS_TEST_BUILD_INVOKED"', 'exit 91']);
+      const environment = {
+        ...process.env,
+        PATH: fake + ':/usr/bin:/bin',
+        RUNTIME_RAIDERS_TEST_BUILD_INVOKED: invoked,
+        RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+        RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+        RUNTIME_RAIDERS_TEAM_ID: teamId,
+      };
+      const fixtureBuild = disposableReleaseBuilder(root);
+      const releaseFile = join(root, 'companion/RELEASE');
+
+      const missingSHA = invoke(fixtureBuild, ['--output', join(root, 'missing-sha')], environment);
+      expect(missingSHA.status).toBe(64);
+      expect(missingSHA.stderr).toContain('--release-sha is required');
+      expect(existsSync(invoked)).toBe(false);
+
+      for (const [name, contents, message] of [
+        ['missing file', null, 'companion/RELEASE is required'],
+        ['missing newline', 'version=1\ncompanion_version=0.2.0\nrelease_sequence=1\nupdate_protocol_version=1', 'companion/RELEASE is invalid'],
+        ['extra line', 'version=1\ncompanion_version=0.2.0\nrelease_sequence=1\nupdate_protocol_version=1\nextra=1\n', 'companion/RELEASE is invalid'],
+        ['unsafe version', 'version=1\ncompanion_version=0.2.0</string>\nrelease_sequence=1\nupdate_protocol_version=1\n', 'companion_version is invalid'],
+        ['zero sequence', 'version=1\ncompanion_version=0.2.0\nrelease_sequence=0\nupdate_protocol_version=1\n', 'release_sequence is invalid'],
+        ['unsafe sequence', 'version=1\ncompanion_version=0.2.0\nrelease_sequence=9007199254740992\nupdate_protocol_version=1\n', 'release_sequence is invalid'],
+        ['unsupported protocol', 'version=1\ncompanion_version=0.2.0\nrelease_sequence=1\nupdate_protocol_version=2\n', 'update_protocol_version is invalid'],
+      ] as const) {
+        if (contents === null) rmSync(releaseFile, { force: true });
+        else writeFileSync(releaseFile, contents);
+        const result = invoke(
+          fixtureBuild,
+          releaseBuildArgs('--output', join(root, name.replaceAll(' ', '-'))),
+          environment,
+        );
+        expect(result.status, `${name}: ${result.stderr}`).toBe(64);
+        expect(result.stderr, name).toContain(message);
+        expect(existsSync(invoked), name).toBe(false);
+      }
+
+      writeFileSync(releaseFile, readFileSync(join(process.cwd(), 'companion/RELEASE')));
+      for (const malformedSHA of ['D'.repeat(40), 'd'.repeat(39), 'd'.repeat(41), 'g'.repeat(40)]) {
+        const result = invoke(
+          fixtureBuild,
+          ['--release-sha', malformedSHA, '--output', join(root, 'bad-sha')],
+          environment,
+        );
+        expect(result.status, result.stderr).toBe(64);
+        expect(result.stderr).toContain('--release-sha is invalid');
+        expect(existsSync(invoked)).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('requires signing and a narrowly scoped notary profile before creating output', () => {
     // Catches a release script that produces an unsigned or unnotarized artifact.
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-release-'));
@@ -1091,7 +1211,7 @@ describe('Runtime Raiders release build', () => {
       executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
       const output = join(root, 'output');
       const result = spawnSync('bash', [
-        disposableReleaseBuilder(root), '--output', output, '--scratch-path', 'relative-scratch',
+        disposableReleaseBuilder(root), ...releaseBuildArgs('--output', output, '--scratch-path', 'relative-scratch'),
       ], {
         cwd: root,
         env: {
@@ -1154,7 +1274,7 @@ describe('Runtime Raiders release build', () => {
       const output = join(root, 'output');
       const scratch = join(root, 'scratch');
       const repositoryCacheBefore = buildCacheIdentity(join(process.cwd(), 'companion/.build'));
-      const result = invoke(build, ['--output', output, '--scratch-path', scratch], {
+      const result = invoke(build, releaseBuildArgs('--output', output, '--scratch-path', scratch), {
         ...process.env,
         PATH: fake + ':/usr/bin:/bin',
         RUNTIME_RAIDERS_TEST_LOG: log,
@@ -1211,7 +1331,7 @@ describe('Runtime Raiders release build', () => {
       writeFileSync(join(output, 'runtime-raiders-agent.zip'), 'old zip');
       writeFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'old checksum');
       writeFileSync(join(output, 'install.sh'), 'old installer');
-      const result = invoke(build, ['--output', output, '--scratch-path', join(root, 'scratch')], {
+      const result = invoke(build, releaseBuildArgs('--output', output, '--scratch-path', join(root, 'scratch')), {
         ...process.env, PATH: fake + ':/usr/bin:/bin', RUNTIME_RAIDERS_TEST_LOG: log,
         RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
         RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
@@ -1257,7 +1377,7 @@ describe('Runtime Raiders release build', () => {
       writeFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'old checksum');
       writeFileSync(join(output, 'install.sh'), 'old installer');
       const moved = join(root, 'moves.log');
-      const failed = invoke(build, ['--output', output, '--scratch-path', join(root, 'scratch')], {
+      const failed = invoke(build, releaseBuildArgs('--output', output, '--scratch-path', join(root, 'scratch')), {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: output, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '1',
       });
       expect(failed.status).not.toBe(0);
@@ -1270,7 +1390,7 @@ describe('Runtime Raiders release build', () => {
       const orphan = join(root, 'orphan');
       mkdirSync(orphan, { recursive: true });
       writeFileSync(join(orphan, 'install.sh'), 'user installer');
-      const orphanFailed = invoke(build, ['--output', orphan, '--scratch-path', join(root, 'scratch-orphan')], {
+      const orphanFailed = invoke(build, releaseBuildArgs('--output', orphan, '--scratch-path', join(root, 'scratch-orphan')), {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: orphan, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '1',
       });
       expect(orphanFailed.status).not.toBe(0);
@@ -1279,7 +1399,7 @@ describe('Runtime Raiders release build', () => {
       const directoryTarget = join(root, 'directory-target');
       mkdirSync(join(directoryTarget, 'install.sh'), { recursive: true });
       writeFileSync(join(directoryTarget, 'install.sh', 'sentinel'), 'keep');
-      const directoryResult = invoke(build, ['--output', directoryTarget, '--scratch-path', join(root, 'scratch-directory')], {
+      const directoryResult = invoke(build, releaseBuildArgs('--output', directoryTarget, '--scratch-path', join(root, 'scratch-directory')), {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: directoryTarget, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '0',
       });
       expect(directoryResult.status).not.toBe(0);
@@ -1290,7 +1410,7 @@ describe('Runtime Raiders release build', () => {
       mkdirSync(symlinkTarget, { recursive: true });
       writeFileSync(outsideInstaller, 'outside');
       symlinkSync(outsideInstaller, join(symlinkTarget, 'install.sh'));
-      const symlinkResult = invoke(build, ['--output', symlinkTarget, '--scratch-path', join(root, 'scratch-symlink')], {
+      const symlinkResult = invoke(build, releaseBuildArgs('--output', symlinkTarget, '--scratch-path', join(root, 'scratch-symlink')), {
         ...common, RUNTIME_RAIDERS_TEST_OUTPUT: symlinkTarget, RUNTIME_RAIDERS_TEST_MV_LOG: moved, FAKE_MV_FAIL: '0',
       });
       expect(symlinkResult.status).not.toBe(0);

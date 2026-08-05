@@ -22,20 +22,28 @@ REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)"
 OUTPUT="$ROOT/dist"
 SCRATCH=''
+RELEASE_SHA=''
+usage() {
+  echo "usage: $0 --release-sha 40-lowercase-hex [--output directory] [--scratch-path directory]" >&2
+  exit 64
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --release-sha)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || usage
+      RELEASE_SHA="$2"
+      shift 2
+      ;;
     --output)
       [ "$#" -ge 2 ] && [ -n "$2" ] || {
-        echo "usage: $0 [--output directory] [--scratch-path directory]" >&2
-        exit 64
+        usage
       }
       OUTPUT="$2"
       shift 2
       ;;
     --scratch-path)
       [ "$#" -ge 2 ] && [ -n "$2" ] || {
-        echo "usage: $0 [--output directory] [--scratch-path directory]" >&2
-        exit 64
+        usage
       }
       case "$2" in
         /*) SCRATCH="$2" ;;
@@ -44,11 +52,57 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     *)
-      echo "usage: $0 [--output directory] [--scratch-path directory]" >&2
-      exit 64
+      usage
       ;;
   esac
 done
+[ -n "$RELEASE_SHA" ] || {
+  echo "--release-sha is required" >&2
+  exit 64
+}
+case "$RELEASE_SHA" in *[!0-9a-f]*) echo "--release-sha is invalid" >&2; exit 64 ;; esac
+[ "$(printf '%s' "$RELEASE_SHA" | wc -c | tr -d ' ')" -eq 40 ] || {
+  echo "--release-sha is invalid" >&2
+  exit 64
+}
+
+RELEASE_FILE="$ROOT/companion/RELEASE"
+[ -f "$RELEASE_FILE" ] && [ ! -L "$RELEASE_FILE" ] || {
+  echo "companion/RELEASE is required" >&2
+  exit 64
+}
+RELEASE_NEWLINES="$(wc -l < "$RELEASE_FILE" | tr -d ' ')"
+RELEASE_LINES="$(awk 'END { print NR }' "$RELEASE_FILE")"
+[ "$RELEASE_NEWLINES" -eq 4 ] && [ "$RELEASE_LINES" -eq 4 ] || {
+  echo "companion/RELEASE is invalid" >&2
+  exit 64
+}
+RELEASE_FORMAT="$(sed -n '1p' "$RELEASE_FILE")"
+COMPANION_VERSION_LINE="$(sed -n '2p' "$RELEASE_FILE")"
+RELEASE_SEQUENCE_LINE="$(sed -n '3p' "$RELEASE_FILE")"
+UPDATE_PROTOCOL_LINE="$(sed -n '4p' "$RELEASE_FILE")"
+[ "$RELEASE_FORMAT" = 'version=1' ] || {
+  echo "companion/RELEASE is invalid" >&2
+  exit 64
+}
+case "$COMPANION_VERSION_LINE" in companion_version=*) COMPANION_VERSION=${COMPANION_VERSION_LINE#companion_version=} ;; *) echo "companion/RELEASE is invalid" >&2; exit 64 ;; esac
+case "$COMPANION_VERSION" in ''|*[!A-Za-z0-9._+-]*) echo "companion_version is invalid" >&2; exit 64 ;; esac
+[ "$(printf '%s' "$COMPANION_VERSION" | wc -c | tr -d ' ')" -le 100 ] || {
+  echo "companion_version is invalid" >&2
+  exit 64
+}
+case "$RELEASE_SEQUENCE_LINE" in release_sequence=*) RELEASE_SEQUENCE=${RELEASE_SEQUENCE_LINE#release_sequence=} ;; *) echo "companion/RELEASE is invalid" >&2; exit 64 ;; esac
+case "$RELEASE_SEQUENCE" in ''|0|0*|*[!0-9]*) echo "release_sequence is invalid" >&2; exit 64 ;; esac
+[ "$(printf '%s' "$RELEASE_SEQUENCE" | wc -c | tr -d ' ')" -le 16 ] &&
+  [ "$RELEASE_SEQUENCE" -le 9007199254740991 ] || {
+  echo "release_sequence is invalid" >&2
+  exit 64
+}
+[ "$UPDATE_PROTOCOL_LINE" = 'update_protocol_version=1' ] || {
+  echo "update_protocol_version is invalid" >&2
+  exit 64
+}
+
 TEMP_ROOT=/tmp
 [ -n "$TMPDIR" ] && TEMP_ROOT="$TMPDIR"
 WORK="$(mktemp -d "$TEMP_ROOT/runtime-raiders-release.XXXXXX")"
@@ -94,7 +148,7 @@ lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime
 APP="$WORK/Runtime Raiders Agent.app"
 mkdir -p "$APP/Contents/MacOS"
 mv "$WORK/runtime-raiders-agent" "$APP/Contents/MacOS/runtime-raiders-agent"
-cat > "$APP/Contents/Info.plist" <<'EOF'
+cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -102,8 +156,25 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 <key>CFBundleIdentifier</key><string>com.redlattice.runtime-raiders-agent</string>
 <key>CFBundleName</key><string>Runtime Raiders Agent</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>$COMPANION_VERSION</string>
+<key>RuntimeRaidersReleaseSequence</key><integer>$RELEASE_SEQUENCE</integer>
+<key>RuntimeRaidersReleaseSHA</key><string>$RELEASE_SHA</string>
+<key>RuntimeRaidersUpdateProtocolVersion</key><integer>1</integer>
 </dict></plist>
 EOF
+INFO_PLIST="$APP/Contents/Info.plist"
+/usr/bin/plutil -lint "$INFO_PLIST" >/dev/null || {
+  echo "release identity plist rendering failed" >&2
+  exit 1
+}
+[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$INFO_PLIST")" = 'com.redlattice.runtime-raiders-agent' ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$INFO_PLIST")" = "$COMPANION_VERSION" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSequence raw -o - "$INFO_PLIST")" = "$RELEASE_SEQUENCE" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSHA raw -o - "$INFO_PLIST")" = "$RELEASE_SHA" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersUpdateProtocolVersion raw -o - "$INFO_PLIST")" = '1' ] || {
+  echo "release identity plist validation failed" >&2
+  exit 1
+}
 codesign --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 -R="$REQUIREMENT" "$APP"
 NOTARY_ZIP="$WORK/notary.zip"
