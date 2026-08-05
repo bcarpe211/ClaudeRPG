@@ -40,6 +40,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     public let availableCompanionVersion: String?
     public let availableReleaseSequence: Int64?
     public let updateCommand: String?
+    public let preparedForUpdate: Bool
 
     public init(
         enabled: Bool,
@@ -54,7 +55,8 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         installedReleaseSequence: Int64,
         availableCompanionVersion: String?,
         availableReleaseSequence: Int64?,
-        updateCommand: String?
+        updateCommand: String?,
+        preparedForUpdate: Bool = false
     ) {
         self.enabled = enabled
         self.daemonRunning = daemonRunning
@@ -69,6 +71,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         self.availableCompanionVersion = availableCompanionVersion
         self.availableReleaseSequence = availableReleaseSequence
         self.updateCommand = updateCommand
+        self.preparedForUpdate = preparedForUpdate
     }
 
     public init(
@@ -94,7 +97,8 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
             installedReleaseSequence: 0,
             availableCompanionVersion: nil,
             availableReleaseSequence: nil,
-            updateCommand: nil
+            updateCommand: nil,
+            preparedForUpdate: false
         )
     }
 
@@ -581,6 +585,10 @@ public final class AgentController: @unchecked Sendable {
         acceptanceLock.withLock { acceptingCollection = false }
     }
 
+    public func resumeCollectionAfterUpdate() {
+        lock.withLock { finishBoundarySetupIfReady() }
+    }
+
     public func turnOff() throws {
         pauseCollection()
         try lock.withLock {
@@ -722,7 +730,8 @@ public final class AgentController: @unchecked Sendable {
         serverEnabledSurfaces: [RunSurface],
         lastSuccessfulUploadMS: Int64?,
         installedRelease: CompanionReleaseIdentity,
-        updateAvailability: CompanionUpdateAvailability?
+        updateAvailability: CompanionUpdateAvailability?,
+        preparedForUpdate: Bool = false
     ) throws -> AgentStatus {
         try lock.withLock {
             var health: [RunSurface: AdapterHealth] = [
@@ -746,7 +755,8 @@ public final class AgentController: @unchecked Sendable {
                 installedReleaseSequence: installedRelease.releaseSequence,
                 availableCompanionVersion: updateAvailability?.availableVersion,
                 availableReleaseSequence: updateAvailability?.availableSequence,
-                updateCommand: updateAvailability?.updateCommand
+                updateCommand: updateAvailability?.updateCommand,
+                preparedForUpdate: preparedForUpdate
             )
         }
     }

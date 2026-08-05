@@ -83,6 +83,29 @@ private final class DaemonRuntime: @unchecked Sendable {
         pauseUploader: { [weak self] in self?.uploader.setEnabled(false) },
         pauseHeartbeat: { [weak self] in self?.heartbeat.setEnabled(false) },
         pauseWatcher: { [weak self] in self?.watcher.stop() },
+        resume: { [weak self] in
+            guard let self else { throw CLIError.invalidRuntimeConfiguration }
+            guard controller.enabled else {
+                controller.pauseCollection()
+                uploader.setEnabled(false)
+                heartbeat.setEnabled(false)
+                watcher.stop()
+                return
+            }
+            do {
+                try watcher.start()
+                controller.resumeCollectionAfterUpdate()
+                scheduleReadContinuationIfNeeded()
+                uploader.schedule(enabled: true)
+                heartbeat.setEnabled(true)
+            } catch {
+                controller.pauseCollection()
+                uploader.setEnabled(false)
+                heartbeat.setEnabled(false)
+                watcher.stop()
+                throw error
+            }
+        },
         acceptedResponse: { [weak self] in
             guard let self else {
                 return ControlResponse(ok: false, message: "daemon unavailable")
@@ -234,13 +257,7 @@ private final class DaemonRuntime: @unchecked Sendable {
             }
         case .status:
             do {
-                let status = try controller.status(
-                    daemonRunning: true,
-                    serverEnabledSurfaces: inputs.surfaces,
-                    lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS,
-                    installedRelease: inputs.releaseIdentity,
-                    updateAvailability: releaseChecker?.availability()
-                )
+                let status = try currentStatus()
                 return ControlResponse(ok: true, message: status.description)
             } catch {
                 return ControlResponse(ok: false, message: "status unavailable")
@@ -276,6 +293,8 @@ private final class DaemonRuntime: @unchecked Sendable {
             }
         case .prepareUpdate:
             return updatePreparation.prepare()
+        case .resumeUpdate:
+            return updatePreparation.resume()
         }
     }
 
@@ -285,7 +304,8 @@ private final class DaemonRuntime: @unchecked Sendable {
             serverEnabledSurfaces: inputs.surfaces,
             lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS,
             installedRelease: inputs.releaseIdentity,
-            updateAvailability: releaseChecker?.availability()
+            updateAvailability: releaseChecker?.availability(),
+            preparedForUpdate: updatePreparation.isPrepared
         )
     }
 
@@ -409,7 +429,7 @@ private struct LiveUpdateStatusProvider {
     let trustRoot: InstalledTrustRoot
 
     func status(command: ControlCommand) throws -> CompanionUpdateStatus {
-        guard command == .status || command == .prepareUpdate else {
+        guard command == .status || command == .prepareUpdate || command == .resumeUpdate else {
             throw CLIError.invalidUpdateState
         }
         let response = try ControlSocketClient.send(
@@ -450,7 +470,8 @@ private struct LiveUpdateStatusProvider {
             enrollmentValid: true,
             collectorStateValid: true,
             activeRunCount: status.activeRunCount,
-            queuedEventCount: status.queuedEventCount
+            queuedEventCount: status.queuedEventCount,
+            preparedForUpdate: status.preparedForUpdate
         )
     }
 }
@@ -540,6 +561,14 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
             bootout: launchd.bootout,
             bootstrap: launchd.bootstrap,
             proveDaemonStopped: launchd.proveStopped,
+            resumePreparedDaemon: {
+                let response = try ControlSocketClient.send(
+                    request: ControlRequest(command: .resumeUpdate),
+                    to: paths.controlSocket
+                )
+                guard response.ok else { throw CLIError.updateOperationFailed }
+            },
+            restartDaemon: launchd.restart,
             healthStatus: { try statusProvider.status(command: .status) },
             emitRecoveryCommand: { command in
                 FileHandle.standardError.write(Data("\(command)\n".utf8))
@@ -555,77 +584,32 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
     }
 }
 
-private struct RecoveryEntryMetadata: Equatable {
-    let device: UInt64
-    let inode: UInt64
-    let mode: UInt16
-}
-
-private func recoveryEntryMetadata(parent: Int32, name: String) throws -> RecoveryEntryMetadata {
-    var metadata = stat()
-    guard Darwin.fstatat(parent, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
-          metadata.st_mode & S_IFMT == S_IFDIR,
-          metadata.st_uid == Darwin.geteuid(),
-          metadata.st_mode & 0o777 == 0o700 else {
-        throw CLIError.invalidUpdateState
-    }
-    return RecoveryEntryMetadata(
-        device: UInt64(metadata.st_dev),
-        inode: UInt64(metadata.st_ino),
-        mode: UInt16(metadata.st_mode & 0o777)
-    )
-}
-
-private func restoreStableRollback(paths: AgentPaths) throws {
-    let support = Darwin.open(
-        paths.supportDirectory.path,
-        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-    )
-    guard support >= 0 else { throw CLIError.invalidUpdateState }
-    defer { Darwin.close(support) }
-    var supportMetadata = stat()
-    guard Darwin.fstat(support, &supportMetadata) == 0,
-          supportMetadata.st_mode & S_IFMT == S_IFDIR,
-          supportMetadata.st_uid == Darwin.geteuid(),
-          supportMetadata.st_mode & 0o777 == 0o700 else {
-        throw CLIError.invalidUpdateState
-    }
-    let rollbackName = paths.rollbackApplication.lastPathComponent
-    let failedName = paths.failedApplication.lastPathComponent
-    let installedName = paths.installedApplication.lastPathComponent
-    let rollbackBefore = try recoveryEntryMetadata(parent: support, name: rollbackName)
-    let failedBefore = try recoveryEntryMetadata(parent: support, name: failedName)
-    var installedMetadata = stat()
-    guard Darwin.fstatat(support, installedName, &installedMetadata, AT_SYMLINK_NOFOLLOW) != 0,
-          errno == ENOENT,
-          try recoveryEntryMetadata(parent: support, name: rollbackName) == rollbackBefore,
-          try recoveryEntryMetadata(parent: support, name: failedName) == failedBefore,
-          Darwin.renameat(support, rollbackName, support, installedName) == 0,
-          Darwin.fsync(support) == 0,
-          try recoveryEntryMetadata(parent: support, name: installedName) == rollbackBefore,
-          try recoveryEntryMetadata(parent: support, name: failedName) == failedBefore else {
-        throw CLIError.invalidUpdateState
-    }
-}
-
 private func runStableRecovery(paths: AgentPaths) throws {
     let enrollment = try EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
     let trustRoot = try InstalledTrustRoot(expectedBundleURL: paths.rollbackApplication)
-    guard try AgentController.persistedCollectorState(
-        paths: paths,
-        surfaces: enrollment.enabledSurfaces
-    ) == .disabled,
-    let manifest = try UpdateStateStore(paths: paths).load().cachedManifest else {
-        throw CLIError.invalidUpdateState
-    }
     let verifier = CandidateVerifier()
-    let verifyBundles = {
-        guard try trustRoot.verifyApplication(at: paths.rollbackApplication) ==
-                trustRoot.verifiedSelf else {
+    let layout = try StableRecoveryFileTransaction(paths: paths)
+    var boundManifest: ReleaseManifestV1?
+    let verifyBundles: (StableRecoveryPhase) throws -> Void = { phase in
+        guard try AgentController.persistedCollectorState(
+            paths: paths,
+            surfaces: enrollment.enabledSurfaces
+        ) == .disabled,
+        try trustRoot.verifyApplication(at: paths.rollbackApplication) ==
+            trustRoot.verifiedSelf else {
             throw CLIError.invalidUpdateState
         }
+        guard phase == .rollbackAndFailed else { return }
+        let currentManifest = try UpdateStateStore(paths: paths).load().cachedManifest
+        if let boundManifest {
+            guard currentManifest == boundManifest else { throw CLIError.invalidUpdateState }
+        } else {
+            guard let currentManifest else { throw CLIError.invalidUpdateState }
+            boundManifest = currentManifest
+        }
+        guard let manifest = boundManifest else { throw CLIError.invalidUpdateState }
         let failedIdentity = try verifier.verify(
             candidate: paths.failedApplication,
             manifest: manifest,
@@ -641,7 +625,8 @@ private func runStableRecovery(paths: AgentPaths) throws {
         plistURL: launchAgentURL(),
         runCommand: runner.run
     )
-    let recovery = StableUpdateRecovery(operations: StableUpdateRecoveryOperations(
+    let recovery = StableUpdateRecovery(paths: paths, operations: StableUpdateRecoveryOperations(
+        phase: { try layout.inspectAndNormalize() },
         verifyBundles: verifyBundles,
         persistDisabled: {
             try AgentController.persistDisabledForRecovery(
@@ -651,7 +636,13 @@ private func runStableRecovery(paths: AgentPaths) throws {
         },
         bootout: launchd.bootout,
         proveStopped: launchd.proveStopped,
-        restore: { try restoreStableRollback(paths: paths) },
+        restore: { try layout.restore(phase: $0) },
+        verifyRestoredBundle: { _ in
+            guard try trustRoot.verifyApplication(at: paths.installedApplication) ==
+                    trustRoot.verifiedSelf else {
+                throw CLIError.invalidUpdateState
+            }
+        },
         bootstrap: launchd.bootstrap,
         verifyDisabledHealth: {
             let status = try LiveUpdateStatusProvider(
@@ -661,7 +652,7 @@ private func runStableRecovery(paths: AgentPaths) throws {
                 trustRoot: trustRoot
             ).status(command: .status)
             return status.verifiedApplication == trustRoot.verifiedSelf &&
-                !status.enabled && status.activeRunCount == 0
+                !status.enabled && !status.preparedForUpdate && status.activeRunCount == 0
         }
     ))
     try recovery.run()

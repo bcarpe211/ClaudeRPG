@@ -45,6 +45,7 @@ public struct CompanionUpdateStatus: Equatable, Sendable {
     public let collectorStateValid: Bool
     public let activeRunCount: Int
     public let queuedEventCount: Int
+    public let preparedForUpdate: Bool
 
     public init(
         verifiedApplication: VerifiedCompanionApplication,
@@ -53,7 +54,8 @@ public struct CompanionUpdateStatus: Equatable, Sendable {
         enrollmentValid: Bool,
         collectorStateValid: Bool,
         activeRunCount: Int,
-        queuedEventCount: Int
+        queuedEventCount: Int,
+        preparedForUpdate: Bool = false
     ) {
         self.verifiedApplication = verifiedApplication
         self.daemonRunning = daemonRunning
@@ -62,6 +64,7 @@ public struct CompanionUpdateStatus: Equatable, Sendable {
         self.collectorStateValid = collectorStateValid
         self.activeRunCount = activeRunCount
         self.queuedEventCount = queuedEventCount
+        self.preparedForUpdate = preparedForUpdate
     }
 }
 
@@ -105,6 +108,8 @@ public struct CompanionUpdaterOperations {
     let bootout: () throws -> Void
     let bootstrap: () throws -> Void
     let proveDaemonStopped: () throws -> Bool
+    let resumePreparedDaemon: () throws -> Void
+    let restartDaemon: () throws -> Void
     let healthStatus: Status
     let emitRecoveryCommand: (String) -> Void
     let observe: (CompanionUpdaterStage) -> Void
@@ -122,6 +127,8 @@ public struct CompanionUpdaterOperations {
         bootout: @escaping () throws -> Void,
         bootstrap: @escaping () throws -> Void,
         proveDaemonStopped: @escaping () throws -> Bool,
+        resumePreparedDaemon: @escaping () throws -> Void,
+        restartDaemon: @escaping () throws -> Void,
         healthStatus: @escaping Status,
         emitRecoveryCommand: @escaping (String) -> Void,
         observe: @escaping (CompanionUpdaterStage) -> Void = { _ in },
@@ -138,6 +145,8 @@ public struct CompanionUpdaterOperations {
         self.bootout = bootout
         self.bootstrap = bootstrap
         self.proveDaemonStopped = proveDaemonStopped
+        self.resumePreparedDaemon = resumePreparedDaemon
+        self.restartDaemon = restartDaemon
         self.healthStatus = healthStatus
         self.emitRecoveryCommand = emitRecoveryCommand
         self.observe = observe
@@ -213,6 +222,7 @@ public final class CompanionUpdater {
         try transaction.assertPriorMatches(priorSeal)
         var preparationAttempted = false
         var quiescenceAuthorized = false
+        var verifiedCandidateIdentity: CompanionReleaseIdentity?
         do {
             operations.observe(.download)
             let receipt = try withFrozenBoundary(frozen, pathCheck: {
@@ -280,6 +290,7 @@ public final class CompanionUpdater {
             guard candidateIdentity == manifest.identity else {
                 throw CompanionUpdaterError.candidateRejected
             }
+            verifiedCandidateIdentity = candidateIdentity
             try transaction.bindVerifiedCandidate(identity: candidateIdentity)
 
             let requiredCapacity = try withFrozenBoundary(frozen, pathCheck: {
@@ -338,6 +349,9 @@ public final class CompanionUpdater {
             }
             try validatePriorStatus(preparedStatus, initial: initial)
             guard preparedStatus.activeRunCount == 0 else { throw CompanionUpdaterError.activeRun }
+            guard preparedStatus.preparedForUpdate else {
+                throw CompanionUpdaterError.invalidStatus
+            }
             quiescenceAuthorized = true
 
             operations.observe(.bootout)
@@ -385,6 +399,7 @@ public final class CompanionUpdater {
                     from: error,
                     transaction: transaction,
                     initial: initial,
+                    candidateIdentity: verifiedCandidateIdentity,
                     frozen: frozen
                 )
             }
@@ -393,6 +408,7 @@ public final class CompanionUpdater {
                     after: error,
                     transaction: transaction,
                     initial: initial,
+                    candidateIdentity: verifiedCandidateIdentity,
                     frozen: frozen
                 )
             } else {
@@ -406,6 +422,7 @@ public final class CompanionUpdater {
         from updateError: Error,
         transaction: UpdateFileTransaction,
         initial: CompanionUpdateStatus,
+        candidateIdentity: CompanionReleaseIdentity?,
         frozen: ProtectedStateSnapshot
     ) throws -> CompanionUpdateResult {
         let hadSwapped = transaction.hasSwapped
@@ -444,7 +461,11 @@ public final class CompanionUpdater {
         } catch let recoveryError as CompanionUpdaterError where recoveryError == .updateRolledBack {
             throw recoveryError
         } catch {
-            return try enterTerminalRecovery(transaction: transaction)
+            return try enterTerminalRecovery(
+                transaction: transaction,
+                initial: initial,
+                candidateIdentity: candidateIdentity
+            )
         }
     }
 
@@ -452,6 +473,7 @@ public final class CompanionUpdater {
         after updateError: Error,
         transaction: UpdateFileTransaction,
         initial: CompanionUpdateStatus,
+        candidateIdentity: CompanionReleaseIdentity?,
         frozen: ProtectedStateSnapshot
     ) throws -> CompanionUpdateResult {
         do {
@@ -475,38 +497,80 @@ public final class CompanionUpdater {
             )
             try transaction.cleanupBeforeSwap()
         } catch {
-            return try enterTerminalRecovery(transaction: transaction)
+            return try enterTerminalRecovery(
+                transaction: transaction,
+                initial: initial,
+                candidateIdentity: candidateIdentity
+            )
         }
         throw updateError
     }
 
     private func enterTerminalRecovery(
-        transaction: UpdateFileTransaction
+        transaction: UpdateFileTransaction,
+        initial: CompanionUpdateStatus,
+        candidateIdentity: CompanionReleaseIdentity?
     ) throws -> CompanionUpdateResult {
-        let stableRecoveryAvailable: Bool
-        do {
-            try transaction.prepareStableRecovery()
-            stableRecoveryAvailable = true
-        } catch {
-            stableRecoveryAvailable = false
-        }
-        let disabledPersisted: Bool
-        do {
-            try AgentController.persistDisabledForRecovery(paths: paths, surfaces: surfaces)
-            disabledPersisted = true
-        } catch {
-            disabledPersisted = false
-        }
-        // A bootout response is not itself proof either way: launchd may have
-        // completed the stop before the response channel failed. The separate
-        // positive proof is the only condition that authorizes a recovery command.
         try? operations.bootout()
-        let daemonStopped = (try? operations.proveDaemonStopped()) == true
-        guard stableRecoveryAvailable, disabledPersisted, daemonStopped else {
+        if (try? operations.proveDaemonStopped()) != true {
+            try? operations.resumePreparedDaemon()
+            if positivelyRunning(
+                initial: initial,
+                candidateIdentity: candidateIdentity
+            ) {
+                throw CompanionUpdaterError.terminalSafetyFailure
+            }
+            try? operations.restartDaemon()
+            if positivelyRunning(
+                initial: initial,
+                candidateIdentity: candidateIdentity
+            ) {
+                throw CompanionUpdaterError.terminalSafetyFailure
+            }
+            try? operations.bootout()
+            guard (try? operations.proveDaemonStopped()) == true else {
+                throw CompanionUpdaterError.terminalSafetyFailure
+            }
+        }
+        guard (try? transaction.prepareStableRecovery()) != nil,
+              (try? AgentController.persistDisabledForRecovery(
+                  paths: paths,
+                  surfaces: surfaces
+              )) != nil else {
             throw CompanionUpdaterError.terminalSafetyFailure
         }
         operations.emitRecoveryCommand(Self.recoveryCommand)
         throw CompanionUpdaterError.rollbackFailed(recoveryCommand: Self.recoveryCommand)
+    }
+
+    private func positivelyRunning(
+        initial: CompanionUpdateStatus,
+        candidateIdentity: CompanionReleaseIdentity?
+    ) -> Bool {
+        let start = operations.monotonicNow()
+        guard start.isFinite else { return false }
+        let deadline = start + Self.healthTimeout
+        repeat {
+            if let status = try? operations.healthStatus(),
+               status.daemonRunning,
+               !status.preparedForUpdate,
+               status.enabled == initial.enabled,
+               status.enrollmentValid,
+               status.collectorStateValid,
+               status.activeRunCount == 0,
+               status.queuedEventCount >= initial.queuedEventCount,
+               status.verifiedApplication.teamIdentifier ==
+                   initial.verifiedApplication.teamIdentifier,
+               (
+                   status.verifiedApplication.identity == initial.verifiedApplication.identity ||
+                       status.verifiedApplication.identity == candidateIdentity
+               ) {
+                return true
+            }
+            let now = operations.monotonicNow()
+            guard now.isFinite, now < deadline else { return false }
+            operations.sleep(min(Self.healthPollInterval, deadline - now))
+        } while true
     }
 
     private func waitForHealth(
@@ -530,6 +594,7 @@ public final class CompanionUpdater {
                     try operations.healthStatus()
                 }
                 if status.daemonRunning,
+                   !status.preparedForUpdate,
                    status.verifiedApplication.identity == identity,
                    status.verifiedApplication.teamIdentifier == teamIdentifier,
                    status.enabled == enabled,
@@ -556,6 +621,7 @@ public final class CompanionUpdater {
 
     private func validateInitialStatus(_ status: CompanionUpdateStatus) throws {
         guard status.daemonRunning,
+              !status.preparedForUpdate,
               status.enrollmentValid,
               status.collectorStateValid,
               status.activeRunCount >= 0,
@@ -1080,47 +1146,61 @@ public final class UpdateFileTransaction {
     }
 
     public func prepareStableRecovery() throws {
-        if Self.exists(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent) {
-            try assertRollbackPriorUnchanged()
-        } else {
+        let installedName = paths.installedApplication.lastPathComponent
+        let rollbackName = paths.rollbackApplication.lastPathComponent
+        let failedName = paths.failedApplication.lastPathComponent
+        let installedExists = Self.exists(descriptor: supportDescriptor, name: installedName)
+        let rollbackExists = Self.exists(descriptor: supportDescriptor, name: rollbackName)
+        let failedExists = Self.exists(descriptor: supportDescriptor, name: failedName)
+
+        switch (installedExists, rollbackExists, failedExists) {
+        case (true, false, false):
             try assertPriorInstalledUnchanged()
-            try Self.requireMissing(
-                descriptor: supportDescriptor,
-                name: paths.rollbackApplication.lastPathComponent
-            )
+            try Self.requireMissing(descriptor: supportDescriptor, name: rollbackName)
             guard Darwin.renameat(
                 supportDescriptor,
-                paths.installedApplication.lastPathComponent,
+                installedName,
                 supportDescriptor,
-                paths.rollbackApplication.lastPathComponent
+                rollbackName
             ) == 0 else { throw Self.posixError() }
             try Self.synchronize(supportDescriptor)
             try assertRollbackPriorUnchanged()
-        }
-        if Self.exists(descriptor: supportDescriptor, name: paths.failedApplication.lastPathComponent) {
-            do {
-                try assertFailedCandidateUnchanged()
-            } catch {
-                guard Self.exists(
-                    descriptor: supportDescriptor,
-                    name: paths.installedApplication.lastPathComponent
-                ) else { throw error }
-                try assertInstalledCandidateUnchanged()
-            }
-        } else if Self.exists(
-            descriptor: supportDescriptor,
-            name: paths.installedApplication.lastPathComponent
-        ) {
+        case (true, false, true):
+            try assertPriorInstalledUnchanged()
+            try assertFailedCandidateUnchanged()
+            try Self.requireMissing(descriptor: supportDescriptor, name: rollbackName)
+            guard Darwin.renameat(
+                supportDescriptor,
+                installedName,
+                supportDescriptor,
+                rollbackName
+            ) == 0 else { throw Self.posixError() }
+            try Self.synchronize(supportDescriptor)
+            try assertRollbackPriorUnchanged()
+            try assertFailedCandidateUnchanged()
+        case (true, true, false):
+            try assertRollbackPriorUnchanged()
             try assertInstalledCandidateUnchanged()
             guard Darwin.renameat(
                 supportDescriptor,
-                paths.installedApplication.lastPathComponent,
+                installedName,
                 supportDescriptor,
-                paths.failedApplication.lastPathComponent
+                failedName
             ) == 0 else { throw Self.posixError() }
             try Self.synchronize(supportDescriptor)
+            try assertRollbackPriorUnchanged()
             try assertFailedCandidateUnchanged()
+        case (false, true, false):
+            try assertRollbackPriorUnchanged()
+        case (false, true, true):
+            try assertRollbackPriorUnchanged()
+            try assertFailedCandidateUnchanged()
+        default:
+            throw CompanionUpdaterError.unsafeFilesystem
         }
+
+        try Self.setOwnerOnlyMode(descriptor: supportDescriptor, name: rollbackName)
+        try normalizePriorRootMode(at: rollbackName)
         guard let priorSeal,
               priorSeal.containsExecutable(relativePath: "Contents/MacOS/runtime-raiders-agent") else {
             throw CompanionUpdaterError.unsafeFilesystem
@@ -1483,10 +1563,10 @@ public final class UpdateFileTransaction {
     }
 }
 
-private final class CompanionUpdateLock {
+public final class CompanionUpdateLock {
     private var descriptor: Int32
 
-    init(paths: AgentPaths) throws {
+    public init(paths: AgentPaths) throws {
         let stateDescriptor: Int32
         do {
             stateDescriptor = try OwnerOnlyDirectory.openOrCreate(paths.stateDirectory)
@@ -1524,7 +1604,7 @@ private final class CompanionUpdateLock {
 
     deinit { unlock() }
 
-    func unlock() {
+    public func unlock() {
         guard descriptor >= 0 else { return }
         _ = companionUpdaterFlock(descriptor, LOCK_UN)
         Darwin.close(descriptor)

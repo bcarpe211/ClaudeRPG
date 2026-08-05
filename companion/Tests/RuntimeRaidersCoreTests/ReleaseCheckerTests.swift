@@ -146,6 +146,88 @@ final class ReleaseCheckerTests: XCTestCase {
         }
     }
 
+    func testForcedFetchPersistsExactValidatedManifestWithoutNotification() throws {
+        try withPaths { paths in
+            let notifications = LockedBox(0)
+            let responseBody = validManifestData()
+            let checker = try makeChecker(
+                paths: paths,
+                transport: { _ in .init(statusCode: 200, body: responseBody) },
+                notifier: {
+                    notifications.withValue { $0 += 1 }
+                    return true
+                }
+            )
+
+            XCTAssertEqual(try checker.fetchNow(), manifest)
+
+            let persisted = try UpdateStateStore(paths: paths).load()
+            XCTAssertEqual(persisted.lastCheckAttemptMS, now)
+            XCTAssertEqual(persisted.lastObservedReleaseSequence, manifest.releaseSequence)
+            XCTAssertEqual(persisted.cachedManifest, manifest)
+            XCTAssertNil(persisted.lastNotifiedReleaseSequence)
+            XCTAssertEqual(notifications.value, 0)
+
+            let newInstance = try makeChecker(
+                paths: paths,
+                transport: { _ in throw URLError(.cannotConnectToHost) }
+            )
+            XCTAssertEqual(newInstance.availability(), availability)
+
+            var recoveryBoundManifest: ReleaseManifestV1?
+            let recovery = StableUpdateRecovery(
+                paths: paths,
+                operations: StableUpdateRecoveryOperations(
+                    phase: { .rollbackAndFailed },
+                    verifyBundles: { phase in
+                        XCTAssertEqual(phase, .rollbackAndFailed)
+                        let persistedManifest = try UpdateStateStore(paths: paths)
+                            .load().cachedManifest
+                        if let recoveryBoundManifest {
+                            XCTAssertEqual(persistedManifest, recoveryBoundManifest)
+                        } else {
+                            recoveryBoundManifest = persistedManifest
+                        }
+                    },
+                    persistDisabled: {},
+                    bootout: {},
+                    proveStopped: { true },
+                    restore: { _ in },
+                    verifyRestoredBundle: { _ in },
+                    bootstrap: {},
+                    verifyDisabledHealth: { true }
+                )
+            )
+            try recovery.run()
+            XCTAssertEqual(recoveryBoundManifest, manifest)
+        }
+    }
+
+    func testForcedFetchRetainsAndReturnsHigherMonotonicCachedManifest() throws {
+        try withPaths { paths in
+            let higher = try manifest(sequence: 3, version: "0.3.0", shaByte: "d")
+            let responseBody = validManifestData()
+            try UpdateStateStore(paths: paths).save(UpdateStateV1(
+                lastCheckAttemptMS: now - 1,
+                lastObservedReleaseSequence: higher.releaseSequence,
+                lastNotifiedReleaseSequence: higher.releaseSequence,
+                cachedManifest: higher
+            ))
+            let checker = try makeChecker(
+                paths: paths,
+                transport: { _ in .init(statusCode: 200, body: responseBody) }
+            )
+
+            XCTAssertEqual(try checker.fetchNow(), higher)
+
+            let persisted = try UpdateStateStore(paths: paths).load()
+            XCTAssertEqual(persisted.lastCheckAttemptMS, now)
+            XCTAssertEqual(persisted.lastObservedReleaseSequence, higher.releaseSequence)
+            XCTAssertEqual(persisted.lastNotifiedReleaseSequence, higher.releaseSequence)
+            XCTAssertEqual(persisted.cachedManifest, higher)
+        }
+    }
+
     func testLiveTransportSendsOnlyBoundedAnonymousHeadersOnWire() throws {
         let server = try RawHTTPServer(responseBody: validManifestData())
         defer { server.stop() }
@@ -337,6 +419,16 @@ final class ReleaseCheckerTests: XCTestCase {
 
     private func validManifestData() -> Data {
         Data(#"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#.utf8)
+    }
+
+    private func manifest(
+        sequence: Int64,
+        version: String,
+        shaByte: Character
+    ) throws -> ReleaseManifestV1 {
+        try ReleaseManifestV1.decode(Data(
+            "{\"manifest_version\":1,\"companion_version\":\"\(version)\",\"release_sequence\":\(sequence),\"release_sha\":\"\(String(repeating: shaByte, count: 40))\",\"update_protocol_version\":1,\"zip_sha256\":\"\(String(repeating: shaByte, count: 64))\",\"zip_url\":\"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip\"}".utf8
+        ))
     }
 
     private func parsedHeaders(_ wire: String) -> [String: String] {

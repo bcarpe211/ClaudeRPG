@@ -12,6 +12,7 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
     case doctor
     case uninstall
     case prepareUpdate = "prepare_update"
+    case resumeUpdate = "resume_update"
 }
 
 public enum CompanionCommandRoute: Equatable, Sendable {
@@ -105,7 +106,12 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
     private let pauseUploader: () -> Void
     private let pauseHeartbeat: () -> Void
     private let pauseWatcher: () -> Void
+    private let resumeAction: () throws -> Void
     private let acceptedResponse: () throws -> ControlResponse
+    private let stateLock = NSLock()
+    private var prepared = false
+
+    public var isPrepared: Bool { stateLock.withLock { prepared } }
 
     public init(
         workQueue: DispatchQueue,
@@ -114,6 +120,7 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
         pauseUploader: @escaping () -> Void,
         pauseHeartbeat: @escaping () -> Void,
         pauseWatcher: @escaping () -> Void,
+        resume: @escaping () throws -> Void = {},
         acceptedResponse: @escaping () throws -> ControlResponse = {
             ControlResponse(ok: true, message: "prepared for update")
         }
@@ -124,6 +131,7 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
         self.pauseUploader = pauseUploader
         self.pauseHeartbeat = pauseHeartbeat
         self.pauseWatcher = pauseWatcher
+        resumeAction = resume
         self.acceptedResponse = acceptedResponse
     }
 
@@ -137,9 +145,23 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
                 pauseUploader()
                 pauseHeartbeat()
                 pauseWatcher()
+                stateLock.withLock { prepared = true }
                 return try acceptedResponse()
             } catch {
                 return ControlResponse(ok: false, message: "unable to prepare update")
+            }
+        }
+    }
+
+    public func resume() -> ControlResponse {
+        workQueue.sync {
+            do {
+                guard isPrepared else { return try acceptedResponse() }
+                try resumeAction()
+                stateLock.withLock { prepared = false }
+                return try acceptedResponse()
+            } catch {
+                return ControlResponse(ok: false, message: "unable to resume after update")
             }
         }
     }
@@ -196,6 +218,17 @@ public struct LaunchdJobController {
         }
     }
 
+    public func restart() throws {
+        let result = try runCommand(
+            Self.executable,
+            ["kickstart", "-k", jobTarget],
+            10
+        )
+        guard result.exitStatus == .exited(0) else {
+            throw LaunchdJobControllerError.commandFailed
+        }
+    }
+
     public func proveStopped() -> Bool {
         guard let result = try? runCommand(
             Self.executable,
@@ -235,54 +268,248 @@ public enum StableUpdateRecoveryError: Error, Equatable {
     case healthVerificationFailed
 }
 
+public enum StableRecoveryPhase: Equatable, Sendable {
+    case rollbackOnly
+    case rollbackAndFailed
+}
+
+public final class StableRecoveryFileTransaction {
+    private struct Entry: Equatable {
+        let device: UInt64
+        let inode: UInt64
+        let mode: UInt16
+    }
+
+    private struct Snapshot {
+        let phase: StableRecoveryPhase
+        let rollback: Entry
+        let failed: Entry?
+    }
+
+    private let paths: AgentPaths
+    private let supportDescriptor: Int32
+    private var snapshot: Snapshot?
+
+    public init(paths: AgentPaths) throws {
+        self.paths = paths
+        guard let descriptor = try OwnerOnlyDirectory.openExisting(paths.supportDirectory) else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        supportDescriptor = descriptor
+    }
+
+    deinit { Darwin.close(supportDescriptor) }
+
+    public func inspectAndNormalize() throws -> StableRecoveryPhase {
+        try requireMissing(paths.installedApplication.lastPathComponent)
+        let rollbackName = paths.rollbackApplication.lastPathComponent
+        let rollbackBefore = try ownedDirectory(rollbackName, allowSafeReadableMode: true)
+        let failedName = paths.failedApplication.lastPathComponent
+        let failed: Entry?
+        let phase: StableRecoveryPhase
+        if exists(failedName) {
+            failed = try ownedDirectory(failedName, allowSafeReadableMode: false)
+            phase = .rollbackAndFailed
+        } else {
+            try requireMissing(failedName)
+            failed = nil
+            phase = .rollbackOnly
+        }
+        let rollbackDescriptor = Darwin.openat(
+            supportDescriptor,
+            rollbackName,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard rollbackDescriptor >= 0 else { throw CompanionUpdaterError.unsafeFilesystem }
+        defer { Darwin.close(rollbackDescriptor) }
+        var rollbackMetadata = stat()
+        guard Darwin.fstat(rollbackDescriptor, &rollbackMetadata) == 0,
+              UInt64(rollbackMetadata.st_dev) == rollbackBefore.device,
+              UInt64(rollbackMetadata.st_ino) == rollbackBefore.inode,
+              Darwin.fchmod(rollbackDescriptor, 0o700) == 0 else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        let rollback = try ownedDirectory(rollbackName, allowSafeReadableMode: false)
+        guard rollback.device == rollbackBefore.device,
+              rollback.inode == rollbackBefore.inode else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        snapshot = Snapshot(phase: phase, rollback: rollback, failed: failed)
+        return phase
+    }
+
+    public func restore(phase: StableRecoveryPhase) throws {
+        guard let snapshot, snapshot.phase == phase,
+              try ownedDirectory(
+                  paths.rollbackApplication.lastPathComponent,
+                  allowSafeReadableMode: false
+              ) == snapshot.rollback else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        try requireMissing(paths.installedApplication.lastPathComponent)
+        switch (phase, snapshot.failed) {
+        case (.rollbackOnly, nil):
+            try requireMissing(paths.failedApplication.lastPathComponent)
+        case let (.rollbackAndFailed, failed?):
+            guard try ownedDirectory(
+                paths.failedApplication.lastPathComponent,
+                allowSafeReadableMode: false
+            ) == failed else {
+                throw CompanionUpdaterError.unsafeFilesystem
+            }
+        default:
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        guard Darwin.renameat(
+            supportDescriptor,
+            paths.rollbackApplication.lastPathComponent,
+            supportDescriptor,
+            paths.installedApplication.lastPathComponent
+        ) == 0 else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        try synchronize()
+        guard try ownedDirectory(
+            paths.installedApplication.lastPathComponent,
+            allowSafeReadableMode: false
+        ) == snapshot.rollback else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        if let failed = snapshot.failed {
+            guard try ownedDirectory(
+                paths.failedApplication.lastPathComponent,
+                allowSafeReadableMode: false
+            ) == failed else {
+                throw CompanionUpdaterError.unsafeFilesystem
+            }
+        } else {
+            try requireMissing(paths.failedApplication.lastPathComponent)
+        }
+    }
+
+    private func ownedDirectory(
+        _ name: String,
+        allowSafeReadableMode: Bool
+    ) throws -> Entry {
+        var metadata = stat()
+        let mode: mode_t
+        guard Darwin.fstatat(supportDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_uid == Darwin.geteuid() else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        mode = metadata.st_mode & 0o777
+        guard mode == 0o700 || (allowSafeReadableMode && mode == 0o755) else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        return Entry(
+            device: UInt64(metadata.st_dev),
+            inode: UInt64(metadata.st_ino),
+            mode: UInt16(mode)
+        )
+    }
+
+    private func requireMissing(_ name: String) throws {
+        var metadata = stat()
+        guard Darwin.fstatat(supportDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) != 0,
+              errno == ENOENT else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+
+    private func exists(_ name: String) -> Bool {
+        var metadata = stat()
+        return Darwin.fstatat(supportDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0
+    }
+
+    private func synchronize() throws {
+        while Darwin.fsync(supportDescriptor) != 0 {
+            if errno == EINTR { continue }
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+}
+
 public struct StableUpdateRecoveryOperations {
-    let verifyBundles: () throws -> Void
+    let phase: () throws -> StableRecoveryPhase
+    let verifyBundles: (StableRecoveryPhase) throws -> Void
     let persistDisabled: () throws -> Void
     let bootout: () throws -> Void
     let proveStopped: () -> Bool
-    let restore: () throws -> Void
+    let restore: (StableRecoveryPhase) throws -> Void
+    let verifyRestoredBundle: (StableRecoveryPhase) throws -> Void
     let bootstrap: () throws -> Void
     let verifyDisabledHealth: () throws -> Bool
+    let monotonicNow: () -> TimeInterval
+    let sleep: (TimeInterval) -> Void
 
     public init(
-        verifyBundles: @escaping () throws -> Void,
+        phase: @escaping () throws -> StableRecoveryPhase,
+        verifyBundles: @escaping (StableRecoveryPhase) throws -> Void,
         persistDisabled: @escaping () throws -> Void,
         bootout: @escaping () throws -> Void,
         proveStopped: @escaping () -> Bool,
-        restore: @escaping () throws -> Void,
+        restore: @escaping (StableRecoveryPhase) throws -> Void,
+        verifyRestoredBundle: @escaping (StableRecoveryPhase) throws -> Void,
         bootstrap: @escaping () throws -> Void,
-        verifyDisabledHealth: @escaping () throws -> Bool
+        verifyDisabledHealth: @escaping () throws -> Bool,
+        monotonicNow: @escaping () -> TimeInterval = {
+            ProcessInfo.processInfo.systemUptime
+        },
+        sleep: @escaping (TimeInterval) -> Void = {
+            Thread.sleep(forTimeInterval: $0)
+        }
     ) {
+        self.phase = phase
         self.verifyBundles = verifyBundles
         self.persistDisabled = persistDisabled
         self.bootout = bootout
         self.proveStopped = proveStopped
         self.restore = restore
+        self.verifyRestoredBundle = verifyRestoredBundle
         self.bootstrap = bootstrap
         self.verifyDisabledHealth = verifyDisabledHealth
+        self.monotonicNow = monotonicNow
+        self.sleep = sleep
     }
 }
 
 public final class StableUpdateRecovery {
+    private static let healthTimeout: TimeInterval = 10
+    private static let healthPollInterval: TimeInterval = 0.1
+    private let paths: AgentPaths
     private let operations: StableUpdateRecoveryOperations
 
-    public init(operations: StableUpdateRecoveryOperations) {
+    public init(paths: AgentPaths, operations: StableUpdateRecoveryOperations) {
+        self.paths = paths
         self.operations = operations
     }
 
     public func run() throws {
-        try operations.verifyBundles()
+        let updateLock = try CompanionUpdateLock(paths: paths)
+        defer { updateLock.unlock() }
+        let phase = try operations.phase()
+        try operations.verifyBundles(phase)
         try operations.persistDisabled()
         try? operations.bootout()
         guard operations.proveStopped() else {
             throw StableUpdateRecoveryError.daemonNotProvenStopped
         }
-        try operations.verifyBundles()
-        try operations.restore()
+        try operations.verifyBundles(phase)
+        try operations.restore(phase)
+        try operations.verifyRestoredBundle(phase)
         try operations.bootstrap()
-        guard try operations.verifyDisabledHealth() else {
-            throw StableUpdateRecoveryError.healthVerificationFailed
-        }
+        let start = operations.monotonicNow()
+        guard start.isFinite else { throw StableUpdateRecoveryError.healthVerificationFailed }
+        let deadline = start + Self.healthTimeout
+        repeat {
+            if (try? operations.verifyDisabledHealth()) == true { return }
+            let now = operations.monotonicNow()
+            guard now.isFinite, now < deadline else {
+                throw StableUpdateRecoveryError.healthVerificationFailed
+            }
+            operations.sleep(min(Self.healthPollInterval, deadline - now))
+        } while true
     }
 }
 
@@ -666,7 +893,7 @@ public final class ControlSocketServer: @unchecked Sendable {
 public enum ControlSocketClient {
     static func timeoutSeconds(for command: ControlCommand) -> Int {
         switch command {
-        case .on, .off, .uninstall, .prepareUpdate:
+        case .on, .off, .uninstall, .prepareUpdate, .resumeUpdate:
             30
         case .daemon, .status, .doctor:
             2

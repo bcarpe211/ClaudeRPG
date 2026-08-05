@@ -238,13 +238,7 @@ public final class ReleaseChecker: @unchecked Sendable {
                 try store.save(state)
 
                 let manifest = try fetchNowUnlocked()
-                let currentSequence = state.cachedManifest?.releaseSequence
-                    ?? installed.releaseSequence
-                if manifest.releaseSequence > currentSequence,
-                   manifest.availability(from: installed) != nil {
-                    state.cachedManifest = manifest
-                    state.lastObservedReleaseSequence = manifest.releaseSequence
-                }
+                _ = merge(manifest, into: &state)
 
                 var shouldNotify = false
                 if let cachedManifest = state.cachedManifest,
@@ -263,7 +257,17 @@ public final class ReleaseChecker: @unchecked Sendable {
     }
 
     public func fetchNow() throws -> ReleaseManifestV1 {
-        try lock.withLock { try fetchNowUnlocked() }
+        try lock.withLock {
+            var state = try store.load()
+            let now = clockMS()
+            guard now >= 0 else { throw URLError(.badServerResponse) }
+            state.lastCheckAttemptMS = max(state.lastCheckAttemptMS ?? 0, now)
+            try store.save(state)
+            let fetched = try fetchNowUnlocked()
+            let selected = merge(fetched, into: &state)
+            try store.save(state)
+            return selected
+        }
     }
 
     public func availability() -> CompanionUpdateAvailability? {
@@ -355,6 +359,23 @@ public final class ReleaseChecker: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
         return try ReleaseManifestV1.decode(response.body)
+    }
+
+    private func merge(
+        _ fetched: ReleaseManifestV1,
+        into state: inout UpdateStateV1
+    ) -> ReleaseManifestV1 {
+        if let cached = state.cachedManifest,
+           cached.releaseSequence >= fetched.releaseSequence {
+            return cached
+        }
+        guard fetched.releaseSequence > installed.releaseSequence,
+              fetched.availability(from: installed) != nil else {
+            return fetched
+        }
+        state.cachedManifest = fetched
+        state.lastObservedReleaseSequence = fetched.releaseSequence
+        return fetched
     }
 
     private static func availability(
