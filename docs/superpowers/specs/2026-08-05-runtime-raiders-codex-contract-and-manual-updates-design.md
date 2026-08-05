@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-05
 
-**Status:** Approved in discussion; awaiting written-spec review
+**Status:** Approved
 
 **Scope:** Codex Desktop and CLI surface classification, compatibility policy,
 release discovery, and an explicit signed companion update command
