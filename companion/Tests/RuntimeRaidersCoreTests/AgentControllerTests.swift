@@ -52,7 +52,7 @@ final class AgentControllerTests: XCTestCase {
     func testInitialBoundaryReadsOnlyBoundedProvenanceRegardlessOfHistoricalSize() throws {
         try withHarness { harness in
             var history = lines([
-                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             ])
             history.append(Data(repeating: 0x78, count: 4 * 1_024 * 1_024))
             let file = try harness.makeFile("large-history.jsonl", contents: history)
@@ -80,7 +80,7 @@ final class AgentControllerTests: XCTestCase {
             let file = try harness.makeFile(
                 "single-session-meta.jsonl",
                 contents: lines([
-                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
                 ])
             )
             try harness.controller.install(existingFiles: [file])
@@ -167,7 +167,7 @@ final class AgentControllerTests: XCTestCase {
             let file = try harness.makeFile(
                 "single-session-meta-off-on.jsonl",
                 contents: lines([
-                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
                 ])
             )
             try harness.controller.install(existingFiles: [file])
@@ -624,7 +624,7 @@ final class AgentControllerTests: XCTestCase {
     func testInstallCapturesEveryFileBoundaryBeforeLowBudgetSeedWork() throws {
         try withHarness(readLimitBytes: 128) { harness in
             let metadata = lines([
-                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             ])
             let files = try (0..<4).map { index in
                 try harness.makeFile("boundary-\(index).jsonl", contents: metadata)
@@ -653,7 +653,7 @@ final class AgentControllerTests: XCTestCase {
     func testChangedPathIsBufferedWhileMultiCallbackBoundaryIsStillClosed() throws {
         try withHarness(readLimitBytes: 64) { harness in
             let metadata = lines([
-                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             ])
             let first = try harness.makeFile("buffer-a.jsonl", contents: metadata)
             let second = try harness.makeFile("buffer-b.jsonl", contents: metadata)
@@ -688,7 +688,7 @@ final class AgentControllerTests: XCTestCase {
     func testDisappearingCapturedFileCannotBlockBoundaryActivation() throws {
         try withHarness(readLimitBytes: 64) { harness in
             let metadata = lines([
-                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             ])
             let first = try harness.makeFile("vanish-a.jsonl", contents: metadata)
             let disappearing = try harness.makeFile("vanish-b.jsonl", contents: metadata)
@@ -733,7 +733,7 @@ final class AgentControllerTests: XCTestCase {
     func testCapturedTailRewriteRepinsCurrentEOFBeforeScoringExtensions() throws {
         try withHarness(readLimitBytes: 64) { harness in
             let metadata = lines([
-                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             ])
             var original = metadata
             original.append(completedRun(nativeID: "old-history"))
@@ -1412,7 +1412,7 @@ final class AgentControllerTests: XCTestCase {
 
     private func runPrefix(nativeID: String) -> Data {
         lines([
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             "{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"\(nativeID)\",\"model\":\"synthetic\"}}",
         ])
@@ -1436,7 +1436,7 @@ final class AgentControllerTests: XCTestCase {
 
     private func overSevenDayRun(nativeID: String) -> Data {
         lines([
-            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"cli","cli_version":"0.146.0-alpha.3.1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             "{\"timestamp\":\"2026-01-01T00:00:02Z\",\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"\(nativeID)\",\"model\":\"synthetic\"}}",
             #"{"timestamp":"2026-01-09T00:00:03Z","type":"event_msg","payload":{"type":"task_complete"}}"#,

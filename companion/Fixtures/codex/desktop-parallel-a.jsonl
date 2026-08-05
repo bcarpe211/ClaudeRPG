@@ -1,4 +1,4 @@
-{"timestamp":"2026-01-10T00:00:00Z","type":"session_meta","payload":{"id":"FAKE_DESKTOP_PARALLEL_A","cwd":"DO_NOT_EXPORT_PATH","originator":"SYNTHETIC_DESKTOP_ORIGINATOR","cli_version":"0.146.0-alpha.3.1","source":{"subagent":{"thread_spawn":{"agent_nickname":"FAKE_AGENT_A","agent_path":"DO_NOT_EXPORT_PATH","agent_role":null,"depth":1,"parent_thread_id":"FAKE_PARENT"}}}}}
+{"timestamp":"2026-01-10T00:00:00Z","type":"session_meta","payload":{"id":"FAKE_DESKTOP_PARALLEL_A","cwd":"DO_NOT_EXPORT_PATH","originator":"SYNTHETIC_DESKTOP_ORIGINATOR","cli_version":"0.146.0-alpha.3.1","source":"vscode"}}
 {"timestamp":"2026-01-10T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}
 {"timestamp":"2026-01-10T00:00:02Z","type":"turn_context","payload":{"turn_id":"FAKE_DESKTOP_PARALLEL_TURN_A"}}
 {"timestamp":"2026-01-10T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":19,"cached_input_tokens":5,"cache_write_input_tokens":1,"output_tokens":4,"reasoning_output_tokens":1,"total_tokens":30}}}}

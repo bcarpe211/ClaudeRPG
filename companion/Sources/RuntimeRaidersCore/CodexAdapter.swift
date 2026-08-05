@@ -4,6 +4,11 @@ public enum CodexAdapterSnapshotError: Error, Equatable {
     case invalidSnapshot
 }
 
+public enum CodexCompatibilityIssue: String, Codable, CaseIterable, Equatable, Sendable {
+    case unsupportedSource = "unsupported_source"
+    case unsupportedContract = "unsupported_contract"
+}
+
 public struct CodexAdapter: ProviderAdapter {
     private struct PendingContext: Codable {
         let nativeID: String
@@ -20,7 +25,6 @@ public struct CodexAdapter: ProviderAdapter {
     }
 
     private static let maximumSafeInteger: Int64 = 9_007_199_254_740_991
-    private static let supportedRecordVersion = "0.146.0-alpha.3.1"
     private static let zeroUsage = UsageCountersV1(
         input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0
     )
@@ -28,6 +32,7 @@ public struct CodexAdapter: ProviderAdapter {
     public let expectedSurface: RunSurface
     private var verifiedSurface: RunSurface?
     private var rejectedSurface = false
+    private var storedCompatibilityIssue: CodexCompatibilityIssue?
     private var pendingStartedAt: Int64?
     private var pendingStartedOrdinal: Int64?
     private var pendingUsage: UsageCountersV1?
@@ -41,6 +46,9 @@ public struct CodexAdapter: ProviderAdapter {
     private var activeUsage = zeroUsage
     private var activeModel: String?
     private var activeEffort: String?
+
+    public var compatibilityIssue: CodexCompatibilityIssue? { storedCompatibilityIssue }
+    public var hasActiveRun: Bool { activeNativeID != nil && activeCompletedOrdinal == nil }
 
     public init(expectedSurface: RunSurface) {
         self.expectedSurface = expectedSurface
@@ -77,6 +85,7 @@ public struct CodexAdapter: ProviderAdapter {
         expectedSurface = state.expectedSurface
         verifiedSurface = state.verifiedSurface
         rejectedSurface = state.rejectedSurface
+        storedCompatibilityIssue = state.compatibilityIssue
         pendingStartedAt = state.pendingStartedAt
         pendingStartedOrdinal = state.pendingStartedOrdinal
         pendingUsage = state.pendingUsage
@@ -98,6 +107,7 @@ public struct CodexAdapter: ProviderAdapter {
             expectedSurface: expectedSurface,
             verifiedSurface: verifiedSurface,
             rejectedSurface: rejectedSurface,
+            compatibilityIssue: storedCompatibilityIssue,
             pendingStartedAt: pendingStartedAt,
             pendingStartedOrdinal: pendingStartedOrdinal,
             pendingUsage: pendingUsage,
@@ -147,19 +157,20 @@ public struct CodexAdapter: ProviderAdapter {
             guard !rejectedSurface else { return [] }
             guard let payload = record["payload"] as? [String: Any],
                   Self.timestampMS(record["timestamp"] as? String) != nil,
-                  payload["cli_version"] as? String == Self.supportedRecordVersion,
+                  Self.validRecordVersion(payload["cli_version"]),
                   Self.validRequiredMarker(payload["id"]),
-                  Self.validRequiredMarker(payload["originator"]),
-                  let surface = Self.sessionSurface(payload["source"]) else {
-                rejectedSurface = true
-                verifiedSurface = nil
-                clearLifecycle()
+                  Self.validRequiredMarker(payload["originator"]) else {
+                reject(.unsupportedContract)
                 return []
             }
-            if surface == expectedSurface, expectedSurface == .codexCLI || expectedSurface == .codexDesktop {
+            guard let surface = Self.sessionSurface(payload["source"]) else {
+                reject(Self.isUnknownStringSource(payload["source"])
+                    ? .unsupportedSource : .unsupportedContract)
+                return []
+            }
+            if surface == expectedSurface {
                 verifiedSurface = surface
             } else {
-                rejectedSurface = true
                 verifiedSurface = nil
                 clearLifecycle()
             }
@@ -205,7 +216,11 @@ public struct CodexAdapter: ProviderAdapter {
         case "token_count":
             guard let usage = Self.usage(from: payload) else { return [] }
             if let nativeID = activeNativeID, let startedAt = activeStartedAt {
-                activeUsage = Self.maximum(activeUsage, usage)
+                guard eventTime >= startedAt, Self.isCumulative(usage, atLeast: activeUsage) else {
+                    reject(.unsupportedContract)
+                    return []
+                }
+                activeUsage = usage
                 return [observation(
                     nativeID: nativeID,
                     sequence: source.ordinal,
@@ -215,9 +230,21 @@ public struct CodexAdapter: ProviderAdapter {
                     state: .open
                 )]
             }
-            pendingUsage = pendingUsage.map { Self.maximum($0, usage) } ?? usage
+            if let startedAt = pendingStartedAt, eventTime < startedAt {
+                reject(.unsupportedContract)
+                return []
+            }
+            guard pendingUsage.map({ Self.isCumulative(usage, atLeast: $0) }) ?? true else {
+                reject(.unsupportedContract)
+                return []
+            }
+            pendingUsage = usage
             return []
         case "task_complete":
+            if let startedAt = activeStartedAt, eventTime < startedAt {
+                reject(.unsupportedContract)
+                return []
+            }
             pendingCompletion = PendingCompletion(
                 eventTime: eventTime,
                 ordinal: source.ordinal,
@@ -236,6 +263,10 @@ public struct CodexAdapter: ProviderAdapter {
               let startedAt = pendingStartedAt,
               let startedOrdinal = pendingStartedOrdinal,
               context.ordinal > startedOrdinal else { return [] }
+        guard context.eventTime >= startedAt else {
+            reject(.unsupportedContract)
+            return []
+        }
         activeNativeID = context.nativeID
         activeStartedAt = startedAt
         activeStartedOrdinal = startedOrdinal
@@ -268,6 +299,10 @@ public struct CodexAdapter: ProviderAdapter {
         guard activeCompletedOrdinal == nil else { return [] }
         pendingCompletion = nil
         guard completion.ordinal > contextOrdinal else { return [] }
+        guard completion.eventTime >= startedAt else {
+            reject(.unsupportedContract)
+            return []
+        }
         activeCompletedOrdinal = completion.ordinal
         return [observation(
             nativeID: nativeID,
@@ -293,6 +328,13 @@ public struct CodexAdapter: ProviderAdapter {
         activeUsage = Self.zeroUsage
         activeModel = nil
         activeEffort = nil
+    }
+
+    private mutating func reject(_ issue: CodexCompatibilityIssue) {
+        rejectedSurface = true
+        verifiedSurface = nil
+        storedCompatibilityIssue = issue
+        clearLifecycle()
     }
 
     private func observation(
@@ -348,14 +390,12 @@ public struct CodexAdapter: ProviderAdapter {
         return number.int64Value
     }
 
-    private static func maximum(_ lhs: UsageCountersV1, _ rhs: UsageCountersV1) -> UsageCountersV1 {
-        UsageCountersV1(
-            input: max(lhs.input, rhs.input),
-            output: max(lhs.output, rhs.output),
-            cacheRead: max(lhs.cacheRead, rhs.cacheRead),
-            cacheWrite: max(lhs.cacheWrite, rhs.cacheWrite),
-            reasoningOutput: max(lhs.reasoningOutput, rhs.reasoningOutput)
-        )
+    private static func isCumulative(_ value: UsageCountersV1, atLeast baseline: UsageCountersV1) -> Bool {
+        value.input >= baseline.input
+            && value.output >= baseline.output
+            && value.cacheRead >= baseline.cacheRead
+            && value.cacheWrite >= baseline.cacheWrite
+            && value.reasoningOutput >= baseline.reasoningOutput
     }
 
     private static func displayValue(_ value: Any?) -> String? {
@@ -368,8 +408,27 @@ public struct CodexAdapter: ProviderAdapter {
         return !string.isEmpty && string.utf8.count <= 4_096
     }
 
+    private static func validRecordVersion(_ value: Any?) -> Bool {
+        guard let value = value as? String else { return false }
+        return !value.isEmpty && value.utf8.count <= 100
+    }
+
     private static func sessionSurface(_ source: Any?) -> RunSurface? {
-        if validRequiredMarker(source) { return .codexCLI }
+        if let source = source as? String {
+            switch source {
+            case "vscode": return .codexDesktop
+            case "exec": return .codexCLI
+            default: return nil
+            }
+        }
+        return strictSubagentSurface(source)
+    }
+
+    private static func isUnknownStringSource(_ source: Any?) -> Bool {
+        source is String
+    }
+
+    private static func strictSubagentSurface(_ source: Any?) -> RunSurface? {
         guard let source = source as? [String: Any],
               Set(source.keys) == ["subagent"],
               let subagent = source["subagent"] as? [String: Any],
@@ -464,6 +523,7 @@ public struct CodexAdapter: ProviderAdapter {
         let expectedSurface: RunSurface
         let verifiedSurface: RunSurface?
         let rejectedSurface: Bool
+        let compatibilityIssue: CodexCompatibilityIssue?
         let pendingStartedAt: Int64?
         let pendingStartedOrdinal: Int64?
         let pendingUsage: UsageCountersV1?
@@ -477,5 +537,76 @@ public struct CodexAdapter: ProviderAdapter {
         let activeUsage: UsageCountersV1
         let activeModel: String?
         let activeEffort: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case version, expectedSurface, verifiedSurface, rejectedSurface, compatibilityIssue
+            case pendingStartedAt, pendingStartedOrdinal, pendingUsage, pendingContext, pendingCompletion
+            case activeNativeID, activeStartedAt, activeStartedOrdinal, activeContextOrdinal
+            case activeCompletedOrdinal, activeUsage, activeModel, activeEffort
+        }
+
+        init(
+            version: Int,
+            expectedSurface: RunSurface,
+            verifiedSurface: RunSurface?,
+            rejectedSurface: Bool,
+            compatibilityIssue: CodexCompatibilityIssue?,
+            pendingStartedAt: Int64?,
+            pendingStartedOrdinal: Int64?,
+            pendingUsage: UsageCountersV1?,
+            pendingContext: PendingContext?,
+            pendingCompletion: PendingCompletion?,
+            activeNativeID: String?,
+            activeStartedAt: Int64?,
+            activeStartedOrdinal: Int64?,
+            activeContextOrdinal: Int64?,
+            activeCompletedOrdinal: Int64?,
+            activeUsage: UsageCountersV1,
+            activeModel: String?,
+            activeEffort: String?
+        ) {
+            self.version = version
+            self.expectedSurface = expectedSurface
+            self.verifiedSurface = verifiedSurface
+            self.rejectedSurface = rejectedSurface
+            self.compatibilityIssue = compatibilityIssue
+            self.pendingStartedAt = pendingStartedAt
+            self.pendingStartedOrdinal = pendingStartedOrdinal
+            self.pendingUsage = pendingUsage
+            self.pendingContext = pendingContext
+            self.pendingCompletion = pendingCompletion
+            self.activeNativeID = activeNativeID
+            self.activeStartedAt = activeStartedAt
+            self.activeStartedOrdinal = activeStartedOrdinal
+            self.activeContextOrdinal = activeContextOrdinal
+            self.activeCompletedOrdinal = activeCompletedOrdinal
+            self.activeUsage = activeUsage
+            self.activeModel = activeModel
+            self.activeEffort = activeEffort
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                version: try container.decode(Int.self, forKey: .version),
+                expectedSurface: try container.decode(RunSurface.self, forKey: .expectedSurface),
+                verifiedSurface: try container.decodeIfPresent(RunSurface.self, forKey: .verifiedSurface),
+                rejectedSurface: try container.decode(Bool.self, forKey: .rejectedSurface),
+                compatibilityIssue: try container.decodeIfPresent(CodexCompatibilityIssue.self, forKey: .compatibilityIssue),
+                pendingStartedAt: try container.decodeIfPresent(Int64.self, forKey: .pendingStartedAt),
+                pendingStartedOrdinal: try container.decodeIfPresent(Int64.self, forKey: .pendingStartedOrdinal),
+                pendingUsage: try container.decodeIfPresent(UsageCountersV1.self, forKey: .pendingUsage),
+                pendingContext: try container.decodeIfPresent(PendingContext.self, forKey: .pendingContext),
+                pendingCompletion: try container.decodeIfPresent(PendingCompletion.self, forKey: .pendingCompletion),
+                activeNativeID: try container.decodeIfPresent(String.self, forKey: .activeNativeID),
+                activeStartedAt: try container.decodeIfPresent(Int64.self, forKey: .activeStartedAt),
+                activeStartedOrdinal: try container.decodeIfPresent(Int64.self, forKey: .activeStartedOrdinal),
+                activeContextOrdinal: try container.decodeIfPresent(Int64.self, forKey: .activeContextOrdinal),
+                activeCompletedOrdinal: try container.decodeIfPresent(Int64.self, forKey: .activeCompletedOrdinal),
+                activeUsage: try container.decode(UsageCountersV1.self, forKey: .activeUsage),
+                activeModel: try container.decodeIfPresent(String.self, forKey: .activeModel),
+                activeEffort: try container.decodeIfPresent(String.self, forKey: .activeEffort)
+            )
+        }
     }
 }

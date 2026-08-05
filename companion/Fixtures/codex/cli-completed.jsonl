@@ -1,4 +1,4 @@
-{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"FAKE_CLI_SESSION_COMPLETE","timestamp":"2026-01-01T00:00:00Z","cwd":"DO_NOT_EXPORT_PATH","originator":"SYNTHETIC_CLI_ORIGINATOR","cli_version":"0.146.0-alpha.3.1","source":"SYNTHETIC_CLI_SOURCE","model_provider":"SYNTHETIC_PROVIDER"}}
+{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"FAKE_CLI_SESSION_COMPLETE","timestamp":"2026-01-01T00:00:00Z","cwd":"DO_NOT_EXPORT_PATH","originator":"SYNTHETIC_CLI_ORIGINATOR","cli_version":"0.146.0-alpha.3.1","source":"exec","model_provider":"SYNTHETIC_PROVIDER"}}
 {"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}
 {"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"DO_NOT_EXPORT_PROMPT"}],"internal_chat_message_metadata_passthrough":{"turn_id":"FAKE_CLI_TURN_COMPLETE"}}}
 {"timestamp":"2026-01-01T00:00:03Z","type":"turn_context","payload":{"turn_id":"FAKE_CLI_TURN_COMPLETE"}}
