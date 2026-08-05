@@ -31,12 +31,16 @@ private enum CLIError: Error, CustomStringConvertible {
     case usage
     case missingRuntimeConfiguration
     case invalidRuntimeConfiguration
+    case invalidUpdateState
+    case updateOperationFailed
 
     var description: String {
         switch self {
-        case .usage: "usage: raiders daemon|on|off|status|doctor|uninstall"
+        case .usage: "usage: raiders on|off|status|doctor|uninstall|update"
         case .missingRuntimeConfiguration: "Runtime Raiders enrollment configuration is unavailable"
         case .invalidRuntimeConfiguration: "Runtime Raiders enrollment configuration is invalid"
+        case .invalidUpdateState: "Runtime Raiders update state is invalid"
+        case .updateOperationFailed: "Runtime Raiders update operation failed"
         }
     }
 }
@@ -69,6 +73,23 @@ private final class DaemonRuntime: @unchecked Sendable {
         self?.handleChangedFiles(files)
     }
     private lazy var control = ControlSocketServer(socketURL: paths.controlSocket)
+    private lazy var updatePreparation = SerializedUpdatePreparation(
+        workQueue: workQueue,
+        activeRunCount: { [weak self] in
+            guard let self else { throw CLIError.invalidRuntimeConfiguration }
+            return try self.currentStatus().activeRunCount
+        },
+        pauseAcceptance: { [weak self] in self?.controller.pauseCollection() },
+        pauseUploader: { [weak self] in self?.uploader.setEnabled(false) },
+        pauseHeartbeat: { [weak self] in self?.heartbeat.setEnabled(false) },
+        pauseWatcher: { [weak self] in self?.watcher.stop() },
+        acceptedResponse: { [weak self] in
+            guard let self else {
+                return ControlResponse(ok: false, message: "daemon unavailable")
+            }
+            return ControlResponse(ok: true, message: try self.currentStatus().description)
+        }
+    )
 
     init(inputs: RuntimeInputs) throws {
         self.inputs = inputs
@@ -253,7 +274,19 @@ private final class DaemonRuntime: @unchecked Sendable {
                     return ControlResponse(ok: false, message: "unable to persist off state")
                 }
             }
+        case .prepareUpdate:
+            return updatePreparation.prepare()
         }
+    }
+
+    private func currentStatus() throws -> AgentStatus {
+        try controller.status(
+            daemonRunning: true,
+            serverEnabledSurfaces: inputs.surfaces,
+            lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS,
+            installedRelease: inputs.releaseIdentity,
+            updateAvailability: releaseChecker?.availability()
+        )
     }
 
     fileprivate static func serverHealthy() -> Bool {
@@ -275,13 +308,380 @@ private final class DaemonRuntime: @unchecked Sendable {
     }
 }
 
+private final class BlockingDownloadResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private let completed = DispatchSemaphore(value: 0)
+    private var result: Result<DownloadReceipt, Error>?
+
+    func finish(_ result: Result<DownloadReceipt, Error>) {
+        lock.withLock { self.result = result }
+        completed.signal()
+    }
+
+    func wait() throws -> DownloadReceipt {
+        guard completed.wait(timeout: .now() + 125) == .success,
+              let result = lock.withLock({ self.result }) else {
+            throw CLIError.updateOperationFailed
+        }
+        return try result.get()
+    }
+}
+
+private struct InstalledTrustRoot {
+    private static let validationFlags = SecCSFlags(rawValue:
+        UInt32(kSecCSCheckAllArchitectures) |
+            UInt32(kSecCSStrictValidate) |
+            UInt32(kSecCSCheckNestedCode) |
+            UInt32(kSecCSRestrictSymlinks)
+    )
+
+    let verifiedSelf: VerifiedCompanionApplication
+    private let designatedRequirement: SecRequirement
+
+    init(expectedBundleURL: URL) throws {
+        guard Bundle.main.bundleURL.standardizedFileURL.path ==
+                expectedBundleURL.standardizedFileURL.path else {
+            throw CLIError.invalidUpdateState
+        }
+        let code = try Self.staticCode(at: expectedBundleURL)
+        var requirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(code, [], &requirement) == errSecSuccess,
+              let requirement,
+              SecStaticCodeCheckValidity(code, Self.validationFlags, requirement) == errSecSuccess else {
+            throw CLIError.invalidUpdateState
+        }
+        designatedRequirement = requirement
+        verifiedSelf = try Self.verifiedApplication(
+            at: expectedBundleURL,
+            requirement: requirement
+        )
+    }
+
+    func verifyApplication(at application: URL) throws -> VerifiedCompanionApplication {
+        try Self.verifiedApplication(at: application, requirement: designatedRequirement)
+    }
+
+    private static func verifiedApplication(
+        at application: URL,
+        requirement: SecRequirement
+    ) throws -> VerifiedCompanionApplication {
+        let code = try staticCode(at: application)
+        guard SecStaticCodeCheckValidity(code, validationFlags, requirement) == errSecSuccess else {
+            throw CLIError.invalidUpdateState
+        }
+        var signingInformation: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code,
+            SecCSFlags(rawValue: UInt32(kSecCSSigningInformation)),
+            &signingInformation
+        ) == errSecSuccess,
+        let information = signingInformation as? [String: Any],
+        information[kSecCodeInfoIdentifier as String] as? String ==
+            "com.redlattice.runtime-raiders-agent",
+        let teamIdentifier = information[kSecCodeInfoTeamIdentifier as String] as? String,
+        teamIdentifier.utf8.count == 10,
+        teamIdentifier.utf8.allSatisfy({ byte in
+            (48...57).contains(byte) || (65...90).contains(byte)
+        }),
+        let bundle = Bundle(url: application) else {
+            throw CLIError.invalidUpdateState
+        }
+        return VerifiedCompanionApplication(
+            identity: try CompanionReleaseIdentity.load(from: bundle),
+            teamIdentifier: teamIdentifier
+        )
+    }
+
+    private static func staticCode(at application: URL) throws -> SecStaticCode {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(application as CFURL, [], &code) == errSecSuccess,
+              let code else {
+            throw CLIError.invalidUpdateState
+        }
+        return code
+    }
+}
+
+private struct LiveUpdateStatusProvider {
+    let paths: AgentPaths
+    let surfaces: [RunSurface]
+    let enrollment: EnrollmentConfiguration
+    let trustRoot: InstalledTrustRoot
+
+    func status(command: ControlCommand) throws -> CompanionUpdateStatus {
+        guard command == .status || command == .prepareUpdate else {
+            throw CLIError.invalidUpdateState
+        }
+        let response = try ControlSocketClient.send(
+            request: ControlRequest(command: command),
+            to: paths.controlSocket
+        )
+        guard response.ok,
+              let data = response.message.data(using: .utf8),
+              let status = try? JSONDecoder().decode(AgentStatus.self, from: data) else {
+            throw CLIError.invalidUpdateState
+        }
+        let verified = try trustRoot.verifyApplication(at: paths.installedApplication)
+        let persistedState = try AgentController.persistedCollectorState(
+            paths: paths,
+            surfaces: surfaces
+        )
+        let currentEnrollment = try EnrollmentConfiguration.loadExisting(
+            from: paths.stateDirectory.appendingPathComponent("enrollment.json")
+        )
+        let queuedCount = try Outbox.queuedCount(inExistingDirectory: paths.outboxDirectory)
+        guard status.daemonRunning,
+              status.installedReleaseSequence == verified.identity.releaseSequence,
+              status.installedCompanionVersion == verified.identity.companionVersion,
+              status.serverEnabledSurfaces == surfaces.sorted(by: { $0.rawValue < $1.rawValue }),
+              currentEnrollment == enrollment,
+              queuedCount == status.queuedEventCount,
+              (persistedState == .enabled || persistedState == .disabled),
+              status.persistedState == persistedState,
+              status.enabled == (persistedState == .enabled),
+              status.activeRunCount >= 0,
+              status.queuedEventCount >= 0 else {
+            throw CLIError.invalidUpdateState
+        }
+        return CompanionUpdateStatus(
+            verifiedApplication: verified,
+            daemonRunning: status.daemonRunning,
+            enabled: status.enabled,
+            enrollmentValid: true,
+            collectorStateValid: true,
+            activeRunCount: status.activeRunCount,
+            queuedEventCount: status.queuedEventCount
+        )
+    }
+}
+
+private func launchAgentURL() -> URL {
+    FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        .appendingPathComponent("com.redlattice.runtime-raiders-agent.plist", isDirectory: false)
+}
+
+private func downloadSynchronously(
+    downloader: ArtifactDownloader,
+    source: URL,
+    destination: URL,
+    expectedSHA256: String
+) throws -> DownloadReceipt {
+    let box = BlockingDownloadResult()
+    Task.detached {
+        do {
+            box.finish(.success(try await downloader.download(
+                from: source,
+                to: destination,
+                expectedSHA256: expectedSHA256
+            )))
+        } catch {
+            box.finish(.failure(error))
+        }
+    }
+    return try box.wait()
+}
+
+private func availableCapacity(at directory: URL) throws -> Int64 {
+    let values = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+    guard let capacity = values.volumeAvailableCapacityForImportantUsage, capacity >= 0 else {
+        throw CLIError.invalidUpdateState
+    }
+    return capacity
+}
+
+private func runForegroundUpdate(paths: AgentPaths) throws {
+    let enrollment = try EnrollmentConfiguration.loadExisting(
+        from: paths.stateDirectory.appendingPathComponent("enrollment.json")
+    )
+    let trustRoot = try InstalledTrustRoot(expectedBundleURL: paths.installedApplication)
+    let statusProvider = LiveUpdateStatusProvider(
+        paths: paths,
+        surfaces: enrollment.enabledSurfaces,
+        enrollment: enrollment,
+        trustRoot: trustRoot
+    )
+    let releaseChecker = try ReleaseChecker(
+        paths: paths,
+        installed: trustRoot.verifiedSelf.identity
+    )
+    let downloader = ArtifactDownloader()
+    let commandRunner = SystemCommandRunner()
+    let candidateVerifier = CandidateVerifier()
+    let launchd = LaunchdJobController(
+        plistURL: launchAgentURL(),
+        runCommand: commandRunner.run
+    )
+    let updater = CompanionUpdater(
+        paths: paths,
+        surfaces: enrollment.enabledSurfaces,
+        operations: CompanionUpdaterOperations(
+            status: { try statusProvider.status(command: .status) },
+            fetchManifest: { try releaseChecker.fetchNow() },
+            downloadArchive: { source, destination, digest in
+                try downloadSynchronously(
+                    downloader: downloader,
+                    source: source,
+                    destination: destination,
+                    expectedSHA256: digest
+                )
+            },
+            runCommand: commandRunner.run,
+            verifyCandidate: { candidate, manifest, installed in
+                try candidateVerifier.verify(
+                    candidate: candidate,
+                    manifest: manifest,
+                    installed: installed.identity,
+                    installedTeamIdentifier: installed.teamIdentifier
+                )
+            },
+            availableCapacity: availableCapacity,
+            prepareDaemon: { try statusProvider.status(command: .prepareUpdate) },
+            bootout: launchd.bootout,
+            bootstrap: launchd.bootstrap,
+            proveDaemonStopped: launchd.proveStopped,
+            healthStatus: { try statusProvider.status(command: .status) },
+            emitRecoveryCommand: { command in
+                FileHandle.standardError.write(Data("\(command)\n".utf8))
+            }
+        )
+    )
+
+    switch try updater.run() {
+    case .alreadyCurrent:
+        print("Runtime Raiders is already current.")
+    case let .updated(from, to):
+        print("Runtime Raiders updated from \(from.companionVersion) to \(to.companionVersion).")
+    }
+}
+
+private struct RecoveryEntryMetadata: Equatable {
+    let device: UInt64
+    let inode: UInt64
+    let mode: UInt16
+}
+
+private func recoveryEntryMetadata(parent: Int32, name: String) throws -> RecoveryEntryMetadata {
+    var metadata = stat()
+    guard Darwin.fstatat(parent, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
+          metadata.st_mode & S_IFMT == S_IFDIR,
+          metadata.st_uid == Darwin.geteuid(),
+          metadata.st_mode & 0o777 == 0o700 else {
+        throw CLIError.invalidUpdateState
+    }
+    return RecoveryEntryMetadata(
+        device: UInt64(metadata.st_dev),
+        inode: UInt64(metadata.st_ino),
+        mode: UInt16(metadata.st_mode & 0o777)
+    )
+}
+
+private func restoreStableRollback(paths: AgentPaths) throws {
+    let support = Darwin.open(
+        paths.supportDirectory.path,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard support >= 0 else { throw CLIError.invalidUpdateState }
+    defer { Darwin.close(support) }
+    var supportMetadata = stat()
+    guard Darwin.fstat(support, &supportMetadata) == 0,
+          supportMetadata.st_mode & S_IFMT == S_IFDIR,
+          supportMetadata.st_uid == Darwin.geteuid(),
+          supportMetadata.st_mode & 0o777 == 0o700 else {
+        throw CLIError.invalidUpdateState
+    }
+    let rollbackName = paths.rollbackApplication.lastPathComponent
+    let failedName = paths.failedApplication.lastPathComponent
+    let installedName = paths.installedApplication.lastPathComponent
+    let rollbackBefore = try recoveryEntryMetadata(parent: support, name: rollbackName)
+    let failedBefore = try recoveryEntryMetadata(parent: support, name: failedName)
+    var installedMetadata = stat()
+    guard Darwin.fstatat(support, installedName, &installedMetadata, AT_SYMLINK_NOFOLLOW) != 0,
+          errno == ENOENT,
+          try recoveryEntryMetadata(parent: support, name: rollbackName) == rollbackBefore,
+          try recoveryEntryMetadata(parent: support, name: failedName) == failedBefore,
+          Darwin.renameat(support, rollbackName, support, installedName) == 0,
+          Darwin.fsync(support) == 0,
+          try recoveryEntryMetadata(parent: support, name: installedName) == rollbackBefore,
+          try recoveryEntryMetadata(parent: support, name: failedName) == failedBefore else {
+        throw CLIError.invalidUpdateState
+    }
+}
+
+private func runStableRecovery(paths: AgentPaths) throws {
+    let enrollment = try EnrollmentConfiguration.loadExisting(
+        from: paths.stateDirectory.appendingPathComponent("enrollment.json")
+    )
+    let trustRoot = try InstalledTrustRoot(expectedBundleURL: paths.rollbackApplication)
+    guard try AgentController.persistedCollectorState(
+        paths: paths,
+        surfaces: enrollment.enabledSurfaces
+    ) == .disabled,
+    let manifest = try UpdateStateStore(paths: paths).load().cachedManifest else {
+        throw CLIError.invalidUpdateState
+    }
+    let verifier = CandidateVerifier()
+    let verifyBundles = {
+        guard try trustRoot.verifyApplication(at: paths.rollbackApplication) ==
+                trustRoot.verifiedSelf else {
+            throw CLIError.invalidUpdateState
+        }
+        let failedIdentity = try verifier.verify(
+            candidate: paths.failedApplication,
+            manifest: manifest,
+            installed: trustRoot.verifiedSelf.identity,
+            installedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
+        )
+        guard failedIdentity.releaseSequence > trustRoot.verifiedSelf.identity.releaseSequence else {
+            throw CLIError.invalidUpdateState
+        }
+    }
+    let runner = SystemCommandRunner()
+    let launchd = LaunchdJobController(
+        plistURL: launchAgentURL(),
+        runCommand: runner.run
+    )
+    let recovery = StableUpdateRecovery(operations: StableUpdateRecoveryOperations(
+        verifyBundles: verifyBundles,
+        persistDisabled: {
+            try AgentController.persistDisabledForRecovery(
+                paths: paths,
+                surfaces: enrollment.enabledSurfaces
+            )
+        },
+        bootout: launchd.bootout,
+        proveStopped: launchd.proveStopped,
+        restore: { try restoreStableRollback(paths: paths) },
+        bootstrap: launchd.bootstrap,
+        verifyDisabledHealth: {
+            let status = try LiveUpdateStatusProvider(
+                paths: paths,
+                surfaces: enrollment.enabledSurfaces,
+                enrollment: enrollment,
+                trustRoot: trustRoot
+            ).status(command: .status)
+            return status.verifiedApplication == trustRoot.verifiedSelf &&
+                !status.enabled && status.activeRunCount == 0
+        }
+    ))
+    try recovery.run()
+    print("Runtime Raiders restored \(trustRoot.verifiedSelf.identity.companionVersion) with collection off.")
+}
+
 private func run() throws {
+    let paths = AgentPaths()
     let arguments = Array(CommandLine.arguments.dropFirst())
-    guard arguments.count == 1, let command = ControlCommand(rawValue: arguments[0]) else {
+    guard let executableURL = Bundle.main.executableURL,
+          let route = CompanionCommandRouter.route(
+              arguments: arguments,
+              executableURL: executableURL,
+              paths: paths
+          ) else {
         throw CLIError.usage
     }
-    if command == .daemon {
-        let paths = AgentPaths()
+
+    switch route {
+    case .daemon:
         let enrollment = try EnrollmentConfiguration.load(
             from: paths.stateDirectory.appendingPathComponent("enrollment.json")
         )
@@ -291,8 +691,23 @@ private func run() throws {
             )
         ).run()
         return
+    case .foregroundUpdate:
+        try runForegroundUpdate(paths: paths)
+        return
+    case .selfCheck:
+        FileHandle.standardOutput.write(
+            try CompanionSelfCheck.encode(CompanionReleaseIdentity.load(from: .main))
+        )
+        return
+    case .recoverUpdate:
+        try runStableRecovery(paths: paths)
+        return
+    case let .control(command):
+        try runUserControlCommand(command, paths: paths)
     }
-    let paths = AgentPaths()
+}
+
+private func runUserControlCommand(_ command: ControlCommand, paths: AgentPaths) throws {
     do {
         let request = ControlRequest.invocation(
             command: command,

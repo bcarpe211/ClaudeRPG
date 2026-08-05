@@ -11,6 +11,279 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
     case status
     case doctor
     case uninstall
+    case prepareUpdate = "prepare_update"
+}
+
+public enum CompanionCommandRoute: Equatable, Sendable {
+    case daemon
+    case control(ControlCommand)
+    case foregroundUpdate
+    case selfCheck
+    case recoverUpdate
+}
+
+public enum CompanionCommandRouter {
+    public static func route(
+        arguments: [String],
+        executableURL: URL,
+        paths: AgentPaths
+    ) -> CompanionCommandRoute? {
+        guard arguments.count == 1, let argument = arguments.first else { return nil }
+        switch argument {
+        case "on", "off", "status", "doctor", "uninstall":
+            guard let command = ControlCommand(rawValue: argument) else { return nil }
+            return .control(command)
+        case "update":
+            return .foregroundUpdate
+        case "daemon":
+            return exactExecutable(executableURL, equals: installedExecutable(paths))
+                ? .daemon : nil
+        case "__self-check":
+            return .selfCheck
+        case "__recover-update":
+            return exactExecutable(executableURL, equals: rollbackExecutable(paths))
+                ? .recoverUpdate : nil
+        default:
+            return nil
+        }
+    }
+
+    private static func installedExecutable(_ paths: AgentPaths) -> URL {
+        paths.installedApplication.appendingPathComponent(
+            "Contents/MacOS/runtime-raiders-agent",
+            isDirectory: false
+        )
+    }
+
+    private static func rollbackExecutable(_ paths: AgentPaths) -> URL {
+        paths.rollbackApplication.appendingPathComponent(
+            "Contents/MacOS/runtime-raiders-agent",
+            isDirectory: false
+        )
+    }
+
+    private static func exactExecutable(_ first: URL, equals second: URL) -> Bool {
+        first.isFileURL &&
+            second.isFileURL &&
+            first.standardizedFileURL.path == second.standardizedFileURL.path
+    }
+}
+
+public enum CompanionSelfCheck {
+    public static func encode(_ identity: CompanionReleaseIdentity) throws -> Data {
+        struct Payload: Encodable {
+            let companionVersion: String
+            let releaseSequence: Int64
+            let releaseSHA: String
+            let updateProtocolVersion: Int
+
+            enum CodingKeys: String, CodingKey {
+                case companionVersion = "companion_version"
+                case releaseSequence = "release_sequence"
+                case releaseSHA = "release_sha"
+                case updateProtocolVersion = "update_protocol_version"
+            }
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(Payload(
+            companionVersion: identity.companionVersion,
+            releaseSequence: identity.releaseSequence,
+            releaseSHA: identity.releaseSHA,
+            updateProtocolVersion: identity.updateProtocolVersion
+        ))
+        data.append(0x0A)
+        return data
+    }
+}
+
+public final class SerializedUpdatePreparation: @unchecked Sendable {
+    private let workQueue: DispatchQueue
+    private let activeRunCount: () throws -> Int
+    private let pauseAcceptance: () -> Void
+    private let pauseUploader: () -> Void
+    private let pauseHeartbeat: () -> Void
+    private let pauseWatcher: () -> Void
+    private let acceptedResponse: () throws -> ControlResponse
+
+    public init(
+        workQueue: DispatchQueue,
+        activeRunCount: @escaping () throws -> Int,
+        pauseAcceptance: @escaping () -> Void,
+        pauseUploader: @escaping () -> Void,
+        pauseHeartbeat: @escaping () -> Void,
+        pauseWatcher: @escaping () -> Void,
+        acceptedResponse: @escaping () throws -> ControlResponse = {
+            ControlResponse(ok: true, message: "prepared for update")
+        }
+    ) {
+        self.workQueue = workQueue
+        self.activeRunCount = activeRunCount
+        self.pauseAcceptance = pauseAcceptance
+        self.pauseUploader = pauseUploader
+        self.pauseHeartbeat = pauseHeartbeat
+        self.pauseWatcher = pauseWatcher
+        self.acceptedResponse = acceptedResponse
+    }
+
+    public func prepare() -> ControlResponse {
+        workQueue.sync {
+            do {
+                guard try activeRunCount() == 0 else {
+                    return ControlResponse(ok: false, message: "active Run prevents update")
+                }
+                pauseAcceptance()
+                pauseUploader()
+                pauseHeartbeat()
+                pauseWatcher()
+                return try acceptedResponse()
+            } catch {
+                return ControlResponse(ok: false, message: "unable to prepare update")
+            }
+        }
+    }
+}
+
+public enum LaunchdJobControllerError: Error, Equatable {
+    case unsafeLaunchAgent
+    case commandFailed
+}
+
+public struct LaunchdJobController {
+    public typealias Command = (
+        _ executable: URL,
+        _ arguments: [String],
+        _ timeout: TimeInterval
+    ) throws -> SystemCommandResult
+
+    private static let label = "com.redlattice.runtime-raiders-agent"
+    private static let executable = URL(fileURLWithPath: "/bin/launchctl")
+    private let userIdentifier: uid_t
+    private let plistURL: URL
+    private let runCommand: Command
+
+    public init(
+        userIdentifier: uid_t = Darwin.geteuid(),
+        plistURL: URL,
+        runCommand: @escaping Command
+    ) {
+        self.userIdentifier = userIdentifier
+        self.plistURL = plistURL.standardizedFileURL
+        self.runCommand = runCommand
+    }
+
+    public func bootout() throws {
+        let result = try runCommand(
+            Self.executable,
+            ["bootout", jobTarget],
+            10
+        )
+        guard result.exitStatus == .exited(0) else {
+            throw LaunchdJobControllerError.commandFailed
+        }
+    }
+
+    public func bootstrap() throws {
+        try validateLaunchAgent()
+        let result = try runCommand(
+            Self.executable,
+            ["bootstrap", domainTarget, plistURL.path],
+            10
+        )
+        guard result.exitStatus == .exited(0) else {
+            throw LaunchdJobControllerError.commandFailed
+        }
+    }
+
+    public func proveStopped() -> Bool {
+        guard let result = try? runCommand(
+            Self.executable,
+            ["print", jobTarget],
+            5
+        ),
+        result.exitStatus == .exited(113),
+        result.stdout.isEmpty,
+        String(decoding: result.stderr, as: UTF8.self).contains("Could not find service") else {
+            return false
+        }
+        return true
+    }
+
+    private var domainTarget: String { "gui/\(userIdentifier)" }
+    private var jobTarget: String { "\(domainTarget)/\(Self.label)" }
+
+    private func validateLaunchAgent() throws {
+        guard plistURL.isFileURL,
+              plistURL.path.hasPrefix("/"),
+              plistURL.lastPathComponent == "\(Self.label).plist" else {
+            throw LaunchdJobControllerError.unsafeLaunchAgent
+        }
+        var metadata = stat()
+        guard Darwin.lstat(plistURL.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o777 == 0o600,
+              metadata.st_nlink == 1 else {
+            throw LaunchdJobControllerError.unsafeLaunchAgent
+        }
+    }
+}
+
+public enum StableUpdateRecoveryError: Error, Equatable {
+    case daemonNotProvenStopped
+    case healthVerificationFailed
+}
+
+public struct StableUpdateRecoveryOperations {
+    let verifyBundles: () throws -> Void
+    let persistDisabled: () throws -> Void
+    let bootout: () throws -> Void
+    let proveStopped: () -> Bool
+    let restore: () throws -> Void
+    let bootstrap: () throws -> Void
+    let verifyDisabledHealth: () throws -> Bool
+
+    public init(
+        verifyBundles: @escaping () throws -> Void,
+        persistDisabled: @escaping () throws -> Void,
+        bootout: @escaping () throws -> Void,
+        proveStopped: @escaping () -> Bool,
+        restore: @escaping () throws -> Void,
+        bootstrap: @escaping () throws -> Void,
+        verifyDisabledHealth: @escaping () throws -> Bool
+    ) {
+        self.verifyBundles = verifyBundles
+        self.persistDisabled = persistDisabled
+        self.bootout = bootout
+        self.proveStopped = proveStopped
+        self.restore = restore
+        self.bootstrap = bootstrap
+        self.verifyDisabledHealth = verifyDisabledHealth
+    }
+}
+
+public final class StableUpdateRecovery {
+    private let operations: StableUpdateRecoveryOperations
+
+    public init(operations: StableUpdateRecoveryOperations) {
+        self.operations = operations
+    }
+
+    public func run() throws {
+        try operations.verifyBundles()
+        try operations.persistDisabled()
+        try? operations.bootout()
+        guard operations.proveStopped() else {
+            throw StableUpdateRecoveryError.daemonNotProvenStopped
+        }
+        try operations.verifyBundles()
+        try operations.restore()
+        try operations.bootstrap()
+        guard try operations.verifyDisabledHealth() else {
+            throw StableUpdateRecoveryError.healthVerificationFailed
+        }
+    }
 }
 
 public struct ControlRequest: Codable, Equatable, Sendable {
@@ -391,9 +664,9 @@ public final class ControlSocketServer: @unchecked Sendable {
 }
 
 public enum ControlSocketClient {
-    private static func timeoutSeconds(for command: ControlCommand) -> Int {
+    static func timeoutSeconds(for command: ControlCommand) -> Int {
         switch command {
-        case .on, .off, .uninstall:
+        case .on, .off, .uninstall, .prepareUpdate:
             30
         case .daemon, .status, .doctor:
             2
