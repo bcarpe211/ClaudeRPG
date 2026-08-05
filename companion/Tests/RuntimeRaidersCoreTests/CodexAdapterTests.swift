@@ -207,6 +207,26 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertFalse(adapter.hasActiveRun)
     }
 
+    func testActiveRunReplacementWithEarlierTimestampFailsClosed() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        XCTAssertEqual(
+            try startRun(adapter: &adapter, payload: validSessionPayload(for: .codexCLI)).count,
+            1
+        )
+        XCTAssertTrue(adapter.hasActiveRun)
+
+        XCTAssertTrue(adapter.consume(
+            line: Data(#"{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"task_started"}}"#.utf8),
+            source: .init(ordinal: 3), observedAt: observedAt
+        ).isEmpty)
+        XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
+        XCTAssertFalse(adapter.hasActiveRun)
+        XCTAssertTrue(adapter.consume(
+            line: Data(#"{"timestamp":"2026-01-01T00:00:03Z","type":"turn_context","payload":{"turn_id":"later-turn"}}"#.utf8),
+            source: .init(ordinal: 4), observedAt: observedAt
+        ).isEmpty)
+    }
+
     func testMalformedSessionProvenanceRejectsFilesPermanently() throws {
         for surface in [RunSurface.codexCLI, .codexDesktop] {
             let valid = validSessionPayload(for: surface)

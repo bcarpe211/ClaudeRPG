@@ -202,6 +202,10 @@ public struct CodexAdapter: ProviderAdapter {
         }
         switch eventType {
         case "task_started":
+            if let startedAt = activeStartedAt, eventTime < startedAt {
+                reject(.unsupportedContract)
+                return []
+            }
             pendingStartedAt = eventTime
             pendingStartedOrdinal = source.ordinal
             activeNativeID = nil
