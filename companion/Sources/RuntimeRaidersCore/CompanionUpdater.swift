@@ -532,11 +532,13 @@ public final class CompanionUpdater {
                 throw CompanionUpdaterError.terminalSafetyFailure
             }
         }
-        guard (try? transaction.prepareStableRecovery()) != nil,
-              (try? AgentController.persistDisabledForRecovery(
-                  paths: paths,
-                  surfaces: surfaces
-              )) != nil else {
+        guard (try? AgentController.persistDisabledForRecovery(
+            paths: paths,
+            surfaces: surfaces
+        )) != nil else {
+            throw CompanionUpdaterError.terminalSafetyFailure
+        }
+        guard (try? transaction.prepareStableRecovery()) != nil else {
             throw CompanionUpdaterError.terminalSafetyFailure
         }
         operations.emitRecoveryCommand(Self.recoveryCommand)

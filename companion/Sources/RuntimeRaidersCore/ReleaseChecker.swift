@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 
+@_silgen_name("flock")
+private func updateStateFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
+
 public struct UpdateStateV1: Codable, Equatable, Sendable {
     public let version: Int
     public var lastCheckAttemptMS: Int64?
@@ -34,55 +37,108 @@ public final class UpdateStateStore: @unchecked Sendable {
 
     private let file: URL
     private let directoryDescriptor: Int32
+    private let lockDescriptor: Int32
     private let atomicStore: AtomicStore
-    private let lock = NSRecursiveLock()
+    private let lock = NSLock()
 
     public init(paths: AgentPaths) throws {
         file = paths.updateState
         directoryDescriptor = try OwnerOnlyDirectory.openOrCreate(paths.stateDirectory)
+        lockDescriptor = Darwin.openat(
+            directoryDescriptor,
+            "update-state.lock",
+            O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
+            mode_t(0o600)
+        )
+        guard lockDescriptor >= 0 else {
+            Darwin.close(directoryDescriptor)
+            throw AgentControllerError.invalidState
+        }
+        var lockMetadata = stat()
+        guard Darwin.fstat(lockDescriptor, &lockMetadata) == 0,
+              lockMetadata.st_mode & S_IFMT == S_IFREG,
+              lockMetadata.st_uid == Darwin.geteuid(),
+              lockMetadata.st_mode & 0o777 == 0o600,
+              lockMetadata.st_nlink == 1 else {
+            Darwin.close(lockDescriptor)
+            Darwin.close(directoryDescriptor)
+            throw AgentControllerError.invalidState
+        }
         atomicStore = AtomicStore()
     }
 
-    deinit { Darwin.close(directoryDescriptor) }
+    deinit {
+        Darwin.close(lockDescriptor)
+        Darwin.close(directoryDescriptor)
+    }
 
     public func load() throws -> UpdateStateV1 {
-        try lock.withLock {
-            do {
-                guard let data = try read() else { return UpdateStateV1() }
-                guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      Set(object.keys).isSubset(of: Self.allowedKeys),
-                      object["version"] != nil,
-                      let state = try? JSONDecoder().decode(UpdateStateV1.self, from: data),
-                      Self.valid(state) else {
-                    return try replaceMalformedState()
-                }
-                return state
-            } catch {
-                return try replaceMalformedState()
-            }
+        try withFileLock {
+            try loadUnlocked()
         }
     }
 
     public func save(_ state: UpdateStateV1) throws {
-        try lock.withLock {
-            guard Self.valid(state) else { throw AgentControllerError.invalidState }
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-            let data = try encoder.encode(state)
-            guard data.count <= Self.maximumBytes else {
-                throw AgentControllerError.invalidState
-            }
-            try atomicStore.write(
-                data,
-                directoryDescriptor: directoryDescriptor,
-                name: file.lastPathComponent
-            )
+        try withFileLock {
+            try saveUnlocked(state)
         }
     }
 
-    private func replaceMalformedState() throws -> UpdateStateV1 {
+    func withExclusiveState<Result>(
+        _ body: (inout UpdateStateV1) throws -> Result
+    ) throws -> Result {
+        try withFileLock {
+            var state = try loadUnlocked()
+            let result = try body(&state)
+            try saveUnlocked(state)
+            return result
+        }
+    }
+
+    private func withFileLock<Result>(_ body: () throws -> Result) throws -> Result {
+        try lock.withLock {
+            while updateStateFlock(lockDescriptor, LOCK_EX) != 0 {
+                guard errno == EINTR else { throw AgentControllerError.invalidState }
+            }
+            defer { _ = updateStateFlock(lockDescriptor, LOCK_UN) }
+            return try body()
+        }
+    }
+
+    private func loadUnlocked() throws -> UpdateStateV1 {
+        do {
+            guard let data = try read() else { return UpdateStateV1() }
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Set(object.keys).isSubset(of: Self.allowedKeys),
+                  object["version"] != nil,
+                  let state = try? JSONDecoder().decode(UpdateStateV1.self, from: data),
+                  Self.valid(state) else {
+                return try replaceMalformedStateUnlocked()
+            }
+            return state
+        } catch {
+            return try replaceMalformedStateUnlocked()
+        }
+    }
+
+    private func saveUnlocked(_ state: UpdateStateV1) throws {
+        guard Self.valid(state) else { throw AgentControllerError.invalidState }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(state)
+        guard data.count <= Self.maximumBytes else {
+            throw AgentControllerError.invalidState
+        }
+        try atomicStore.write(
+            data,
+            directoryDescriptor: directoryDescriptor,
+            name: file.lastPathComponent
+        )
+    }
+
+    private func replaceMalformedStateUnlocked() throws -> UpdateStateV1 {
         let empty = UpdateStateV1()
-        try save(empty)
+        try saveUnlocked(empty)
         return empty
     }
 
@@ -227,29 +283,36 @@ public final class ReleaseChecker: @unchecked Sendable {
     public func checkIfDue() -> ReleaseCheckResult {
         lock.withLock {
             do {
-                var state = try store.load()
                 let now = clockMS()
-                if let lastAttempt = state.lastCheckAttemptMS,
-                   now < lastAttempt || now - lastAttempt < Self.checkIntervalMS {
+                let isDue = try store.withExclusiveState { state -> Bool in
+                    if let lastAttempt = state.lastCheckAttemptMS,
+                       now < lastAttempt || now - lastAttempt < Self.checkIntervalMS {
+                        return false
+                    }
+                    state.lastCheckAttemptMS = max(state.lastCheckAttemptMS ?? 0, now)
+                    return true
+                }
+                guard isDue else {
                     return .notDue
                 }
 
-                state.lastCheckAttemptMS = now
-                try store.save(state)
-
                 let manifest = try fetchNowUnlocked()
-                _ = merge(manifest, into: &state)
-
                 var shouldNotify = false
-                if let cachedManifest = state.cachedManifest,
-                   cachedManifest.availability(from: installed) != nil,
-                   cachedManifest.releaseSequence > (state.lastNotifiedReleaseSequence ?? 0) {
-                    state.lastNotifiedReleaseSequence = cachedManifest.releaseSequence
-                    shouldNotify = true
+                let availability = try store.withExclusiveState { state in
+                    _ = merge(manifest, into: &state)
+                    if let cachedManifest = state.cachedManifest,
+                       cachedManifest.availability(from: installed) != nil,
+                       cachedManifest.releaseSequence > (state.lastNotifiedReleaseSequence ?? 0) {
+                        state.lastNotifiedReleaseSequence = max(
+                            state.lastNotifiedReleaseSequence ?? 0,
+                            cachedManifest.releaseSequence
+                        )
+                        shouldNotify = true
+                    }
+                    return Self.availability(state: state, installed: installed)
                 }
-                try store.save(state)
                 if shouldNotify { _ = notifier() }
-                return .checked(Self.availability(state: state, installed: installed))
+                return .checked(availability)
             } catch {
                 return .failed
             }
@@ -258,15 +321,15 @@ public final class ReleaseChecker: @unchecked Sendable {
 
     public func fetchNow() throws -> ReleaseManifestV1 {
         try lock.withLock {
-            var state = try store.load()
             let now = clockMS()
             guard now >= 0 else { throw URLError(.badServerResponse) }
-            state.lastCheckAttemptMS = max(state.lastCheckAttemptMS ?? 0, now)
-            try store.save(state)
+            try store.withExclusiveState { state in
+                state.lastCheckAttemptMS = max(state.lastCheckAttemptMS ?? 0, now)
+            }
             let fetched = try fetchNowUnlocked()
-            let selected = merge(fetched, into: &state)
-            try store.save(state)
-            return selected
+            return try store.withExclusiveState { state in
+                merge(fetched, into: &state)
+            }
         }
     }
 

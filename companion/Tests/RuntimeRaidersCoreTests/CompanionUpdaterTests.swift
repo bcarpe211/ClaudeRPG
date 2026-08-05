@@ -271,7 +271,7 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: harness.outboxRecord), outboxBefore)
             XCTAssertEqual(
                 try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                true
+                false
             )
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.daemonRunning)
@@ -767,9 +767,18 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
-    func testTerminalRecoveryDoesNotEmitCommandWhenDisabledPersistenceFails() throws {
+    func testNoSwapPersistenceFailureLeavesInstalledBundlePathInodeAndModeUnchanged() throws {
         try withHarness { harness in
-            harness.healthStatuses = [harness.newStatus(enabled: false)]
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: harness.paths.installedApplication.path
+            )
+            let installedInode = try inode(harness.paths.installedApplication)
+            let installedMode = try permissions(harness.paths.installedApplication)
+            harness.prepareSideEffect = { throw InjectedUpdaterFailure.responseLost }
+            harness.bootstrapSideEffect = { call in
+                if call == 0 { throw InjectedUpdaterFailure.operation }
+            }
             harness.bootoutSideEffect = { call in
                 guard call == 1 else { return }
                 let state = harness.paths.stateDirectory.appendingPathComponent("collector-state.json")
@@ -783,6 +792,50 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertEqual(harness.stoppedProofCallCount, 1)
             XCTAssertFalse(harness.daemonRunning)
+            XCTAssertEqual(try inode(harness.paths.installedApplication), installedInode)
+            XCTAssertEqual(try permissions(harness.paths.installedApplication), installedMode)
+            XCTAssertEqual(try marker(harness.paths.installedApplication), "old")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+        }
+    }
+
+    func testSwappedPersistenceFailureLeavesSwappedBundleLayoutInodeAndModeUnchanged() throws {
+        try withHarness { harness in
+            let priorInode = try inode(harness.paths.installedApplication)
+            var candidateInode: UInt64?
+            var candidateMode: Int?
+            var rollbackMode: Int?
+            harness.healthStatuses = [harness.newStatus(enabled: false)]
+            harness.beforeFirstHealth = {
+                candidateInode = try inode(harness.paths.installedApplication)
+                candidateMode = try permissions(harness.paths.installedApplication)
+                rollbackMode = try permissions(harness.paths.rollbackApplication)
+            }
+            harness.bootoutSideEffect = { call in
+                guard call == 1 else { return }
+                let state = harness.paths.stateDirectory.appendingPathComponent("collector-state.json")
+                try FileManager.default.removeItem(at: state)
+                try FileManager.default.createDirectory(at: state, withIntermediateDirectories: false)
+            }
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
+                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
+            }
+
+            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
+            XCTAssertEqual(harness.stoppedProofCallCount, 1)
+            XCTAssertFalse(harness.daemonRunning)
+            XCTAssertEqual(try inode(harness.paths.installedApplication), try XCTUnwrap(candidateInode))
+            XCTAssertEqual(try permissions(harness.paths.installedApplication), try XCTUnwrap(candidateMode))
+            XCTAssertEqual(try marker(harness.paths.installedApplication), "new")
+            XCTAssertEqual(try inode(harness.paths.rollbackApplication), priorInode)
+            XCTAssertEqual(
+                try permissions(harness.paths.rollbackApplication),
+                try XCTUnwrap(rollbackMode)
+            )
+            XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
         }
     }
 
@@ -891,9 +944,21 @@ final class CompanionUpdaterTests: XCTestCase {
     func testTerminalRecoveryRefusesAmbiguousThreeBundleStateWithoutMutationOrCommand() throws {
         try withHarness { harness in
             let blocker = Data("unrelated-failed-blocker".utf8)
+            var installedInode: UInt64?
+            var installedMode: Int?
+            var rollbackInode: UInt64?
+            var rollbackMode: Int?
+            var failedInode: UInt64?
+            var failedMode: Int?
             harness.healthStatuses = [harness.newStatus(enabled: false)]
             harness.beforeFirstHealth = {
                 try writeOwnerFile(blocker, to: harness.paths.failedApplication)
+                installedInode = try inode(harness.paths.installedApplication)
+                installedMode = try permissions(harness.paths.installedApplication)
+                rollbackInode = try inode(harness.paths.rollbackApplication)
+                rollbackMode = try permissions(harness.paths.rollbackApplication)
+                failedInode = try inode(harness.paths.failedApplication)
+                failedMode = try permissions(harness.paths.failedApplication)
             }
 
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
@@ -903,6 +968,16 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertEqual(try marker(harness.paths.installedApplication), "new")
             XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
             XCTAssertEqual(try Data(contentsOf: harness.paths.failedApplication), blocker)
+            XCTAssertEqual(try inode(harness.paths.installedApplication), try XCTUnwrap(installedInode))
+            XCTAssertEqual(try permissions(harness.paths.installedApplication), try XCTUnwrap(installedMode))
+            XCTAssertEqual(try inode(harness.paths.rollbackApplication), try XCTUnwrap(rollbackInode))
+            XCTAssertEqual(try permissions(harness.paths.rollbackApplication), try XCTUnwrap(rollbackMode))
+            XCTAssertEqual(try inode(harness.paths.failedApplication), try XCTUnwrap(failedInode))
+            XCTAssertEqual(try permissions(harness.paths.failedApplication), try XCTUnwrap(failedMode))
+            XCTAssertEqual(
+                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
+                false
+            )
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.daemonRunning)
         }

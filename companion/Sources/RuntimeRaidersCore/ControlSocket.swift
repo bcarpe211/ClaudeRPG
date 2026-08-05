@@ -266,6 +266,7 @@ public struct LaunchdJobController {
 public enum StableUpdateRecoveryError: Error, Equatable {
     case daemonNotProvenStopped
     case healthVerificationFailed
+    case retrySafetyFailure
 }
 
 public enum StableRecoveryPhase: Equatable, Sendable {
@@ -387,6 +388,56 @@ public final class StableRecoveryFileTransaction {
         }
     }
 
+    public func revertRestore(phase: StableRecoveryPhase) throws {
+        guard let snapshot, snapshot.phase == phase,
+              try ownedDirectory(
+                  paths.installedApplication.lastPathComponent,
+                  allowSafeReadableMode: false
+              ) == snapshot.rollback else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        try requireMissing(paths.rollbackApplication.lastPathComponent)
+        switch (phase, snapshot.failed) {
+        case (.rollbackOnly, nil):
+            try requireMissing(paths.failedApplication.lastPathComponent)
+        case let (.rollbackAndFailed, failed?):
+            guard try ownedDirectory(
+                paths.failedApplication.lastPathComponent,
+                allowSafeReadableMode: false
+            ) == failed else {
+                throw CompanionUpdaterError.unsafeFilesystem
+            }
+        default:
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        guard Darwin.renameat(
+            supportDescriptor,
+            paths.installedApplication.lastPathComponent,
+            supportDescriptor,
+            paths.rollbackApplication.lastPathComponent
+        ) == 0 else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        try synchronize()
+        try requireMissing(paths.installedApplication.lastPathComponent)
+        guard try ownedDirectory(
+            paths.rollbackApplication.lastPathComponent,
+            allowSafeReadableMode: false
+        ) == snapshot.rollback else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        if let failed = snapshot.failed {
+            guard try ownedDirectory(
+                paths.failedApplication.lastPathComponent,
+                allowSafeReadableMode: false
+            ) == failed else {
+                throw CompanionUpdaterError.unsafeFilesystem
+            }
+        } else {
+            try requireMissing(paths.failedApplication.lastPathComponent)
+        }
+    }
+
     private func ownedDirectory(
         _ name: String,
         allowSafeReadableMode: Bool
@@ -437,6 +488,7 @@ public struct StableUpdateRecoveryOperations {
     let bootout: () throws -> Void
     let proveStopped: () -> Bool
     let restore: (StableRecoveryPhase) throws -> Void
+    let revertRestored: (StableRecoveryPhase) throws -> Void
     let verifyRestoredBundle: (StableRecoveryPhase) throws -> Void
     let bootstrap: () throws -> Void
     let verifyDisabledHealth: () throws -> Bool
@@ -450,6 +502,7 @@ public struct StableUpdateRecoveryOperations {
         bootout: @escaping () throws -> Void,
         proveStopped: @escaping () -> Bool,
         restore: @escaping (StableRecoveryPhase) throws -> Void,
+        revertRestored: @escaping (StableRecoveryPhase) throws -> Void,
         verifyRestoredBundle: @escaping (StableRecoveryPhase) throws -> Void,
         bootstrap: @escaping () throws -> Void,
         verifyDisabledHealth: @escaping () throws -> Bool,
@@ -466,6 +519,7 @@ public struct StableUpdateRecoveryOperations {
         self.bootout = bootout
         self.proveStopped = proveStopped
         self.restore = restore
+        self.revertRestored = revertRestored
         self.verifyRestoredBundle = verifyRestoredBundle
         self.bootstrap = bootstrap
         self.verifyDisabledHealth = verifyDisabledHealth
@@ -497,19 +551,36 @@ public final class StableUpdateRecovery {
         }
         try operations.verifyBundles(phase)
         try operations.restore(phase)
-        try operations.verifyRestoredBundle(phase)
-        try operations.bootstrap()
-        let start = operations.monotonicNow()
-        guard start.isFinite else { throw StableUpdateRecoveryError.healthVerificationFailed }
-        let deadline = start + Self.healthTimeout
-        repeat {
-            if (try? operations.verifyDisabledHealth()) == true { return }
-            let now = operations.monotonicNow()
-            guard now.isFinite, now < deadline else {
+        do {
+            try operations.verifyRestoredBundle(phase)
+            try operations.bootstrap()
+            let start = operations.monotonicNow()
+            guard start.isFinite else {
                 throw StableUpdateRecoveryError.healthVerificationFailed
             }
-            operations.sleep(min(Self.healthPollInterval, deadline - now))
-        } while true
+            let deadline = start + Self.healthTimeout
+            repeat {
+                if (try? operations.verifyDisabledHealth()) == true { return }
+                let now = operations.monotonicNow()
+                guard now.isFinite, now < deadline else {
+                    throw StableUpdateRecoveryError.healthVerificationFailed
+                }
+                operations.sleep(min(Self.healthPollInterval, deadline - now))
+            } while true
+        } catch {
+            let postRestoreError = error
+            try? operations.bootout()
+            guard operations.proveStopped() else {
+                throw StableUpdateRecoveryError.retrySafetyFailure
+            }
+            do {
+                try operations.revertRestored(phase)
+                try operations.verifyBundles(phase)
+            } catch {
+                throw StableUpdateRecoveryError.retrySafetyFailure
+            }
+            throw postRestoreError
+        }
     }
 }
 

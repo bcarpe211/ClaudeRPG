@@ -637,6 +637,7 @@ private func runStableRecovery(paths: AgentPaths) throws {
         bootout: launchd.bootout,
         proveStopped: launchd.proveStopped,
         restore: { try layout.restore(phase: $0) },
+        revertRestored: { try layout.revertRestore(phase: $0) },
         verifyRestoredBundle: { _ in
             guard try trustRoot.verifyApplication(at: paths.installedApplication) ==
                     trustRoot.verifiedSelf else {

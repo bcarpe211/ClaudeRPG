@@ -3,6 +3,12 @@ import Foundation
 import XCTest
 @testable import RuntimeRaidersCore
 
+@_silgen_name("flock")
+private func releaseCheckerTestFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
+
+@_silgen_name("fork")
+private func releaseCheckerTestFork() -> pid_t
+
 final class ReleaseCheckerTests: XCTestCase {
     private let now: Int64 = 1_800_000_000_000
 
@@ -193,6 +199,7 @@ final class ReleaseCheckerTests: XCTestCase {
                     bootout: {},
                     proveStopped: { true },
                     restore: { _ in },
+                    revertRestored: { _ in },
                     verifyRestoredBundle: { _ in },
                     bootstrap: {},
                     verifyDisabledHealth: { true }
@@ -225,6 +232,204 @@ final class ReleaseCheckerTests: XCTestCase {
             XCTAssertEqual(persisted.lastObservedReleaseSequence, higher.releaseSequence)
             XCTAssertEqual(persisted.lastNotifiedReleaseSequence, higher.releaseSequence)
             XCTAssertEqual(persisted.cachedManifest, higher)
+        }
+    }
+
+    func testConcurrentInstancesMergeFreshStateAfterNetworkWithoutLosingHigherManifestOrMarker() throws {
+        try withPaths { paths in
+            let higher = try manifest(sequence: 3, version: "0.3.0", shaByte: "d")
+            let fixedNow = now
+            let lowerManifestData = validManifestData()
+            let higherManifestData = manifestData(higher)
+            let higherAvailability = CompanionUpdateAvailability(
+                installedVersion: "0.2.0",
+                installedSequence: 1,
+                availableVersion: "0.3.0",
+                availableSequence: 3,
+                updateCommand: "raiders update"
+            )
+            let backgroundEnteredNetwork = DispatchSemaphore(value: 0)
+            let releaseBackgroundNetwork = DispatchSemaphore(value: 0)
+            let backgroundFinished = DispatchSemaphore(value: 0)
+            let foregroundFinished = DispatchSemaphore(value: 0)
+            let backgroundResult = LockedBox<ReleaseCheckResult?>(nil)
+            let foregroundResult = LockedBox<Result<ReleaseManifestV1, Error>?>(nil)
+            let stateSeenByNotifier = LockedBox<UpdateStateV1?>(nil)
+            let background = try makeChecker(
+                paths: paths,
+                clockMS: { fixedNow },
+                transport: { _ in
+                    backgroundEnteredNetwork.signal()
+                    _ = releaseBackgroundNetwork.wait(timeout: .now() + 5)
+                    return .init(statusCode: 200, body: lowerManifestData)
+                },
+                notifier: {
+                    stateSeenByNotifier.value = try? UpdateStateStore(paths: paths).load()
+                    return true
+                }
+            )
+            let foreground = try makeChecker(
+                paths: paths,
+                clockMS: { fixedNow + 1 },
+                transport: { _ in .init(statusCode: 200, body: higherManifestData) }
+            )
+
+            DispatchQueue.global(qos: .utility).async {
+                backgroundResult.value = background.checkIfDue()
+                backgroundFinished.signal()
+            }
+            XCTAssertEqual(backgroundEnteredNetwork.wait(timeout: .now() + 2), .success)
+            DispatchQueue.global(qos: .utility).async {
+                foregroundResult.value = Result { try foreground.fetchNow() }
+                foregroundFinished.signal()
+            }
+            let foregroundCompletedBeforeRelease = foregroundFinished.wait(timeout: .now() + 1)
+            XCTAssertEqual(
+                foregroundCompletedBeforeRelease,
+                .success,
+                "the update-state filesystem lock must not span network I/O"
+            )
+            releaseBackgroundNetwork.signal()
+            if foregroundCompletedBeforeRelease == .timedOut {
+                XCTAssertEqual(foregroundFinished.wait(timeout: .now() + 2), .success)
+            }
+            XCTAssertEqual(backgroundFinished.wait(timeout: .now() + 2), .success)
+
+            XCTAssertEqual(try foregroundResult.value?.get(), higher)
+            XCTAssertEqual(backgroundResult.value, .checked(higherAvailability))
+            let persisted = try UpdateStateStore(paths: paths).load()
+            XCTAssertEqual(persisted.lastCheckAttemptMS, now + 1)
+            XCTAssertEqual(persisted.lastObservedReleaseSequence, 3)
+            XCTAssertEqual(persisted.lastNotifiedReleaseSequence, 3)
+            XCTAssertEqual(persisted.cachedManifest, higher)
+            XCTAssertEqual(stateSeenByNotifier.value, persisted)
+        }
+    }
+
+    func testUpdateStateStoreBlocksBehindIndependentProcessLock() throws {
+        try withPaths { paths in
+            let fixedNow = now
+            let store = try UpdateStateStore(paths: paths)
+            let lockURL = paths.stateDirectory.appendingPathComponent(
+                "update-state.lock",
+                isDirectory: false
+            )
+            let lockPath = strdup(lockURL.path)
+            guard let lockPath else { throw POSIXError(.ENOMEM) }
+            defer { free(lockPath) }
+            var ready = [Int32](repeating: -1, count: 2)
+            var release = [Int32](repeating: -1, count: 2)
+            guard Darwin.pipe(&ready) == 0, Darwin.pipe(&release) == 0 else {
+                throw POSIXError(.EIO)
+            }
+            let child = releaseCheckerTestFork()
+            guard child >= 0 else { throw POSIXError(.EIO) }
+            if child == 0 {
+                Darwin.close(ready[0])
+                Darwin.close(release[1])
+                let descriptor = Darwin.open(
+                    lockPath,
+                    O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
+                    mode_t(0o600)
+                )
+                var outcome: Int32 = descriptor >= 0
+                    ? releaseCheckerTestFlock(descriptor, LOCK_EX | LOCK_NB)
+                    : -errno
+                if descriptor >= 0, outcome != 0 { outcome = -errno }
+                _ = Darwin.write(ready[1], &outcome, MemoryLayout<Int32>.size)
+                if outcome == 0 {
+                    var token: UInt8 = 0
+                    _ = Darwin.read(release[0], &token, 1)
+                    _ = releaseCheckerTestFlock(descriptor, LOCK_UN)
+                }
+                if descriptor >= 0 { Darwin.close(descriptor) }
+                Darwin.close(ready[1])
+                Darwin.close(release[0])
+                Darwin._exit(0)
+            }
+            Darwin.close(ready[1])
+            Darwin.close(release[0])
+            defer {
+                Darwin.close(ready[0])
+                Darwin.close(release[1])
+                var status: Int32 = 0
+                _ = Darwin.waitpid(child, &status, 0)
+            }
+            var childOutcome: Int32 = -1
+            XCTAssertEqual(
+                Darwin.read(ready[0], &childOutcome, MemoryLayout<Int32>.size),
+                MemoryLayout<Int32>.size
+            )
+            XCTAssertEqual(childOutcome, 0)
+
+            let saveFinished = DispatchSemaphore(value: 0)
+            let saveResult = LockedBox<Result<Void, Error>?>(nil)
+            DispatchQueue.global(qos: .utility).async {
+                saveResult.value = Result {
+                    try store.save(UpdateStateV1(lastCheckAttemptMS: fixedNow))
+                }
+                saveFinished.signal()
+            }
+            let completedWhileChildHeldLock = saveFinished.wait(timeout: .now() + 0.1)
+            XCTAssertEqual(
+                completedWhileChildHeldLock,
+                .timedOut,
+                "state writes must wait for the independent process lock"
+            )
+            var releaseToken: UInt8 = 1
+            XCTAssertEqual(Darwin.write(release[1], &releaseToken, 1), 1)
+            if completedWhileChildHeldLock == .timedOut {
+                XCTAssertEqual(saveFinished.wait(timeout: .now() + 2), .success)
+            }
+            XCTAssertNoThrow(try saveResult.value?.get())
+            XCTAssertEqual(try store.load().lastCheckAttemptMS, now)
+        }
+    }
+
+    func testUpdateStateLockIsReleasedWhenAtomicMutationThrows() throws {
+        enum ExpectedFailure: Error { case injected }
+
+        try withPaths { paths in
+            let first = try UpdateStateStore(paths: paths)
+            XCTAssertThrowsError(
+                try first.withExclusiveState { _ in throw ExpectedFailure.injected }
+            ) { error in
+                XCTAssertTrue(error is ExpectedFailure)
+            }
+
+            let second = try UpdateStateStore(paths: paths)
+            try second.withExclusiveState { state in
+                state.lastCheckAttemptMS = now
+            }
+            XCTAssertEqual(try first.load().lastCheckAttemptMS, now)
+        }
+    }
+
+    func testUpdateStateLockRejectsSymlinkWithoutTouchingTarget() throws {
+        try withPaths { paths in
+            try FileManager.default.createDirectory(
+                at: paths.stateDirectory,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: paths.stateDirectory.path
+            )
+            let target = paths.supportDirectory.deletingLastPathComponent()
+                .appendingPathComponent("update-state-lock-target")
+            let targetBytes = Data("DO_NOT_TOUCH_UPDATE_STATE_LOCK_TARGET".utf8)
+            try targetBytes.write(to: target)
+            let lockURL = paths.stateDirectory.appendingPathComponent(
+                "update-state.lock",
+                isDirectory: false
+            )
+            try FileManager.default.createSymbolicLink(at: lockURL, withDestinationURL: target)
+
+            XCTAssertThrowsError(try UpdateStateStore(paths: paths))
+            XCTAssertEqual(try Data(contentsOf: target), targetBytes)
+            var metadata = stat()
+            XCTAssertEqual(Darwin.lstat(lockURL.path, &metadata), 0)
+            XCTAssertEqual(metadata.st_mode & S_IFMT, S_IFLNK)
         }
     }
 
@@ -419,6 +624,12 @@ final class ReleaseCheckerTests: XCTestCase {
 
     private func validManifestData() -> Data {
         Data(#"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#.utf8)
+    }
+
+    private func manifestData(_ manifest: ReleaseManifestV1) -> Data {
+        Data(
+            "{\"manifest_version\":1,\"companion_version\":\"\(manifest.companionVersion)\",\"release_sequence\":\(manifest.releaseSequence),\"release_sha\":\"\(manifest.releaseSHA)\",\"update_protocol_version\":\(manifest.updateProtocolVersion),\"zip_sha256\":\"\(manifest.zipSHA256)\",\"zip_url\":\"\(manifest.zipURL.absoluteString)\"}".utf8
+        )
     }
 
     private func manifest(

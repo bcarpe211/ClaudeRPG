@@ -401,6 +401,7 @@ final class ControlProtocolTests: XCTestCase {
                 XCTAssertEqual(phase, .rollbackOnly)
                 log.append("restore")
             },
+            revertRestored: { _ in log.append("revert") },
             verifyRestoredBundle: { phase in
                 XCTAssertEqual(phase, .rollbackOnly)
                 log.append("verify-restored")
@@ -435,6 +436,7 @@ final class ControlProtocolTests: XCTestCase {
             bootout: { throw POSIXError(.EIO) },
             proveStopped: { true },
             restore: { _ in restoredAfterResponseLoss = true },
+            revertRestored: { _ in },
             verifyRestoredBundle: { _ in },
             bootstrap: {},
             verifyDisabledHealth: { true }
@@ -456,6 +458,7 @@ final class ControlProtocolTests: XCTestCase {
             bootout: {},
             proveStopped: { false },
             restore: { _ in restoredWithoutProof = true },
+            revertRestored: { _ in },
             verifyRestoredBundle: { _ in },
             bootstrap: {},
             verifyDisabledHealth: { true }
@@ -523,6 +526,162 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(try recoveryPermissions(unsafeFailed.failedApplication), 0o755)
     }
 
+    func testStableRecoveryRevertsEveryPostRestoreFailureAndSecondRunSucceeds() throws {
+        enum Failure: String, CaseIterable {
+            case restoredVerification
+            case bootstrap
+            case invalidHealth
+            case healthTimeout
+        }
+        enum Injected: Error { case operation }
+
+        for failure in Failure.allCases {
+            let paths = try makeRecoveryPaths("retry-\(failure.rawValue)")
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
+            try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
+            let rollbackInode = try recoveryInode(paths.rollbackApplication)
+            let failedInode = try recoveryInode(paths.failedApplication)
+            let layout = try StableRecoveryFileTransaction(paths: paths)
+            var attempt = 0
+            var bootouts = 0
+            var stoppedProofs = 0
+            var daemonRunning = true
+            var now: TimeInterval = 0
+            let recovery = StableUpdateRecovery(
+                paths: paths,
+                operations: StableUpdateRecoveryOperations(
+                    phase: {
+                        attempt += 1
+                        now = 0
+                        return try layout.inspectAndNormalize()
+                    },
+                    verifyBundles: { phase in
+                        XCTAssertEqual(phase, .rollbackAndFailed)
+                        XCTAssertEqual(try self.recoveryInode(paths.rollbackApplication), rollbackInode)
+                        XCTAssertEqual(try self.recoveryMarker(paths.rollbackApplication), "old")
+                        XCTAssertEqual(try self.recoveryInode(paths.failedApplication), failedInode)
+                        XCTAssertEqual(try self.recoveryMarker(paths.failedApplication), "new")
+                    },
+                    persistDisabled: {},
+                    bootout: {
+                        bootouts += 1
+                        daemonRunning = false
+                    },
+                    proveStopped: {
+                        stoppedProofs += 1
+                        return !daemonRunning
+                    },
+                    restore: { try layout.restore(phase: $0) },
+                    revertRestored: { try layout.revertRestore(phase: $0) },
+                    verifyRestoredBundle: { phase in
+                        XCTAssertEqual(phase, .rollbackAndFailed)
+                        XCTAssertEqual(try self.recoveryInode(paths.installedApplication), rollbackInode)
+                        XCTAssertEqual(try self.recoveryMarker(paths.installedApplication), "old")
+                        XCTAssertEqual(try self.recoveryInode(paths.failedApplication), failedInode)
+                        if attempt == 1, failure == .restoredVerification {
+                            throw Injected.operation
+                        }
+                    },
+                    bootstrap: {
+                        if attempt == 1, failure == .bootstrap { throw Injected.operation }
+                        daemonRunning = true
+                    },
+                    verifyDisabledHealth: {
+                        if attempt == 1, failure == .invalidHealth { throw Injected.operation }
+                        return attempt != 1 || failure != .healthTimeout
+                    },
+                    monotonicNow: { now },
+                    sleep: { now += max($0, 10) }
+                )
+            )
+
+            XCTAssertThrowsError(try recovery.run(), failure.rawValue) { error in
+                if failure == .restoredVerification || failure == .bootstrap {
+                    XCTAssertTrue(error is Injected)
+                } else {
+                    XCTAssertEqual(
+                        error as? StableUpdateRecoveryError,
+                        .healthVerificationFailed
+                    )
+                }
+            }
+            XCTAssertEqual(bootouts, 2, failure.rawValue)
+            XCTAssertEqual(stoppedProofs, 2, failure.rawValue)
+            XCTAssertFalse(daemonRunning, failure.rawValue)
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: paths.installedApplication.path),
+                failure.rawValue
+            )
+            XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.rollbackApplication), "old")
+            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+
+            try recovery.run()
+
+            XCTAssertEqual(attempt, 2, failure.rawValue)
+            XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
+            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+            XCTAssertTrue(daemonRunning, failure.rawValue)
+        }
+    }
+
+    func testStableRecoveryReportsDistinctTerminalErrorWhenExactRevertIsUnsafe() throws {
+        enum Injected: Error { case operation }
+
+        let paths = try makeRecoveryPaths("unsafe-retry-revert")
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
+        let failedInode = try recoveryInode(paths.failedApplication)
+        let layout = try StableRecoveryFileTransaction(paths: paths)
+        var bootouts = 0
+        let recovery = StableUpdateRecovery(
+            paths: paths,
+            operations: StableUpdateRecoveryOperations(
+                phase: { try layout.inspectAndNormalize() },
+                verifyBundles: { _ in },
+                persistDisabled: {},
+                bootout: { bootouts += 1 },
+                proveStopped: { true },
+                restore: { try layout.restore(phase: $0) },
+                revertRestored: { try layout.revertRestore(phase: $0) },
+                verifyRestoredBundle: { _ in
+                    try FileManager.default.removeItem(at: paths.installedApplication)
+                    try self.makeRecoveryApp(
+                        paths.installedApplication,
+                        marker: "intruder",
+                        mode: 0o700
+                    )
+                    throw Injected.operation
+                },
+                bootstrap: {},
+                verifyDisabledHealth: { true }
+            )
+        )
+
+        XCTAssertThrowsError(try recovery.run()) { error in
+            XCTAssertEqual(error as? StableUpdateRecoveryError, .retrySafetyFailure)
+        }
+        XCTAssertEqual(bootouts, 2)
+        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "intruder")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+        XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+    }
+
     func testStableRecoveryPollsHealthWithoutRealSleepAndPreservesInstalledOnDeadline() throws {
         let delayedPaths = try makeRecoveryPaths("delayed-health")
         defer { try? FileManager.default.removeItem(at: delayedPaths.supportDirectory.deletingLastPathComponent()) }
@@ -536,6 +695,7 @@ final class ControlProtocolTests: XCTestCase {
             bootout: {},
             proveStopped: { true },
             restore: { _ in },
+            revertRestored: { _ in },
             verifyRestoredBundle: { _ in },
             bootstrap: {},
             verifyDisabledHealth: {
@@ -564,6 +724,7 @@ final class ControlProtocolTests: XCTestCase {
             bootout: {},
             proveStopped: { true },
             restore: { try timeoutLayout.restore(phase: $0) },
+            revertRestored: { try timeoutLayout.revertRestore(phase: $0) },
             verifyRestoredBundle: { _ in },
             bootstrap: {},
             verifyDisabledHealth: { false },
@@ -573,8 +734,8 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertThrowsError(try timedOut.run()) { error in
             XCTAssertEqual(error as? StableUpdateRecoveryError, .healthVerificationFailed)
         }
-        XCTAssertEqual(try recoveryMarker(timeoutPaths.installedApplication), "old")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: timeoutPaths.rollbackApplication.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: timeoutPaths.installedApplication.path))
+        XCTAssertEqual(try recoveryMarker(timeoutPaths.rollbackApplication), "old")
     }
 
     func testStableRecoveryRefusesHeldSharedUpdateLockBeforeEffectsAndReleasesAfterFailure() throws {
@@ -595,6 +756,7 @@ final class ControlProtocolTests: XCTestCase {
                 return true
             },
             restore: { _ in effects += 1 },
+            revertRestored: { _ in effects += 1 },
             verifyRestoredBundle: { _ in effects += 1 },
             bootstrap: { effects += 1 },
             verifyDisabledHealth: {
@@ -615,6 +777,7 @@ final class ControlProtocolTests: XCTestCase {
             bootout: {},
             proveStopped: { true },
             restore: { _ in },
+            revertRestored: { _ in },
             verifyRestoredBundle: { _ in },
             bootstrap: {},
             verifyDisabledHealth: { true }
@@ -666,6 +829,7 @@ final class ControlProtocolTests: XCTestCase {
                     restore: { _ in
                         if failure == .restore { throw POSIXError(.EIO) }
                     },
+                    revertRestored: { _ in },
                     verifyRestoredBundle: { _ in
                         if failure == .restoredVerification { throw POSIXError(.EIO) }
                     },
