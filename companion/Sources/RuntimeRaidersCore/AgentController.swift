@@ -466,6 +466,37 @@ public final class AgentController: @unchecked Sendable {
         }
     }
 
+    public static func persistDisabledForRecovery(
+        paths: AgentPaths,
+        surfaces: [RunSurface]
+    ) throws {
+        guard let descriptor = try OwnerOnlyDirectory.openExisting(paths.stateDirectory) else {
+            throw AgentControllerError.invalidState
+        }
+        defer { Darwin.close(descriptor) }
+        guard let data = try readState(
+            directoryDescriptor: descriptor,
+            name: "collector-state.json",
+            maximumBytes: 4 * 1_024 * 1_024
+        ),
+        let decoded = try? JSONDecoder().decode(PersistedState.self, from: data),
+        valid(decoded, surfaces: surfaces) else {
+            throw AgentControllerError.invalidState
+        }
+        guard decoded.enabled else { return }
+        let disabled = try replacingTopLevelEnabledWithFalse(in: data)
+        guard let verified = try? JSONDecoder().decode(PersistedState.self, from: disabled),
+              !verified.enabled,
+              valid(verified, surfaces: surfaces) else {
+            throw AgentControllerError.invalidState
+        }
+        try writeStateAtomically(
+            disabled,
+            directoryDescriptor: descriptor,
+            name: "collector-state.json"
+        )
+    }
+
     public static func persistedCollectorState(
         paths: AgentPaths,
         surfaces: [RunSurface]
@@ -1356,6 +1387,91 @@ public final class AgentController: @unchecked Sendable {
             if errno == EINTR { continue }
             throw currentPOSIXError()
         }
+    }
+
+    private static func replacingTopLevelEnabledWithFalse(in data: Data) throws -> Data {
+        let bytes = [UInt8](data)
+        var index = 0
+        var depth = 0
+        var expectingKey = false
+        var match: Range<Int>?
+
+        func skipWhitespace(_ cursor: inout Int) {
+            while cursor < bytes.count, [0x20, 0x09, 0x0a, 0x0d].contains(bytes[cursor]) {
+                cursor += 1
+            }
+        }
+
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == 0x7b {
+                depth += 1
+                expectingKey = depth == 1
+                index += 1
+                continue
+            }
+            if byte == 0x7d {
+                depth -= 1
+                index += 1
+                continue
+            }
+            if byte == 0x2c, depth == 1 {
+                expectingKey = true
+                index += 1
+                continue
+            }
+            guard byte == 0x22 else {
+                index += 1
+                continue
+            }
+
+            let stringStart = index
+            index += 1
+            var escaped = false
+            while index < bytes.count {
+                if escaped {
+                    escaped = false
+                } else if bytes[index] == 0x5c {
+                    escaped = true
+                } else if bytes[index] == 0x22 {
+                    break
+                }
+                index += 1
+            }
+            guard index < bytes.count else { throw AgentControllerError.invalidState }
+            let stringEnd = index
+            index += 1
+            guard depth == 1, expectingKey else { continue }
+            expectingKey = false
+
+            var cursor = index
+            skipWhitespace(&cursor)
+            guard cursor < bytes.count, bytes[cursor] == 0x3a else {
+                throw AgentControllerError.invalidState
+            }
+            let encodedKey = Data(bytes[stringStart...stringEnd])
+            guard let key = try? JSONDecoder().decode(String.self, from: encodedKey) else {
+                throw AgentControllerError.invalidState
+            }
+            guard key == "enabled" else { continue }
+            cursor += 1
+            skipWhitespace(&cursor)
+            let trueBytes = Array("true".utf8)
+            let falseBytes = Array("false".utf8)
+            if bytes[cursor...].starts(with: trueBytes) {
+                guard match == nil else { throw AgentControllerError.invalidState }
+                match = cursor..<(cursor + trueBytes.count)
+            } else if bytes[cursor...].starts(with: falseBytes) {
+                return data
+            } else {
+                throw AgentControllerError.invalidState
+            }
+        }
+
+        guard let match else { throw AgentControllerError.invalidState }
+        var output = data
+        output.replaceSubrange(match, with: Data("false".utf8))
+        return output
     }
 
     private static func currentPOSIXError() -> POSIXError {

@@ -6,6 +6,34 @@ import XCTest
 final class AgentControllerTests: XCTestCase {
     private let now: Int64 = 1_800_000_000_000
 
+    func testPersistDisabledForRecoveryChangesOnlyEnabledAndPreservesQueue() throws {
+        try withHarness { harness in
+            let stateFile = harness.paths.stateDirectory.appendingPathComponent("collector-state.json")
+            let before = try Data(contentsOf: stateFile)
+            let queuedBefore = try harness.outbox.queuedCount()
+            let expected = Data(
+                String(decoding: before, as: UTF8.self)
+                    .replacingOccurrences(of: "\"enabled\":true", with: "\"enabled\":false")
+                    .utf8
+            )
+
+            try AgentController.persistDisabledForRecovery(
+                paths: harness.paths,
+                surfaces: harness.registry.surfaces
+            )
+
+            XCTAssertEqual(try Data(contentsOf: stateFile), expected)
+            XCTAssertEqual(try harness.outbox.queuedCount(), queuedBefore)
+            XCTAssertEqual(
+                try AgentController.persistedEnabled(
+                    paths: harness.paths,
+                    surfaces: harness.registry.surfaces
+                ),
+                false
+            )
+        }
+    }
+
     func testStatusShowsInstalledAvailableAndExactUpdateCommand() throws {
         try withHarness { harness in
             let installed = CompanionReleaseIdentity(
