@@ -174,6 +174,19 @@ for arch in arm64 x86_64; do
     cp "$ROOT/companion/.build/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
   fi
 done
+VALIDATOR_ARCH="$(/usr/bin/uname -m)"
+case "$VALIDATOR_ARCH" in arm64|x86_64) ;; *) echo "unsupported release validator architecture" >&2; exit 1 ;; esac
+if [ -n "$SCRATCH" ]; then
+  (cd "$ROOT/companion" && swift build -c release --arch "$VALIDATOR_ARCH" --scratch-path "$SCRATCH" --product runtime-raiders-release-validator)
+  RELEASE_VALIDATOR="$SCRATCH/$VALIDATOR_ARCH-apple-macosx/release/runtime-raiders-release-validator"
+else
+  (cd "$ROOT/companion" && swift build -c release --arch "$VALIDATOR_ARCH" --product runtime-raiders-release-validator)
+  RELEASE_VALIDATOR="$ROOT/companion/.build/$VALIDATOR_ARCH-apple-macosx/release/runtime-raiders-release-validator"
+fi
+[ -f "$RELEASE_VALIDATOR" ] && [ -x "$RELEASE_VALIDATOR" ] || {
+  echo "release archive validator build failed" >&2
+  exit 1
+}
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
 APP="$WORK/Runtime Raiders Agent.app"
 mkdir -p "$APP/Contents/MacOS"
@@ -213,25 +226,8 @@ xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$RUNTIME_RAIDERS_NOTAR
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 codesign --verify --strict --verbose=2 --all-architectures -R="$REQUIREMENT" "$APP"
-ditto -c -k --keepParent "$APP" "$STAGED_OUTPUT/runtime-raiders-agent.zip"
-ZIP_ENTRIES="$WORK/distribution-zip-entries"
-/usr/bin/unzip -Z1 "$STAGED_OUTPUT/runtime-raiders-agent.zip" > "$ZIP_ENTRIES" || {
-  echo "release archive shape validation failed" >&2
-  exit 1
-}
-[ -s "$ZIP_ENTRIES" ] || {
-  echo "release archive shape validation failed" >&2
-  exit 1
-}
-saw_app_root=0
-while IFS= read -r entry; do
-  case "$entry" in
-    'Runtime Raiders Agent.app/') saw_app_root=1 ;;
-    'Runtime Raiders Agent.app/'*) ;;
-    *) echo "release archive shape validation failed" >&2; exit 1 ;;
-  esac
-done < "$ZIP_ENTRIES"
-[ "$saw_app_root" -eq 1 ] || {
+(cd "$WORK" && /usr/bin/zip -q -r -X "$STAGED_OUTPUT/runtime-raiders-agent.zip" 'Runtime Raiders Agent.app')
+"$RELEASE_VALIDATOR" "$STAGED_OUTPUT/runtime-raiders-agent.zip" || {
   echo "release archive shape validation failed" >&2
   exit 1
 }

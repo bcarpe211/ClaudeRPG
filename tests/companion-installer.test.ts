@@ -21,6 +21,54 @@ function executable(path: string, lines: string[]): void {
   chmodSync(path, 0o755);
 }
 
+function fakeReleaseSwift(fake: string, log = false): void {
+  executable(join(fake, 'swift'), [
+    'arch=""; scratch=""; product=""',
+    'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; --product) product="$2"; shift 2;; *) shift;; esac; done',
+    '[ -n "$scratch" ] || scratch="$PWD/.build"',
+    'output="$scratch/$arch-apple-macosx/release"; mkdir -p "$output"',
+    'if [ "$product" = runtime-raiders-release-validator ]; then',
+    '  if [ -n "${RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR:-}" ]; then',
+    '    cp "$RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR" "$output/runtime-raiders-release-validator"',
+    '  else',
+    '    printf "#!/bin/sh\\nexit 0\\n" > "$output/runtime-raiders-release-validator"',
+    '    chmod 755 "$output/runtime-raiders-release-validator"',
+    '  fi',
+    'else',
+    '  printf "%s" "$arch" > "$output/raiders"',
+    'fi',
+    ...(log ? ['printf "swift %s %s\\n" "$arch" "$product" >> "$RUNTIME_RAIDERS_TEST_LOG"'] : []),
+  ]);
+}
+
+function productionReleaseValidator(root: string): string {
+  const scratch = join(root, 'production-release-validator');
+  const tmp = join(root, 'production-release-validator-tmp');
+  const clang = join(root, 'production-release-validator-clang');
+  mkdirSync(tmp, { recursive: true });
+  mkdirSync(clang, { recursive: true });
+  const result = spawnSync('/usr/bin/swift', [
+    'build',
+    '--disable-sandbox',
+    '--scratch-path', scratch,
+    '--product', 'runtime-raiders-release-validator',
+  ], {
+    cwd: join(process.cwd(), 'companion'),
+    env: {
+      ...process.env,
+      TMPDIR: tmp,
+      CLANG_MODULE_CACHE_PATH: clang,
+      SWIFTPM_MODULECACHE_OVERRIDE: clang,
+    },
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    throw new Error(`${result.stdout}${result.stderr}`);
+  }
+  const architecture = execFileSync('/usr/bin/uname', ['-m'], { encoding: 'utf8' }).trim();
+  return join(scratch, `${architecture}-apple-macosx/debug/runtime-raiders-release-validator`);
+}
+
 function renderedInstaller(root: string): string {
   const path = join(root, 'install.sh');
   writeFileSync(path, readFileSync(installer, 'utf8')
@@ -1154,12 +1202,7 @@ describe('Runtime Raiders release build', () => {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
       const capturedPlist = join(root, 'Info.plist');
-      executable(join(fake, 'swift'), [
-        'arch=""; scratch=""',
-        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
-        'mkdir -p "$scratch/$arch-apple-macosx/release"',
-        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
-      ]);
+      fakeReleaseSwift(fake);
       executable(join(fake, 'lipo'), [
         'output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done',
         'printf universal > "$output"',
@@ -1334,12 +1377,7 @@ describe('Runtime Raiders release build', () => {
     try {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
-      executable(join(fake, 'swift'), [
-        'arch=""; scratch=""',
-        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
-        'mkdir -p "$scratch/$arch-apple-macosx/release"',
-        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
-      ]);
+      fakeReleaseSwift(fake);
       executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
       executable(join(fake, 'codesign'), ['exit 0']);
       executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
@@ -1378,14 +1416,7 @@ describe('Runtime Raiders release build', () => {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
       const log = join(root, 'commands.log');
-      executable(join(fake, 'swift'), [
-        'arch=""; scratch=""',
-        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
-        '[ -n "$scratch" ] || scratch="$PWD/.build"',
-        'mkdir -p "$scratch/$arch-apple-macosx/release"',
-        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
-        'printf "swift %s\\n" "$arch" >> "$RUNTIME_RAIDERS_TEST_LOG"',
-      ]);
+      fakeReleaseSwift(fake, true);
       executable(join(fake, 'lipo'), [
         'output=""',
         'while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done',
@@ -1409,6 +1440,7 @@ describe('Runtime Raiders release build', () => {
       ]);
       const output = join(root, 'output');
       const scratch = join(root, 'scratch');
+      const releaseValidator = productionReleaseValidator(root);
       const fixture = disposableReleaseBuilder(root);
       const repositoryCacheBefore = buildCacheIdentity(join(process.cwd(), 'companion/.build'));
       const result = invoke(fixture.build, releaseBuildArgs(fixture.releaseSHA, '--output', output, '--scratch-path', scratch), {
@@ -1418,6 +1450,7 @@ describe('Runtime Raiders release build', () => {
         RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
         RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
         RUNTIME_RAIDERS_TEAM_ID: teamId,
+        RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR: releaseValidator,
         FAKE_RELEASE_SHASUM_FAIL: '0',
       });
       expect(result.status, result.stderr).toBe(0);
@@ -1433,6 +1466,12 @@ describe('Runtime Raiders release build', () => {
         'runtime-raiders-agent.zip.sha256',
       ]);
       const zipPath = join(output, 'runtime-raiders-agent.zip');
+      const productionValidation = spawnSync(releaseValidator, [zipPath], { encoding: 'utf8' });
+      const zipFacts = execFileSync('/usr/bin/zipinfo', ['-v', zipPath], { encoding: 'utf8' });
+      expect(
+        productionValidation.status,
+        `${productionValidation.stdout}${productionValidation.stderr}\n${zipFacts}`,
+      ).toBe(0);
       const zipDigest = execFileSync('/usr/bin/shasum', ['-a', '256', zipPath], { encoding: 'utf8' }).split(/\s+/)[0];
       expect(readFileSync(join(output, 'runtime-raiders-agent.zip.sha256'), 'utf8')).toBe(
         `${zipDigest}  runtime-raiders-agent.zip\n`,
@@ -1471,36 +1510,29 @@ describe('Runtime Raiders release build', () => {
       expect(commands).toContain('xcrun stapler staple');
       expect(commands).toContain('xcrun stapler validate');
       const dittoCommands = commands.split('\n').filter((line) => line.startsWith('ditto '));
-      expect(dittoCommands).toHaveLength(2);
+      expect(dittoCommands).toHaveLength(1);
       expect(dittoCommands[0]).toContain('--sequesterRsrc');
-      expect(dittoCommands[1]).not.toContain('--sequesterRsrc');
+      expect(zipFacts).not.toContain('extended local header:                          yes');
       expect(commands).not.toMatch(/upload|publish|aws|s3|rsync|scp/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('rejects a distributed ZIP containing a sequestered resource sidecar before output', () => {
-    // Catches trusting the archive command instead of revalidating the updater-facing ZIP shape.
+  it('uses the production validator to reject a name-correct ZIP with an unsafe Unix mode', () => {
+    // Catches falling back to a name-only scan while a strict archive rule is violated.
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-release-sidecar-'));
     try {
       const fake = join(root, 'fakes');
-      const sidecar = join(root, 'sidecar');
       mkdirSync(fake, { recursive: true });
-      mkdirSync(join(sidecar, '__MACOSX'), { recursive: true });
-      writeFileSync(join(sidecar, '__MACOSX/._Runtime Raiders Agent.app'), 'sidecar');
-      executable(join(fake, 'swift'), [
-        'arch=""; scratch=""; while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
-        'mkdir -p "$scratch/$arch-apple-macosx/release"; printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
-      ]);
+      const releaseValidator = productionReleaseValidator(root);
+      fakeReleaseSwift(fake);
       executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
       executable(join(fake, 'codesign'), ['exit 0']);
-      executable(join(fake, 'ditto'), [
-        'sequester=0; last=""; for argument in "$@"; do [ "$argument" = --sequesterRsrc ] && sequester=1; last="$argument"; done',
-        '/usr/bin/ditto "$@"',
-        '[ "$sequester" = 1 ] || (cd "$RUNTIME_RAIDERS_TEST_SIDECAR" && /usr/bin/zip -q "$last" "__MACOSX/._Runtime Raiders Agent.app")',
+      executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
+      executable(join(fake, 'xcrun'), [
+        'if [ "$1" = stapler ] && [ "$2" = staple ]; then chmod 0777 "$3/Contents"; fi',
       ]);
-      executable(join(fake, 'xcrun'), ['exit 0']);
       executable(join(fake, 'shasum'), ['exec /usr/bin/shasum "$@"']);
       const fixture = disposableReleaseBuilder(root);
       const output = join(root, 'output');
@@ -1511,7 +1543,7 @@ describe('Runtime Raiders release build', () => {
         {
           ...process.env,
           PATH: fake + ':/usr/bin:/bin',
-          RUNTIME_RAIDERS_TEST_SIDECAR: sidecar,
+          RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR: releaseValidator,
           RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
           RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
           RUNTIME_RAIDERS_TEAM_ID: teamId,
@@ -1533,13 +1565,7 @@ describe('Runtime Raiders release build', () => {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
       const log = join(root, 'commands.log');
-      executable(join(fake, 'swift'), [
-        'arch=""; scratch=""',
-        'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
-        '[ -n "$scratch" ] || scratch="$PWD/.build"',
-        'mkdir -p "$scratch/$arch-apple-macosx/release"',
-        'printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
-      ]);
+      fakeReleaseSwift(fake);
       executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
       executable(join(fake, 'codesign'), ['exit 0']);
       executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
@@ -1572,10 +1598,7 @@ describe('Runtime Raiders release build', () => {
     try {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
-      executable(join(fake, 'swift'), [
-        'arch=""; scratch=""; while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
-        '[ -n "$scratch" ] || scratch="$PWD/.build"; mkdir -p "$scratch/$arch-apple-macosx/release"; printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
-      ]);
+      fakeReleaseSwift(fake);
       executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
       executable(join(fake, 'codesign'), ['exit 0']);
       executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
@@ -1635,10 +1658,7 @@ describe('Runtime Raiders release build', () => {
     try {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
-      executable(join(fake, 'swift'), [
-        'arch=""; scratch=""; while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; *) shift;; esac; done',
-        '[ -n "$scratch" ] || scratch="$PWD/.build"; mkdir -p "$scratch/$arch-apple-macosx/release"; printf "%s" "$arch" > "$scratch/$arch-apple-macosx/release/raiders"',
-      ]);
+      fakeReleaseSwift(fake);
       executable(join(fake, 'lipo'), ['output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done; printf universal > "$output"']);
       executable(join(fake, 'codesign'), ['exit 0']);
       executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
