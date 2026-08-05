@@ -72,6 +72,25 @@ final class ZipArchiveValidatorTests: XCTestCase {
         }
     }
 
+    func testRejectsGroupOrWorldWritableRegularFilesAndDirectories() throws {
+        try assertInvalid(entries: [
+            validEntries()[0],
+            ZipEntry(
+                name: "Runtime Raiders Agent.app/Contents/writable",
+                data: Data(),
+                unixMode: UInt32(S_IFREG | 0o666)
+            ),
+        ])
+        try assertInvalid(entries: [
+            ZipEntry(
+                name: "Runtime Raiders Agent.app/",
+                directory: true,
+                unixMode: UInt32(S_IFDIR | 0o777)
+            ),
+            validEntries()[1],
+        ])
+    }
+
     func testRejectsEncryptedUnsupportedCompressionAndMultiDiskArchives() throws {
         try assertInvalid(entries: [validEntries()[0], ZipEntry(
             name: "Runtime Raiders Agent.app/file", flags: 1, data: Data()

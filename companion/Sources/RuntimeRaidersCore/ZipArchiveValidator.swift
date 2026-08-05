@@ -150,6 +150,7 @@ private struct Parser {
             let fileType = mode & S_IFMT
             guard madeBy >> 8 == 3,
                   mode & 0o7000 == 0,
+                  mode & 0o022 == 0,
                   (path.hasSuffix("/") ? fileType == S_IFDIR : fileType == S_IFREG) else {
                 throw invalid
             }
