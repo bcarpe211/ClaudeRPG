@@ -129,6 +129,26 @@ final class AtomicStoreTests: XCTestCase {
                 paths.controlSocket,
                 support.appendingPathComponent("agent.sock", isDirectory: false)
             )
+            XCTAssertEqual(
+                paths.updateState,
+                support.appendingPathComponent("state/update-state.json", isDirectory: false)
+            )
+            XCTAssertEqual(
+                paths.updateLock,
+                support.appendingPathComponent("state/update.lock", isDirectory: false)
+            )
+            XCTAssertEqual(
+                paths.installedApplication,
+                support.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
+            )
+            XCTAssertEqual(
+                paths.rollbackApplication,
+                support.appendingPathComponent("Runtime Raiders Agent.rollback.app", isDirectory: true)
+            )
+            XCTAssertEqual(
+                paths.failedApplication,
+                support.appendingPathComponent("Runtime Raiders Agent.failed.app", isDirectory: true)
+            )
             XCTAssertFalse(FileManager.default.fileExists(atPath: support.path))
         }
     }
