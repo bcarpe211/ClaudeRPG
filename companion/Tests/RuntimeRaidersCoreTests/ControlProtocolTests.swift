@@ -135,4 +135,30 @@ final class ControlProtocolTests: XCTestCase {
 
         XCTAssertEqual(response, ControlResponse(ok: true, message: "present"))
     }
+
+    func testOnWaitsForSafeInitializationBeyondFastControlTimeout() throws {
+        let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-slow-on-control-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let socketURL = parent.appendingPathComponent("agent.sock")
+        let handlerFinished = DispatchSemaphore(value: 0)
+        let server = ControlSocketServer(socketURL: socketURL)
+        try server.start { command in
+            defer { handlerFinished.signal() }
+            XCTAssertEqual(command, .on)
+            Thread.sleep(forTimeInterval: 2.25)
+            return ControlResponse(ok: true, message: "enabled")
+        }
+        defer { server.stop() }
+
+        let result = Result {
+            try ControlSocketClient.send(.on, to: socketURL)
+        }
+
+        XCTAssertEqual(handlerFinished.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(
+            try result.get(),
+            ControlResponse(ok: true, message: "enabled")
+        )
+    }
 }

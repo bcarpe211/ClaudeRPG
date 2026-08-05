@@ -312,8 +312,11 @@ public final class ControlSocketServer: @unchecked Sendable {
         ) == 0 else { throw currentPOSIXError() }
     }
 
-    fileprivate static func setClientTimeouts(_ descriptor: Int32) throws {
-        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+    fileprivate static func setClientTimeouts(
+        _ descriptor: Int32,
+        seconds: Int = 2
+    ) throws {
+        var timeout = timeval(tv_sec: seconds, tv_usec: 0)
         for option in [SO_RCVTIMEO, SO_SNDTIMEO] {
             guard Darwin.setsockopt(
                 descriptor,
@@ -388,6 +391,15 @@ public final class ControlSocketServer: @unchecked Sendable {
 }
 
 public enum ControlSocketClient {
+    private static func timeoutSeconds(for command: ControlCommand) -> Int {
+        switch command {
+        case .on, .off, .uninstall:
+            30
+        case .daemon, .status, .doctor:
+            2
+        }
+    }
+
     public static func send(
         _ command: ControlCommand,
         to socketURL: URL,
@@ -411,7 +423,10 @@ public enum ControlSocketClient {
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ControlSocketServer.currentPOSIXError() }
         try ControlSocketServer.disableSIGPIPE(descriptor)
-        try ControlSocketServer.setClientTimeouts(descriptor)
+        try ControlSocketServer.setClientTimeouts(
+            descriptor,
+            seconds: timeoutSeconds(for: request.command)
+        )
         defer { Darwin.close(descriptor) }
         try ControlSocketServer.withAddress(socketURL.standardizedFileURL.path) { address, length in
             guard Darwin.connect(descriptor, address, length) == 0 else {
