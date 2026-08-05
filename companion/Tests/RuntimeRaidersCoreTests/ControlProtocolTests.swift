@@ -526,6 +526,162 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(try recoveryPermissions(unsafeFailed.failedApplication), 0o755)
     }
 
+    func testStableRecoveryLayoutRevertsExactRollbackAfterEveryPostRenameThrow() throws {
+        enum Injected: Error { case operation }
+
+        for fault: StableRecoveryRestoreFault in [
+            .parentSynchronize,
+            .installedPostcheck,
+            .failedCandidatePostcheck,
+        ] {
+            let paths = try makeRecoveryPaths("restore-post-rename-\(fault)")
+            defer {
+                try? FileManager.default.removeItem(
+                    at: paths.supportDirectory.deletingLastPathComponent()
+                )
+            }
+            try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
+            try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
+            let rollbackInode = try recoveryInode(paths.rollbackApplication)
+            let failedInode = try recoveryInode(paths.failedApplication)
+            var pendingFault: StableRecoveryRestoreFault? = fault
+            let layout = try StableRecoveryFileTransaction(
+                paths: paths,
+                restoreFault: { checkpoint in
+                    guard pendingFault == checkpoint else { return }
+                    pendingFault = nil
+                    throw Injected.operation
+                }
+            )
+            let phase = try layout.inspectAndNormalize()
+
+            XCTAssertThrowsError(try layout.restore(phase: phase), String(describing: fault)) {
+                XCTAssertTrue($0 is Injected, String(describing: fault))
+            }
+            let installedExists = FileManager.default.fileExists(
+                atPath: paths.installedApplication.path
+            )
+            let rollbackExists = FileManager.default.fileExists(
+                atPath: paths.rollbackApplication.path
+            )
+            XCTAssertFalse(installedExists, String(describing: fault))
+            XCTAssertTrue(rollbackExists, String(describing: fault))
+            guard !installedExists, rollbackExists else { continue }
+            XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.rollbackApplication), "old")
+            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+
+            let retryPhase = try layout.inspectAndNormalize()
+            XCTAssertEqual(retryPhase, .rollbackAndFailed)
+            try layout.restore(phase: retryPhase)
+            XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
+            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+        }
+    }
+
+    func testStableRecoveryLayoutReturnsTypedTerminalErrorWhenInternalRevertIsUnsafe() throws {
+        enum Injected: Error { case operation }
+
+        let paths = try makeRecoveryPaths("restore-post-rename-unsafe-revert")
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
+        let failedInode = try recoveryInode(paths.failedApplication)
+        let layout = try StableRecoveryFileTransaction(
+            paths: paths,
+            restoreFault: { checkpoint in
+                guard checkpoint == .installedPostcheck else { return }
+                try FileManager.default.removeItem(at: paths.installedApplication)
+                try self.makeRecoveryApp(
+                    paths.installedApplication,
+                    marker: "intruder",
+                    mode: 0o700
+                )
+                throw Injected.operation
+            }
+        )
+        let phase = try layout.inspectAndNormalize()
+
+        XCTAssertThrowsError(try layout.restore(phase: phase)) { error in
+            XCTAssertEqual(error as? StableUpdateRecoveryError, .retrySafetyFailure)
+        }
+        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "intruder")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+        XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+    }
+
+    func testStableRecoveryBootsOutWhenBootstrapStartsDaemonThenThrowsAndRetrySucceeds() throws {
+        enum Injected: Error { case operation }
+
+        let paths = try makeRecoveryPaths("bootstrap-start-then-throw")
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
+        let rollbackInode = try recoveryInode(paths.rollbackApplication)
+        let failedInode = try recoveryInode(paths.failedApplication)
+        let layout = try StableRecoveryFileTransaction(paths: paths)
+        var attempt = 0
+        var bootouts = 0
+        var stoppedProofs = 0
+        var daemonRunning = true
+        let recovery = StableUpdateRecovery(
+            paths: paths,
+            operations: StableUpdateRecoveryOperations(
+                phase: {
+                    attempt += 1
+                    return try layout.inspectAndNormalize()
+                },
+                verifyBundles: { _ in },
+                persistDisabled: {},
+                bootout: {
+                    bootouts += 1
+                    daemonRunning = false
+                },
+                proveStopped: {
+                    stoppedProofs += 1
+                    return !daemonRunning
+                },
+                restore: { try layout.restore(phase: $0) },
+                revertRestored: { try layout.revertRestore(phase: $0) },
+                verifyRestoredBundle: { _ in },
+                bootstrap: {
+                    daemonRunning = true
+                    if attempt == 1 { throw Injected.operation }
+                },
+                verifyDisabledHealth: { true }
+            )
+        )
+
+        XCTAssertThrowsError(try recovery.run()) { error in
+            XCTAssertTrue(error is Injected)
+        }
+        XCTAssertEqual(bootouts, 2)
+        XCTAssertEqual(stoppedProofs, 2)
+        XCTAssertFalse(daemonRunning)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.installedApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
+        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+
+        try recovery.run()
+
+        XCTAssertEqual(attempt, 2)
+        XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+        XCTAssertTrue(daemonRunning)
+    }
+
     func testStableRecoveryRevertsEveryPostRestoreFailureAndSecondRunSucceeds() throws {
         enum Failure: String, CaseIterable {
             case restoredVerification

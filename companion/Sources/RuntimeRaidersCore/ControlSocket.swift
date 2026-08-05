@@ -274,6 +274,12 @@ public enum StableRecoveryPhase: Equatable, Sendable {
     case rollbackAndFailed
 }
 
+enum StableRecoveryRestoreFault {
+    case parentSynchronize
+    case installedPostcheck
+    case failedCandidatePostcheck
+}
+
 public final class StableRecoveryFileTransaction {
     private struct Entry: Equatable {
         let device: UInt64
@@ -289,14 +295,23 @@ public final class StableRecoveryFileTransaction {
 
     private let paths: AgentPaths
     private let supportDescriptor: Int32
+    private let restoreFault: (StableRecoveryRestoreFault) throws -> Void
     private var snapshot: Snapshot?
 
-    public init(paths: AgentPaths) throws {
+    public convenience init(paths: AgentPaths) throws {
+        try self.init(paths: paths, restoreFault: { _ in })
+    }
+
+    init(
+        paths: AgentPaths,
+        restoreFault: @escaping (StableRecoveryRestoreFault) throws -> Void
+    ) throws {
         self.paths = paths
         guard let descriptor = try OwnerOnlyDirectory.openExisting(paths.supportDirectory) else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
         supportDescriptor = descriptor
+        self.restoreFault = restoreFault
     }
 
     deinit { Darwin.close(supportDescriptor) }
@@ -369,22 +384,35 @@ public final class StableRecoveryFileTransaction {
         ) == 0 else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
-        try synchronize()
-        guard try ownedDirectory(
-            paths.installedApplication.lastPathComponent,
-            allowSafeReadableMode: false
-        ) == snapshot.rollback else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        if let failed = snapshot.failed {
+        do {
+            try restoreFault(.parentSynchronize)
+            try synchronize()
+            try restoreFault(.installedPostcheck)
             guard try ownedDirectory(
-                paths.failedApplication.lastPathComponent,
+                paths.installedApplication.lastPathComponent,
                 allowSafeReadableMode: false
-            ) == failed else {
+            ) == snapshot.rollback else {
                 throw CompanionUpdaterError.unsafeFilesystem
             }
-        } else {
-            try requireMissing(paths.failedApplication.lastPathComponent)
+            if let failed = snapshot.failed {
+                try restoreFault(.failedCandidatePostcheck)
+                guard try ownedDirectory(
+                    paths.failedApplication.lastPathComponent,
+                    allowSafeReadableMode: false
+                ) == failed else {
+                    throw CompanionUpdaterError.unsafeFilesystem
+                }
+            } else {
+                try requireMissing(paths.failedApplication.lastPathComponent)
+            }
+        } catch {
+            let postRenameError = error
+            do {
+                try revertRestore(phase: phase)
+            } catch {
+                throw StableUpdateRecoveryError.retrySafetyFailure
+            }
+            throw postRenameError
         }
     }
 
