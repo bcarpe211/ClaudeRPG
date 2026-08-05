@@ -21,6 +21,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const SCRIPT = resolve('scripts/pi/runtime-raiders-artifacts.sh');
+const INSTALLER_TEMPLATE = resolve('companion/packaging/install.sh');
 const releaseSha = 'b'.repeat(40);
 const roots: string[] = [];
 
@@ -655,6 +656,21 @@ describe('Runtime Raiders artifact publication', () => {
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toBe(expectedOutput);
     expect(status.stderr).toBe('');
+  });
+
+  it('publishes the rendered production installer with legitimate runtime URL references', () => {
+    const f = publicationFixture();
+    const renderedInstaller = readFileSync(INSTALLER_TEMPLATE, 'utf8')
+      .replaceAll('__RUNTIME_RAIDERS_TEAM_ID__', 'ABCDE12345');
+    writeFileSync(f.files.installer, renderedInstaller);
+
+    const published = runPublish(f);
+
+    expect(published.status, published.stderr).toBe(0);
+    expect(readFileSync(
+      join(f.artifactRoot, 'releases', releaseSha, 'install.sh'),
+      'utf8',
+    )).toBe(renderedInstaller);
   });
 
   it('reports unpublished without exposing artifact content', () => {
