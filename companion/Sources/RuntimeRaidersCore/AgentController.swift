@@ -35,6 +35,41 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     public let queuedEventCount: Int
     public let lastSuccessfulUploadMS: Int64?
     public let activeRunCount: Int
+    public let installedCompanionVersion: String
+    public let installedReleaseSequence: Int64
+    public let availableCompanionVersion: String?
+    public let availableReleaseSequence: Int64?
+    public let updateCommand: String?
+
+    public init(
+        enabled: Bool,
+        daemonRunning: Bool,
+        persistedState: PersistedCollectorState,
+        serverEnabledSurfaces: [RunSurface],
+        compiledAdapters: [RunSurface: AdapterHealth],
+        queuedEventCount: Int,
+        lastSuccessfulUploadMS: Int64?,
+        activeRunCount: Int,
+        installedCompanionVersion: String,
+        installedReleaseSequence: Int64,
+        availableCompanionVersion: String?,
+        availableReleaseSequence: Int64?,
+        updateCommand: String?
+    ) {
+        self.enabled = enabled
+        self.daemonRunning = daemonRunning
+        self.persistedState = persistedState
+        self.serverEnabledSurfaces = serverEnabledSurfaces
+        self.compiledAdapters = compiledAdapters
+        self.queuedEventCount = queuedEventCount
+        self.lastSuccessfulUploadMS = lastSuccessfulUploadMS
+        self.activeRunCount = activeRunCount
+        self.installedCompanionVersion = installedCompanionVersion
+        self.installedReleaseSequence = installedReleaseSequence
+        self.availableCompanionVersion = availableCompanionVersion
+        self.availableReleaseSequence = availableReleaseSequence
+        self.updateCommand = updateCommand
+    }
 
     public init(
         enabled: Bool,
@@ -46,14 +81,21 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         lastSuccessfulUploadMS: Int64?,
         activeRunCount: Int
     ) {
-        self.enabled = enabled
-        self.daemonRunning = daemonRunning
-        self.persistedState = persistedState
-        self.serverEnabledSurfaces = serverEnabledSurfaces
-        self.compiledAdapters = compiledAdapters
-        self.queuedEventCount = queuedEventCount
-        self.lastSuccessfulUploadMS = lastSuccessfulUploadMS
-        self.activeRunCount = activeRunCount
+        self.init(
+            enabled: enabled,
+            daemonRunning: daemonRunning,
+            persistedState: persistedState,
+            serverEnabledSurfaces: serverEnabledSurfaces,
+            compiledAdapters: compiledAdapters,
+            queuedEventCount: queuedEventCount,
+            lastSuccessfulUploadMS: lastSuccessfulUploadMS,
+            activeRunCount: activeRunCount,
+            installedCompanionVersion: "unknown",
+            installedReleaseSequence: 0,
+            availableCompanionVersion: nil,
+            availableReleaseSequence: nil,
+            updateCommand: nil
+        )
     }
 
     public var description: String {
@@ -69,19 +111,25 @@ public struct DoctorReport: Codable, Equatable, CustomStringConvertible, Sendabl
     public let signingValid: Bool
     public let enrollmentMatchesCompiledAdapters: Bool
     public let claudeOTelEnvironmentPresent: Bool
+    public let compatibilityNeedsReview: Bool
+    public let compatibilityReasons: [CodexCompatibilityIssue]
 
     public init(
         codexRootReadable: Bool,
         serverHealthy: Bool,
         signingValid: Bool,
         enrollmentMatchesCompiledAdapters: Bool,
-        claudeOTelEnvironmentPresent: Bool
+        claudeOTelEnvironmentPresent: Bool,
+        compatibilityNeedsReview: Bool = false,
+        compatibilityReasons: [CodexCompatibilityIssue] = []
     ) {
         self.codexRootReadable = codexRootReadable
         self.serverHealthy = serverHealthy
         self.signingValid = signingValid
         self.enrollmentMatchesCompiledAdapters = enrollmentMatchesCompiledAdapters
         self.claudeOTelEnvironmentPresent = claudeOTelEnvironmentPresent
+        self.compatibilityNeedsReview = compatibilityNeedsReview
+        self.compatibilityReasons = compatibilityReasons.sorted { $0.rawValue < $1.rawValue }
     }
 
     public var description: String {
@@ -99,6 +147,16 @@ public enum AgentControllerError: Error, Equatable {
 
 public enum CollectorDiagnostic: String, Equatable, Sendable {
     case deterministicRecordRejected = "deterministic_record_rejected"
+}
+
+public struct PersistedAdapterFacts: Equatable, Sendable {
+    public let activeRunCount: Int
+    public let compatibilityReasons: [CodexCompatibilityIssue]
+
+    public init(activeRunCount: Int, compatibilityReasons: [CodexCompatibilityIssue]) {
+        self.activeRunCount = activeRunCount
+        self.compatibilityReasons = compatibilityReasons.sorted { $0.rawValue < $1.rawValue }
+    }
 }
 
 public enum EnrollmentConfigurationError: Error, Equatable {
@@ -438,6 +496,26 @@ public final class AgentController: @unchecked Sendable {
         return decoded.enabled ? .enabled : .disabled
     }
 
+    public static func persistedAdapterFacts(
+        paths: AgentPaths,
+        surfaces: [RunSurface]
+    ) throws -> PersistedAdapterFacts {
+        guard let descriptor = try OwnerOnlyDirectory.openExisting(paths.stateDirectory) else {
+            return PersistedAdapterFacts(activeRunCount: 0, compatibilityReasons: [])
+        }
+        defer { Darwin.close(descriptor) }
+        guard let data = try readState(
+            directoryDescriptor: descriptor,
+            name: "collector-state.json",
+            maximumBytes: 4 * 1_024 * 1_024
+        ),
+        let decoded = try? JSONDecoder().decode(PersistedState.self, from: data),
+        valid(decoded, surfaces: surfaces) else {
+            throw AgentControllerError.invalidState
+        }
+        return snapshotFacts(in: decoded)
+    }
+
     public func install(existingFiles: [URL]) throws {
         try lock.withLock {
             let files = normalized(existingFiles)
@@ -591,6 +669,27 @@ public final class AgentController: @unchecked Sendable {
         serverEnabledSurfaces: [RunSurface],
         lastSuccessfulUploadMS: Int64?
     ) throws -> AgentStatus {
+        try status(
+            daemonRunning: daemonRunning,
+            serverEnabledSurfaces: serverEnabledSurfaces,
+            lastSuccessfulUploadMS: lastSuccessfulUploadMS,
+            installedRelease: CompanionReleaseIdentity(
+                releaseSequence: 1,
+                releaseSHA: String(repeating: "0", count: 40),
+                companionVersion: configuration.companionVersion,
+                updateProtocolVersion: 1
+            ),
+            updateAvailability: nil
+        )
+    }
+
+    public func status(
+        daemonRunning: Bool,
+        serverEnabledSurfaces: [RunSurface],
+        lastSuccessfulUploadMS: Int64?,
+        installedRelease: CompanionReleaseIdentity,
+        updateAvailability: CompanionUpdateAvailability?
+    ) throws -> AgentStatus {
         try lock.withLock {
             var health: [RunSurface: AdapterHealth] = [
                 .claudeCode: .unavailable,
@@ -599,6 +698,7 @@ public final class AgentController: @unchecked Sendable {
                 .codexCLI: .disabled,
             ]
             for surface in registry.surfaces { health[surface] = .available }
+            let persistedActiveRunCount = Self.snapshotFacts(in: state).activeRunCount
             return AgentStatus(
                 enabled: state.enabled,
                 daemonRunning: daemonRunning,
@@ -607,7 +707,12 @@ public final class AgentController: @unchecked Sendable {
                 compiledAdapters: health,
                 queuedEventCount: try outbox.queuedCount(),
                 lastSuccessfulUploadMS: lastSuccessfulUploadMS,
-                activeRunCount: runRegistry.activeRunCount
+                activeRunCount: max(runRegistry.activeRunCount, persistedActiveRunCount),
+                installedCompanionVersion: installedRelease.companionVersion,
+                installedReleaseSequence: installedRelease.releaseSequence,
+                availableCompanionVersion: updateAvailability?.availableVersion,
+                availableReleaseSequence: updateAvailability?.availableSequence,
+                updateCommand: updateAvailability?.updateCommand
             )
         }
     }
@@ -637,12 +742,35 @@ public final class AgentController: @unchecked Sendable {
         enrollmentAllowedSurfaces: [RunSurface],
         claudeOTelEnvironmentPresent: Bool
     ) -> DoctorReport {
-        return DoctorReport(
-            codexRootReadable: codexRootReadable,
-            serverHealthy: serverHealthy,
-            signingValid: signingValid,
-            enrollmentMatchesCompiledAdapters: Set(enrollmentAllowedSurfaces) == Set(registry.surfaces),
-            claudeOTelEnvironmentPresent: claudeOTelEnvironmentPresent
+        lock.withLock {
+            let facts = Self.snapshotFacts(in: state)
+            return DoctorReport(
+                codexRootReadable: codexRootReadable,
+                serverHealthy: serverHealthy,
+                signingValid: signingValid,
+                enrollmentMatchesCompiledAdapters: Set(enrollmentAllowedSurfaces) == Set(registry.surfaces),
+                claudeOTelEnvironmentPresent: claudeOTelEnvironmentPresent,
+                compatibilityNeedsReview: !facts.compatibilityReasons.isEmpty,
+                compatibilityReasons: facts.compatibilityReasons
+            )
+        }
+    }
+
+    private static func snapshotFacts(in state: PersistedState) -> PersistedAdapterFacts {
+        var reasons: [CodexCompatibilityIssue] = []
+        var activeRunCount = 0
+        for file in state.files.values {
+            for snapshot in file.adapterSnapshots.values {
+                guard let adapter = try? CodexAdapter(snapshot: snapshot) else { continue }
+                if let issue = adapter.compatibilityIssue, !reasons.contains(issue) {
+                    reasons.append(issue)
+                }
+                if adapter.hasActiveRun { activeRunCount += 1 }
+            }
+        }
+        return PersistedAdapterFacts(
+            activeRunCount: activeRunCount,
+            compatibilityReasons: reasons
         )
     }
 

@@ -10,6 +10,7 @@ private struct RuntimeInputs {
     let dedupeSecret: Data
     let deviceToken: String
     let companionVersion: String
+    let releaseIdentity: CompanionReleaseIdentity
     let serverURL: URL
 
     init(enrollment: EnrollmentConfiguration, environment: [String: String]) {
@@ -21,7 +22,8 @@ private struct RuntimeInputs {
         dedupeSecret = enrollment.dedupeSecret
         deviceToken = enrollment.deviceToken
         serverURL = enrollment.serverURL
-        companionVersion = environment["RUNTIME_RAIDERS_COMPANION_VERSION"] ?? "0.1.0"
+        releaseIdentity = compiledReleaseIdentity(environment: environment)
+        companionVersion = releaseIdentity.companionVersion
     }
 }
 
@@ -47,8 +49,13 @@ private final class DaemonRuntime: @unchecked Sendable {
     private let controller: AgentController
     private let uploader: Uploader
     private let heartbeat: Heartbeat
+    private let releaseChecker: ReleaseChecker?
     private let workQueue = DispatchQueue(
         label: "com.redlattice.runtime-raiders.daemon",
+        qos: .utility
+    )
+    private let updateQueue = DispatchQueue(
+        label: "com.redlattice.runtime-raiders.updates",
         qos: .utility
     )
     private let stopLock = NSLock()
@@ -96,6 +103,10 @@ private final class DaemonRuntime: @unchecked Sendable {
             companionVersion: inputs.companionVersion,
             cancellableTransport: Uploader.liveCancellableTransport
         )
+        releaseChecker = try? ReleaseChecker(
+            paths: paths,
+            installed: inputs.releaseIdentity
+        )
     }
 
     func run() throws {
@@ -105,6 +116,9 @@ private final class DaemonRuntime: @unchecked Sendable {
         do {
             let files = try watcher.discoverProviderFiles()
             try controller.install(existingFiles: files)
+            updateQueue.async { [releaseChecker] in
+                _ = releaseChecker?.checkIfDue()
+            }
             try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
             scheduleReadContinuationIfNeeded()
             uploader.schedule(enabled: controller.enabled)
@@ -202,7 +216,9 @@ private final class DaemonRuntime: @unchecked Sendable {
                 let status = try controller.status(
                     daemonRunning: true,
                     serverEnabledSurfaces: inputs.surfaces,
-                    lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS
+                    lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS,
+                    installedRelease: inputs.releaseIdentity,
+                    updateAvailability: releaseChecker?.availability()
                 )
                 return ControlResponse(ok: true, message: status.description)
             } catch {
@@ -330,6 +346,13 @@ private func localStatus(paths: AgentPaths) -> AgentStatus {
     let queuedCount = (try? Outbox.queuedCount(
         inExistingDirectory: paths.outboxDirectory
     )) ?? 0
+    let installed = localReleaseIdentity()
+    let updateAvailability = (try? UpdateStateStore(paths: paths).load())?
+        .cachedManifest?.availability(from: installed)
+    let adapterFacts = (try? AgentController.persistedAdapterFacts(
+        paths: paths,
+        surfaces: surfaces
+    )) ?? PersistedAdapterFacts(activeRunCount: 0, compatibilityReasons: [])
     return AgentStatus(
         enabled: persistedState == .enabled,
         daemonRunning: false,
@@ -338,7 +361,12 @@ private func localStatus(paths: AgentPaths) -> AgentStatus {
         compiledAdapters: health,
         queuedEventCount: queuedCount,
         lastSuccessfulUploadMS: nil,
-        activeRunCount: 0
+        activeRunCount: adapterFacts.activeRunCount,
+        installedCompanionVersion: installed.companionVersion,
+        installedReleaseSequence: installed.releaseSequence,
+        availableCompanionVersion: updateAvailability?.availableVersion,
+        availableReleaseSequence: updateAvailability?.availableSequence,
+        updateCommand: updateAvailability?.updateCommand
     )
 }
 
@@ -349,6 +377,10 @@ private func localDoctor(paths: AgentPaths) -> DoctorReport {
     let environment = ProcessInfo.processInfo.environment
     let codexRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex/sessions", isDirectory: true)
+    let adapterFacts = (try? AgentController.persistedAdapterFacts(
+        paths: paths,
+        surfaces: enrollment?.enabledSurfaces ?? []
+    )) ?? PersistedAdapterFacts(activeRunCount: 0, compatibilityReasons: [])
     return DoctorReport(
         codexRootReadable: DaemonRuntime.codexRootReadable(codexRoot),
         serverHealthy: DaemonRuntime.serverHealthy(),
@@ -356,8 +388,38 @@ private func localDoctor(paths: AgentPaths) -> DoctorReport {
         enrollmentMatchesCompiledAdapters: enrollment != nil,
         claudeOTelEnvironmentPresent: DoctorEnvironment.claudeOTelPresent(
             in: environment
-        )
+        ),
+        compatibilityNeedsReview: !adapterFacts.compatibilityReasons.isEmpty,
+        compatibilityReasons: adapterFacts.compatibilityReasons
     )
+}
+
+private func localReleaseIdentity() -> CompanionReleaseIdentity {
+    compiledReleaseIdentity(environment: ProcessInfo.processInfo.environment)
+}
+
+private func compiledReleaseIdentity(
+    environment: [String: String]
+) -> CompanionReleaseIdentity {
+    let dictionary: [String: Any] = [
+        "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
+        "CFBundleShortVersionString": environment[
+            "RUNTIME_RAIDERS_COMPANION_VERSION"
+        ] ?? "0.1.0",
+        "RuntimeRaidersReleaseSequence": 1,
+        "RuntimeRaidersReleaseSHA": String(repeating: "0", count: 40),
+        "RuntimeRaidersUpdateProtocolVersion": 1,
+    ]
+    if let identity = try? CompanionReleaseIdentity.parse(infoDictionary: dictionary) {
+        return identity
+    }
+    return try! CompanionReleaseIdentity.parse(infoDictionary: [
+        "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
+        "CFBundleShortVersionString": "0.1.0",
+        "RuntimeRaidersReleaseSequence": 1,
+        "RuntimeRaidersReleaseSHA": String(repeating: "0", count: 40),
+        "RuntimeRaidersUpdateProtocolVersion": 1,
+    ])
 }
 
 do {

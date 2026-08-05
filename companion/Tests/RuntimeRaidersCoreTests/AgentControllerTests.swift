@@ -6,6 +6,76 @@ import XCTest
 final class AgentControllerTests: XCTestCase {
     private let now: Int64 = 1_800_000_000_000
 
+    func testStatusShowsInstalledAvailableAndExactUpdateCommand() throws {
+        try withHarness { harness in
+            let installed = CompanionReleaseIdentity(
+                releaseSequence: 1,
+                releaseSHA: String(repeating: "a", count: 40),
+                companionVersion: "0.2.0",
+                updateProtocolVersion: 1
+            )
+            let available = CompanionUpdateAvailability(
+                installedVersion: "0.2.0",
+                installedSequence: 1,
+                availableVersion: "0.2.1",
+                availableSequence: 2,
+                updateCommand: "raiders update"
+            )
+
+            let status = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil,
+                installedRelease: installed,
+                updateAvailability: available
+            )
+
+            XCTAssertEqual(status.installedCompanionVersion, "0.2.0")
+            XCTAssertEqual(status.installedReleaseSequence, 1)
+            XCTAssertEqual(status.availableCompanionVersion, "0.2.1")
+            XCTAssertEqual(status.availableReleaseSequence, 2)
+            XCTAssertEqual(status.updateCommand, "raiders update")
+        }
+    }
+
+    func testDoctorReportsOnlySortedCompatibilityReasonCodes() throws {
+        try withHarness { harness in
+            let source = try harness.makeFile("unsupported-source.jsonl", contents: Data())
+            let contract = try harness.makeFile("unsupported-contract.jsonl", contents: Data())
+            let active = try harness.makeFile("active-restart.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [source, contract, active])
+            try append(lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"source","originator":"originator","source":"unknown","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ]), to: source)
+            try append(lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"contract","originator":"originator","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ]), to: contract)
+            try append(runPrefix(nativeID: "DO_NOT_EXPORT_ACTIVE_NATIVE_ID"), to: active)
+            try harness.controller.processChangedFiles([source, contract, active])
+
+            let restarted = try harness.makeController()
+            let report = restarted.doctor(
+                codexRootReadable: true,
+                serverHealthy: true,
+                signingValid: true,
+                enrollmentAllowedSurfaces: [.codexCLI],
+                claudeOTelEnvironmentPresent: false
+            )
+            let status = try restarted.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil
+            )
+
+            XCTAssertTrue(report.compatibilityNeedsReview)
+            XCTAssertEqual(report.compatibilityReasons, [.unsupportedContract, .unsupportedSource])
+            XCTAssertEqual(status.activeRunCount, 1)
+            let rendered = report.description + status.description
+            XCTAssertFalse(rendered.contains("unsupported-source.jsonl"))
+            XCTAssertFalse(rendered.contains("DO_NOT_EXPORT_ACTIVE_NATIVE_ID"))
+        }
+    }
+
     func testFirstInstallSeedsEOFBeforeObservingFutureAppends() throws {
         try withHarness { harness in
             let existing = try harness.makeFile("existing.jsonl", contents: completedRun(nativeID: "DO_NOT_EXPORT_OLD"))
