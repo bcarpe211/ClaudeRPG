@@ -1392,8 +1392,6 @@ public final class AgentController: @unchecked Sendable {
     private static func replacingTopLevelEnabledWithFalse(in data: Data) throws -> Data {
         let bytes = [UInt8](data)
         var index = 0
-        var depth = 0
-        var expectingKey = false
         var match: Range<Int>?
 
         func skipWhitespace(_ cursor: inout Int) {
@@ -1402,73 +1400,135 @@ public final class AgentController: @unchecked Sendable {
             }
         }
 
-        while index < bytes.count {
-            let byte = bytes[index]
-            if byte == 0x7b {
-                depth += 1
-                expectingKey = depth == 1
-                index += 1
-                continue
-            }
-            if byte == 0x7d {
-                depth -= 1
-                index += 1
-                continue
-            }
-            if byte == 0x2c, depth == 1 {
-                expectingKey = true
-                index += 1
-                continue
-            }
-            guard byte == 0x22 else {
-                index += 1
-                continue
-            }
-
-            let stringStart = index
-            index += 1
-            var escaped = false
-            while index < bytes.count {
-                if escaped {
-                    escaped = false
-                } else if bytes[index] == 0x5c {
-                    escaped = true
-                } else if bytes[index] == 0x22 {
-                    break
-                }
-                index += 1
-            }
-            guard index < bytes.count else { throw AgentControllerError.invalidState }
-            let stringEnd = index
-            index += 1
-            guard depth == 1, expectingKey else { continue }
-            expectingKey = false
-
-            var cursor = index
-            skipWhitespace(&cursor)
-            guard cursor < bytes.count, bytes[cursor] == 0x3a else {
+        func parseString(_ cursor: inout Int) throws -> Range<Int> {
+            guard cursor < bytes.count, bytes[cursor] == 0x22 else {
                 throw AgentControllerError.invalidState
             }
-            let encodedKey = Data(bytes[stringStart...stringEnd])
+            let start = cursor
+            cursor += 1
+            var escaped = false
+            while cursor < bytes.count {
+                let byte = bytes[cursor]
+                cursor += 1
+                if escaped {
+                    escaped = false
+                } else if byte == 0x5c {
+                    escaped = true
+                } else if byte == 0x22 {
+                    return start..<cursor
+                }
+            }
+            throw AgentControllerError.invalidState
+        }
+
+        func skipValue(_ cursor: inout Int) throws {
+            skipWhitespace(&cursor)
+            guard cursor < bytes.count else { throw AgentControllerError.invalidState }
+            if bytes[cursor] == 0x22 {
+                _ = try parseString(&cursor)
+                return
+            }
+            if bytes[cursor] == 0x7b {
+                cursor += 1
+                skipWhitespace(&cursor)
+                if cursor < bytes.count, bytes[cursor] == 0x7d {
+                    cursor += 1
+                    return
+                }
+                while true {
+                    _ = try parseString(&cursor)
+                    skipWhitespace(&cursor)
+                    guard cursor < bytes.count, bytes[cursor] == 0x3a else {
+                        throw AgentControllerError.invalidState
+                    }
+                    cursor += 1
+                    try skipValue(&cursor)
+                    skipWhitespace(&cursor)
+                    guard cursor < bytes.count else { throw AgentControllerError.invalidState }
+                    if bytes[cursor] == 0x7d {
+                        cursor += 1
+                        return
+                    }
+                    guard bytes[cursor] == 0x2c else { throw AgentControllerError.invalidState }
+                    cursor += 1
+                    skipWhitespace(&cursor)
+                }
+            }
+            if bytes[cursor] == 0x5b {
+                cursor += 1
+                skipWhitespace(&cursor)
+                if cursor < bytes.count, bytes[cursor] == 0x5d {
+                    cursor += 1
+                    return
+                }
+                while true {
+                    try skipValue(&cursor)
+                    skipWhitespace(&cursor)
+                    guard cursor < bytes.count else { throw AgentControllerError.invalidState }
+                    if bytes[cursor] == 0x5d {
+                        cursor += 1
+                        return
+                    }
+                    guard bytes[cursor] == 0x2c else { throw AgentControllerError.invalidState }
+                    cursor += 1
+                }
+            }
+            let start = cursor
+            while cursor < bytes.count,
+                  ![0x20, 0x09, 0x0a, 0x0d, 0x2c, 0x5d, 0x7d].contains(bytes[cursor]) {
+                cursor += 1
+            }
+            guard cursor > start else { throw AgentControllerError.invalidState }
+        }
+
+        skipWhitespace(&index)
+        guard index < bytes.count, bytes[index] == 0x7b else {
+            throw AgentControllerError.invalidState
+        }
+        index += 1
+        while true {
+            skipWhitespace(&index)
+            guard index < bytes.count else { throw AgentControllerError.invalidState }
+            if bytes[index] == 0x7d {
+                index += 1
+                break
+            }
+            let encodedKeyRange = try parseString(&index)
+            skipWhitespace(&index)
+            guard index < bytes.count, bytes[index] == 0x3a else {
+                throw AgentControllerError.invalidState
+            }
+            let encodedKey = Data(bytes[encodedKeyRange])
             guard let key = try? JSONDecoder().decode(String.self, from: encodedKey) else {
                 throw AgentControllerError.invalidState
             }
-            guard key == "enabled" else { continue }
-            cursor += 1
-            skipWhitespace(&cursor)
-            let trueBytes = Array("true".utf8)
-            let falseBytes = Array("false".utf8)
-            if bytes[cursor...].starts(with: trueBytes) {
-                guard match == nil else { throw AgentControllerError.invalidState }
-                match = cursor..<(cursor + trueBytes.count)
-            } else if bytes[cursor...].starts(with: falseBytes) {
-                return data
-            } else {
-                throw AgentControllerError.invalidState
+            index += 1
+            skipWhitespace(&index)
+            if key == "enabled" {
+                let trueBytes = Array("true".utf8)
+                let falseBytes = Array("false".utf8)
+                if bytes[index...].starts(with: trueBytes) {
+                    guard match == nil else { throw AgentControllerError.invalidState }
+                    match = index..<(index + trueBytes.count)
+                } else if bytes[index...].starts(with: falseBytes) {
+                    return data
+                } else {
+                    throw AgentControllerError.invalidState
+                }
             }
+            try skipValue(&index)
+            skipWhitespace(&index)
+            guard index < bytes.count else { throw AgentControllerError.invalidState }
+            if bytes[index] == 0x7d {
+                index += 1
+                break
+            }
+            guard bytes[index] == 0x2c else { throw AgentControllerError.invalidState }
+            index += 1
         }
 
-        guard let match else { throw AgentControllerError.invalidState }
+        skipWhitespace(&index)
+        guard index == bytes.count, let match else { throw AgentControllerError.invalidState }
         var output = data
         output.replaceSubrange(match, with: Data("false".utf8))
         return output

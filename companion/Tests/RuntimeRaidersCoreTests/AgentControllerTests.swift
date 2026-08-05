@@ -34,6 +34,47 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testPersistDisabledForRecoveryHandlesNestedStateEscapesAndMultipleDeferredPaths() throws {
+        try withHarness { harness in
+            let retained = try harness.makeFile(
+                "retained-\\\"nested.jsonl",
+                contents: completedRun(nativeID: "recovery-parser-retained")
+            )
+            let deferredOne = try harness.makeFile("deferred-one.jsonl", contents: Data())
+            let deferredTwo = try harness.makeFile("deferred-two.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [retained, deferredOne, deferredTwo])
+            try harness.controller.turnOff()
+            try FileManager.default.removeItem(at: deferredOne)
+            try FileManager.default.removeItem(at: deferredTwo)
+            try harness.controller.turnOn(existingFiles: [retained])
+
+            let stateFile = harness.paths.stateDirectory.appendingPathComponent("collector-state.json")
+            let before = try Data(contentsOf: stateFile)
+            let text = String(decoding: before, as: UTF8.self)
+            XCTAssertTrue(text.contains("deferredSeedPaths"))
+            XCTAssertTrue(text.contains("adapterSnapshots"))
+            XCTAssertTrue(text.contains("\\\\\\\""))
+            let expected = Data(
+                text.replacingOccurrences(of: "\"enabled\":true", with: "\"enabled\":false").utf8
+            )
+            XCTAssertNotEqual(before, expected)
+
+            try AgentController.persistDisabledForRecovery(
+                paths: harness.paths,
+                surfaces: harness.registry.surfaces
+            )
+
+            XCTAssertEqual(try Data(contentsOf: stateFile), expected)
+            XCTAssertEqual(
+                try AgentController.persistedEnabled(
+                    paths: harness.paths,
+                    surfaces: harness.registry.surfaces
+                ),
+                false
+            )
+        }
+    }
+
     func testStatusShowsInstalledAvailableAndExactUpdateCommand() throws {
         try withHarness { harness in
             let installed = CompanionReleaseIdentity(

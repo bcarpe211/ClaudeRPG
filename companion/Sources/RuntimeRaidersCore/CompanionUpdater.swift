@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -23,6 +24,7 @@ public enum CompanionUpdaterError: Error, Equatable {
     case healthCheckFailed
     case updateRolledBack
     case rollbackFailed(recoveryCommand: String)
+    case terminalSafetyFailure
 }
 
 public struct VerifiedCompanionApplication: Equatable, Sendable {
@@ -172,16 +174,28 @@ public final class CompanionUpdater {
             operations.observe(.unlock)
         }
 
+        let beforeStatus = try ProtectedStateSnapshot.capture(paths: paths, includeUpdateState: true)
+        let priorSeal = try UpdateFileTransaction.captureInstalledSeal(paths: paths)
         operations.observe(.status)
-        let initial = try operations.status()
+        let initial = try withPreFreezeBoundary(
+            snapshot: beforeStatus,
+            includeUpdateState: true,
+            installedSeal: priorSeal
+        ) {
+            try operations.status()
+        }
         try validateInitialStatus(initial)
         guard initial.activeRunCount == 0 else { throw CompanionUpdaterError.activeRun }
         let beforeFetch = try ProtectedStateSnapshot.capture(paths: paths, includeUpdateState: false)
 
         operations.observe(.fetch)
-        let manifest = try operations.fetchManifest()
-        let afterFetch = try ProtectedStateSnapshot.capture(paths: paths, includeUpdateState: false)
-        guard beforeFetch == afterFetch else { throw CompanionUpdaterError.protectedStateChanged }
+        let manifest = try withPreFreezeBoundary(
+            snapshot: beforeFetch,
+            includeUpdateState: false,
+            installedSeal: priorSeal
+        ) {
+            try operations.fetchManifest()
+        }
         let frozen = try ProtectedStateSnapshot.capture(paths: paths, includeUpdateState: true)
 
         let installed = initial.verifiedApplication.identity
@@ -193,122 +207,195 @@ public final class CompanionUpdater {
         }
 
         let transaction = try UpdateFileTransaction(paths: paths)
-        var prepared = false
+        try transaction.assertPriorMatches(priorSeal)
+        var preparationAttempted = false
+        var quiescenceAuthorized = false
         do {
             operations.observe(.download)
-            let receipt = try operations.downloadArchive(
-                manifest.zipURL,
-                transaction.archive,
-                manifest.zipSHA256
-            )
+            let receipt = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+            }) {
+                try operations.downloadArchive(
+                    manifest.zipURL,
+                    transaction.archive,
+                    manifest.zipSHA256
+                )
+            }
             guard receipt.sha256 == manifest.zipSHA256 else {
                 throw CompanionUpdaterError.digestMismatch
             }
-            try transaction.validateDownloadedArchive(receipt: receipt)
-            try assertFrozen(frozen)
+            try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+            }) {
+                try transaction.validateDownloadedArchive(
+                    receipt: receipt,
+                    expectedSHA256: manifest.zipSHA256
+                )
+            }
 
             operations.observe(.archiveValidate)
-            let archiveSummary = try ZipArchiveValidator.validate(transaction.archive)
-            try transaction.validateDownloadedArchive(receipt: receipt)
+            let archiveSummary = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertArchiveUnchanged(expectedSHA256: manifest.zipSHA256)
+            }) {
+                try ZipArchiveValidator.validate(transaction.archive)
+            }
 
             operations.observe(.extract)
-            let extraction = try operations.runCommand(
-                URL(fileURLWithPath: "/usr/bin/ditto"),
-                ["-x", "-k", transaction.archive.path, transaction.stagingDirectory.path],
-                Self.extractionTimeout
-            )
+            let extraction = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertArchiveUnchanged(expectedSHA256: manifest.zipSHA256)
+            }) {
+                try operations.runCommand(
+                    URL(fileURLWithPath: "/usr/bin/ditto"),
+                    ["-x", "-k", transaction.archive.path, transaction.stagingDirectory.path],
+                    Self.extractionTimeout
+                )
+            }
             guard extraction.exitStatus == .exited(0) else {
                 throw CompanionUpdaterError.extractionFailed
             }
-            try ZipArchiveValidator.validateExtractedTree(transaction.stagingDirectory)
-            try transaction.sealValidatedCandidate()
-            try assertFrozen(frozen)
+            try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertArchiveUnchanged(expectedSHA256: manifest.zipSHA256)
+            }) {
+                try ZipArchiveValidator.validateExtractedTree(transaction.stagingDirectory)
+                try transaction.sealValidatedCandidate()
+            }
 
             operations.observe(.candidateVerify)
-            let candidateIdentity = try operations.verifyCandidate(
-                transaction.candidateApplication,
-                manifest,
-                initial.verifiedApplication
-            )
+            let candidateIdentity = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+            }) {
+                try operations.verifyCandidate(
+                    transaction.candidateApplication,
+                    manifest,
+                    initial.verifiedApplication
+                )
+            }
             guard candidateIdentity == manifest.identity else {
                 throw CompanionUpdaterError.candidateRejected
             }
-            try transaction.assertCandidateUnchanged()
+            try transaction.bindVerifiedCandidate(identity: candidateIdentity)
 
-            let requiredCapacity = try transaction.requiredCapacity(
-                candidateUncompressedSize: archiveSummary.totalUncompressedSize,
-                safetyMargin: Self.capacitySafetyMargin
-            )
-            let availableCapacity = try operations.availableCapacity(paths.supportDirectory)
+            let requiredCapacity = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+            }) {
+                try transaction.requiredCapacity(
+                    candidateUncompressedSize: archiveSummary.totalUncompressedSize,
+                    safetyMargin: Self.capacitySafetyMargin
+                )
+            }
+            let availableCapacity = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+            }) {
+                try operations.availableCapacity(paths.supportDirectory)
+            }
             guard availableCapacity >= requiredCapacity else {
                 throw CompanionUpdaterError.insufficientSpace
             }
 
             operations.observe(.selfCheck)
-            let selfCheck = try operations.runCommand(
-                transaction.candidateExecutable,
-                ["__self-check"],
-                Self.selfCheckTimeout
-            )
+            let selfCheck = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+            }) {
+                try operations.runCommand(
+                    transaction.candidateExecutable,
+                    ["__self-check"],
+                    Self.selfCheckTimeout
+                )
+            }
             guard selfCheck.exitStatus == .exited(0),
                   selfCheck.stderr.isEmpty,
                   try Self.decodeSelfCheck(selfCheck.stdout) == candidateIdentity else {
                 throw CompanionUpdaterError.selfCheckFailed
             }
-            try transaction.assertCandidateUnchanged()
-            try assertFrozen(frozen)
 
             operations.observe(.statusRecheck)
-            let rechecked = try operations.status()
+            let rechecked = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+            }) {
+                try operations.status()
+            }
             try validatePriorStatus(rechecked, initial: initial)
             guard rechecked.activeRunCount == 0 else { throw CompanionUpdaterError.activeRun }
-            try assertFrozen(frozen)
 
             operations.observe(.prepareDaemon)
-            let preparedStatus = try operations.prepareDaemon()
+            let preparedStatus = try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+            }) {
+                preparationAttempted = true
+                return try operations.prepareDaemon()
+            }
             try validatePriorStatus(preparedStatus, initial: initial)
             guard preparedStatus.activeRunCount == 0 else { throw CompanionUpdaterError.activeRun }
-            prepared = true
-            try assertFrozen(frozen)
+            quiescenceAuthorized = true
 
             operations.observe(.bootout)
-            try operations.bootout()
-            try assertFrozen(frozen)
+            try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+            }) {
+                try operations.bootout()
+            }
 
             operations.observe(.swap)
-            try transaction.swap()
-            try assertFrozen(frozen)
+            try withFrozenBoundary(frozen) { try transaction.swap() }
 
             operations.observe(.bootstrap)
-            try operations.bootstrap()
-            try assertFrozen(frozen, allowNewOutboxEntries: true)
+            try withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
+                try transaction.assertInstalledCandidateUnchanged()
+            }) {
+                try operations.bootstrap()
+            }
 
             operations.observe(.healthVerify)
             _ = try waitForHealth(
                 identity: candidateIdentity,
                 teamIdentifier: initial.verifiedApplication.teamIdentifier,
                 enabled: initial.enabled,
-                minimumQueuedEventCount: initial.queuedEventCount
+                minimumQueuedEventCount: initial.queuedEventCount,
+                frozen: frozen,
+                pathCheck: { try transaction.assertInstalledCandidateUnchanged() }
             )
-            try assertFrozen(frozen, allowNewOutboxEntries: true)
+            try transaction.markCandidateHealthPassed(identity: candidateIdentity)
 
             operations.observe(.cleanup)
             // Health has committed the new bundle. Cleanup is best-effort from
             // this point so an unsafe or substituted rollback tree cannot turn
             // a verified installation into a destructive second transaction.
-            try? transaction.cleanupAfterSuccess()
+            try? withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
+                try transaction.assertInstalledCandidateUnchanged()
+            }) {
+                try transaction.cleanupAfterSuccess()
+            }
             return .updated(from: installed, to: candidateIdentity)
         } catch {
-            guard prepared else {
+            if quiescenceAuthorized || transaction.hasSwapped {
+                return try recover(
+                    from: error,
+                    transaction: transaction,
+                    initial: initial,
+                    frozen: frozen
+                )
+            }
+            if preparationAttempted {
+                return try resumeUnchangedApplication(
+                    after: error,
+                    transaction: transaction,
+                    initial: initial,
+                    frozen: frozen
+                )
+            } else {
                 try? transaction.cleanupBeforeSwap()
                 throw error
             }
-            return try recover(
-                from: error,
-                transaction: transaction,
-                initial: initial,
-                frozen: frozen
-            )
         }
     }
 
@@ -319,47 +406,130 @@ public final class CompanionUpdater {
         frozen: ProtectedStateSnapshot
     ) throws -> CompanionUpdateResult {
         do {
-            try operations.bootout()
-            if transaction.hasSwapped { try transaction.rollback() }
-            try operations.bootstrap()
+            try withFrozenBoundary(frozen, allowNewOutboxEntries: true) {
+                try operations.bootout()
+            }
+            if transaction.hasSwapped {
+                try withFrozenBoundary(frozen, allowNewOutboxEntries: true) {
+                    try transaction.rollback()
+                }
+            }
+            try withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+            }) {
+                try operations.bootstrap()
+            }
             _ = try waitForHealth(
                 identity: initial.verifiedApplication.identity,
                 teamIdentifier: initial.verifiedApplication.teamIdentifier,
                 enabled: initial.enabled,
-                minimumQueuedEventCount: initial.queuedEventCount
+                minimumQueuedEventCount: initial.queuedEventCount,
+                frozen: frozen,
+                pathCheck: { try transaction.assertPriorInstalledUnchanged() }
             )
-            try assertFrozen(frozen, allowNewOutboxEntries: true)
-            try transaction.cleanupAfterRollback()
+            try withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+            }) {
+                try transaction.cleanupAfterRollback()
+            }
             throw CompanionUpdaterError.updateRolledBack
         } catch let recoveryError as CompanionUpdaterError where recoveryError == .updateRolledBack {
             throw recoveryError
         } catch {
-            try? AgentController.persistDisabledForRecovery(paths: paths, surfaces: surfaces)
-            operations.emitRecoveryCommand(Self.recoveryCommand)
-            throw CompanionUpdaterError.rollbackFailed(recoveryCommand: Self.recoveryCommand)
+            return try enterTerminalRecovery(transaction: transaction)
         }
+    }
+
+    private func resumeUnchangedApplication(
+        after updateError: Error,
+        transaction: UpdateFileTransaction,
+        initial: CompanionUpdateStatus,
+        frozen: ProtectedStateSnapshot
+    ) throws -> CompanionUpdateResult {
+        do {
+            try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+            }) {
+                try operations.bootout()
+            }
+            try withFrozenBoundary(frozen, pathCheck: {
+                try transaction.assertPriorInstalledUnchanged()
+            }) {
+                try operations.bootstrap()
+            }
+            _ = try waitForHealth(
+                identity: initial.verifiedApplication.identity,
+                teamIdentifier: initial.verifiedApplication.teamIdentifier,
+                enabled: initial.enabled,
+                minimumQueuedEventCount: initial.queuedEventCount,
+                frozen: frozen,
+                pathCheck: { try transaction.assertPriorInstalledUnchanged() }
+            )
+            try transaction.cleanupBeforeSwap()
+        } catch {
+            return try enterTerminalRecovery(transaction: transaction)
+        }
+        throw updateError
+    }
+
+    private func enterTerminalRecovery(
+        transaction: UpdateFileTransaction
+    ) throws -> CompanionUpdateResult {
+        let stableRecoveryAvailable: Bool
+        do {
+            try transaction.prepareStableRecovery()
+            stableRecoveryAvailable = true
+        } catch {
+            stableRecoveryAvailable = false
+        }
+        do {
+            try AgentController.persistDisabledForRecovery(paths: paths, surfaces: surfaces)
+        } catch {
+            throw CompanionUpdaterError.terminalSafetyFailure
+        }
+        guard stableRecoveryAvailable else {
+            throw CompanionUpdaterError.terminalSafetyFailure
+        }
+        operations.emitRecoveryCommand(Self.recoveryCommand)
+        throw CompanionUpdaterError.rollbackFailed(recoveryCommand: Self.recoveryCommand)
     }
 
     private func waitForHealth(
         identity: CompanionReleaseIdentity,
         teamIdentifier: String,
         enabled: Bool,
-        minimumQueuedEventCount: Int
+        minimumQueuedEventCount: Int,
+        frozen: ProtectedStateSnapshot,
+        pathCheck: () throws -> Void
     ) throws -> CompanionUpdateStatus {
         let start = operations.monotonicNow()
         guard start.isFinite else { throw CompanionUpdaterError.healthCheckFailed }
         let deadline = start + Self.healthTimeout
         repeat {
-            if let status = try? operations.healthStatus(),
-               status.daemonRunning,
-               status.verifiedApplication.identity == identity,
-               status.verifiedApplication.teamIdentifier == teamIdentifier,
-               status.enabled == enabled,
-               status.enrollmentValid,
-               status.collectorStateValid,
-               status.activeRunCount == 0,
-               status.queuedEventCount >= minimumQueuedEventCount {
-                return status
+            do {
+                let status = try withFrozenBoundary(
+                    frozen,
+                    allowNewOutboxEntries: true,
+                    pathCheck: pathCheck
+                ) {
+                    try operations.healthStatus()
+                }
+                if status.daemonRunning,
+                   status.verifiedApplication.identity == identity,
+                   status.verifiedApplication.teamIdentifier == teamIdentifier,
+                   status.enabled == enabled,
+                   status.enrollmentValid,
+                   status.collectorStateValid,
+                   status.activeRunCount == 0,
+                   status.queuedEventCount >= minimumQueuedEventCount {
+                    return status
+                }
+            } catch CompanionUpdaterError.protectedStateChanged {
+                throw CompanionUpdaterError.protectedStateChanged
+            } catch CompanionUpdaterError.unsafeFilesystem {
+                throw CompanionUpdaterError.unsafeFilesystem
+            } catch {
+                // A transient status failure is retried until the fixed deadline.
             }
             let now = operations.monotonicNow()
             guard now.isFinite, now < deadline else {
@@ -377,6 +547,77 @@ public final class CompanionUpdater {
               status.queuedEventCount >= 0,
               !status.verifiedApplication.teamIdentifier.isEmpty else {
             throw CompanionUpdaterError.invalidStatus
+        }
+    }
+
+    private func withPreFreezeBoundary<Value>(
+        snapshot: ProtectedStateSnapshot,
+        includeUpdateState: Bool,
+        installedSeal: UpdateFileTransaction.TreeSeal,
+        operation: () throws -> Value
+    ) throws -> Value {
+        try verifyPreFreezeBoundary(
+            snapshot: snapshot,
+            includeUpdateState: includeUpdateState,
+            installedSeal: installedSeal
+        )
+        do {
+            let value = try operation()
+            try verifyPreFreezeBoundary(
+                snapshot: snapshot,
+                includeUpdateState: includeUpdateState,
+                installedSeal: installedSeal
+            )
+            return value
+        } catch {
+            let operationError = error
+            try verifyPreFreezeBoundary(
+                snapshot: snapshot,
+                includeUpdateState: includeUpdateState,
+                installedSeal: installedSeal
+            )
+            throw operationError
+        }
+    }
+
+    private func verifyPreFreezeBoundary(
+        snapshot: ProtectedStateSnapshot,
+        includeUpdateState: Bool,
+        installedSeal: UpdateFileTransaction.TreeSeal
+    ) throws {
+        let current: ProtectedStateSnapshot
+        do {
+            current = try ProtectedStateSnapshot.capture(
+                paths: paths,
+                includeUpdateState: includeUpdateState
+            )
+        } catch {
+            throw CompanionUpdaterError.protectedStateChanged
+        }
+        guard current == snapshot else { throw CompanionUpdaterError.protectedStateChanged }
+        guard try UpdateFileTransaction.captureInstalledSeal(paths: paths) == installedSeal else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+
+    private func withFrozenBoundary<Value>(
+        _ frozen: ProtectedStateSnapshot,
+        allowNewOutboxEntries: Bool = false,
+        pathCheck: () throws -> Void = {},
+        operation: () throws -> Value
+    ) throws -> Value {
+        try pathCheck()
+        try assertFrozen(frozen, allowNewOutboxEntries: allowNewOutboxEntries)
+        do {
+            let value = try operation()
+            try pathCheck()
+            try assertFrozen(frozen, allowNewOutboxEntries: allowNewOutboxEntries)
+            return value
+        } catch {
+            let operationError = error
+            try pathCheck()
+            try assertFrozen(frozen, allowNewOutboxEntries: allowNewOutboxEntries)
+            throw operationError
         }
     }
 
@@ -398,7 +639,12 @@ public final class CompanionUpdater {
         _ frozen: ProtectedStateSnapshot,
         allowNewOutboxEntries: Bool = false
     ) throws {
-        let current = try ProtectedStateSnapshot.capture(paths: paths, includeUpdateState: true)
+        let current: ProtectedStateSnapshot
+        do {
+            current = try ProtectedStateSnapshot.capture(paths: paths, includeUpdateState: true)
+        } catch {
+            throw CompanionUpdaterError.protectedStateChanged
+        }
         guard frozen.isPreserved(by: current, allowNewOutboxEntries: allowNewOutboxEntries) else {
             throw CompanionUpdaterError.protectedStateChanged
         }
@@ -461,7 +707,11 @@ public final class UpdateFileTransaction {
     private var supportDescriptor: Int32
     private var workspaceDescriptor: Int32
     private var stagingDescriptor: Int32
-    private var candidateSeal: [SealedEntry]?
+    private var priorSeal: TreeSeal?
+    private var archiveSeal: SealedEntry?
+    private var candidateSeal: TreeSeal?
+    private var verifiedCandidateIdentity: CompanionReleaseIdentity?
+    private var candidateHealthPassed = false
 
     public init(paths: AgentPaths) throws {
         self.paths = paths
@@ -492,6 +742,10 @@ public final class UpdateFileTransaction {
         do {
             try Self.requireOwnedDirectory(
                 descriptor: supportDescriptor,
+                name: paths.installedApplication.lastPathComponent
+            )
+            priorSeal = try Self.sealTree(
+                parentDescriptor: supportDescriptor,
                 name: paths.installedApplication.lastPathComponent
             )
             try Self.requireMissing(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent)
@@ -526,7 +780,36 @@ public final class UpdateFileTransaction {
 
     deinit { closeDescriptors() }
 
-    public func validateDownloadedArchive(receipt: DownloadReceipt) throws {
+    fileprivate static func captureInstalledSeal(paths: AgentPaths) throws -> TreeSeal {
+        guard let support = try OwnerOnlyDirectory.openExisting(paths.supportDirectory) else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        defer { Darwin.close(support) }
+        return try sealTree(
+            parentDescriptor: support,
+            name: paths.installedApplication.lastPathComponent
+        )
+    }
+
+    fileprivate func assertPriorInstalledUnchanged() throws {
+        guard let priorSeal,
+              try Self.sealTree(
+            parentDescriptor: supportDescriptor,
+            name: paths.installedApplication.lastPathComponent
+        ) == priorSeal else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+
+    fileprivate func assertPriorMatches(_ expected: TreeSeal) throws {
+        guard priorSeal == expected else { throw CompanionUpdaterError.unsafeFilesystem }
+        try assertPriorInstalledUnchanged()
+    }
+
+    public func validateDownloadedArchive(
+        receipt: DownloadReceipt,
+        expectedSHA256: String? = nil
+    ) throws {
         let descriptor = Darwin.openat(
             workspaceDescriptor,
             archive.lastPathComponent,
@@ -545,6 +828,44 @@ public final class UpdateFileTransaction {
               receipt.byteCount <= ArtifactDownloader.maximumByteCount else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
+        let sealed = try Self.sealFile(
+            descriptor: descriptor,
+            relativePath: archive.lastPathComponent,
+            expected: metadata
+        )
+        let digest = sealed.contentSHA256.map { String(format: "%02x", $0) }.joined()
+        guard digest == receipt.sha256,
+              expectedSHA256.map({ $0 == digest }) ?? true else {
+            throw CompanionUpdaterError.digestMismatch
+        }
+        if let archiveSeal, archiveSeal != sealed {
+            throw CompanionUpdaterError.digestMismatch
+        }
+        archiveSeal = sealed
+    }
+
+    public func assertArchiveUnchanged(expectedSHA256: String) throws {
+        guard let archiveSeal else { throw CompanionUpdaterError.digestMismatch }
+        let descriptor = Darwin.openat(
+            workspaceDescriptor,
+            archive.lastPathComponent,
+            O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else { throw CompanionUpdaterError.digestMismatch }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0 else {
+            throw CompanionUpdaterError.digestMismatch
+        }
+        let current = try Self.sealFile(
+            descriptor: descriptor,
+            relativePath: archive.lastPathComponent,
+            expected: metadata
+        )
+        let digest = current.contentSHA256.map { String(format: "%02x", $0) }.joined()
+        guard current == archiveSeal, digest == expectedSHA256 else {
+            throw CompanionUpdaterError.digestMismatch
+        }
     }
 
     public func sealValidatedCandidate() throws {
@@ -557,6 +878,29 @@ public final class UpdateFileTransaction {
               try Self.sealTree(
                   parentDescriptor: stagingDescriptor,
                   name: candidateApplication.lastPathComponent
+              ) == candidateSeal else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+
+    public func bindVerifiedCandidate(identity: CompanionReleaseIdentity) throws {
+        try assertCandidateUnchanged()
+        verifiedCandidateIdentity = identity
+    }
+
+    public func markCandidateHealthPassed(identity: CompanionReleaseIdentity) throws {
+        guard verifiedCandidateIdentity == identity else {
+            throw CompanionUpdaterError.candidateRejected
+        }
+        try assertInstalledCandidateUnchanged()
+        candidateHealthPassed = true
+    }
+
+    public func assertInstalledCandidateUnchanged() throws {
+        guard let candidateSeal,
+              try Self.sealTree(
+                  parentDescriptor: supportDescriptor,
+                  name: paths.installedApplication.lastPathComponent
               ) == candidateSeal else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
@@ -581,6 +925,7 @@ public final class UpdateFileTransaction {
 
     public func swap() throws {
         try assertCandidateUnchanged()
+        try assertPriorInstalledUnchanged()
         try Self.requireMissing(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent)
         try Self.requireMissing(descriptor: supportDescriptor, name: promotedName)
         guard Darwin.renameat(
@@ -592,6 +937,7 @@ public final class UpdateFileTransaction {
         do {
             try Self.requireOwnedDirectory(descriptor: supportDescriptor, name: promotedName)
             try Self.setOwnerOnlyMode(descriptor: supportDescriptor, name: promotedName)
+            try normalizeCandidateRootMode(at: promotedName)
             guard Darwin.renameat(
                 supportDescriptor,
                 paths.installedApplication.lastPathComponent,
@@ -603,6 +949,7 @@ public final class UpdateFileTransaction {
                     descriptor: supportDescriptor,
                     name: paths.rollbackApplication.lastPathComponent
                 )
+                try normalizePriorRootMode(at: paths.rollbackApplication.lastPathComponent)
             } catch {
                 _ = Darwin.renameat(
                     supportDescriptor,
@@ -628,6 +975,8 @@ public final class UpdateFileTransaction {
             }
             try Self.synchronize(supportDescriptor)
             hasSwapped = true
+            try assertInstalledCandidateUnchanged()
+            try assertRollbackPriorUnchanged()
         } catch {
             throw error
         }
@@ -635,14 +984,8 @@ public final class UpdateFileTransaction {
 
     public func rollback() throws {
         guard hasSwapped else { return }
-        try Self.requireOwnedDirectory(
-            descriptor: supportDescriptor,
-            name: paths.installedApplication.lastPathComponent
-        )
-        try Self.requireOwnedDirectory(
-            descriptor: supportDescriptor,
-            name: paths.rollbackApplication.lastPathComponent
-        )
+        try assertInstalledCandidateUnchanged()
+        try assertRollbackPriorUnchanged()
         try Self.requireMissing(descriptor: supportDescriptor, name: paths.failedApplication.lastPathComponent)
         guard Darwin.renameat(
             supportDescriptor,
@@ -660,17 +1003,14 @@ public final class UpdateFileTransaction {
         }
         try Self.synchronize(supportDescriptor)
         hasSwapped = false
+        try assertPriorInstalledUnchanged()
+        try assertFailedCandidateUnchanged()
     }
 
     public func cleanupAfterSuccess() throws {
-        try Self.requireOwnedDirectory(
-            descriptor: supportDescriptor,
-            name: paths.installedApplication.lastPathComponent
-        )
-        _ = try Self.sealTree(
-            parentDescriptor: supportDescriptor,
-            name: paths.rollbackApplication.lastPathComponent
-        )
+        guard candidateHealthPassed else { throw CompanionUpdaterError.unsafeFilesystem }
+        try assertInstalledCandidateUnchanged()
+        try assertRollbackPriorUnchanged()
         try Self.removeTree(
             parentDescriptor: supportDescriptor,
             name: paths.rollbackApplication.lastPathComponent
@@ -679,24 +1019,105 @@ public final class UpdateFileTransaction {
     }
 
     public func cleanupAfterRollback() throws {
-        try Self.requireOwnedDirectory(
-            descriptor: supportDescriptor,
-            name: paths.installedApplication.lastPathComponent
-        )
+        try assertPriorInstalledUnchanged()
+        try assertFailedCandidateUnchanged()
         try Self.requireMissing(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent)
         try removeWorkspace()
     }
 
     public func cleanupBeforeSwap() throws {
-        try Self.requireOwnedDirectory(
-            descriptor: supportDescriptor,
-            name: paths.installedApplication.lastPathComponent
-        )
+        try assertPriorInstalledUnchanged()
         guard !hasSwapped else { throw CompanionUpdaterError.unsafeFilesystem }
         if Self.exists(descriptor: supportDescriptor, name: promotedName) {
             try Self.removeTree(parentDescriptor: supportDescriptor, name: promotedName)
         }
         try removeWorkspace()
+    }
+
+    public func prepareStableRecovery() throws {
+        if Self.exists(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent) {
+            try assertRollbackPriorUnchanged()
+        } else {
+            try assertPriorInstalledUnchanged()
+            try Self.requireMissing(
+                descriptor: supportDescriptor,
+                name: paths.rollbackApplication.lastPathComponent
+            )
+            guard Darwin.renameat(
+                supportDescriptor,
+                paths.installedApplication.lastPathComponent,
+                supportDescriptor,
+                paths.rollbackApplication.lastPathComponent
+            ) == 0 else { throw Self.posixError() }
+            try Self.synchronize(supportDescriptor)
+            try assertRollbackPriorUnchanged()
+        }
+        if Self.exists(descriptor: supportDescriptor, name: paths.failedApplication.lastPathComponent) {
+            do {
+                try assertFailedCandidateUnchanged()
+            } catch {
+                guard Self.exists(
+                    descriptor: supportDescriptor,
+                    name: paths.installedApplication.lastPathComponent
+                ) else { throw error }
+                try assertInstalledCandidateUnchanged()
+            }
+        } else if Self.exists(
+            descriptor: supportDescriptor,
+            name: paths.installedApplication.lastPathComponent
+        ) {
+            try assertInstalledCandidateUnchanged()
+            guard Darwin.renameat(
+                supportDescriptor,
+                paths.installedApplication.lastPathComponent,
+                supportDescriptor,
+                paths.failedApplication.lastPathComponent
+            ) == 0 else { throw Self.posixError() }
+            try Self.synchronize(supportDescriptor)
+            try assertFailedCandidateUnchanged()
+        }
+        guard let priorSeal,
+              priorSeal.containsExecutable(relativePath: "Contents/MacOS/runtime-raiders-agent") else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+
+    private func assertRollbackPriorUnchanged() throws {
+        guard let priorSeal,
+              try Self.sealTree(
+            parentDescriptor: supportDescriptor,
+            name: paths.rollbackApplication.lastPathComponent
+        ) == priorSeal else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+
+    private func assertFailedCandidateUnchanged() throws {
+        guard let candidateSeal,
+              try Self.sealTree(
+                  parentDescriptor: supportDescriptor,
+                  name: paths.failedApplication.lastPathComponent
+              ) == candidateSeal else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+    }
+
+    private func normalizeCandidateRootMode(at name: String) throws {
+        guard let candidateSeal else { throw CompanionUpdaterError.unsafeFilesystem }
+        let normalized = candidateSeal.replacingRootMode(with: 0o700)
+        guard try Self.sealTree(parentDescriptor: supportDescriptor, name: name) == normalized else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        self.candidateSeal = normalized
+    }
+
+    private func normalizePriorRootMode(at name: String) throws {
+        guard let priorSeal else { throw CompanionUpdaterError.unsafeFilesystem }
+        let normalized = priorSeal.replacingRootMode(with: 0o700)
+        guard try Self.sealTree(parentDescriptor: supportDescriptor, name: name) == normalized else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        self.priorSeal = normalized
     }
 
     private func removeWorkspace() throws {
@@ -726,17 +1147,46 @@ public final class UpdateFileTransaction {
         }
     }
 
-    private struct SealedEntry: Equatable {
+    fileprivate struct TreeSeal: Equatable {
+        let entries: [SealedEntry]
+
+        func replacingRootMode(with mode: UInt16) -> Self {
+            Self(entries: entries.map { entry in
+                guard entry.path == "." else { return entry }
+                return SealedEntry(
+                    path: entry.path,
+                    kind: entry.kind,
+                    device: entry.device,
+                    inode: entry.inode,
+                    mode: mode,
+                    size: entry.size,
+                    modifiedSeconds: entry.modifiedSeconds,
+                    modifiedNanoseconds: entry.modifiedNanoseconds,
+                    contentSHA256: entry.contentSHA256
+                )
+            })
+        }
+
+        func containsExecutable(relativePath: String) -> Bool {
+            entries.contains {
+                $0.path == relativePath && $0.kind == UInt16(S_IFREG) && $0.mode & 0o111 != 0
+            }
+        }
+    }
+
+    fileprivate struct SealedEntry: Equatable {
         let path: String
+        let kind: UInt16
         let device: UInt64
         let inode: UInt64
         let mode: UInt16
         let size: Int64
         let modifiedSeconds: Int64
         let modifiedNanoseconds: Int64
+        let contentSHA256: Data
     }
 
-    private static func sealTree(parentDescriptor: Int32, name: String) throws -> [SealedEntry] {
+    private static func sealTree(parentDescriptor: Int32, name: String) throws -> TreeSeal {
         let descriptor = Darwin.openat(
             parentDescriptor,
             name,
@@ -745,8 +1195,8 @@ public final class UpdateFileTransaction {
         guard descriptor >= 0 else { throw CompanionUpdaterError.unsafeFilesystem }
         defer { Darwin.close(descriptor) }
         var entries: [SealedEntry] = []
-        try sealDirectory(descriptor, relativePath: name, entries: &entries)
-        return entries.sorted { $0.path < $1.path }
+        try sealDirectory(descriptor, relativePath: ".", entries: &entries)
+        return TreeSeal(entries: entries.sorted { $0.path < $1.path })
     }
 
     private static func sealDirectory(
@@ -761,7 +1211,7 @@ public final class UpdateFileTransaction {
               directoryMetadata.st_mode & 0o022 == 0 else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
-        entries.append(sealedEntry(relativePath, directoryMetadata))
+        entries.append(sealedEntry(relativePath, directoryMetadata, contentSHA256: Data()))
         for name in try directoryNames(descriptor) {
             var metadata = stat()
             guard Darwin.fstatat(descriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
@@ -770,7 +1220,7 @@ public final class UpdateFileTransaction {
                 throw CompanionUpdaterError.unsafeFilesystem
             }
             let type = metadata.st_mode & S_IFMT
-            let path = relativePath + "/" + name
+            let path = relativePath == "." ? name : relativePath + "/" + name
             if type == S_IFDIR {
                 let child = Darwin.openat(
                     descriptor,
@@ -781,27 +1231,95 @@ public final class UpdateFileTransaction {
                 defer { Darwin.close(child) }
                 try sealDirectory(child, relativePath: path, entries: &entries)
             } else if type == S_IFREG, metadata.st_nlink == 1 {
-                entries.append(sealedEntry(path, metadata))
+                let file = Darwin.openat(descriptor, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+                guard file >= 0 else { throw CompanionUpdaterError.unsafeFilesystem }
+                defer { Darwin.close(file) }
+                entries.append(try sealFile(descriptor: file, relativePath: path, expected: metadata))
             } else {
                 throw CompanionUpdaterError.unsafeFilesystem
             }
         }
+        var currentDirectoryMetadata = stat()
+        guard Darwin.fstat(descriptor, &currentDirectoryMetadata) == 0,
+              currentDirectoryMetadata.st_mode == directoryMetadata.st_mode,
+              currentDirectoryMetadata.st_dev == directoryMetadata.st_dev,
+              currentDirectoryMetadata.st_ino == directoryMetadata.st_ino,
+              currentDirectoryMetadata.st_size == directoryMetadata.st_size,
+              currentDirectoryMetadata.st_mtimespec.tv_sec == directoryMetadata.st_mtimespec.tv_sec,
+              currentDirectoryMetadata.st_mtimespec.tv_nsec == directoryMetadata.st_mtimespec.tv_nsec else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
     }
 
-    private static func sealedEntry(_ path: String, _ metadata: stat) -> SealedEntry {
+    private static func sealFile(
+        descriptor: Int32,
+        relativePath: String,
+        expected: stat
+    ) throws -> SealedEntry {
+        guard expected.st_mode & S_IFMT == S_IFREG,
+              expected.st_uid == Darwin.geteuid(),
+              expected.st_mode & 0o022 == 0,
+              expected.st_nlink == 1,
+              expected.st_size >= 0 else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        var hasher = SHA256()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+        var total: Int64 = 0
+        while true {
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count > 0 {
+                hasher.update(data: Data(buffer[0..<count]))
+                let (next, overflow) = total.addingReportingOverflow(Int64(count))
+                guard !overflow else { throw CompanionUpdaterError.unsafeFilesystem }
+                total = next
+            } else if count == 0 {
+                break
+            } else if errno == EINTR {
+                continue
+            } else {
+                throw CompanionUpdaterError.unsafeFilesystem
+            }
+        }
+        var current = stat()
+        guard Darwin.fstat(descriptor, &current) == 0,
+              current.st_mode & S_IFMT == S_IFREG,
+              current.st_dev == expected.st_dev,
+              current.st_ino == expected.st_ino,
+              current.st_mode == expected.st_mode,
+              current.st_size == expected.st_size,
+              current.st_mtimespec.tv_sec == expected.st_mtimespec.tv_sec,
+              current.st_mtimespec.tv_nsec == expected.st_mtimespec.tv_nsec,
+              total == expected.st_size else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        return sealedEntry(
+            relativePath,
+            current,
+            contentSHA256: Data(hasher.finalize())
+        )
+    }
+
+    private static func sealedEntry(
+        _ path: String,
+        _ metadata: stat,
+        contentSHA256: Data
+    ) -> SealedEntry {
         SealedEntry(
             path: path,
+            kind: UInt16(metadata.st_mode & S_IFMT),
             device: UInt64(metadata.st_dev),
             inode: UInt64(metadata.st_ino),
             mode: UInt16(metadata.st_mode & 0o7777),
             size: Int64(metadata.st_size),
             modifiedSeconds: Int64(metadata.st_mtimespec.tv_sec),
-            modifiedNanoseconds: Int64(metadata.st_mtimespec.tv_nsec)
+            modifiedNanoseconds: Int64(metadata.st_mtimespec.tv_nsec),
+            contentSHA256: contentSHA256
         )
     }
 
     private static func treeSize(parentDescriptor: Int32, name: String) throws -> Int64 {
-        try sealTree(parentDescriptor: parentDescriptor, name: name).reduce(0) { total, entry in
+        try sealTree(parentDescriptor: parentDescriptor, name: name).entries.reduce(0) { total, entry in
             let (next, overflow) = total.addingReportingOverflow(max(0, entry.size))
             guard !overflow else { throw CompanionUpdaterError.insufficientSpace }
             return next
