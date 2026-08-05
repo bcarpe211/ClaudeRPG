@@ -170,6 +170,42 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
+    func testNoSwapRecoveryPreservesUnknownFailedBlockerWithStagedCandidate() throws {
+        try withHarness { harness in
+            harness.healthStatuses = [harness.oldStatus()]
+            let blockerBytes = Data("unrelated-failed-blocker".utf8)
+            var blockerInode: UInt64?
+            let protectedBefore = try harness.protectedBytes()
+            harness.bootoutSideEffect = { call in
+                guard call == 0 else { return }
+                try writeOwnerFile(blockerBytes, to: harness.paths.failedApplication)
+                blockerInode = try inode(harness.paths.failedApplication)
+                throw InjectedUpdaterFailure.responseLost
+            }
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
+                XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
+            }
+
+            XCTAssertEqual(try harness.installedMarker(), "old")
+            XCTAssertEqual(try harness.protectedBytes(), protectedBefore)
+            XCTAssertEqual(
+                try inode(harness.paths.failedApplication),
+                try XCTUnwrap(blockerInode)
+            )
+            XCTAssertEqual(try Data(contentsOf: harness.paths.failedApplication), blockerBytes)
+            XCTAssertEqual(harness.bootoutCallCount, 2)
+            XCTAssertEqual(harness.bootstrapCallCount, 1)
+            XCTAssertEqual(harness.stoppedProofCallCount, 0)
+            XCTAssertTrue(harness.daemonRunning)
+            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
+            XCTAssertFalse(harness.hasUpdateWorkspace)
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path)
+            )
+        }
+    }
+
     func testPreSwapRefusalRestartsUnchangedApplicationAndRetainsUnownedBlocker() throws {
         try withHarness { harness in
             harness.healthStatuses = [harness.oldStatus()]
@@ -757,10 +793,13 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
-    func testNoSwapCleanupAcceptsSealedCandidatePromotedBeforePriorMove() throws {
+    func testNoSwapCleanupPreservesUnknownFailedBlockerWithPromotedCandidate() throws {
         try withTransaction { transaction, paths in
             try makeFakeApp(transaction.candidateApplication, marker: "candidate")
             try transaction.sealValidatedCandidate()
+            let blockerBytes = Data("unrelated-promoted-blocker".utf8)
+            try writeOwnerFile(blockerBytes, to: paths.failedApplication)
+            let blockerInode = try inode(paths.failedApplication)
             try FileManager.default.moveItem(
                 at: transaction.candidateApplication,
                 to: transaction.promotedCandidateApplication
@@ -777,7 +816,11 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertFalse(
                 FileManager.default.fileExists(atPath: transaction.workspaceDirectory.path)
             )
-            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.failedApplication.path))
+            XCTAssertEqual(try inode(paths.failedApplication), blockerInode)
+            XCTAssertEqual(try Data(contentsOf: paths.failedApplication), blockerBytes)
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: paths.rollbackApplication.path)
+            )
         }
     }
 

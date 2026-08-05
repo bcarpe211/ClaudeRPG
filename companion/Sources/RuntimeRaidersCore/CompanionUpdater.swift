@@ -1043,10 +1043,6 @@ public final class UpdateFileTransaction {
     public func cleanupAfterNoSwap() throws {
         guard !hasSwapped else { throw CompanionUpdaterError.unsafeFilesystem }
         try assertPriorInstalledUnchanged()
-        try Self.requireMissing(
-            descriptor: supportDescriptor,
-            name: paths.failedApplication.lastPathComponent
-        )
 
         let candidateIsStaged = Self.exists(
             descriptor: stagingDescriptor,
