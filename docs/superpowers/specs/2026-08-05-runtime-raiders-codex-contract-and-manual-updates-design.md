@@ -53,7 +53,9 @@ related changes:
 
 - Automatically downloading or installing companion releases.
 - Adding another LaunchAgent, daemon, scheduler, or long-running updater.
-- Fetching or executing remote schemas, parser rules, scripts, or scoring logic.
+- Fetching or executing remote schemas, parser rules, scripts, or scoring logic
+  as part of release discovery or `raiders update`; the separately gated
+  first-install workflow remains the sole published-installer exception.
 - Enabling OTel or modifying Codex, Claude, Omp, shell, editor, or provider
   configuration.
 - Reading or reporting prompts, responses, commands, tool calls, file contents,
@@ -301,6 +303,13 @@ collection or change game state.
 The first updater-capable release must still be installed through the existing
 verified installer because the current release has no `raiders update` command.
 All later protocol-1 releases can use the explicit foreground command.
+
+After the controlled installed-off canary passes, routine first-time office
+onboarding retains the intended single-line `curl .../install.sh | /bin/sh`
+experience. The controlled canary still downloads the installer into an
+owner-only file and verifies its recorded SHA-256 before execution. Neither
+path changes the update rule: manifests and ZIPs are never piped to a shell,
+and an installed player upgrades only with `raiders update`.
 
 ## 8. Failure behavior
 

@@ -14,8 +14,9 @@
 - Do not read, store, log, or upload prompts, responses, commands, tool calls, file contents, paths, repository names, window titles, native Run identifiers, or provider record fragments.
 - Send release checks only to `https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json`, with no query, body, cookie, credential, enrollment field, device field, version field, provider field, or usage field.
 - Keep one existing LaunchAgent and daemon; the update notification may spawn only one fixed, short-lived `/usr/bin/osascript` child.
-- Never download or execute a remote schema, parser, scoring rule, script, or shell command.
+- Release discovery and `raiders update` never download or execute a remote schema, parser, scoring rule, script, or shell command; the separately gated first-install workflow remains the sole published-installer exception.
 - Never install automatically. Only the player's foreground `raiders update` command may download and replace the app.
+- Preserve the simple single-line `curl .../install.sh | /bin/sh` experience for routine first-time office onboarding after the controlled canary passes. The canary itself must use a locally downloaded, recorded-digest-verified installer; manifests and ZIPs are never piped to a shell.
 - Refuse replacement when a locally known Run is active, recheck atomically before daemon quiescence, and never interrupt a provider process.
 - Keep collector-state version `1` and Codex snapshot version `1` backward-readable by the installed release; add only optional, unknown-key-safe fields.
 - Keep enrollment, collector state, cursors, update state, and outbox outside the replaceable app bundle.
@@ -974,6 +975,8 @@ raiders update
 
 Require separate ordered gates for first updater-capable install, second-sequence publication, manual update, live Desktop/CLI classification, and office activation. Reject any instruction that pipes the update manifest, ZIP, or installer to a shell for the canary.
 
+Treat routine onboarding and controlled validation as different contracts: the routine office-install section must retain the single-line fixed-origin `curl .../install.sh | /bin/sh` command, while the installed-off canary must download, verify the recorded installer SHA-256, and execute the local file. This exact documentation contract is an intentional product and security gate approved by the user; it prevents either path from silently replacing the other.
+
 - [ ] **Step 2: Run documentation tests and verify the old triplet language fails**
 
 ```bash
@@ -985,6 +988,8 @@ Expected: FAIL on three-file, 3/3, signed-triplet, and missing manual-update lan
 - [ ] **Step 3: Update build and publication operations**
 
 Document the signed quartet, exact four digests, tracked `companion/RELEASE`, immutable v1/v2 behavior, manifest headers, withdrawal, and recovery. State explicitly that discovery works while collection is off and sends an anonymous static GET only to the trusted game server.
+
+Document the three installation lifecycles without conflating them: routine new-player onboarding uses the one-line installer pipe after all rollout gates pass, the controlled first canary uses a locally downloaded and digest-verified installer, and already-installed players use only `raiders update`.
 
 - [ ] **Step 4: Write the two-sequence canary document**
 
