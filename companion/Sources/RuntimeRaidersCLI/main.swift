@@ -13,7 +13,7 @@ private struct RuntimeInputs {
     let releaseIdentity: CompanionReleaseIdentity
     let serverURL: URL
 
-    init(enrollment: EnrollmentConfiguration, environment: [String: String]) {
+    init(enrollment: EnrollmentConfiguration) throws {
         let defaultRoot = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
         codexRoot = defaultRoot
@@ -22,7 +22,7 @@ private struct RuntimeInputs {
         dedupeSecret = enrollment.dedupeSecret
         deviceToken = enrollment.deviceToken
         serverURL = enrollment.serverURL
-        releaseIdentity = compiledReleaseIdentity(environment: environment)
+        releaseIdentity = try CompanionReleaseIdentity.load(from: .main)
         companionVersion = releaseIdentity.companionVersion
     }
 }
@@ -287,8 +287,7 @@ private func run() throws {
         )
         try DaemonRuntime(
             inputs: RuntimeInputs(
-                enrollment: enrollment,
-                environment: ProcessInfo.processInfo.environment
+                enrollment: enrollment
             )
         ).run()
         return
@@ -309,7 +308,7 @@ private func run() throws {
         guard daemonIsUnavailable(error) else { throw error }
         switch command {
         case .status:
-            print(localStatus(paths: paths).description)
+            print(try localStatus(paths: paths).description)
         case .doctor:
             print(localDoctor(paths: paths).description)
         default:
@@ -323,7 +322,7 @@ private func daemonIsUnavailable(_ error: Error) -> Bool {
     return posix.code == .ENOENT || posix.code == .ECONNREFUSED
 }
 
-private func localStatus(paths: AgentPaths) -> AgentStatus {
+private func localStatus(paths: AgentPaths) throws -> AgentStatus {
     let enrollment = try? EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
@@ -346,7 +345,7 @@ private func localStatus(paths: AgentPaths) -> AgentStatus {
     let queuedCount = (try? Outbox.queuedCount(
         inExistingDirectory: paths.outboxDirectory
     )) ?? 0
-    let installed = localReleaseIdentity()
+    let installed = try CompanionReleaseIdentity.load(from: .main)
     let updateAvailability = (try? UpdateStateStore(paths: paths).load())?
         .cachedManifest?.availability(from: installed)
     let adapterFacts = (try? AgentController.persistedAdapterFacts(
@@ -392,34 +391,6 @@ private func localDoctor(paths: AgentPaths) -> DoctorReport {
         compatibilityNeedsReview: !adapterFacts.compatibilityReasons.isEmpty,
         compatibilityReasons: adapterFacts.compatibilityReasons
     )
-}
-
-private func localReleaseIdentity() -> CompanionReleaseIdentity {
-    compiledReleaseIdentity(environment: ProcessInfo.processInfo.environment)
-}
-
-private func compiledReleaseIdentity(
-    environment: [String: String]
-) -> CompanionReleaseIdentity {
-    let dictionary: [String: Any] = [
-        "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
-        "CFBundleShortVersionString": environment[
-            "RUNTIME_RAIDERS_COMPANION_VERSION"
-        ] ?? "0.1.0",
-        "RuntimeRaidersReleaseSequence": 1,
-        "RuntimeRaidersReleaseSHA": String(repeating: "0", count: 40),
-        "RuntimeRaidersUpdateProtocolVersion": 1,
-    ]
-    if let identity = try? CompanionReleaseIdentity.parse(infoDictionary: dictionary) {
-        return identity
-    }
-    return try! CompanionReleaseIdentity.parse(infoDictionary: [
-        "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
-        "CFBundleShortVersionString": "0.1.0",
-        "RuntimeRaidersReleaseSequence": 1,
-        "RuntimeRaidersReleaseSHA": String(repeating: "0", count: 40),
-        "RuntimeRaidersUpdateProtocolVersion": 1,
-    ])
 }
 
 do {

@@ -7,6 +7,13 @@ public struct CompanionReleaseIdentity: Codable, Equatable, Sendable {
     public let companionVersion: String
     public let updateProtocolVersion: Int
 
+    public static func load(from bundle: Bundle = .main) throws -> Self {
+        guard let infoDictionary = bundle.infoDictionary else {
+            throw ReleaseContractError.invalidIdentity
+        }
+        return try parse(infoDictionary: infoDictionary)
+    }
+
     public static func parse(infoDictionary: [String: Any]) throws -> Self {
         guard infoDictionary["CFBundleIdentifier"] as? String == "com.redlattice.runtime-raiders-agent",
               let companionVersion = infoDictionary["CFBundleShortVersionString"] as? String,

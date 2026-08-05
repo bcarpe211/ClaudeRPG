@@ -34,6 +34,45 @@ public struct AtomicStore {
         try Self.synchronizeDirectory(parent)
     }
 
+    func write(
+        _ data: Data,
+        directoryDescriptor: Int32,
+        name: String
+    ) throws {
+        guard !name.isEmpty,
+              name != ".",
+              name != "..",
+              !name.contains("/") else {
+            throw POSIXError(.EINVAL)
+        }
+        let temporary = ".\(name).runtime-raiders-tmp-\(UUID().uuidString)"
+        let descriptor = Darwin.openat(
+            directoryDescriptor,
+            temporary,
+            O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC,
+            mode_t(S_IRUSR | S_IWUSR)
+        )
+        guard descriptor >= 0 else { throw Self.currentPOSIXError() }
+        var needsClose = true
+        defer {
+            if needsClose { try? Self.closeDescriptor(descriptor) }
+            _ = Darwin.unlinkat(directoryDescriptor, temporary, 0)
+        }
+        try Self.writeAll(data, to: descriptor)
+        try Self.synchronizeDescriptor(descriptor)
+        try Self.closeDescriptor(descriptor)
+        needsClose = false
+        guard Darwin.renameat(
+            directoryDescriptor,
+            temporary,
+            directoryDescriptor,
+            name
+        ) == 0 else {
+            throw Self.currentPOSIXError()
+        }
+        try Self.synchronizeDescriptor(directoryDescriptor)
+    }
+
     private static func createPrivateTemporaryFile(at temporary: URL, contents: Data) throws {
         let descriptor = Darwin.open(
             temporary.path,

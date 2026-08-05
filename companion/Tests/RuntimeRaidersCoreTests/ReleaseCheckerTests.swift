@@ -53,6 +53,43 @@ final class ReleaseCheckerTests: XCTestCase {
         }
     }
 
+    func testStateWritesStayAnchoredAfterValidatedParentPathIsReplaced() throws {
+        try withPaths { paths in
+            let store = try UpdateStateStore(paths: paths)
+            try store.save(UpdateStateV1(lastCheckAttemptMS: 1))
+            let pinnedDirectory = paths.stateDirectory.deletingLastPathComponent()
+                .appendingPathComponent("pinned-state", isDirectory: true)
+            let replacementTarget = paths.stateDirectory.deletingLastPathComponent()
+                .appendingPathComponent("replacement-state", isDirectory: true)
+            try FileManager.default.moveItem(at: paths.stateDirectory, to: pinnedDirectory)
+            try FileManager.default.createDirectory(at: replacementTarget, withIntermediateDirectories: false)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: replacementTarget.path
+            )
+            let trap = replacementTarget.appendingPathComponent("update-state.json")
+            let trapContents = Data("DO_NOT_REPLACE_REDIRECTED_TARGET".utf8)
+            try trapContents.write(to: trap)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: trap.path
+            )
+            try FileManager.default.createSymbolicLink(
+                at: paths.stateDirectory,
+                withDestinationURL: replacementTarget
+            )
+
+            try store.save(UpdateStateV1(lastCheckAttemptMS: 2))
+
+            let pinnedState = try JSONDecoder().decode(
+                UpdateStateV1.self,
+                from: Data(contentsOf: pinnedDirectory.appendingPathComponent("update-state.json"))
+            )
+            XCTAssertEqual(pinnedState.lastCheckAttemptMS, 2)
+            XCTAssertEqual(try Data(contentsOf: trap), trapContents)
+        }
+    }
+
     func testCheckIsDueOnlyAfterTwentyFourHours() throws {
         try withPaths { paths in
             let clock = LockedBox(now)
@@ -106,6 +143,34 @@ final class ReleaseCheckerTests: XCTestCase {
             ] {
                 XCTAssertFalse(serialized.contains(forbidden), forbidden)
             }
+        }
+    }
+
+    func testLiveTransportSendsOnlyBoundedAnonymousHeadersOnWire() throws {
+        let server = try RawHTTPServer(responseBody: validManifestData())
+        defer { server.stop() }
+        var request = URLRequest(url: server.url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 2
+
+        let response = try ReleaseChecker.liveTransport(request, allowedURL: server.url)
+        let wire = String(decoding: try server.capturedRequest(), as: UTF8.self)
+        let headers = parsedHeaders(wire)
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, validManifestData())
+        XCTAssertEqual(headers["user-agent"], "anonymous")
+        XCTAssertEqual(headers["accept-language"], "*")
+        for forbidden in [
+            ProcessInfo.processInfo.processName,
+            ProcessInfo.processInfo.operatingSystemVersionString,
+            "CFNetwork",
+            "Darwin",
+            "device",
+            "player",
+            "companion_version",
+        ] where !forbidden.isEmpty {
+            XCTAssertFalse(wire.localizedCaseInsensitiveContains(forbidden), forbidden)
         }
     }
 
@@ -274,6 +339,16 @@ final class ReleaseCheckerTests: XCTestCase {
         Data(#"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#.utf8)
     }
 
+    private func parsedHeaders(_ wire: String) -> [String: String] {
+        var headers: [String: String] = [:]
+        for line in wire.components(separatedBy: "\r\n").dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            headers[String(line[..<colon]).lowercased()] = String(line[line.index(after: colon)...])
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return headers
+    }
+
     private func withPaths(_ body: (AgentPaths) throws -> Void) throws {
         let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-release-checker-\(UUID().uuidString)", isDirectory: true)
@@ -303,5 +378,125 @@ private final class LockedBox<Value>: @unchecked Sendable {
 
     func withValue<Result>(_ body: (inout Value) throws -> Result) rethrows -> Result {
         try lock.withLock { try body(&stored) }
+    }
+}
+
+private final class RawHTTPServer: @unchecked Sendable {
+    private let listening: Int32
+    private let responseBody: Data
+    private let completed = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var request = Data()
+    private var error: Error?
+    private var stopped = false
+    let url: URL
+
+    init(responseBody: Data) throws {
+        let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw Self.posixError() }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, Darwin.listen(descriptor, 1) == 0 else {
+            Darwin.close(descriptor)
+            throw Self.posixError()
+        }
+        var boundAddress = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &boundAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.getsockname(descriptor, $0, &length)
+            }
+        }
+        guard named == 0,
+              let url = URL(string: "http://127.0.0.1:\(UInt16(bigEndian: boundAddress.sin_port))/manifest") else {
+            Darwin.close(descriptor)
+            throw Self.posixError()
+        }
+        listening = descriptor
+        self.responseBody = responseBody
+        self.url = url
+        DispatchQueue.global(qos: .utility).async { [self] in serve() }
+    }
+
+    func capturedRequest() throws -> Data {
+        guard completed.wait(timeout: .now() + 2) == .success else {
+            throw URLError(.timedOut)
+        }
+        return try lock.withLock {
+            if let error { throw error }
+            return request
+        }
+    }
+
+    func stop() {
+        let shouldClose = lock.withLock { () -> Bool in
+            guard !stopped else { return false }
+            stopped = true
+            return true
+        }
+        if shouldClose { Darwin.close(listening) }
+    }
+
+    private func serve() {
+        let client = Darwin.accept(listening, nil, nil)
+        guard client >= 0 else {
+            finish(error: Self.posixError())
+            return
+        }
+        defer { Darwin.close(client) }
+        var captured = Data()
+        var buffer = [UInt8](repeating: 0, count: 1_024)
+        while captured.count <= 16 * 1_024 {
+            let count = Darwin.read(client, &buffer, buffer.count)
+            if count > 0 {
+                captured.append(contentsOf: buffer.prefix(count))
+                if captured.range(of: Data("\r\n\r\n".utf8)) != nil { break }
+            } else if count < 0, errno == EINTR {
+                continue
+            } else {
+                finish(error: count == 0 ? URLError(.networkConnectionLost) : Self.posixError())
+                return
+            }
+        }
+        let head = Data(
+            "HTTP/1.1 200 OK\r\nContent-Length: \(responseBody.count)\r\nConnection: close\r\n\r\n".utf8
+        )
+        do {
+            try writeAll(head + responseBody, to: client)
+            lock.withLock { request = captured }
+            completed.signal()
+        } catch {
+            finish(error: error)
+        }
+    }
+
+    private func finish(error: Error) {
+        lock.withLock { self.error = error }
+        completed.signal()
+    }
+
+    private func writeAll(_ data: Data, to descriptor: Int32) throws {
+        try data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.write(descriptor, base.advanced(by: offset), bytes.count - offset)
+                if count > 0 { offset += count }
+                else if count < 0, errno == EINTR { continue }
+                else { throw Self.posixError() }
+            }
+        }
+    }
+
+    private static func posixError() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }

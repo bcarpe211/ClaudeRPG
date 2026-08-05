@@ -72,7 +72,11 @@ public final class UpdateStateStore: @unchecked Sendable {
             guard data.count <= Self.maximumBytes else {
                 throw AgentControllerError.invalidState
             }
-            try atomicStore.write(data, to: file)
+            try atomicStore.write(
+                data,
+                directoryDescriptor: directoryDescriptor,
+                name: file.lastPathComponent
+            )
         }
     }
 
@@ -270,13 +274,23 @@ public final class ReleaseChecker: @unchecked Sendable {
     }
 
     public static func liveTransport(_ request: URLRequest) throws -> UploadHTTPResponse {
-        guard request.url == ReleaseManifestV1.manifestURL,
+        try liveTransport(request, allowedURL: ReleaseManifestV1.manifestURL)
+    }
+
+    static func liveTransport(
+        _ request: URLRequest,
+        allowedURL: URL
+    ) throws -> UploadHTTPResponse {
+        guard request.url == allowedURL,
               request.httpMethod == "GET",
               request.httpBody == nil,
               request.allHTTPHeaderFields?.isEmpty ?? true else {
             throw URLError(.unsupportedURL)
         }
 
+        var anonymousRequest = request
+        anonymousRequest.setValue("anonymous", forHTTPHeaderField: "User-Agent")
+        anonymousRequest.setValue("*", forHTTPHeaderField: "Accept-Language")
         let collector = ReleaseResponseCollector(maximumBytes: maximumResponseBytes)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -287,12 +301,16 @@ public final class ReleaseChecker: @unchecked Sendable {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.httpMaximumConnectionsPerHost = 1
+        configuration.httpAdditionalHeaders = [
+            "User-Agent": "anonymous",
+            "Accept-Language": "*",
+        ]
         let session = URLSession(
             configuration: configuration,
             delegate: collector,
             delegateQueue: nil
         )
-        let task = session.dataTask(with: request)
+        let task = session.dataTask(with: anonymousRequest)
         task.resume()
         guard collector.wait(timeout: 2) else {
             task.cancel()
