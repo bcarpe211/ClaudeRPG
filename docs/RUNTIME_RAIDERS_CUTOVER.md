@@ -22,7 +22,7 @@ not authorize another.
 | Publishing/fetching the approved SHA to tracked `origin/main` | Repository/release owner, after verified updater hold | Pi checkout, service start, or future SHAs |
 | Preparing fail-closed Caddy artifact routes | User-approved Pi administrator, after exact release publication | Artifact publication, application cutover, or companion installation |
 | Production cutover and rollback | Explicit user approval for the recorded release and window | Future deployments |
-| Publishing the signed companion triplet | Explicit release-owner approval after section 5 server acceptance | Installing, enabling, or office activation |
+| Publishing the signed companion quartet | Explicit release-owner approval after section 5 server acceptance | Installing, enabling, updating, or office activation |
 | Companion install and old OTel cleanup | Mac owner or authorized administrator | Editing provider configuration or enabling collection |
 | Enabling canaries, then the office | Explicit canary/office activation approval | Enabling any unverified provider |
 
@@ -80,7 +80,7 @@ environment contents in this document or a commit.
 | IT DNS evidence/date for both FQDNs | `________________` |
 | Caddy validation and TLS evidence/date for both FQDNs | `________________` |
 | `raiders.local`, SSH, Avahi, actual network-path evidence/date | `________________` |
-| Signed triplet SHA-256 values and pre-cutover validation | `________________` |
+| Signed quartet SHA-256 values, `companion/RELEASE`, and pre-cutover validation | `________________` |
 | Post-cutover publication and installed-off canary record | `________________` |
 | Migration/e2e/preflight/config test evidence | `________________` |
 | Exact user authorization and UTC timestamp | `________________` |
@@ -201,11 +201,11 @@ matching authorization above.
   server and companion suites, and fake-transport privacy evidence. Do not
   install the production-locked companion yet: its installer, download, and
   enrollment URLs intentionally cannot succeed until the Runtime Raiders server
-  has passed section 5 and the signed triplet has been separately published.
+  has passed section 5 and the signed quartet has been separately published.
   An installed canary is therefore a **post-cutover, pre-activation** gate, not
   a prerequisite for changing the server while every collector is absent.
 - Implement and test the fail-closed publication mechanism before freezing the
-  final `RELEASE_SHA`, then rebuild and revalidate the signed triplet from that
+  final `RELEASE_SHA`, then rebuild and revalidate the signed quartet from that
   final candidate. Keep the files unpublished until section 5.3.
 - The exact initial allowlist is
   `RUN_ENABLED_SURFACES=codex_desktop,codex_cli`. Both Codex Desktop and Codex
@@ -435,7 +435,8 @@ prepare_caddy_routes() (
   for url in \
     https://raiders.redlattice.com/install.sh \
     https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip \
-    https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256; do
+    https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256 \
+    https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json; do
     test "$(curl --silent --show-error --proto '=https' --max-redirs 0 \
       --connect-timeout 10 --max-time 30 --output /dev/null \
       --write-out '%{http_code}' "$url")" = 404
@@ -489,7 +490,7 @@ particular, confirm both initial and final updater holds, initial and final Git
 readiness, active manager-loaded Caddy inputs, root/`0600` env protection,
 internal DNS for both FQDNs, pinned HTTPS for both FQDNs, exact `raiders.local`
 identity, active server/Caddy/Avahi, the root-owned empty artifact store with
-`current` absent and all three artifact URLs returning `404`, disk capacity for
+`current` absent and all four artifact URLs returning `404`, disk capacity for
 two logical DB snapshots plus release files, database integrity, exact
 environment/policy/allowlist, and the **final** `game_state.paused = 1` read.
 
@@ -878,17 +879,20 @@ From the Pi, the actual office path, and the TV as appropriate, verify:
 Record pass/fail and UTC time only. Do not record a Raider Key, page content, or
 SSE state payload.
 
-### 5.3 Publish the exact signed triplet
+### 5.3 Publish the exact signed quartet
 
 Only after sections 5.1 and 5.2 pass may the release owner separately authorize
-publication of the exact validated `install.sh`, ZIP, and adjacent checksum.
-Record `INSTALLER_SHA256`, `ZIP_SHA256`, and `CHECKSUM_SHA256` separately in the
-restricted operator record. Copy exactly those three reviewed files into one
-root-controlled, nonsymlink `SOURCE_DIR` beneath `/var/lib/runtime-raiders` on
-the Pi. That directory contains exactly `install.sh`,
-`runtime-raiders-agent.zip`, and `runtime-raiders-agent.zip.sha256`. A build
-output directory by itself is not a publication path, and copying does not
-authorize selection or serving.
+publication of the exact validated `install.sh`, ZIP, adjacent checksum, and
+static update manifest. Record `INSTALLER_SHA256`, `ZIP_SHA256`,
+`CHECKSUM_SHA256`, `UPDATE_MANIFEST_SHA256`, `RELEASE_SEQUENCE`, and
+`COMPANION_VERSION` separately in the restricted operator record. The tracked
+`companion/RELEASE` binds the clean SHA to its version and monotonic sequence.
+Copy exactly those four reviewed files into one root-controlled, nonsymlink
+`SOURCE_DIR` beneath `/var/lib/runtime-raiders` on the Pi. That directory
+contains `install.sh`, `runtime-raiders-agent.zip`,
+`runtime-raiders-agent.zip.sha256`, and `runtime-raiders-agent.update.json`.
+A build output directory by itself is not a publication path, and copying does
+not authorize selection or serving.
 
 From the exact deployed checkout, publish only after the separate approval:
 
@@ -897,14 +901,17 @@ cd "$REPO"
 sudo scripts/pi/runtime-raiders-artifacts.sh publish \
   --source "$SOURCE_DIR" \
   --release-sha "$RELEASE_SHA" \
+  --release-sequence "$RELEASE_SEQUENCE" \
+  --companion-version "$COMPANION_VERSION" \
   --installer-sha256 "$INSTALLER_SHA256" \
   --zip-sha256 "$ZIP_SHA256" \
-  --checksum-sha256 "$CHECKSUM_SHA256"
+  --checksum-sha256 "$CHECKSUM_SHA256" \
+  --update-manifest-sha256 "$UPDATE_MANIFEST_SHA256"
 sudo scripts/pi/runtime-raiders-artifacts.sh status
 ```
 
 Download each HTTPS response independently into an owner-only temporary
-directory. Compare all three bytestrings with their separately recorded
+directory. Compare all four bytestrings with their separately recorded
 digests, require `Cache-Control: no-store` and
 `X-Content-Type-Options: nosniff` on every response, and confirm `/health`
 remains `200`:
@@ -933,12 +940,17 @@ download_exact_https 134217728 \
 download_exact_https 4096 \
   "$VERIFY_DIR/runtime-raiders-agent.zip.sha256" "$VERIFY_DIR/checksum.headers" \
   'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'
+download_exact_https 65536 \
+  "$VERIFY_DIR/runtime-raiders-agent.update.json" "$VERIFY_DIR/manifest.headers" \
+  'https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json'
 test "$(sha256sum "$VERIFY_DIR/install.sh" | awk '{print $1}')" = \
   "$INSTALLER_SHA256"
 test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.zip" | awk '{print $1}')" = \
   "$ZIP_SHA256"
 test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.zip.sha256" | awk '{print $1}')" = \
   "$CHECKSUM_SHA256"
+test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.update.json" | awk '{print $1}')" = \
+  "$UPDATE_MANIFEST_SHA256"
 for headers in "$VERIFY_DIR"/*.headers; do
   tr -d '\r' < "$headers" | grep -Fxi 'Cache-Control: no-store'
   tr -d '\r' < "$headers" | grep -Fxi 'X-Content-Type-Options: nosniff'
@@ -956,7 +968,7 @@ sudo scripts/pi/runtime-raiders-artifacts.sh withdraw \
 ```
 
 After withdrawal, `sudo scripts/pi/runtime-raiders-artifacts.sh status` must
-report `unpublished`. Verify all three artifact URLs return `404` and both
+report `unpublished`. Verify all four artifact URLs return `404` and both
 internal health URLs remain `200`:
 
 ```sh
@@ -969,7 +981,8 @@ exact_https_status() {
 for url in \
   https://raiders.redlattice.com/install.sh \
   https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip \
-  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256; do
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256 \
+  https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json; do
   test "$(exact_https_status "$url")" = 404
 done
 for url in \
@@ -984,7 +997,7 @@ release directory remains for inspection; deleting it is not part of
 withdrawal.
 
 Publication acceptance completes only when the active full release SHA, all
-three expected and independently downloaded digests, three response status and
+four expected and independently downloaded digests, four response status and
 header results, health status, and UTC timestamp are recorded without file
 contents, source paths, tokens, enrollment codes, or environment contents.
 Publication does not authorize installation.
@@ -1029,7 +1042,14 @@ daemon failure, or upload is a rollback trigger.
 
 Complete the deployed-server, publication, and installed-off rows in
 `docs/runtime-raiders/canary-checklist.md`. Installing off does not authorize
-canary activation.
+canary activation. The continuation is the separately approved two-sequence
+record in `docs/runtime-raiders/companion-update-canary.md`: while still off,
+publish a newly reviewed sequence 2, observe one availability notification,
+and run only `raiders update` on the already-installed companion. Discovery is
+an anonymous static GET only to the trusted game server's fixed
+`runtime-raiders-agent.update.json` URL and may occur while collection is off;
+it sends no provider telemetry. The manifest and ZIP are never executed or
+piped. No manual-update proof authorizes `raiders on`.
 
 ## 6. Canary activation, office activation, and acceptance
 
@@ -1400,7 +1420,7 @@ handle their local queues.
       cutover.
 - [ ] Exact repository publication and fail-closed Caddy preparation had
       separate approvals; the prior Caddy config backup/checksum was recorded.
-- [ ] `/var/lib/runtime-raiders/current` was absent and all three artifact URLs
+- [ ] `/var/lib/runtime-raiders/current` was absent and all four artifact URLs
       returned `404` before final preflight.
 - [ ] Fresh preflight ended READY with a final paused read.
 - [ ] Logical `.backup` integrity and retained-state baseline were verified.
@@ -1408,7 +1428,7 @@ handle their local queues.
 - [ ] Migration, integrity, retained state, scoring exclusivity, policy,
       routes, both FQDNs, mDNS, physical kiosk, Leaderboard, and SSE SHA passed.
 - [ ] Old OTel is removed manually; no content or secrets were reported.
-- [ ] Signed publication was separately approved; manager `status`, all three
+- [ ] Signed publication was separately approved; manager `status`, all four
       independently downloaded digests, `no-store`, `nosniff`, and health passed.
 - [ ] The first canary used a locally downloaded, hash-verified installer and
       was daemon-live and persistently off before activation approval.

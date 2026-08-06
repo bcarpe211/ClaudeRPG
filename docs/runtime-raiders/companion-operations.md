@@ -1,86 +1,82 @@
 # Runtime Raiders companion operations
 
-The release sequence is fail-closed: build and validate the signed triplet;
-prepare the empty Caddy store at `/var/lib/runtime-raiders`; complete production
-cutover and deployed-server acceptance; separately publish and verify the
-triplet; separately install one persistently-off canary; separately activate
-that canary; and only then authorize routine office installation and activation.
-Preparation leaves `/var/lib/runtime-raiders/current` absent and requires all
-three exact artifact URLs to return HTTP `404`.
+This is the companion-release procedure. Every mutable action is pending until
+its separately named approval. It does not authorize signing, publication,
+Caddy reload, installation, collection, or office rollout.
 
-## Build and validate the signed triplet
+## Release contract and approval order
 
-For a release host, require `RUNTIME_RAIDERS_CODESIGN_IDENTITY`,
-`RUNTIME_RAIDERS_NOTARY_PROFILE`, and the validated
-`RUNTIME_RAIDERS_TEAM_ID`, then run
-`scripts/release/build-runtime-raiders-agent.sh`. The build creates arm64 and
-x86_64 binaries, combines a universal executable in a minimal app, signs with
-hardened runtime and secure timestamp, strictly verifies, notarizes with
-`notarytool --wait`, staples and validates the app, then repeats the same
-designated-requirement verification before recreating the ZIP and SHA-256.
+The signed release is a **quartet**: `install.sh`,
+`runtime-raiders-agent.zip`, `runtime-raiders-agent.zip.sha256`, and
+`runtime-raiders-agent.update.json`. The last is static data, not executable
+code. The exact public URLs are `/install.sh`, the ZIP, its checksum, and
+`/downloads/runtime-raiders-agent.update.json` under
+`https://raiders.redlattice.com`.
 
-Its ZIP, checksum, and installer replacement is transactional, restoring any
-prior complete pair and any prior standalone installer if replacement fails.
-Standalone binaries cannot be stapled. The checked-in installer is fail-closed
-until the release build renders its literal Team ID; installed artifacts verify
-the exact bundle identifier, Apple Developer ID chain, Developer ID Application
-extensions, and leaf certificate Team ID.
+Build from the exact clean `RELEASE_SHA`. `companion/RELEASE` is tracked and
+has four exact lines: its format version, companion version, monotonic release
+sequence, and update protocol version. Sequence 1 and sequence 2 have distinct
+reviewed commits and immutable release directories; version strings do not
+authorize a downgrade. The build signs, notarizes, staples, validates, and
+transactionally emits all four files. Record these four separate values only in
+the restricted operator record: `INSTALLER_SHA256`, `ZIP_SHA256`,
+`CHECKSUM_SHA256`, and `UPDATE_MANIFEST_SHA256`, plus `RELEASE_SEQUENCE` and
+`COMPANION_VERSION`.
 
-The build script does not publish. Record separate SHA-256 values for the
-rendered installer, ZIP, and checksum file in the restricted operator record.
-Keep every companion absent while the server is changed and accepted.
+Approval order is: Caddy route preparation; sequence-1 publication;
+sequence-1 installed-off canary; sequence-2 build/review/publication; manual
+update proof; bounded live provider canary; then office activation. Passing one
+gate never implies the next. Caddy preparation leaves
+`/var/lib/runtime-raiders/current` absent and all four URLs return `404`.
 
-## Publish only after deployed-server acceptance
+## Publish one reviewed quartet
 
-After server acceptance and exact artifact-publication approval, copy the
-validated triplet to one root-controlled, nonsymlink `SOURCE_DIR` beneath
-`/var/lib/runtime-raiders` on the Pi. It contains exactly `install.sh`,
-`runtime-raiders-agent.zip`, and `runtime-raiders-agent.zip.sha256`. From the
-exact deployed checkout, bind publication to the full release SHA and all three
-recorded digests:
+After deployed-server acceptance and a publication approval, put exactly the
+four reviewed files in one root-controlled, nonsymlink `SOURCE_DIR` beneath
+`/var/lib/runtime-raiders`. From the exact deployed checkout:
 
 ```sh
 cd "$REPO"
 sudo scripts/pi/runtime-raiders-artifacts.sh publish \
   --source "$SOURCE_DIR" \
   --release-sha "$RELEASE_SHA" \
+  --release-sequence "$RELEASE_SEQUENCE" \
+  --companion-version "$COMPANION_VERSION" \
   --installer-sha256 "$INSTALLER_SHA256" \
   --zip-sha256 "$ZIP_SHA256" \
-  --checksum-sha256 "$CHECKSUM_SHA256"
+  --checksum-sha256 "$CHECKSUM_SHA256" \
+  --update-manifest-sha256 "$UPDATE_MANIFEST_SHA256"
 sudo scripts/pi/runtime-raiders-artifacts.sh status
 ```
 
-Download `https://raiders.redlattice.com/install.sh`,
-`https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip`, and
-`https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256`
-independently. Require each response digest to equal its separate recorded
-value. Require `Cache-Control: no-store` and
-`X-Content-Type-Options: nosniff` on all three responses and HTTP `200` from
-`https://raiders.redlattice.com/health`. Record only digests, response statuses,
-headers, and UTC time—never contents, source paths, environment contents,
-tokens, or enrollment codes. Publication does not authorize installation.
+Independently download the four URLs and require each recorded digest, HTTP
+`200`, `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`; also
+require `/health` to be `200`. Record aggregate statuses, headers, digests, and
+UTC time only—not contents, source paths, native IDs, prompts, responses,
+tokens, credentials, provider fragments, or environment data.
 
-On any publication, digest, header, or health failure, withdraw only the exact
-active release:
+The artifact command accepts existing v1 releases for recovery/status, but a
+new updater-capable publication is v2 and has the quartet metadata. It rejects
+duplicate/non-monotonic v2 sequences, and a withdrawn v2 release remains
+immutable but cannot be rediscovered until separately reselected. On a
+publication, digest, header, or health failure, withdraw only the exact active
+release:
 
 ```sh
-sudo scripts/pi/runtime-raiders-artifacts.sh withdraw \
-  --release-sha "$RELEASE_SHA"
+sudo scripts/pi/runtime-raiders-artifacts.sh withdraw --release-sha "$RELEASE_SHA"
 sudo scripts/pi/runtime-raiders-artifacts.sh status
 ```
 
-Withdrawal acceptance requires `status` to report `unpublished`, all three
-artifact URLs to return HTTP `404`, and both internal health routes to remain
-HTTP `200`. Publication and withdrawal do not reload Caddy or restart Node.
-They do not alter scoring, the database, or immutable release directories.
+Recovery acceptance is `unpublished`, all four URLs return `404`, and both
+internal health URLs remain `200`. Withdrawal changes neither Caddy nor Node
+and does not delete an immutable release directory.
 
-## Install the first canary locally and persistently off
+## Install the sequence-1 canary locally and persistently off
 
-After publication acceptance and a separate installation approval, the canary
-owner obtains a fresh one-time code. The locally downloaded installer must be
-stored in an owner-only temporary file; verify its SHA-256 against
-`INSTALLER_SHA256` before execution, then execute only that verified local
-installer. Do not use the routine pipe-to-shell command for the first canary.
+This controlled installed-off canary is not routine onboarding. After
+sequence-1 publication acceptance and a distinct installation approval, use a
+locally downloaded installer: verify its recorded SHA-256 before execution and
+execute that local file. Never pipe the canary installer, ZIP, or manifest to a shell.
 
 ```sh
 umask 077
@@ -88,84 +84,53 @@ CANARY_INSTALLER="$(mktemp)"
 CANARY_CODE_FILE="$(mktemp)"
 cleanup_canary_files() { rm -f "$CANARY_INSTALLER" "$CANARY_CODE_FILE"; }
 trap cleanup_canary_files EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-chmod 0600 "$CANARY_INSTALLER"
-chmod 0600 "$CANARY_CODE_FILE"
+chmod 0600 "$CANARY_INSTALLER" "$CANARY_CODE_FILE"
 CANARY_STATUS="$(curl --fail --silent --show-error --proto '=https' \
   --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
   --max-filesize 1048576 --output "$CANARY_INSTALLER" \
   --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh')"
 test "$CANARY_STATUS" = 200
-test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = \
-  "$INSTALLER_SHA256"
-printf 'Enter only the one-time code, save, and close the owner-only file.\n' >&2
+test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = "$INSTALLER_SHA256"
 /usr/bin/vi "$CANARY_CODE_FILE"
 sh "$CANARY_INSTALLER" --code-file "$CANARY_CODE_FILE"
 ```
 
-The installer downloads only
-`https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip` and its
-adjacent `.sha256`. It validates both SHA-256 and the strict code signature
-before it exchanges a previously unused code or replaces the installed app.
-Installation must finish with `daemonRunning=true`, `enabled=false`, and
-`persistedState=disabled`; verify with `raiders status` and `raiders doctor`.
-Do not run `raiders on` until a later canary-activation approval.
+Require `daemonRunning=true`, `enabled=false`, and `persistedState=disabled`
+in `raiders status` and `raiders doctor`. Collection remains persistently off
+until the later bounded `raiders on` authorization. The installer validates the
+ZIP checksum and signed app before enrollment/replacement; it preserves the
+owner-only enrollment, cursors, and outbox across an upgrade or automatic
+rollback.
 
-The stapled app is installed at
-`~/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app`.
-The private enrollment JSON, cursors, and outbox are owner-only under the same
-support directory. The per-user LaunchAgent is exactly
-`com.redlattice.runtime-raiders-agent`, and calls the app's inner
-`runtime-raiders-agent` executable without placing credentials in launchd.
+## Already-installed player: manual update only
 
-The installer reuses its recorded, owner-owned command symlink across upgrades;
-if a user has replaced that link, it leaves the replacement alone and chooses
-the first writable, owner-owned existing PATH directory instead. If none exists,
-it creates `~/.local/bin` and appends exactly
-`export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path` to
-`~/.zprofile`. Upgrades preserve enrollment, cursors, and queued events. Any
-post-backup install failure restores the prior app, launch agent, shim, command
-state, and owned profile marker; a newly issued private enrollment is retained
-so a retry does not consume a second one-time code.
+For an already-installed player, use only `raiders update`.
+Do not run or pipe an installer, ZIP, or manifest. The foreground command
+fetches the exact manifest and ZIP, verifies the fixed HTTPS origin, digest,
+safe ZIP, notarized signed identity, embedded version/sequence/SHA/protocol,
+and offline health before atomic replacement. It refuses an active Run or an
+unsafe/incompatible/stale/non-newer manifest; collection state, enrollment,
+cursors, and outbox survive update and rollback.
 
-Run `raiders uninstall` to remove the companion. Its owner-only shim asks a
-live daemon to persist off and stop; only a genuinely absent socket permits
-fallback bootout. It removes its own plist, app, support state, command symlink,
-and exact PATH marker without affecting neighboring profile content or a
-user-replaced command link. It never uses sudo, package managers, provider
-directories, provider configuration, telemetry, or environment edits.
+Release discovery makes only an anonymous static GET while collection is off to
+the trusted game server's fixed update-manifest URL—no query,
+cookies, token, device/player/provider/usage data, redirects, or additional
+provider telemetry. Local update state and the privacy record hold aggregate
+status/timestamps and validated public release fields only. `raiders status`
+shows availability and the exact `raiders update` instruction; model and effort
+are display-only metadata, while Raid Power is the score.
 
 ## Routine office installation after every prior gate passes
 
-The following private prompt convenience form is allowed only after Caddy preparation,
-production cutover, deployed-server acceptance, three-digest publication,
-installed-off acceptance, live-canary acceptance, and separate office
-activation approval have all passed:
+Routine new-office-player onboarding is deliberately a different contract. Only
+after all rollout gates and a separate office-activation approval, use this
+one-line fixed-origin command:
 
 ```sh
-(
-  set -eu
-  umask 077
-  ROUTINE_INSTALLER="$(mktemp)"
-  cleanup_routine_installer() { rm -f "$ROUTINE_INSTALLER"; }
-  trap cleanup_routine_installer EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  ROUTINE_STATUS="$(curl --fail --silent --show-error --proto '=https' \
-    --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
-    --max-filesize 1048576 --output "$ROUTINE_INSTALLER" \
-    --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh')"
-  test "$ROUTINE_STATUS" = 200
-  test -s "$ROUTINE_INSTALLER"
-  sh "$ROUTINE_INSTALLER"
-)
+curl --fail --silent --show-error https://raiders.redlattice.com/install.sh | /bin/sh
 ```
 
-The installer reads the one-time code with echo disabled from `/dev/tty`; the
-code is never placed in the shell command or process arguments.
-
-Office activation remains independent: installation alone does not authorize
-`raiders on`. Claude Code and Omp remain disabled and unsupported.
+The installer prompts privately for its enrollment code. It does not authorize
+collection; office activation remains separate. Codex Desktop and Codex CLI are
+the only official supported roots. Do not claim provider support or fairness
+from model/effort display fields; Claude Code and Omp remain unsupported.
