@@ -897,8 +897,10 @@ not authorize selection or serving.
 From the exact deployed checkout, publish only after the separate approval:
 
 ```sh
-cd "$REPO"
-sudo scripts/pi/runtime-raiders-artifacts.sh publish \
+(
+  set -eu
+  cd "$REPO"
+  sudo scripts/pi/runtime-raiders-artifacts.sh publish \
   --source "$SOURCE_DIR" \
   --release-sha "$RELEASE_SHA" \
   --release-sequence "$RELEASE_SEQUENCE" \
@@ -907,7 +909,8 @@ sudo scripts/pi/runtime-raiders-artifacts.sh publish \
   --zip-sha256 "$ZIP_SHA256" \
   --checksum-sha256 "$CHECKSUM_SHA256" \
   --update-manifest-sha256 "$UPDATE_MANIFEST_SHA256"
-sudo scripts/pi/runtime-raiders-artifacts.sh status
+  sudo scripts/pi/runtime-raiders-artifacts.sh status
+)
 ```
 
 Download each HTTPS response independently into an owner-only temporary
@@ -917,8 +920,11 @@ digests, require `Cache-Control: no-store` and
 remains `200`:
 
 ```sh
-umask 077
-VERIFY_DIR="$(mktemp -d)"
+(
+  set -eu
+  umask 077
+  VERIFY_DIR="$(mktemp -d)"
+  trap 'rm -rf "$VERIFY_DIR"' EXIT
 chmod 0700 "$VERIFY_DIR"
 download_exact_https() {
   max_bytes=$1
@@ -957,14 +963,18 @@ for headers in "$VERIFY_DIR"/*.headers; do
 done
 download_exact_https 4096 /dev/null /dev/null \
   'https://raiders.redlattice.com/health'
+)
 ```
 
 Any publication, status, digest, header, or health failure blocks installation
 and requires exact-SHA withdrawal:
 
 ```sh
-sudo scripts/pi/runtime-raiders-artifacts.sh withdraw \
+(
+  set -eu
+  sudo scripts/pi/runtime-raiders-artifacts.sh withdraw \
   --release-sha "$RELEASE_SHA"
+)
 ```
 
 After withdrawal, `sudo scripts/pi/runtime-raiders-artifacts.sh status` must
@@ -972,7 +982,9 @@ report `unpublished`. Verify all four artifact URLs return `404` and both
 internal health URLs remain `200`:
 
 ```sh
-sudo scripts/pi/runtime-raiders-artifacts.sh status
+(
+  set -eu
+  sudo scripts/pi/runtime-raiders-artifacts.sh status
 exact_https_status() {
   curl --silent --show-error --proto '=https' --proto-redir '=https' \
     --max-redirs 0 --connect-timeout 10 --max-time 30 --max-filesize 4096 \
@@ -990,6 +1002,7 @@ for url in \
   https://clauderpg.redlattice.com/health; do
   test "$(exact_https_status "$url")" = 200
 done
+)
 ```
 
 Publication and withdrawal do not reload Caddy or restart Node. The immutable
@@ -1011,8 +1024,10 @@ verify its SHA-256 before execution, and run that verified local file. Do not
 pipe a mutable remote response directly into a shell for this first canary:
 
 ```sh
-umask 077
-CANARY_INSTALLER="$(mktemp)"
+(
+  set -eu
+  umask 077
+  CANARY_INSTALLER="$(mktemp)"
 CANARY_CODE_FILE="$(mktemp)"
 cleanup_canary_files() { rm -f "$CANARY_INSTALLER" "$CANARY_CODE_FILE"; }
 trap cleanup_canary_files EXIT
@@ -1031,6 +1046,7 @@ test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = \
 printf 'Enter only the one-time code, save, and close the owner-only file.\n' >&2
 /usr/bin/vi "$CANARY_CODE_FILE"
 sh "$CANARY_INSTALLER" --code-file "$CANARY_CODE_FILE"
+)
 ```
 
 The transactional installer must finish with the real daemon live and all
@@ -1044,8 +1060,10 @@ Complete the deployed-server, publication, and installed-off rows in
 `docs/runtime-raiders/canary-checklist.md`. Installing off does not authorize
 canary activation. The continuation is the separately approved two-sequence
 record in `docs/runtime-raiders/companion-update-canary.md`: while still off,
-publish a newly reviewed sequence 2, observe one availability notification,
-and run only `raiders update` on the already-installed companion. Discovery is
+publish a newly reviewed sequence-2 build/review/sign and separately publish it,
+then after the 24-hour startup-check due boundary restart its fixed launchd job,
+observe one availability notification and run only `raiders update` on the
+already-installed companion. Discovery is
 an anonymous static GET only to the trusted game server's fixed
 `runtime-raiders-agent.update.json` URL and may occur while collection is off;
 it sends no provider telemetry. The manifest and ZIP are never executed or
@@ -1053,8 +1071,15 @@ piped. No manual-update proof authorizes `raiders on`.
 
 ## 6. Canary activation, office activation, and acceptance
 
-Only after section 5, including the installed-off canary, passes may the
-activation owner separately authorize canary enablement.
+The required post-cutover lifecycle is Caddy preparation approval →
+sequence-1 publication → installed-off sequence-1 canary → sequence-2 build,
+review, and signing → sequence-2 publication → notification/status proof →
+manual `raiders update` → bounded `raiders on` Codex Desktop and Codex CLI
+proof → `raiders off` proof → separate office activation → routine onboarding.
+No arrow implies the next authority.
+
+Only after the sequence-2 manual update proof remains disabled may the
+activation owner separately authorize bounded canary enablement.
 
 1. Reconfirm the approved canary reports the exact live-disabled state, then run
    `raiders on` only after explicit canary-activation approval.
@@ -1072,8 +1097,9 @@ activation owner separately authorize canary enablement.
 5. Observe a complete Fight, one long Run, parallel Runs, a collector restart,
    and a brief server-unavailable retry. Confirm outbox replay is idempotent and
    content-free.
-6. If every canary and observation passes, request and record separate office
-   activation approval. Have participating users run `raiders on`.
+6. Run `raiders off`, then prove disabled `raiders status` and `raiders doctor`.
+   If every canary and off-proof passes, request separate office activation;
+   that approval—not this canary—governs later routine onboarding.
 
 Use content-free database aggregates to check the server-side canary boundary:
 

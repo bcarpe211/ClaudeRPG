@@ -58,12 +58,19 @@ companion installation, or activation. Follow
 [`docs/RUNTIME_RAIDERS_CUTOVER.md`](RUNTIME_RAIDERS_CUTOVER.md) and record these
 separate gates in order before onboarding anyone:
 
-1. signed companion publication;
-2. installed-off canary acceptance;
-3. live canary activation and acceptance;
-4. separate office activation approval.
+1. Caddy preparation approval;
+2. sequence-1 publication approval;
+3. installed-off sequence-1 canary acceptance;
+4. clean sequence-2 build, review, and signing;
+5. separate sequence-2 publication;
+6. deterministic off-state notification and `raiders status` proof;
+7. manual `raiders update` proof;
+8. separately approved bounded `raiders on` proof with one official Codex Desktop
+   and one official Codex CLI root Run;
+9. `raiders off` proof; and
+10. separate office activation approval.
 
-Only after all four gates pass may onboarding begin. Each teammate registers a character at
+Only after all ten gates pass may onboarding begin. Each teammate registers a character at
 `http://raiders.local:8080/`. Registration provides a hardened installer command
 and a separate private one-time code for that Raider. The owner runs the command
 on their Mac and enters the code only at the installer's private prompt. The
@@ -71,12 +78,10 @@ installer starts collection **off** and never edits shell or provider
 configuration.
 
 Before opting in, run `raiders status` (and `raiders doctor` if it reports a
-problem) and confirm collection is disabled. Consent is explicit: run
-`raiders on` only when the owner wants Runtime Raiders collection, and run
-`raiders off` to stop it. Use separate controlled canaries for Codex Desktop and
-Codex CLI. With Raiders off, both canaries must work normally and produce no
-Runtime Raiders upload; after explicit opt-in, verify each allowed surface
-separately.
+problem) and confirm collection is disabled. Routine onboarding is not a
+canary: no participant runs `raiders on` until a future separately authorized
+office collection decision. The bounded canary above must already have finished
+its Desktop/CLI proof and `raiders off` check.
 
 Only Codex Desktop and Codex CLI are available in this release. Claude Code and
 Omp are unavailable and unsupported. Manually remove the legacy Claude OTel
@@ -89,13 +94,11 @@ companion installer does not remove or change legacy shell configuration for you
 - [ ] From a laptop on the internal network: `ping raiders.local` resolves and
       `https://raiders.redlattice.com` loads.
 - [ ] The TV shows the kiosk (dungeon + leaderboard), no desktop/cursor/bars.
+- [ ] Do not register/onboard until the ten ordered release gates above have
+      accepted the two-sequence canary and `raiders off` proof.
 - [ ] Register a character; run the one-time companion installer and confirm
-      `raiders status` reports collection disabled before consent.
-- [ ] With Raiders off, complete harmless Codex Desktop and Codex CLI canaries:
-      both work normally and neither uploads Runtime Raiders data.
-- [ ] After explicit `raiders on`, complete a controlled Codex Desktop canary
-      and a separate controlled Codex CLI canary; confirm each allowed surface
-      is recorded as expected. Run `raiders off` when the canaries finish.
+      `raiders status` reports collection disabled. Office activation is a
+      separate authority after routine onboarding.
 - [ ] Confirm Claude Code and Omp remain unavailable; do not configure or probe
       either provider.
 - [ ] Reboot the Pi → it returns to the kiosk unattended.

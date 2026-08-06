@@ -1,11 +1,6 @@
 # Runtime Raiders two-sequence update canary
 
-Status: **pending — no signing, publication, installation, live provider use,
-or office activation is authorized by this record.**
-
-Use this after the server cutover runbook and companion operations runbook. Keep
-collection persistently off except for the single separately authorized bounded
-step below. Record aggregate status/timestamps only. Never record prompts, responses, record paths, native IDs, tokens, credentials, or provider fragments.
+Status: **pending — this record authorizes nothing.** Record aggregate status/timestamps only. Never record prompts, responses, record paths, native IDs, tokens, credentials, or provider fragments.
 
 ## Required order
 
@@ -22,18 +17,76 @@ step below. Record aggregate status/timestamps only. Never record prompts, respo
 11. verify `codex_desktop` and `codex_cli`, content-free storage, Raid Power, model, and effort; and
 12. run `raiders off` before seeking separate office activation.
 
-Steps 1–8 do not authorize step 9. The sequence-2 manifest and ZIP are never
-executed or piped; only the installed signed player runs `raiders update`.
-Step 11 verifies official surface classification, not a provider claim derived
-from display fields: model and effort are display-only and Raid Power is the
-scoring result.
+No step implies the next. Model and effort are display-only; Raid Power is the
+score. The manifest and ZIP are never piped or executed.
 
-## Acceptance and rollback
+## Exact clean build and publication prerequisites
 
-At each step retain only pass/fail/pending, aggregate count, release sequence,
-and UTC timestamp in the restricted operator record. A malformed manifest,
-unexpected notification behavior, invalid signature, failed health check,
-unexpected collection state, content-bearing record, or wrong surface is a
-NO-GO: run `raiders off`, do not advance, and use the signed updater's rollback
-or the separately authorized release withdrawal as applicable. Neither action
-authorizes an office rollout.
+On the authorized release host only, first review a clean `HEAD` and tracked
+four-line `companion/RELEASE`; set the notarization/signing environment outside
+Git, then use this fail-fast block. It is pending evidence, not a command to run
+without approval.
+
+```sh
+(
+  set -eu
+  git diff --quiet
+  git diff --cached --quiet
+  RELEASE_SHA="$(git rev-parse HEAD)"
+  scripts/release/build-runtime-raiders-agent.sh --release-sha "$RELEASE_SHA"
+  shasum -a 256 dist/install.sh dist/runtime-raiders-agent.zip \
+    dist/runtime-raiders-agent.zip.sha256 dist/runtime-raiders-agent.update.json
+)
+```
+
+Record the clean SHA, sequence, companion version, protocol, four digests, and
+sign/notary/staple validation status. Sequence 2 must be a new clean SHA and a
+strictly higher sequence. A withdrawal removes only `current`; its immutable
+diagnostic directory remains, its v2 sequence is consumed, and recovery needs a
+new clean SHA with a strictly higher sequence—not reselection of the withdrawn
+v2 release.
+
+## Deterministic off-state notification proof
+
+Publication does not trigger discovery. The daemon checks only at startup when
+the persisted last attempt is at least 24 hours old. After sequence-2
+publication, keep collection off and record the last-attempt timestamp. At the
+recorded 24-hour due boundary, restart exactly the installed launchd job:
+
+```sh
+(
+  set -eu
+  launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"
+  raiders status
+  raiders doctor
+)
+```
+
+Accept only one notification and cached sequence-2 availability with disabled
+intent. Record restart UTC, due UTC, notification count, and status/doctor
+aggregate fields. If the cadence cannot be waited or a test clock is not
+separately authorized, stop: do not claim notification evidence, alter state,
+or publish again.
+
+## Manual update proof and recovery
+
+Before and after `raiders update`, run `raiders status` and `raiders doctor`.
+Record only release identity/update availability, disabled intent, enrollment
+present/absent, compatibility reason, cursors/surfaces aggregate, active Run
+count, and outbox/queue count. Require the sequence/version/SHA/protocol to
+advance, daemon health to be live, and disabled intent plus those preserved
+aggregate values to match the pre-update record. The updater automatically
+rolls back a failed transaction.
+
+If `raiders update` emits terminal recovery output, stop, preserve only its
+aggregate output, and run exactly the emitted stable command—do not improvise
+or delete bundles. Its fixed form is:
+
+```sh
+"$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.rollback.app/Contents/MacOS/runtime-raiders-agent" __recover-update
+```
+
+Only after successful manual proof may a separately approved bounded
+`raiders on` produce one official Desktop and one official CLI root Run. Then
+run `raiders off`, prove disabled status/doctor, and only then request separate
+office activation and routine onboarding.

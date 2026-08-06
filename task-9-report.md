@@ -51,3 +51,27 @@ request and passed.
 No implementation or production action was performed. The live canary, signing,
 publication, and office evidence is intentionally still pending and must be
 recorded outside Git at each separately approved gate.
+
+## Fix Round 1
+
+### RED
+
+Extended the documentation contract first. The old docs failed on missing
+fail-fast isolated blocks, stale Pi onboarding/lifecycle order, and missing
+clean-build, cadence, no-reselection, approval, and recovery evidence.
+
+### GREEN
+
+Publication, download/header/digest, withdrawal, and controlled-canary snippets
+now use self-contained `set -eu` subshells; secret/temp blocks retain local
+`umask` and traps. Primary cutover and Pi onboarding now require the complete
+sequence through `raiders off` before office activation and routine onboarding.
+The two-sequence record adds the clean Task 7 build command, the exact Task 6
+launchd restart target after the 24-hour due boundary, status/doctor evidence,
+terminal recovery command rule, and v2 consumed-sequence recovery rule.
+
+### Tests and concerns
+
+`npm test -- tests/runtime-raiders-publication-docs.test.ts` passed 16/16 and
+`git diff --check` passed. No live signing, Caddy, publication, provider,
+install, or office action occurred; all evidence remains pending.

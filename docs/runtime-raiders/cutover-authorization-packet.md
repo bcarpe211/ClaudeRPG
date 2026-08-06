@@ -33,11 +33,12 @@ named boundary.
    all four HTTPS digests.
 9. Separately authorize sequence-1 installation on one canary and prove its
    daemon is live but collection is persistently off.
-10. Separately approve the reviewed sequence-2 quartet publication.
-11. Separately authorize the manual `raiders update` proof while still off.
-12. Separately authorize the bounded live provider canary, then require
+10. Separately authorize sequence-2 build, review, and signing from its clean SHA.
+11. Separately approve sequence-2 quartet publication.
+12. Separately authorize the manual `raiders update` proof while still off.
+13. Separately authorize the bounded live provider canary, then require
    `raiders off` before seeking office activation.
-13. Separately authorize office activation only after canary acceptance.
+14. Separately authorize office activation only after canary acceptance.
 
 ## Recorded candidate and prior state
 
@@ -194,11 +195,11 @@ literal recorded value; do not approve a placeholder.
 ### E. Signed companion publication
 
 > After deployed-server acceptance, I authorize publishing only the signed
-> companion quartet for release SHA `________________________________________`
-> with recorded release sequence, companion version, installer, ZIP,
-> checksum-file, and update-manifest SHA-256 values
-> `________________________________________________________________`,
-> `________________________________________________________________`, and
+> companion quartet for release SHA `________________________________________`,
+> protocol `________`, release sequence `________________`, companion version
+> `________________`, installer SHA-256 `________________________________________________________________`, ZIP
+> SHA-256 `________________________________________________________________`, checksum-file SHA-256
+> `________________________________________________________________`, and update-manifest SHA-256
 > `________________________________________________________________`. This does not authorize downloading an
 > installer for execution, installing any companion, or activation.
 
@@ -210,28 +211,33 @@ literal recorded value; do not approve a placeholder.
 > and the daemon must be live with collection persistently off. This does not
 > authorize `raiders on`.
 
-### G. Sequence-2 build, review, and publication
+### G. Sequence-2 build, review, and signing
 
 > With the sequence-1 canary still persistently off, I authorize review and
-> publication only of the new clean-SHA sequence-2 quartet, including
-> `runtime-raiders-agent.update.json`. This does not authorize update execution
-> or collection.
+> signing only of the new clean-SHA sequence-2 quartet. This does not authorize
+> publication, update execution, or collection.
 
-### H. Manual update proof
+### H. Sequence-2 publication
+
+> After signing review accepts the recorded clean SHA, protocol, sequence,
+> version, and four digests, I authorize only sequence-2 publication. This does
+> not authorize installation, update execution, collection, or office rollout.
+
+### I. Manual update proof
 
 > After sequence-2 publication acceptance, I authorize only the installed
 > canary to run `raiders update` and prove its signed version/sequence, daemon
 > health, disabled state, enrollment, cursors, and outbox. This does not
 > authorize `raiders on`.
 
-### I. Bounded live provider canary
+### J. Bounded live provider canary
 
 > After manual update proof, I authorize bounded `raiders on` only for the
 > single recorded canary and content-free official Codex Desktop/CLI root-Run
 > checks. It must run `raiders off` before any office request. This does not
 > authorize office installation or activation.
 
-### J. Office activation
+### K. Office activation
 
 > After the bounded canary is off and accepted, I authorize participating office users to
 > install and enable Runtime Raiders. Claude Code and Omp remain disabled and

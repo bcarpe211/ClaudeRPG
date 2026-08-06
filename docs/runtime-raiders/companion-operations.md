@@ -36,8 +36,10 @@ four reviewed files in one root-controlled, nonsymlink `SOURCE_DIR` beneath
 `/var/lib/runtime-raiders`. From the exact deployed checkout:
 
 ```sh
-cd "$REPO"
-sudo scripts/pi/runtime-raiders-artifacts.sh publish \
+(
+  set -eu
+  cd "$REPO"
+  sudo scripts/pi/runtime-raiders-artifacts.sh publish \
   --source "$SOURCE_DIR" \
   --release-sha "$RELEASE_SHA" \
   --release-sequence "$RELEASE_SEQUENCE" \
@@ -46,7 +48,8 @@ sudo scripts/pi/runtime-raiders-artifacts.sh publish \
   --zip-sha256 "$ZIP_SHA256" \
   --checksum-sha256 "$CHECKSUM_SHA256" \
   --update-manifest-sha256 "$UPDATE_MANIFEST_SHA256"
-sudo scripts/pi/runtime-raiders-artifacts.sh status
+  sudo scripts/pi/runtime-raiders-artifacts.sh status
+)
 ```
 
 Independently download the four URLs and require each recorded digest, HTTP
@@ -57,14 +60,18 @@ tokens, credentials, provider fragments, or environment data.
 
 The artifact command accepts existing v1 releases for recovery/status, but a
 new updater-capable publication is v2 and has the quartet metadata. It rejects
-duplicate/non-monotonic v2 sequences, and a withdrawn v2 release remains
-immutable but cannot be rediscovered until separately reselected. On a
+duplicate/non-monotonic v2 sequences. A withdrawn v2 release remains immutable
+for diagnosis, but its sequence is consumed: recovery requires a new clean SHA
+and strictly higher sequence, never reselection of the withdrawn v2 release. On a
 publication, digest, header, or health failure, withdraw only the exact active
 release:
 
 ```sh
-sudo scripts/pi/runtime-raiders-artifacts.sh withdraw --release-sha "$RELEASE_SHA"
-sudo scripts/pi/runtime-raiders-artifacts.sh status
+(
+  set -eu
+  sudo scripts/pi/runtime-raiders-artifacts.sh withdraw --release-sha "$RELEASE_SHA"
+  sudo scripts/pi/runtime-raiders-artifacts.sh status
+)
 ```
 
 Recovery acceptance is `unpublished`, all four URLs return `404`, and both
@@ -79,8 +86,10 @@ locally downloaded installer: verify its recorded SHA-256 before execution and
 execute that local file. Never pipe the canary installer, ZIP, or manifest to a shell.
 
 ```sh
-umask 077
-CANARY_INSTALLER="$(mktemp)"
+(
+  set -eu
+  umask 077
+  CANARY_INSTALLER="$(mktemp)"
 CANARY_CODE_FILE="$(mktemp)"
 cleanup_canary_files() { rm -f "$CANARY_INSTALLER" "$CANARY_CODE_FILE"; }
 trap cleanup_canary_files EXIT
@@ -93,6 +102,7 @@ test "$CANARY_STATUS" = 200
 test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = "$INSTALLER_SHA256"
 /usr/bin/vi "$CANARY_CODE_FILE"
 sh "$CANARY_INSTALLER" --code-file "$CANARY_CODE_FILE"
+)
 ```
 
 Require `daemonRunning=true`, `enabled=false`, and `persistedState=disabled`

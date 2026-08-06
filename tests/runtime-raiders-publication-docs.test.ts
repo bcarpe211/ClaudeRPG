@@ -49,10 +49,11 @@ describe('Runtime Raiders artifact-publication documentation', () => {
       '### D. Production cutover',
       '### E. Signed companion publication',
       '### F. Installed-off canary',
-      '### G. Sequence-2 build, review, and publication',
-      '### H. Manual update proof',
-      '### I. Bounded live provider canary',
-      '### J. Office activation',
+      '### G. Sequence-2 build, review, and signing',
+      '### H. Sequence-2 publication',
+      '### I. Manual update proof',
+      '### J. Bounded live provider canary',
+      '### K. Office activation',
     ];
     let previous = -1;
     for (const heading of approvalHeadings) {
@@ -155,9 +156,9 @@ describe('Runtime Raiders artifact-publication documentation', () => {
   });
 
   it('keeps Pi setup onboarding behind publication and both canary approvals', () => {
-    const publication = piSetup.indexOf('signed companion publication');
-    const installedOff = piSetup.indexOf('installed-off canary');
-    const liveCanary = piSetup.indexOf('live canary activation');
+    const publication = piSetup.indexOf('sequence-1 publication');
+    const installedOff = piSetup.indexOf('installed-off sequence-1');
+    const liveCanary = piSetup.indexOf('bounded `raiders on`');
     const officeApproval = piSetup.indexOf('office activation approval');
     const onboarding = piSetup.indexOf('Each teammate registers');
 
@@ -196,6 +197,64 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(canary).toContain('aggregate status/timestamps only');
     expect(canary).toMatch(/never record prompts, responses, record paths, native IDs, tokens, credentials, or provider fragments/i);
     expect(canary).toMatch(/pending/i);
+  });
+
+  it('makes publication, withdrawal, and canary snippets fail fast in isolated subshells', () => {
+    const section = runbook.slice(
+      runbook.indexOf('### 5.3 Publish the exact signed quartet'),
+      runbook.indexOf('## 6. Canary activation'),
+    );
+    for (const marker of [
+      'runtime-raiders-artifacts.sh publish',
+      'download_exact_https()',
+      'runtime-raiders-artifacts.sh withdraw',
+      'CANARY_INSTALLER="$(mktemp)"',
+    ]) {
+      const before = section.slice(0, section.indexOf(marker));
+      expect(before.lastIndexOf('(\n  set -eu')).toBeGreaterThan(-1);
+    }
+    const canary = section.slice(section.indexOf('CANARY_INSTALLER'), section.indexOf('## 6. Canary activation'));
+    expect(canary.indexOf('test "$(shasum -a 256')).toBeLessThan(canary.indexOf('sh "$CANARY_INSTALLER"'));
+    expect(canary).toContain('trap cleanup_canary_files EXIT');
+  });
+
+  it('requires the complete off-to-office lifecycle in the primary runbook and Pi onboarding', () => {
+    const required = [
+      'Caddy preparation', 'sequence-1 publication', 'installed-off',
+      'sequence-2 build', 'sequence-2 publication', 'notification',
+      'raiders update', 'raiders on', 'Codex Desktop', 'Codex CLI',
+      'raiders off', 'office activation',
+    ];
+    for (const document of [runbook, piSetup]) {
+      let last = -1;
+      for (const term of required) {
+        const next = document.toLowerCase().indexOf(term.toLowerCase(), last + 1);
+        expect(next, term).toBeGreaterThan(last);
+        last = next;
+      }
+    }
+    expect(piSetup.indexOf('Each teammate registers')).toBeGreaterThan(
+      piSetup.indexOf('10. separate office activation approval'),
+    );
+    expect(runbook).not.toMatch(/If every canary[^.]*office activation approval[\s\S]*Have participating users run `raiders on`/);
+  });
+
+  it('documents build, cadence, no-reselection, approval fields, and update recovery evidence', () => {
+    const canary = readDoc('docs/runtime-raiders/companion-update-canary.md');
+    expect(canary).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
+    expect(canary).toContain('scripts/release/build-runtime-raiders-agent.sh --release-sha "$RELEASE_SHA"');
+    expect(canary).toContain('launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"');
+    expect(canary).toContain('24-hour due boundary');
+    expect(canary).toContain('raiders status');
+    expect(canary).toContain('raiders doctor');
+    expect(canary).toContain('Runtime Raiders Agent.rollback.app/Contents/MacOS/runtime-raiders-agent" __recover-update');
+    expect(operations).toMatch(/withdrawn v2[^.]*new clean SHA[^.]*higher sequence/i);
+    expect(operations).not.toMatch(/withdrawn v2[^.]*reselected/i);
+    for (const field of ['release sequence', 'companion version', 'installer sha-256', 'zip sha-256', 'checksum-file sha-256', 'update-manifest sha-256']) {
+      expect(packet.toLowerCase()).toContain(field);
+    }
+    expect(packet).toContain('### G. Sequence-2 build, review, and signing');
+    expect(packet).toContain('### H. Sequence-2 publication');
   });
 
   it('does not present unapproved 2026-08-04 work as verified evidence', () => {
