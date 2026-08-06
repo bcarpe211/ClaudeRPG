@@ -23,18 +23,45 @@ import { afterEach, describe, expect, it } from 'vitest';
 const SCRIPT = resolve('scripts/pi/runtime-raiders-artifacts.sh');
 const INSTALLER_TEMPLATE = resolve('companion/packaging/install.sh');
 const releaseSha = 'b'.repeat(40);
+const companionVersion = '0.2.0';
+const releaseSequence = '1';
+const updateProtocolVersion = 1;
+const zipUrl = 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip';
 const roots: string[] = [];
 
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-function sourceTriplet(root: string) {
+function publicManifest(
+  selectedReleaseSha: string,
+  selectedReleaseSequence: number,
+  selectedCompanionVersion: string,
+  zipDigest: string,
+): string {
+  return JSON.stringify({
+    companion_version: selectedCompanionVersion,
+    manifest_version: 1,
+    release_sequence: selectedReleaseSequence,
+    release_sha: selectedReleaseSha,
+    update_protocol_version: updateProtocolVersion,
+    zip_sha256: zipDigest,
+    zip_url: zipUrl,
+  }) + '\n';
+}
+
+function sourceTriplet(
+  root: string,
+  selectedReleaseSha = releaseSha,
+  selectedReleaseSequence = Number(releaseSequence),
+  selectedCompanionVersion = companionVersion,
+) {
   const source = join(root, 'source');
   mkdirSync(source);
   const installer = join(source, 'install.sh');
   const zip = join(source, 'runtime-raiders-agent.zip');
   const checksum = join(source, 'runtime-raiders-agent.zip.sha256');
+  const updateManifest = join(source, 'runtime-raiders-agent.update.json');
   writeFileSync(installer, [
     '#!/bin/sh',
     "ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'",
@@ -44,7 +71,13 @@ function sourceTriplet(root: string) {
   ].join('\n'));
   writeFileSync(zip, 'signed-test-archive');
   writeFileSync(checksum, `${sha256(zip)}  runtime-raiders-agent.zip\n`);
-  return { source, installer, zip, checksum };
+  writeFileSync(updateManifest, publicManifest(
+    selectedReleaseSha,
+    selectedReleaseSequence,
+    selectedCompanionVersion,
+    sha256(zip),
+  ));
+  return { source, installer, zip, checksum, updateManifest };
 }
 
 function executable(path: string, body: string): void {
@@ -119,6 +152,43 @@ exec /usr/bin/install "$@"`);
 
   executable(join(fakes, 'chown'), `
 printf 'chown %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"`);
+
+  executable(join(fakes, 'curl'), `
+printf 'curl %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
+output=
+url=
+max_size=
+saw_proto=0
+saw_fail=0
+saw_max_time=0
+while test "$#" -gt 0; do
+  case "$1" in
+    --output) output=$2; shift 2 ;;
+    --max-filesize) max_size=$2; shift 2 ;;
+    --proto) test "$2" = '=https'; saw_proto=1; shift 2 ;;
+    --max-time) test "$2" = 30; saw_max_time=1; shift 2 ;;
+    --fail) saw_fail=1; shift ;;
+    --silent|--show-error) shift ;;
+    --location|--location-trusted) exit 64 ;;
+    https://*) test -z "$url"; url=$1; shift ;;
+    *) exit 64 ;;
+  esac
+done
+test "$saw_proto" = 1 && test "$saw_fail" = 1 && test "$saw_max_time" = 1
+case "$url:$max_size" in
+  'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip:134217728')
+    test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_ZIP_FETCH:-0}" = 0 || exit 22
+    source="$RUNTIME_RAIDERS_ARTIFACT_ROOT/current/downloads/runtime-raiders-agent.zip" ;;
+  'https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json:65536')
+    test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_MANIFEST_FETCH:-0}" = 0 || exit 22
+    source="$RUNTIME_RAIDERS_ARTIFACT_ROOT/current/downloads/runtime-raiders-agent.update.json" ;;
+  *) exit 64 ;;
+esac
+/bin/cp "$source" "$output"
+if test "$url" = 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json' &&
+  test "\${RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_MANIFEST_FETCH:-0}" = 1; then
+  printf '%s\\n' '{"manifest_version":1}' > "$output"
+fi`);
 
   executable(join(fakes, 'mv'), `
 printf 'mv %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
@@ -198,6 +268,9 @@ function publicationFixture(selectedReleaseSha = releaseSha) {
     '--installer-sha256', sha256(files.installer),
     '--zip-sha256', sha256(files.zip),
     '--checksum-sha256', sha256(files.checksum),
+    '--release-sequence', releaseSequence,
+    '--companion-version', companionVersion,
+    '--update-manifest-sha256', sha256(files.updateManifest),
   ];
   return { ...environment, files, args, originalArgs: [...args], releaseSha: selectedReleaseSha };
 }
@@ -217,6 +290,8 @@ function run(
       RUNTIME_RAIDERS_TEST_MODE: '1',
       RUNTIME_RAIDERS_ARTIFACT_ROOT: environment.artifactRoot,
       RUNTIME_RAIDERS_TEST_LOG: environment.commandLog,
+      RUNTIME_RAIDERS_CURL: join(environment.fakes, 'curl'),
+      RUNTIME_RAIDERS_NODE: process.execPath,
       ...extraEnvironment,
     },
   });
@@ -227,6 +302,7 @@ function runPublish(f: PublicationFixture, extraEnvironment: NodeJS.ProcessEnv =
     [6, f.files.installer],
     [8, f.files.zip],
     [10, f.files.checksum],
+    [16, f.files.updateManifest],
   ];
   for (const [argument, file] of sourceArguments) {
     if (f.args[argument] === f.originalArgs[argument] && existsSync(file)) {
@@ -234,6 +310,24 @@ function runPublish(f: PublicationFixture, extraEnvironment: NodeJS.ProcessEnv =
     }
   }
   return run(f, f.args, extraEnvironment);
+}
+
+function setPublicationIdentity(
+  f: PublicationFixture,
+  selectedReleaseSha: string,
+  selectedReleaseSequence: number,
+  selectedCompanionVersion = companionVersion,
+): void {
+  f.args[4] = selectedReleaseSha;
+  f.args[12] = String(selectedReleaseSequence);
+  f.args[14] = selectedCompanionVersion;
+  writeFileSync(f.files.updateManifest, publicManifest(
+    selectedReleaseSha,
+    selectedReleaseSequence,
+    selectedCompanionVersion,
+    sha256(f.files.zip),
+  ));
+  f.args[16] = sha256(f.files.updateManifest);
 }
 
 function runStatus(f: PublicationFixture, extraEnvironment: NodeJS.ProcessEnv = {}) {
@@ -283,13 +377,83 @@ function releaseBytes(artifactRoot: string, sha: string) {
     installer: readFileSync(join(release, 'install.sh')),
     zip: readFileSync(zip),
     checksum: readFileSync(checksum),
+    updateManifest: readFileSync(join(release, 'downloads', 'runtime-raiders-agent.update.json')),
     manifest: readFileSync(join(release, '.release-manifest')),
   };
 }
 
+function createSelectedV1Release(f: PublicationFixture, selectedReleaseSha: string): string {
+  const release = join(f.artifactRoot, 'releases', selectedReleaseSha);
+  const downloads = join(release, 'downloads');
+  mkdirSync(downloads, { recursive: true, mode: 0o755 });
+  chmodSync(release, 0o755);
+  chmodSync(downloads, 0o755);
+  const installer = join(release, 'install.sh');
+  const zip = join(downloads, 'runtime-raiders-agent.zip');
+  const checksum = join(downloads, 'runtime-raiders-agent.zip.sha256');
+  writeFileSync(installer, readFileSync(f.files.installer), { mode: 0o644 });
+  writeFileSync(zip, readFileSync(f.files.zip), { mode: 0o644 });
+  writeFileSync(checksum, readFileSync(f.files.checksum), { mode: 0o644 });
+  const manifest = join(release, '.release-manifest');
+  writeFileSync(manifest, [
+    'version=1',
+    `release_sha=${selectedReleaseSha}`,
+    `installer_sha256=${sha256(installer)}`,
+    `zip_sha256=${sha256(zip)}`,
+    `checksum_sha256=${sha256(checksum)}`,
+    '',
+  ].join('\n'), { mode: 0o600 });
+  symlinkSync(`releases/${selectedReleaseSha}`, join(f.artifactRoot, 'current'));
+  return [
+    `active_release=${selectedReleaseSha}`,
+    `installer_sha256=${sha256(installer)}`,
+    `zip_sha256=${sha256(zip)}`,
+    `checksum_sha256=${sha256(checksum)}`,
+    '',
+  ].join('\n');
+}
+
+function createStoredV2Release(
+  f: PublicationFixture,
+  selectedReleaseSha: string,
+  selectedReleaseSequence: number,
+): string {
+  const release = join(f.artifactRoot, 'releases', selectedReleaseSha);
+  const downloads = join(release, 'downloads');
+  mkdirSync(downloads, { recursive: true, mode: 0o755 });
+  chmodSync(release, 0o755);
+  chmodSync(downloads, 0o755);
+  const installer = join(release, 'install.sh');
+  const zip = join(downloads, 'runtime-raiders-agent.zip');
+  const checksum = join(downloads, 'runtime-raiders-agent.zip.sha256');
+  const updateManifest = join(downloads, 'runtime-raiders-agent.update.json');
+  writeFileSync(installer, readFileSync(f.files.installer), { mode: 0o644 });
+  writeFileSync(zip, readFileSync(f.files.zip), { mode: 0o644 });
+  writeFileSync(checksum, readFileSync(f.files.checksum), { mode: 0o644 });
+  writeFileSync(updateManifest, publicManifest(
+    selectedReleaseSha,
+    selectedReleaseSequence,
+    companionVersion,
+    sha256(zip),
+  ), { mode: 0o644 });
+  writeFileSync(join(release, '.release-manifest'), [
+    'version=2',
+    `release_sha=${selectedReleaseSha}`,
+    `release_sequence=${selectedReleaseSequence}`,
+    `companion_version=${companionVersion}`,
+    `update_protocol_version=${updateProtocolVersion}`,
+    `installer_sha256=${sha256(installer)}`,
+    `zip_sha256=${sha256(zip)}`,
+    `checksum_sha256=${sha256(checksum)}`,
+    `update_manifest_sha256=${sha256(updateManifest)}`,
+    '',
+  ].join('\n'), { mode: 0o600 });
+  return release;
+}
+
 function expectNoTemporaryPublicationPaths(artifactRoot: string) {
   expect(readdirSync(artifactRoot).filter((name) =>
-    name.startsWith('.stage.') || name.startsWith('.current.'),
+    name.startsWith('.stage.') || name.startsWith('.current.') || name.startsWith('.verify.'),
   )).toEqual([]);
 }
 
@@ -315,6 +479,9 @@ function runScript(
         '--installer-sha256', sha256(files.installer),
         '--zip-sha256', sha256(files.zip),
         '--checksum-sha256', sha256(files.checksum),
+        '--release-sequence', releaseSequence,
+        '--companion-version', companionVersion,
+        '--update-manifest-sha256', sha256(files.updateManifest),
       ]
     : ['status'];
   return spawnSync('bash', [SCRIPT, ...args], {
@@ -325,6 +492,8 @@ function runScript(
       RUNTIME_RAIDERS_TEST_MODE: '1',
       RUNTIME_RAIDERS_ARTIFACT_ROOT: environment.artifactRoot,
       RUNTIME_RAIDERS_TEST_LOG: environment.commandLog,
+      RUNTIME_RAIDERS_CURL: join(environment.fakes, 'curl'),
+      RUNTIME_RAIDERS_NODE: process.execPath,
     },
   });
 }
@@ -341,11 +510,21 @@ describe('Runtime Raiders artifact publication', () => {
   it.each([
     ['uppercase release SHA', (f: PublicationFixture) => { f.args[4] = releaseSha.toUpperCase(); }],
     ['short installer digest', (f: PublicationFixture) => { f.args[6] = 'a'.repeat(63); }],
+    ['zero release sequence', (f: PublicationFixture) => { f.args[12] = '0'; }],
+    ['noncanonical release sequence', (f: PublicationFixture) => { f.args[12] = '01'; }],
+    ['unsafe release sequence', (f: PublicationFixture) => { f.args[12] = '9007199254740992'; }],
+    ['empty companion version', (f: PublicationFixture) => { f.args[14] = ''; }],
+    ['unsafe companion version', (f: PublicationFixture) => { f.args[14] = '0.2.0 beta'; }],
     ['missing installer', (f: PublicationFixture) => { unlinkSync(f.files.installer); }],
+    ['missing update manifest', (f: PublicationFixture) => { unlinkSync(f.files.updateManifest); }],
     ['empty ZIP', (f: PublicationFixture) => { writeFileSync(f.files.zip, ''); }],
     ['symlinked checksum', (f: PublicationFixture) => {
       unlinkSync(f.files.checksum);
       symlinkSync(f.files.zip, f.files.checksum);
+    }],
+    ['symlinked update manifest', (f: PublicationFixture) => {
+      unlinkSync(f.files.updateManifest);
+      symlinkSync(f.files.zip, f.files.updateManifest);
     }],
     ['unrendered Team ID', (f: PublicationFixture) => {
       writeFileSync(f.files.installer, "TEAM_ID='__RUNTIME_RAIDERS_TEAM_ID__'\n");
@@ -403,9 +582,57 @@ describe('Runtime Raiders artifact publication', () => {
   });
 
   it.each([
+    ['release sequence', '--release-sequence'],
+    ['companion version', '--companion-version'],
+    ['update manifest digest', '--update-manifest-sha256'],
+  ])('requires %s exactly once', (_name, option) => {
+    const missing = publicationFixture();
+    const optionIndex = missing.args.indexOf(option);
+    missing.args.splice(optionIndex, 2);
+    expectRejectedBeforeSelection(missing, run(missing, missing.args));
+
+    const duplicate = publicationFixture();
+    const duplicateIndex = duplicate.args.indexOf(option);
+    duplicate.args.push(option, duplicate.args[duplicateIndex + 1]);
+    expectRejectedBeforeSelection(duplicate, run(duplicate, duplicate.args));
+  });
+
+  it.each([
+    ['manifest version', (manifest: Record<string, unknown>) => { manifest.manifest_version = 2; }],
+    ['release SHA', (manifest: Record<string, unknown>) => { manifest.release_sha = 'a'.repeat(40); }],
+    ['release sequence', (manifest: Record<string, unknown>) => { manifest.release_sequence = 2; }],
+    ['companion version', (manifest: Record<string, unknown>) => { manifest.companion_version = '9.9.9'; }],
+    ['update protocol', (manifest: Record<string, unknown>) => { manifest.update_protocol_version = 2; }],
+    ['ZIP digest', (manifest: Record<string, unknown>) => { manifest.zip_sha256 = 'a'.repeat(64); }],
+    ['ZIP URL', (manifest: Record<string, unknown>) => { manifest.zip_url = 'https://example.invalid/agent.zip'; }],
+    ['extra key', (manifest: Record<string, unknown>) => { manifest.untrusted_url = 'https://example.invalid'; }],
+  ])('rejects a public manifest with mismatched %s', (_name, mutate) => {
+    const f = publicationFixture();
+    const manifest = JSON.parse(readFileSync(f.files.updateManifest, 'utf8'));
+    mutate(manifest);
+    writeFileSync(f.files.updateManifest, `${JSON.stringify(manifest)}\n`);
+
+    const result = runPublish(f);
+
+    expectRejectedBeforeSelection(f, result);
+  });
+
+  it('requires the source directory to contain only the signed quartet', () => {
+    const f = publicationFixture();
+    writeFileSync(join(f.files.source, 'provider-user-secret.txt'), 'private-extra');
+
+    const result = runPublish(f);
+
+    expectRejectedBeforeSelection(f, result);
+    expect(result.stderr).not.toContain('provider-user-secret');
+    expect(result.stderr).not.toContain('private-extra');
+  });
+
+  it.each([
     ['installer', 6],
     ['ZIP', 8],
     ['checksum', 10],
+    ['update manifest', 16],
   ])('rejects a supplied %s digest that does not match its source', (_name, argument) => {
     const f = publicationFixture();
     f.args[argument] = 'a'.repeat(64);
@@ -422,12 +649,12 @@ describe('Runtime Raiders artifact publication', () => {
   ])('preserves the prior selection and release bytes when %s fails', (_name, failureVariable) => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
-    f.args[4] = priorSha;
+    setPublicationIdentity(f, priorSha, 1);
     const priorPublication = runPublish(f);
     expect(priorPublication.status, priorPublication.stderr).toBe(0);
     const priorBytes = releaseBytes(f.artifactRoot, priorSha);
 
-    f.args[4] = releaseSha;
+    setPublicationIdentity(f, releaseSha, 2);
     const failed = runPublish(f, {
       [failureVariable]: '1',
       RUNTIME_RAIDERS_TEST_SENSITIVE: `${f.root} provider-user-secret signed-test-archive ABCDE12345`,
@@ -443,11 +670,11 @@ describe('Runtime Raiders artifact publication', () => {
   it('refuses concurrent publication when the fd lock is busy without changing selected state', () => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
-    f.args[4] = priorSha;
+    setPublicationIdentity(f, priorSha, 1);
     const priorPublication = runPublish(f);
     expect(priorPublication.status, priorPublication.stderr).toBe(0);
     const priorBytes = releaseBytes(f.artifactRoot, priorSha);
-    f.args[4] = releaseSha;
+    setPublicationIdentity(f, releaseSha, 2);
     const concurrent = runPublish(f, { RUNTIME_RAIDERS_TEST_FLOCK_BUSY: '1' });
 
     expect(concurrent.status).not.toBe(0);
@@ -459,50 +686,142 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readFileSync(f.commandLog, 'utf8')).toContain('flock -n 9');
   });
 
-  it('reselects an existing exact immutable release', () => {
+  it('rejects reuse of an existing v2 release and sequence', () => {
     const f = publicationFixture();
     const first = runPublish(f);
     expect(first.status, first.stderr).toBe(0);
     const publishedBytes = releaseBytes(f.artifactRoot, releaseSha);
 
-    const reselected = runPublish(f);
+    const reused = runPublish(f);
 
-    expect(reselected.status, reselected.stderr).toBe(0);
+    expectContentFreeFailure(f, reused);
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
     expect(releaseBytes(f.artifactRoot, releaseSha)).toEqual(publishedBytes);
   });
 
+  it('selects only a release sequence greater than every stored valid v2 release', () => {
+    const f = publicationFixture();
+    createStoredV2Release(f, 'a'.repeat(40), 1);
+    setPublicationIdentity(f, releaseSha, 2);
+
+    const published = runPublish(f);
+
+    expect(published.status, published.stderr).toBe(0);
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${releaseSha}`);
+  });
+
   it.each([
-    ['installer', 6],
-    ['ZIP', 8],
-    ['checksum', 10],
-  ])('refuses an existing release whose manifest %s digest differs from the approval', (_name, argument) => {
+    ['reused', 2],
+    ['downgraded', 1],
+  ])('rejects a %s sequence even when the highest release was withdrawn', (_name, requestedSequence) => {
+    const withdrawnSha = 'a'.repeat(40);
+    const f = publicationFixture();
+    setPublicationIdentity(f, withdrawnSha, 2);
+    expect(runPublish(f).status).toBe(0);
+    expect(runWithdraw(f, withdrawnSha).status).toBe(0);
+    setPublicationIdentity(f, releaseSha, requestedSequence);
+
+    const refused = runPublish(f);
+
+    expectRejectedBeforeSelection(f, refused);
+    expect(existsSync(join(f.artifactRoot, 'releases', withdrawnSha))).toBe(true);
+  });
+
+  it('fails closed when two valid stored v2 releases reuse a sequence', () => {
+    const f = publicationFixture();
+    createStoredV2Release(f, 'a'.repeat(40), 1);
+    createStoredV2Release(f, 'c'.repeat(40), 1);
+    setPublicationIdentity(f, releaseSha, 2);
+
+    const refused = runPublish(f);
+
+    expectRejectedBeforeSelection(f, refused);
+  });
+
+  it.each([
+    ['damaged v2 release', (f: PublicationFixture) => {
+      const release = createStoredV2Release(f, 'a'.repeat(40), 1);
+      appendFileSync(join(release, '.release-manifest'), 'extra=true\n');
+    }],
+    ['malformed release directory name', (f: PublicationFixture) => {
+      createStoredV2Release(f, 'not-a-release-sha', 1);
+    }],
+    ['symlinked release directory', (f: PublicationFixture) => {
+      symlinkSync(f.root, join(f.artifactRoot, 'releases', 'a'.repeat(40)), 'dir');
+    }],
+    ['regular file release entry', (f: PublicationFixture) => {
+      writeFileSync(join(f.artifactRoot, 'releases', 'a'.repeat(40)), 'unsafe');
+    }],
+  ])('does not skip a %s while selecting a new release', (_name, damageStore) => {
+    const f = publicationFixture();
+    damageStore(f);
+    setPublicationIdentity(f, releaseSha, 2);
+
+    const refused = runPublish(f);
+
+    expectRejectedBeforeSelection(f, refused);
+  });
+
+  it('leaves the prior selector unchanged when public and private manifests disagree', () => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
+    setPublicationIdentity(f, priorSha, 1);
     expect(runPublish(f).status).toBe(0);
-    const existingBytes = releaseBytes(f.artifactRoot, releaseSha);
-    f.args[4] = priorSha;
-    expect(runPublish(f).status).toBe(0);
-    const priorBytes = releaseBytes(f.artifactRoot, priorSha);
+    setPublicationIdentity(f, releaseSha, 2);
+    const manifest = JSON.parse(readFileSync(f.files.updateManifest, 'utf8'));
+    manifest.release_sequence = 3;
+    writeFileSync(f.files.updateManifest, `${JSON.stringify(manifest)}\n`);
+    f.args[16] = sha256(f.files.updateManifest);
 
-    f.args[4] = releaseSha;
-    f.args[argument] = 'a'.repeat(64);
     const refused = runPublish(f);
 
     expectContentFreeFailure(f, refused);
     expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
-    expect(releaseBytes(f.artifactRoot, priorSha)).toEqual(priorBytes);
-    expect(releaseBytes(f.artifactRoot, releaseSha)).toEqual(existingBytes);
+    expect(existsSync(join(f.artifactRoot, 'releases', releaseSha))).toBe(false);
+  });
+
+  it.each([
+    ['ZIP', 'RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_ZIP_FETCH'],
+    ['JSON', 'RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_MANIFEST_FETCH'],
+    ['strict JSON validation', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_MANIFEST_FETCH'],
+  ])('restores the prior selector and retains the immutable release after failed public %s re-fetch', (_name, failure) => {
+    const priorSha = 'a'.repeat(40);
+    const f = publicationFixture();
+    setPublicationIdentity(f, priorSha, 1);
+    expect(runPublish(f).status).toBe(0);
+    setPublicationIdentity(f, releaseSha, 2);
+
+    const failed = runPublish(f, { [failure]: '1' });
+
+    expectContentFreeFailure(f, failed);
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
+    expect(releaseBytes(f.artifactRoot, releaseSha).updateManifest).toEqual(
+      readFileSync(f.files.updateManifest),
+    );
+    expectNoTemporaryPublicationPaths(f.artifactRoot);
+  });
+
+  it('removes a first selector but retains the immutable release after failed public re-fetch', () => {
+    const f = publicationFixture();
+
+    const failed = runPublish(f, { RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_MANIFEST_FETCH: '1' });
+
+    expectContentFreeFailure(f, failed);
+    expect(existsSync(join(f.artifactRoot, 'current'))).toBe(false);
+    expect(releaseBytes(f.artifactRoot, releaseSha).updateManifest).toEqual(
+      readFileSync(f.files.updateManifest),
+    );
+    expectNoTemporaryPublicationPaths(f.artifactRoot);
   });
 
   it('does not clobber a release directory that appears during the release rename', () => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
-    f.args[4] = priorSha;
+    setPublicationIdentity(f, priorSha, 1);
     expect(runPublish(f).status).toBe(0);
     const priorBytes = releaseBytes(f.artifactRoot, priorSha);
 
-    f.args[4] = releaseSha;
+    setPublicationIdentity(f, releaseSha, 2);
     const raced = runPublish(f, { RUNTIME_RAIDERS_TEST_RACE_RELEASE: '1' });
 
     expectContentFreeFailure(f, raced);
@@ -516,10 +835,10 @@ describe('Runtime Raiders artifact publication', () => {
   it('automatically releases the lock and permits withdrawal after committed publication', () => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
-    f.args[4] = priorSha;
+    setPublicationIdentity(f, priorSha, 1);
     expect(runPublish(f).status).toBe(0);
 
-    f.args[4] = releaseSha;
+    setPublicationIdentity(f, releaseSha, 2);
     const published = runPublish(f, { RUNTIME_RAIDERS_TEST_FAIL_LOCK_CLEANUP: '1' });
 
     expect(published.status, published.stderr).toBe(0);
@@ -547,10 +866,10 @@ describe('Runtime Raiders artifact publication', () => {
     (signal) => {
       const priorSha = 'a'.repeat(40);
       const f = publicationFixture();
-      f.args[4] = priorSha;
+      setPublicationIdentity(f, priorSha, 1);
       expect(runPublish(f).status).toBe(0);
 
-      f.args[4] = releaseSha;
+      setPublicationIdentity(f, releaseSha, 2);
       const published = runPublish(f, {
         BASH_ENV: postCommitBashEnv(f, 'signal'),
         RUNTIME_RAIDERS_TEST_POSTCOMMIT_SIGNAL: signal,
@@ -569,11 +888,11 @@ describe('Runtime Raiders artifact publication', () => {
     (signal) => {
       const priorSha = 'a'.repeat(40);
       const f = publicationFixture();
-      f.args[4] = priorSha;
+      setPublicationIdentity(f, priorSha, 1);
       expect(runPublish(f).status).toBe(0);
       const priorBytes = releaseBytes(f.artifactRoot, priorSha);
 
-      f.args[4] = releaseSha;
+      setPublicationIdentity(f, releaseSha, 2);
       const interrupted = runPublish(f, { RUNTIME_RAIDERS_TEST_PRECOMMIT_SIGNAL: signal });
 
       expectContentFreeFailure(f, interrupted);
@@ -588,14 +907,14 @@ describe('Runtime Raiders artifact publication', () => {
     const f = publicationFixture();
     const existingPublication = runPublish(f);
     expect(existingPublication.status, existingPublication.stderr).toBe(0);
-    f.args[4] = priorSha;
+    setPublicationIdentity(f, priorSha, 2);
     const priorPublication = runPublish(f);
     expect(priorPublication.status, priorPublication.stderr).toBe(0);
     const priorBytes = releaseBytes(f.artifactRoot, priorSha);
     const existingInstaller = join(f.artifactRoot, 'releases', releaseSha, 'install.sh');
     writeFileSync(existingInstaller, 'tampered');
 
-    f.args[4] = releaseSha;
+    setPublicationIdentity(f, releaseSha, 3);
     const refused = runPublish(f);
 
     expect(refused.status).not.toBe(0);
@@ -606,17 +925,22 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readFileSync(existingInstaller, 'utf8')).toBe('tampered');
   });
 
-  it('publishes the canonical triplet atomically with private manifest-backed status', () => {
+  it('publishes the canonical v2 quartet atomically with private manifest-backed status', () => {
     const environment = fixture();
     const files = sourceTriplet(environment.artifactRoot);
     const installerDigest = sha256(files.installer);
     const zipDigest = sha256(files.zip);
     const checksumDigest = sha256(files.checksum);
+    const updateManifestDigest = sha256(files.updateManifest);
     const expectedOutput = [
       `active_release=${releaseSha}`,
+      `release_sequence=${releaseSequence}`,
+      `companion_version=${companionVersion}`,
+      `update_protocol_version=${updateProtocolVersion}`,
       `installer_sha256=${installerDigest}`,
       `zip_sha256=${zipDigest}`,
       `checksum_sha256=${checksumDigest}`,
+      `update_manifest_sha256=${updateManifestDigest}`,
       '',
     ].join('\n');
 
@@ -634,8 +958,14 @@ describe('Runtime Raiders artifact publication', () => {
     expect(readFileSync(join(current, 'install.sh'))).toEqual(readFileSync(files.installer));
     expect(readFileSync(join(downloads, 'runtime-raiders-agent.zip'))).toEqual(readFileSync(files.zip));
     expect(readFileSync(join(downloads, 'runtime-raiders-agent.zip.sha256'))).toEqual(readFileSync(files.checksum));
+    expect(readFileSync(join(downloads, 'runtime-raiders-agent.update.json'))).toEqual(
+      readFileSync(files.updateManifest),
+    );
     expect(readFileSync(join(current, 'downloads/runtime-raiders-agent.zip'))).toEqual(readFileSync(files.zip));
     expect(readFileSync(join(current, 'downloads/runtime-raiders-agent.zip.sha256'))).toEqual(readFileSync(files.checksum));
+    expect(readFileSync(join(current, 'downloads/runtime-raiders-agent.update.json'))).toEqual(
+      readFileSync(files.updateManifest),
+    );
     expect(existsSync(join(release, 'runtime-raiders-agent.zip'))).toBe(false);
     expect(existsSync(join(release, 'runtime-raiders-agent.zip.sha256'))).toBe(false);
     expect(mode(release)).toBe(0o755);
@@ -645,11 +975,34 @@ describe('Runtime Raiders artifact publication', () => {
     expect(mode(downloads)).toBe(0o755);
     expect(mode(join(downloads, 'runtime-raiders-agent.zip'))).toBe(0o644);
     expect(mode(join(downloads, 'runtime-raiders-agent.zip.sha256'))).toBe(0o644);
+    expect(mode(join(downloads, 'runtime-raiders-agent.update.json'))).toBe(0o644);
     expect(mode(join(release, '.release-manifest'))).toBe(0o600);
+    expect(readdirSync(release).sort()).toEqual(['.release-manifest', 'downloads', 'install.sh']);
+    expect(readdirSync(downloads).sort()).toEqual([
+      'runtime-raiders-agent.update.json',
+      'runtime-raiders-agent.zip',
+      'runtime-raiders-agent.zip.sha256',
+    ]);
+    expect(readFileSync(join(release, '.release-manifest'), 'utf8')).toBe([
+      'version=2',
+      `release_sha=${releaseSha}`,
+      `release_sequence=${releaseSequence}`,
+      `companion_version=${companionVersion}`,
+      `update_protocol_version=${updateProtocolVersion}`,
+      `installer_sha256=${installerDigest}`,
+      `zip_sha256=${zipDigest}`,
+      `checksum_sha256=${checksumDigest}`,
+      `update_manifest_sha256=${updateManifestDigest}`,
+      '',
+    ].join('\n'));
 
     const commands = readFileSync(environment.commandLog, 'utf8');
     expect(commands.match(/install -d -o root -g root -m 0755/g)).toHaveLength(2);
-    expect(commands.match(/install -o root -g root -m 0644/g)).toHaveLength(3);
+    expect(commands.match(/install -o root -g root -m 0644/g)).toHaveLength(4);
+    expect(commands).toContain(`curl --proto =https --fail --silent --show-error --max-time 30 --max-filesize 134217728 --output`);
+    expect(commands).toContain(zipUrl);
+    expect(commands).toContain('https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json');
+    expect(commands).not.toContain('--location');
     expect(commands).toContain('chown root:root');
 
     const status = runScript(files, environment, 'status');
@@ -703,6 +1056,21 @@ describe('Runtime Raiders artifact publication', () => {
 });
 
 describe('Runtime Raiders artifact status validation', () => {
+  it('preserves the exact private v1 manifest layout and status output', () => {
+    const f = publicationFixture();
+    const expectedStatus = createSelectedV1Release(f, releaseSha);
+
+    const status = runStatus(f);
+
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toBe(expectedStatus);
+    expect(status.stderr).toBe('');
+    expect(readdirSync(join(f.artifactRoot, 'releases', releaseSha, 'downloads')).sort()).toEqual([
+      'runtime-raiders-agent.zip',
+      'runtime-raiders-agent.zip.sha256',
+    ]);
+  });
+
   it.each([
     ['absolute target', `/releases/${releaseSha}`],
     ['parent traversal', `../releases/${releaseSha}`],
@@ -789,17 +1157,18 @@ describe('Runtime Raiders artifact status validation', () => {
   it.each([
     ['release root', (release: string) => join(release, 'provider-user-secret.txt')],
     ['downloads', (release: string) => join(release, 'downloads', 'provider-user-secret.txt')],
-  ])('refuses to reselect an immutable release containing an unexpected entry in %s', (_name, extraPath) => {
+  ])('refuses publication when a stored immutable release contains an unexpected entry in %s', (_name, extraPath) => {
     const priorSha = 'a'.repeat(40);
+    const nextSha = 'c'.repeat(40);
     const f = publicationFixture();
+    expect(runPublish(f).status).toBe(0);
+    setPublicationIdentity(f, priorSha, 2);
     expect(runPublish(f).status).toBe(0);
     const existingRelease = join(f.artifactRoot, 'releases', releaseSha);
     const extra = extraPath(existingRelease);
     writeFileSync(extra, 'private-extra');
-    f.args[4] = priorSha;
-    expect(runPublish(f).status).toBe(0);
 
-    f.args[4] = releaseSha;
+    setPublicationIdentity(f, nextSha, 3);
     const refused = runPublish(f);
 
     expectContentFreeFailure(f, refused);
@@ -835,6 +1204,7 @@ describe('Runtime Raiders artifact status validation', () => {
   it.each([
     ['ZIP', 'runtime-raiders-agent.zip'],
     ['checksum', 'runtime-raiders-agent.zip.sha256'],
+    ['update manifest', 'runtime-raiders-agent.update.json'],
   ])('rejects a symlinked nested %s', (_name, filename) => {
     const f = publicationFixture();
     expect(runPublish(f).status).toBe(0);
@@ -853,6 +1223,7 @@ describe('Runtime Raiders artifact status validation', () => {
     ['installer', 'install.sh', 0o600],
     ['ZIP', 'downloads/runtime-raiders-agent.zip', 0o600],
     ['checksum', 'downloads/runtime-raiders-agent.zip.sha256', 0o600],
+    ['update manifest', 'downloads/runtime-raiders-agent.update.json', 0o600],
     ['manifest', '.release-manifest', 0o644],
   ])('rejects the wrong mode on the %s', (_name, relativePath, wrongMode) => {
     const f = publicationFixture();
@@ -868,6 +1239,7 @@ describe('Runtime Raiders artifact status validation', () => {
     ['installer', 'install.sh'],
     ['ZIP', 'downloads/runtime-raiders-agent.zip'],
     ['checksum', 'downloads/runtime-raiders-agent.zip.sha256'],
+    ['update manifest', 'downloads/runtime-raiders-agent.update.json'],
     ['manifest', '.release-manifest'],
   ])('rejects a release missing its %s', (_name, relativePath) => {
     const f = publicationFixture();
@@ -883,6 +1255,7 @@ describe('Runtime Raiders artifact status validation', () => {
     ['installer', 'install.sh'],
     ['ZIP', 'downloads/runtime-raiders-agent.zip'],
     ['checksum', 'downloads/runtime-raiders-agent.zip.sha256'],
+    ['update manifest', 'downloads/runtime-raiders-agent.update.json'],
   ])('rejects a calculated %s digest mismatch', (_name, relativePath) => {
     const f = publicationFixture();
     expect(runPublish(f).status).toBe(0);

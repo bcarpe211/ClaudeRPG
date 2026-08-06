@@ -388,7 +388,8 @@ if [ "$hostname_ok" -eq 1 ] && [ "$dns_ok" -eq 1 ]; then
   for artifact_path in \
     /install.sh \
     /downloads/runtime-raiders-agent.zip \
-    /downloads/runtime-raiders-agent.zip.sha256; do
+    /downloads/runtime-raiders-agent.zip.sha256 \
+    /downloads/runtime-raiders-agent.update.json; do
     artifact_status=$(curl --silent --show-error --max-time 10 --output /dev/null \
       --write-out '%{http_code}' --noproxy '*' \
       --resolve "raiders.redlattice.com:443:$resolved_local" \

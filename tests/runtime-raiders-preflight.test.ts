@@ -150,7 +150,8 @@ esac`);
 case "$*" in
   *https://raiders.redlattice.com/install.sh*|\
   *https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip*|\
-  *https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256*)
+  *https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256*|\
+  *https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json*)
     printf '%s' "\${FAKE_ARTIFACT_HTTP_STATUS:-404}" ;;
   *https://raiders.redlattice.com/health*) [ "\${FAKE_NEW_HTTPS:-1}" = 1 ] ;;
   *https://clauderpg.redlattice.com/health*) [ "\${FAKE_OLD_HTTPS:-1}" = 1 ] ;;
@@ -925,6 +926,20 @@ describe('Runtime Raiders Pi preflight', () => {
     const result = run(fixture(), { FAKE_ARTIFACT_HTTP_STATUS: '200' });
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('FAIL artifact routes unpublished');
+  });
+
+  it('requires the exact unpublished quartet route set including the public update manifest', () => {
+    const result = run(fixture());
+    const artifactRouteRequests = result.commands.split('\n').filter((command) =>
+      command.startsWith('curl ') && command.includes('https://raiders.redlattice.com/') &&
+      !command.includes('/health'),
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(artifactRouteRequests).toHaveLength(4);
+    expect(artifactRouteRequests.some((command) =>
+      command.endsWith('https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json'),
+    )).toBe(true);
   });
 
   it('reports every gate ready only when all checks pass', () => {

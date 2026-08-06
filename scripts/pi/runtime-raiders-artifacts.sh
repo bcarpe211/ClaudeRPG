@@ -4,16 +4,30 @@ umask 077
 
 PRODUCTION_ROOT=/var/lib/runtime-raiders
 ARTIFACT_ROOT=$PRODUCTION_ROOT
+CURL=/usr/bin/curl
+NODE=/usr/bin/node
 if [[ ${RUNTIME_RAIDERS_TEST_MODE:-0} == 1 ]]; then
   ARTIFACT_ROOT=${RUNTIME_RAIDERS_ARTIFACT_ROOT:?test artifact root is required}
+  CURL=${RUNTIME_RAIDERS_CURL:?test curl is required}
+  NODE=${RUNTIME_RAIDERS_NODE:?test node is required}
 fi
 RELEASES=$ARTIFACT_ROOT/releases
 CURRENT=$ARTIFACT_ROOT/current
+PUBLIC_ZIP_URL=https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip
+PUBLIC_UPDATE_MANIFEST_URL=https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json
 
 die() { printf 'runtime-raiders-artifacts: %s\n' "$1" >&2; exit 1; }
 require_root() { test "$(id -u)" = 0 || die 'root is required'; }
 require_release_sha() { [[ $1 =~ ^[0-9a-f]{40}$ ]] || die 'invalid release SHA'; }
 require_digest() { [[ $1 =~ ^[0-9a-f]{64}$ ]] || die "invalid $2 SHA-256"; }
+require_release_sequence() {
+  [[ $1 =~ ^[1-9][0-9]*$ ]] || die 'invalid release sequence'
+  test "${#1}" -le 16 && test "$1" -le 9007199254740991 || die 'invalid release sequence'
+}
+require_companion_version() {
+  [[ $1 =~ ^[A-Za-z0-9._+-]+$ ]] || die 'invalid companion version'
+  test "${#1}" -le 100 || die 'invalid companion version'
+}
 sha256_file() { sha256sum -- "$1" 2>/dev/null | awk 'NR == 1 && NF >= 1 { print $1; exit }'; }
 metadata() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null; }
 ownership() { stat -c '%u:%g' -- "$1" 2>/dev/null; }
@@ -64,6 +78,49 @@ acquire_publication_lock() {
   fi
 }
 
+validate_public_manifest() {
+  local manifest=$1
+  local expected_release_sha=$2
+  local expected_release_sequence=$3
+  local expected_companion_version=$4
+  local expected_zip_sha256=$5
+  local byte_count
+  require_regular_file "$manifest" 'public update manifest'
+  byte_count=$(wc -c < "$manifest" 2>/dev/null | tr -d ' ') ||
+    die 'public update manifest is invalid'
+  [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le 65536 ||
+    die 'public update manifest is invalid'
+  if ! "$NODE" - "$manifest" "$expected_release_sha" "$expected_release_sequence" \
+      "$expected_companion_version" "$expected_zip_sha256" <<'NODE' >/dev/null 2>&1
+const fs = require('node:fs');
+const [path, releaseSHA, releaseSequenceText, companionVersion, zipSHA256] = process.argv.slice(2);
+const bytes = fs.readFileSync(path);
+if (bytes.length === 0 || bytes.length > 65536) throw new Error('invalid manifest');
+const text = bytes.toString('utf8');
+const object = JSON.parse(text);
+const expected = {
+  companion_version: companionVersion,
+  manifest_version: 1,
+  release_sequence: Number(releaseSequenceText),
+  release_sha: releaseSHA,
+  update_protocol_version: 1,
+  zip_sha256: zipSHA256,
+  zip_url: 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip',
+};
+if (text !== `${JSON.stringify(expected)}\n`) throw new Error('invalid manifest');
+if (Object.getPrototypeOf(object) !== Object.prototype) throw new Error('invalid manifest');
+if (Object.keys(object).length !== 7) throw new Error('invalid manifest');
+for (const key of Object.keys(expected)) {
+  if (!Object.prototype.hasOwnProperty.call(object, key) || object[key] !== expected[key]) {
+    throw new Error('invalid manifest');
+  }
+}
+NODE
+  then
+    die 'public update manifest is invalid'
+  fi
+}
+
 validate_source() {
   test -d "$SOURCE" && test ! -L "$SOURCE" || die 'source must be a nonsymlink directory'
   SOURCE=$(canonicalize "$SOURCE" 'source')
@@ -72,15 +129,24 @@ validate_source() {
   SOURCE_INSTALLER=$SOURCE/install.sh
   SOURCE_ZIP=$SOURCE/runtime-raiders-agent.zip
   SOURCE_CHECKSUM=$SOURCE/runtime-raiders-agent.zip.sha256
+  SOURCE_UPDATE_MANIFEST=$SOURCE/runtime-raiders-agent.update.json
   require_regular_file "$SOURCE_INSTALLER" 'source installer'
   require_regular_file "$SOURCE_ZIP" 'source ZIP'
   require_regular_file "$SOURCE_CHECKSUM" 'source checksum'
+  require_regular_file "$SOURCE_UPDATE_MANIFEST" 'source update manifest'
+  local source_entries
+  shopt -s nullglob dotglob
+  source_entries=("$SOURCE"/*)
+  shopt -u nullglob dotglob
+  test "${#source_entries[@]}" = 4 || die 'source contains unexpected entries'
   SOURCE_INSTALLER=$(canonicalize "$SOURCE_INSTALLER" 'source installer')
   SOURCE_ZIP=$(canonicalize "$SOURCE_ZIP" 'source ZIP')
   SOURCE_CHECKSUM=$(canonicalize "$SOURCE_CHECKSUM" 'source checksum')
+  SOURCE_UPDATE_MANIFEST=$(canonicalize "$SOURCE_UPDATE_MANIFEST" 'source update manifest')
   require_beneath_artifact_root "$SOURCE_INSTALLER" 'source installer'
   require_beneath_artifact_root "$SOURCE_ZIP" 'source ZIP'
   require_beneath_artifact_root "$SOURCE_CHECKSUM" 'source checksum'
+  require_beneath_artifact_root "$SOURCE_UPDATE_MANIFEST" 'source update manifest'
 
   local normalized_installer=$STAGE/normalized-installer
   if ! awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' \
@@ -115,12 +181,16 @@ validate_source() {
   test "$(sha256_file "$SOURCE_INSTALLER")" = "$INSTALLER_SHA256" || die 'installer SHA-256 mismatch'
   test "$(sha256_file "$SOURCE_ZIP")" = "$ZIP_SHA256" || die 'ZIP SHA-256 mismatch'
   test "$(sha256_file "$SOURCE_CHECKSUM")" = "$CHECKSUM_SHA256" || die 'checksum SHA-256 mismatch'
+  test "$(sha256_file "$SOURCE_UPDATE_MANIFEST")" = "$UPDATE_MANIFEST_SHA256" ||
+    die 'update manifest SHA-256 mismatch'
   if ! printf '%s  runtime-raiders-agent.zip\n' "$ZIP_SHA256" > "$STAGE/expected.sha256" 2>/dev/null; then
     die 'failed to stage expected checksum'
   fi
   cmp -s -- "$STAGE/expected.sha256" "$SOURCE_CHECKSUM" ||
     die 'checksum file does not match the approved ZIP'
   rm -f -- "$STAGE/expected.sha256"
+  validate_public_manifest "$SOURCE_UPDATE_MANIFEST" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
+    "$COMPANION_VERSION" "$ZIP_SHA256"
 }
 
 validate_release() {
@@ -130,12 +200,17 @@ validate_release() {
   local downloads=$directory/downloads
   local zip=$downloads/runtime-raiders-agent.zip
   local checksum=$downloads/runtime-raiders-agent.zip.sha256
+  local update_manifest=$downloads/runtime-raiders-agent.update.json
   local manifest=$directory/.release-manifest
   local version_line
   local release_line
+  local sequence_line
+  local companion_version_line
+  local protocol_line
   local installer_line
   local zip_line
   local checksum_line
+  local update_manifest_line
   local extra_line
   local release_entries
   local download_entries
@@ -147,31 +222,74 @@ validate_release() {
   require_regular_file "$zip" 'release ZIP'
   require_regular_file "$checksum" 'release checksum'
   require_regular_file "$manifest" 'release manifest'
+  IFS= read -r version_line < "$manifest" 2>/dev/null || die 'release manifest is invalid'
   shopt -s nullglob dotglob
   release_entries=("$directory"/*)
   download_entries=("$downloads"/*)
   shopt -u nullglob dotglob
   test "${#release_entries[@]}" = 3 || die 'release directory contains unexpected entries'
-  test "${#download_entries[@]}" = 2 || die 'release downloads directory contains unexpected entries'
   test "$(metadata "$installer")" = '0:0:644' || die 'release installer must be owned by root:root with mode 0644'
   test "$(metadata "$zip")" = '0:0:644' || die 'release ZIP must be owned by root:root with mode 0644'
   test "$(metadata "$checksum")" = '0:0:644' || die 'release checksum must be owned by root:root with mode 0644'
   test "$(metadata "$manifest")" = '0:0:600' || die 'release manifest must be owned by root:root with mode 0600'
 
-  {
-    IFS= read -r version_line &&
-      IFS= read -r release_line &&
-      IFS= read -r installer_line &&
-      IFS= read -r zip_line &&
-      IFS= read -r checksum_line &&
-      ! IFS= read -r extra_line
-  } < "$manifest" 2>/dev/null || die 'release manifest is invalid'
-  test "$version_line" = 'version=1' || die 'release manifest is invalid'
+  VALIDATED_MANIFEST_VERSION=
+  VALIDATED_RELEASE_SEQUENCE=
+  VALIDATED_COMPANION_VERSION=
+  VALIDATED_UPDATE_PROTOCOL_VERSION=
+  VALIDATED_UPDATE_MANIFEST_SHA256=
+  case $version_line in
+    version=1)
+      test "${#download_entries[@]}" = 2 || die 'release downloads directory contains unexpected entries'
+      {
+        IFS= read -r version_line &&
+          IFS= read -r release_line &&
+          IFS= read -r installer_line &&
+          IFS= read -r zip_line &&
+          IFS= read -r checksum_line &&
+          ! IFS= read -r extra_line
+      } < "$manifest" 2>/dev/null || die 'release manifest is invalid'
+      test "$version_line" = 'version=1' || die 'release manifest is invalid'
+      VALIDATED_MANIFEST_VERSION=1
+      ;;
+    version=2)
+      require_regular_file "$update_manifest" 'release update manifest'
+      test "${#download_entries[@]}" = 3 || die 'release downloads directory contains unexpected entries'
+      test "$(metadata "$update_manifest")" = '0:0:644' ||
+        die 'release update manifest must be owned by root:root with mode 0644'
+      {
+        IFS= read -r version_line &&
+          IFS= read -r release_line &&
+          IFS= read -r sequence_line &&
+          IFS= read -r companion_version_line &&
+          IFS= read -r protocol_line &&
+          IFS= read -r installer_line &&
+          IFS= read -r zip_line &&
+          IFS= read -r checksum_line &&
+          IFS= read -r update_manifest_line &&
+          ! IFS= read -r extra_line
+      } < "$manifest" 2>/dev/null || die 'release manifest is invalid'
+      test "$version_line" = 'version=2' || die 'release manifest is invalid'
+      [[ $sequence_line == release_sequence=* ]] || die 'release manifest is invalid'
+      [[ $companion_version_line == companion_version=* ]] || die 'release manifest is invalid'
+      test "$protocol_line" = 'update_protocol_version=1' || die 'release manifest is invalid'
+      [[ $update_manifest_line == update_manifest_sha256=* ]] || die 'release manifest is invalid'
+      VALIDATED_MANIFEST_VERSION=2
+      VALIDATED_RELEASE_SEQUENCE=${sequence_line#release_sequence=}
+      VALIDATED_COMPANION_VERSION=${companion_version_line#companion_version=}
+      VALIDATED_UPDATE_PROTOCOL_VERSION=1
+      VALIDATED_UPDATE_MANIFEST_SHA256=${update_manifest_line#update_manifest_sha256=}
+      require_release_sequence "$VALIDATED_RELEASE_SEQUENCE"
+      require_companion_version "$VALIDATED_COMPANION_VERSION"
+      require_digest "$VALIDATED_UPDATE_MANIFEST_SHA256" 'update manifest'
+      ;;
+    *) die 'release manifest is invalid' ;;
+  esac
+
   test "$release_line" = "release_sha=$expected_sha" || die 'release manifest is invalid'
   [[ $installer_line == installer_sha256=* ]] || die 'release manifest is invalid'
   [[ $zip_line == zip_sha256=* ]] || die 'release manifest is invalid'
   [[ $checksum_line == checksum_sha256=* ]] || die 'release manifest is invalid'
-
   VALIDATED_RELEASE_SHA=${release_line#release_sha=}
   VALIDATED_INSTALLER_SHA256=${installer_line#installer_sha256=}
   VALIDATED_ZIP_SHA256=${zip_line#zip_sha256=}
@@ -184,14 +302,121 @@ validate_release() {
   test "$(sha256_file "$zip")" = "$VALIDATED_ZIP_SHA256" || die 'release ZIP SHA-256 mismatch'
   test "$(sha256_file "$checksum")" = "$VALIDATED_CHECKSUM_SHA256" || die 'release checksum SHA-256 mismatch'
   printf '%s  runtime-raiders-agent.zip\n' "$VALIDATED_ZIP_SHA256" | cmp -s - "$checksum" || die 'release checksum file is not canonical'
+  if test "$VALIDATED_MANIFEST_VERSION" = 2; then
+    test "$(sha256_file "$update_manifest")" = "$VALIDATED_UPDATE_MANIFEST_SHA256" ||
+      die 'release update manifest SHA-256 mismatch'
+    validate_public_manifest "$update_manifest" "$VALIDATED_RELEASE_SHA" \
+      "$VALIDATED_RELEASE_SEQUENCE" "$VALIDATED_COMPANION_VERSION" "$VALIDATED_ZIP_SHA256"
+  fi
 }
 
 print_validated_status() {
-  printf '%s\n' \
-    "active_release=$VALIDATED_RELEASE_SHA" \
-    "installer_sha256=$VALIDATED_INSTALLER_SHA256" \
-    "zip_sha256=$VALIDATED_ZIP_SHA256" \
-    "checksum_sha256=$VALIDATED_CHECKSUM_SHA256"
+  if test "$VALIDATED_MANIFEST_VERSION" = 1; then
+    printf '%s\n' \
+      "active_release=$VALIDATED_RELEASE_SHA" \
+      "installer_sha256=$VALIDATED_INSTALLER_SHA256" \
+      "zip_sha256=$VALIDATED_ZIP_SHA256" \
+      "checksum_sha256=$VALIDATED_CHECKSUM_SHA256"
+  else
+    printf '%s\n' \
+      "active_release=$VALIDATED_RELEASE_SHA" \
+      "release_sequence=$VALIDATED_RELEASE_SEQUENCE" \
+      "companion_version=$VALIDATED_COMPANION_VERSION" \
+      "update_protocol_version=$VALIDATED_UPDATE_PROTOCOL_VERSION" \
+      "installer_sha256=$VALIDATED_INSTALLER_SHA256" \
+      "zip_sha256=$VALIDATED_ZIP_SHA256" \
+      "checksum_sha256=$VALIDATED_CHECKSUM_SHA256" \
+      "update_manifest_sha256=$VALIDATED_UPDATE_MANIFEST_SHA256"
+  fi
+}
+
+validate_all_stored_releases() {
+  local stored_release
+  local stored_name
+  local seen_sequences=' '
+  HIGHEST_STORED_V2_SEQUENCE=0
+  shopt -s nullglob dotglob
+  for stored_release in "$RELEASES"/*; do
+    stored_name=${stored_release##*/}
+    require_release_sha "$stored_name"
+    test -d "$stored_release" && test ! -L "$stored_release" ||
+      die 'stored release must be a nonsymlink directory'
+    validate_release "$stored_release" "$stored_name"
+    if test "$VALIDATED_MANIFEST_VERSION" = 2; then
+      case $seen_sequences in
+        *" $VALIDATED_RELEASE_SEQUENCE "*) die 'stored release sequence is duplicated' ;;
+      esac
+      seen_sequences="$seen_sequences$VALIDATED_RELEASE_SEQUENCE "
+      if test "$VALIDATED_RELEASE_SEQUENCE" -gt "$HIGHEST_STORED_V2_SEQUENCE"; then
+        HIGHEST_STORED_V2_SEQUENCE=$VALIDATED_RELEASE_SEQUENCE
+      fi
+    fi
+  done
+  shopt -u nullglob dotglob
+}
+
+capture_previous_selector() {
+  PREVIOUS_SELECTOR=
+  if test ! -e "$CURRENT" && test ! -L "$CURRENT"; then
+    return
+  fi
+  test -L "$CURRENT" || die 'current selector must be a symlink'
+  test "$(ownership "$CURRENT")" = '0:0' || die 'current selector must be owned by root:root'
+  PREVIOUS_SELECTOR=$(readlink "$CURRENT" 2>/dev/null) || die 'current selector could not be read'
+  [[ $PREVIOUS_SELECTOR =~ ^releases/([0-9a-f]{40})$ ]] || die 'current selector is invalid'
+  validate_release "$ARTIFACT_ROOT/$PREVIOUS_SELECTOR" "${BASH_REMATCH[1]}"
+}
+
+restore_previous_selector() {
+  local selected_selector="releases/$RELEASE_SHA"
+  local actual_selector
+  test -L "$CURRENT" || return 1
+  test "$(ownership "$CURRENT")" = '0:0' || return 1
+  actual_selector=$(readlink "$CURRENT" 2>/dev/null) || return 1
+  test "$actual_selector" = "$selected_selector" || return 1
+  if test -n "$PREVIOUS_SELECTOR"; then
+    local rollback_candidate=$ARTIFACT_ROOT/.current.rollback.$$
+    if test -e "$rollback_candidate" || test -L "$rollback_candidate"; then
+      return 1
+    fi
+    ln -s -- "$PREVIOUS_SELECTOR" "$rollback_candidate" 2>/dev/null || return 1
+    TEMP_SELECTOR=$rollback_candidate
+    mv -T -- "$TEMP_SELECTOR" "$CURRENT" 2>/dev/null || return 1
+    TEMP_SELECTOR=
+  else
+    unlink -- "$CURRENT" 2>/dev/null || return 1
+  fi
+  SELECTOR_CHANGED=0
+}
+
+verify_selected_public_release() {
+  local created_verify
+  local fetched_zip
+  local fetched_manifest
+  local byte_count
+  created_verify=$(mktemp -d -- "$ARTIFACT_ROOT/.verify.XXXXXXXXXX" 2>/dev/null) || return 1
+  VERIFY=$created_verify
+  case $VERIFY in
+    "$ARTIFACT_ROOT"/.verify.*) ;;
+    *) return 1 ;;
+  esac
+  test "$(metadata "$VERIFY")" = '0:0:700' || return 1
+  fetched_zip=$VERIFY/runtime-raiders-agent.zip
+  fetched_manifest=$VERIFY/runtime-raiders-agent.update.json
+  "$CURL" --proto '=https' --fail --silent --show-error --max-time 30 \
+    --max-filesize 134217728 --output "$fetched_zip" "$PUBLIC_ZIP_URL" || return 1
+  require_regular_file "$fetched_zip" 'fetched public ZIP'
+  byte_count=$(wc -c < "$fetched_zip" 2>/dev/null | tr -d ' ') || return 1
+  [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le 134217728 || return 1
+  test "$(sha256_file "$fetched_zip")" = "$ZIP_SHA256" || return 1
+  "$CURL" --proto '=https' --fail --silent --show-error --max-time 30 \
+    --max-filesize 65536 --output "$fetched_manifest" "$PUBLIC_UPDATE_MANIFEST_URL" || return 1
+  require_regular_file "$fetched_manifest" 'fetched public update manifest'
+  byte_count=$(wc -c < "$fetched_manifest" 2>/dev/null | tr -d ' ') || return 1
+  [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le 65536 || return 1
+  test "$(sha256_file "$fetched_manifest")" = "$UPDATE_MANIFEST_SHA256" || return 1
+  validate_public_manifest "$fetched_manifest" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
+    "$COMPANION_VERSION" "$ZIP_SHA256"
 }
 
 select_release() {
@@ -209,9 +434,9 @@ select_release() {
     trap 'exit 1' HUP INT TERM
     die 'failed to select published release'
   fi
-  SELECTION_COMMITTED=1
+  SELECTOR_CHANGED=1
   TEMP_SELECTOR=''
-  trap 'exit 0' HUP INT TERM
+  trap 'exit 1' HUP INT TERM
 }
 
 status_command() {
@@ -275,11 +500,17 @@ publish_command() {
   INSTALLER_SHA256=
   ZIP_SHA256=
   CHECKSUM_SHA256=
+  RELEASE_SEQUENCE=
+  COMPANION_VERSION=
+  UPDATE_MANIFEST_SHA256=
   local seen_source=0
   local seen_release_sha=0
   local seen_installer_sha256=0
   local seen_zip_sha256=0
   local seen_checksum_sha256=0
+  local seen_release_sequence=0
+  local seen_companion_version=0
+  local seen_update_manifest_sha256=0
 
   while test "$#" -gt 0; do
     test "$#" -ge 2 || die 'publish option requires a value'
@@ -309,6 +540,21 @@ publish_command() {
         CHECKSUM_SHA256=$2
         seen_checksum_sha256=1
         ;;
+      --release-sequence)
+        test "$seen_release_sequence" -eq 0 || die 'duplicate --release-sequence'
+        RELEASE_SEQUENCE=$2
+        seen_release_sequence=1
+        ;;
+      --companion-version)
+        test "$seen_companion_version" -eq 0 || die 'duplicate --companion-version'
+        COMPANION_VERSION=$2
+        seen_companion_version=1
+        ;;
+      --update-manifest-sha256)
+        test "$seen_update_manifest_sha256" -eq 0 || die 'duplicate --update-manifest-sha256'
+        UPDATE_MANIFEST_SHA256=$2
+        seen_update_manifest_sha256=1
+        ;;
       *) die 'unexpected publish argument' ;;
     esac
     shift 2
@@ -319,20 +565,35 @@ publish_command() {
   test "$seen_installer_sha256" -eq 1 || die 'missing --installer-sha256'
   test "$seen_zip_sha256" -eq 1 || die 'missing --zip-sha256'
   test "$seen_checksum_sha256" -eq 1 || die 'missing --checksum-sha256'
+  test "$seen_release_sequence" -eq 1 || die 'missing --release-sequence'
+  test "$seen_companion_version" -eq 1 || die 'missing --companion-version'
+  test "$seen_update_manifest_sha256" -eq 1 || die 'missing --update-manifest-sha256'
   require_release_sha "$RELEASE_SHA"
   require_digest "$INSTALLER_SHA256" 'installer'
   require_digest "$ZIP_SHA256" 'ZIP'
   require_digest "$CHECKSUM_SHA256" 'checksum'
+  require_release_sequence "$RELEASE_SEQUENCE"
+  require_companion_version "$COMPANION_VERSION"
+  require_digest "$UPDATE_MANIFEST_SHA256" 'update manifest'
   require_root
   validate_store
   acquire_publication_lock
   STAGE=''
+  VERIFY=''
   TEMP_SELECTOR=''
   SELECTION_COMMITTED=0
+  SELECTOR_CHANGED=0
+  PREVIOUS_SELECTOR=''
   cleanup() {
     local status=$?
     trap - EXIT
     trap '' HUP INT TERM
+    if test "$SELECTOR_CHANGED" = 1; then
+      if ! restore_previous_selector; then
+        printf 'runtime-raiders-artifacts: failed to restore previous selector\n' >&2
+        status=1
+      fi
+    fi
     if test -n "$TEMP_SELECTOR"; then
       case "$TEMP_SELECTOR" in
         "$ARTIFACT_ROOT"/.current.*)
@@ -355,23 +616,29 @@ publish_command() {
           ;;
       esac
     fi
+    if test -n "$VERIFY"; then
+      case "$VERIFY" in
+        "$ARTIFACT_ROOT"/.verify.*)
+          rm -rf -- "$VERIFY" 2>/dev/null || status=1
+          ;;
+        *)
+          printf 'runtime-raiders-artifacts: refusing unsafe verification cleanup\n' >&2
+          status=1
+          ;;
+      esac
+    fi
     exit "$status"
   }
   trap cleanup EXIT
   trap 'exit 1' HUP INT TERM
 
   local release_target=$RELEASES/$RELEASE_SHA
+  validate_all_stored_releases
+  test "$RELEASE_SEQUENCE" -gt "$HIGHEST_STORED_V2_SEQUENCE" ||
+    die 'release sequence must increase monotonically'
+  capture_previous_selector
   if test -e "$release_target" || test -L "$release_target"; then
-    validate_release "$release_target" "$RELEASE_SHA"
-    test "$VALIDATED_INSTALLER_SHA256" = "$INSTALLER_SHA256" ||
-      die 'existing release does not match approved digests'
-    test "$VALIDATED_ZIP_SHA256" = "$ZIP_SHA256" ||
-      die 'existing release does not match approved digests'
-    test "$VALIDATED_CHECKSUM_SHA256" = "$CHECKSUM_SHA256" ||
-      die 'existing release does not match approved digests'
-    select_release "$RELEASE_SHA"
-    print_validated_status
-    return
+    die 'release already exists'
   fi
 
   local created_stage
@@ -396,12 +663,18 @@ publish_command() {
     die 'failed to stage ZIP'
   install -o root -g root -m 0644 -- "$SOURCE_CHECKSUM" "$staged_downloads/runtime-raiders-agent.zip.sha256" 2>/dev/null ||
     die 'failed to stage checksum'
+  install -o root -g root -m 0644 -- "$SOURCE_UPDATE_MANIFEST" "$staged_downloads/runtime-raiders-agent.update.json" 2>/dev/null ||
+    die 'failed to stage update manifest'
   if ! printf '%s\n' \
-      'version=1' \
+      'version=2' \
       "release_sha=$RELEASE_SHA" \
+      "release_sequence=$RELEASE_SEQUENCE" \
+      "companion_version=$COMPANION_VERSION" \
+      'update_protocol_version=1' \
       "installer_sha256=$INSTALLER_SHA256" \
       "zip_sha256=$ZIP_SHA256" \
-      "checksum_sha256=$CHECKSUM_SHA256" > "$staged_release/.release-manifest" 2>/dev/null; then
+      "checksum_sha256=$CHECKSUM_SHA256" \
+      "update_manifest_sha256=$UPDATE_MANIFEST_SHA256" > "$staged_release/.release-manifest" 2>/dev/null; then
     die 'failed to stage release manifest'
   fi
   chown root:root "$staged_release/.release-manifest" 2>/dev/null ||
@@ -418,8 +691,17 @@ publish_command() {
   rmdir -- "$STAGE" 2>/dev/null || die 'failed to remove empty staging directory'
   STAGE=''
 
+  validate_all_stored_releases
   validate_release "$release_target" "$RELEASE_SHA"
   select_release "$RELEASE_SHA"
+  if ! verify_selected_public_release; then
+    die 'selected public release verification failed'
+  fi
+  rm -rf -- "$VERIFY" 2>/dev/null || die 'failed to remove public verification directory'
+  VERIFY=''
+  SELECTION_COMMITTED=1
+  SELECTOR_CHANGED=0
+  trap 'exit 0' HUP INT TERM
   print_validated_status
 }
 
