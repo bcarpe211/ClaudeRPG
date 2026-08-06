@@ -207,6 +207,51 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertFalse(adapter.hasActiveRun)
     }
 
+    func testMalformedRecognizedLifecyclePermanentlyPreventsCompletion() throws {
+        let malformedRecords = [
+            #"{"timestamp":"not-a-time","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":"one","cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"turn_context","payload":{"turn_id":7}}"#,
+        ]
+        for malformed in malformedRecords {
+            var adapter = CodexAdapter(expectedSurface: .codexCLI)
+            _ = try startRun(
+                adapter: &adapter,
+                payload: validSessionPayload(for: .codexCLI)
+            )
+
+            XCTAssertTrue(adapter.consume(
+                line: Data(malformed.utf8),
+                source: .init(ordinal: 3),
+                observedAt: observedAt
+            ).isEmpty)
+            XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
+            XCTAssertFalse(adapter.hasActiveRun)
+            XCTAssertTrue(adapter.consume(
+                line: Data(#"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#.utf8),
+                source: .init(ordinal: 4),
+                observedAt: observedAt
+            ).isEmpty)
+        }
+
+        var noiseAdapter = CodexAdapter(expectedSurface: .codexCLI)
+        _ = try startRun(
+            adapter: &noiseAdapter,
+            payload: validSessionPayload(for: .codexCLI)
+        )
+        XCTAssertTrue(noiseAdapter.consume(
+            line: Data(#"{"timestamp":"not-a-time","type":"event_msg","payload":{"type":"unrecognized_noise"}}"#.utf8),
+            source: .init(ordinal: 3),
+            observedAt: observedAt
+        ).isEmpty)
+        XCTAssertNil(noiseAdapter.compatibilityIssue)
+        XCTAssertEqual(noiseAdapter.consume(
+            line: Data(#"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#.utf8),
+            source: .init(ordinal: 4),
+            observedAt: observedAt
+        ).last?.state, .completed)
+    }
+
     func testActiveRunReplacementWithEarlierTimestampFailsClosed() throws {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         XCTAssertEqual(

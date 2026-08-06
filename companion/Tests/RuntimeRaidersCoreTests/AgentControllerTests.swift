@@ -1254,6 +1254,45 @@ final class AgentControllerTests: XCTestCase {
         )
     }
 
+    func testMalformedEnabledAdapterSnapshotFailsClosedForRestartAndUpdateStatus() throws {
+        try withHarness { harness in
+            let provider = try harness.makeFile("malformed-snapshot.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [provider])
+            let stateFile = harness.paths.stateDirectory.appendingPathComponent(
+                "collector-state.json"
+            )
+            var state = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: stateFile))
+                    as? [String: Any]
+            )
+            var files = try XCTUnwrap(state["files"] as? [String: Any])
+            var file = try XCTUnwrap(files[provider.path] as? [String: Any])
+            var snapshots = try XCTUnwrap(file["adapterSnapshots"] as? [String: Any])
+            snapshots[RunSurface.codexCLI.rawValue] = Data("not-a-snapshot".utf8)
+                .base64EncodedString()
+            file["adapterSnapshots"] = snapshots
+            files[provider.path] = file
+            state["files"] = files
+            try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+                .write(to: stateFile)
+
+            XCTAssertEqual(
+                try AgentController.persistedCollectorState(
+                    paths: harness.paths,
+                    surfaces: [.codexCLI]
+                ),
+                .invalid
+            )
+            XCTAssertThrowsError(
+                try AgentController.persistedAdapterFacts(
+                    paths: harness.paths,
+                    surfaces: [.codexCLI]
+                )
+            )
+            XCTAssertThrowsError(try harness.makeController())
+        }
+    }
+
     func testControllerAndControlSocketRejectSymlinkedOwnedDirectoriesWithoutChmodTarget() throws {
         let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-owned-links-\(UUID().uuidString)", isDirectory: true)

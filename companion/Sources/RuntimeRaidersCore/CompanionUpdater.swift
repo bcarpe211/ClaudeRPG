@@ -68,6 +68,11 @@ public struct CompanionUpdateStatus: Equatable, Sendable {
     }
 }
 
+public enum CompanionDaemonPreparationResult: Equatable, Sendable {
+    case prepared(CompanionUpdateStatus)
+    case refusedActiveRun
+}
+
 public enum CompanionUpdaterStage: String, Sendable {
     case lock
     case status
@@ -97,6 +102,7 @@ public struct CompanionUpdaterOperations {
         ReleaseManifestV1,
         VerifiedCompanionApplication
     ) throws -> CompanionReleaseIdentity
+    public typealias DaemonPreparation = () throws -> CompanionDaemonPreparationResult
 
     let status: Status
     let fetchManifest: ManifestFetch
@@ -104,7 +110,7 @@ public struct CompanionUpdaterOperations {
     let runCommand: Command
     let verifyCandidate: CandidateVerification
     let availableCapacity: (URL) throws -> Int64
-    let prepareDaemon: Status
+    let prepareDaemon: DaemonPreparation
     let bootout: () throws -> Void
     let bootstrap: () throws -> Void
     let proveDaemonStopped: () throws -> Bool
@@ -123,7 +129,7 @@ public struct CompanionUpdaterOperations {
         runCommand: @escaping Command,
         verifyCandidate: @escaping CandidateVerification,
         availableCapacity: @escaping (URL) throws -> Int64,
-        prepareDaemon: @escaping Status,
+        prepareDaemon: @escaping DaemonPreparation,
         bootout: @escaping () throws -> Void,
         bootstrap: @escaping () throws -> Void,
         proveDaemonStopped: @escaping () throws -> Bool,
@@ -340,17 +346,37 @@ public final class CompanionUpdater {
             guard rechecked.activeRunCount == 0 else { throw CompanionUpdaterError.activeRun }
 
             operations.observe(.prepareDaemon)
-            let preparedStatus = try withFrozenBoundary(frozen, pathCheck: {
+            try transaction.assertPriorInstalledUnchanged()
+            try transaction.assertCandidateUnchanged()
+            try assertFrozen(frozen)
+            let preparationResult: CompanionDaemonPreparationResult
+            do {
+                preparationAttempted = true
+                preparationResult = try operations.prepareDaemon()
+            } catch {
+                let operationError = error
                 try transaction.assertPriorInstalledUnchanged()
                 try transaction.assertCandidateUnchanged()
-            }) {
-                preparationAttempted = true
-                return try operations.prepareDaemon()
+                try assertFrozen(frozen)
+                throw operationError
             }
-            try validatePriorStatus(preparedStatus, initial: initial)
-            guard preparedStatus.activeRunCount == 0 else { throw CompanionUpdaterError.activeRun }
-            guard preparedStatus.preparedForUpdate else {
-                throw CompanionUpdaterError.invalidStatus
+            switch preparationResult {
+            case .refusedActiveRun:
+                preparationAttempted = false
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+                throw CompanionUpdaterError.activeRun
+            case let .prepared(preparedStatus):
+                try transaction.assertPriorInstalledUnchanged()
+                try transaction.assertCandidateUnchanged()
+                try assertFrozen(frozen)
+                try validatePriorStatus(preparedStatus, initial: initial)
+                guard preparedStatus.activeRunCount == 0 else {
+                    throw CompanionUpdaterError.invalidStatus
+                }
+                guard preparedStatus.preparedForUpdate else {
+                    throw CompanionUpdaterError.invalidStatus
+                }
             }
             quiescenceAuthorized = true
 
@@ -377,20 +403,25 @@ public final class CompanionUpdater {
                 identity: candidateIdentity,
                 teamIdentifier: initial.verifiedApplication.teamIdentifier,
                 enabled: initial.enabled,
-                minimumQueuedEventCount: initial.queuedEventCount,
+                queuedEventCount: initial.queuedEventCount,
+                preparedForUpdate: true,
                 frozen: frozen,
                 pathCheck: { try transaction.assertInstalledCandidateUnchanged() }
             )
             try transaction.markCandidateHealthPassed(identity: candidateIdentity)
+            try operations.resumePreparedDaemon()
 
             operations.observe(.cleanup)
-            // Health has committed the new bundle. Cleanup is best-effort from
-            // this point so an unsafe or substituted rollback tree cannot turn
-            // a verified installation into a destructive second transaction.
-            try? withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
+            // Health and explicit daemon resume have committed the new bundle.
+            // Cleanup is best-effort from this point so an unsafe or substituted
+            // rollback tree cannot turn a verified installation into a
+            // destructive second transaction.
+            do {
                 try transaction.assertInstalledCandidateUnchanged()
-            }) {
                 try transaction.cleanupAfterSuccess()
+            } catch {
+                // A committed daemon may resume legitimate state activity;
+                // cleanup remains best-effort and never changes that commit.
             }
             return .updated(from: installed, to: candidateIdentity)
         } catch {
@@ -444,18 +475,17 @@ public final class CompanionUpdater {
                 identity: initial.verifiedApplication.identity,
                 teamIdentifier: initial.verifiedApplication.teamIdentifier,
                 enabled: initial.enabled,
-                minimumQueuedEventCount: initial.queuedEventCount,
+                queuedEventCount: initial.queuedEventCount,
+                preparedForUpdate: true,
                 frozen: frozen,
                 pathCheck: { try transaction.assertPriorInstalledUnchanged() }
             )
-            try withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
-                try transaction.assertPriorInstalledUnchanged()
-            }) {
-                if hadSwapped {
-                    try transaction.cleanupAfterRollback()
-                } else {
-                    try transaction.cleanupAfterNoSwap()
-                }
+            try operations.resumePreparedDaemon()
+            try transaction.assertPriorInstalledUnchanged()
+            if hadSwapped {
+                try transaction.cleanupAfterRollback()
+            } else {
+                try transaction.cleanupAfterNoSwap()
             }
             throw CompanionUpdaterError.updateRolledBack
         } catch let recoveryError as CompanionUpdaterError where recoveryError == .updateRolledBack {
@@ -491,10 +521,12 @@ public final class CompanionUpdater {
                 identity: initial.verifiedApplication.identity,
                 teamIdentifier: initial.verifiedApplication.teamIdentifier,
                 enabled: initial.enabled,
-                minimumQueuedEventCount: initial.queuedEventCount,
+                queuedEventCount: initial.queuedEventCount,
+                preparedForUpdate: true,
                 frozen: frozen,
                 pathCheck: { try transaction.assertPriorInstalledUnchanged() }
             )
+            try operations.resumePreparedDaemon()
             try transaction.cleanupBeforeSwap()
         } catch {
             return try enterTerminalRecovery(
@@ -579,7 +611,8 @@ public final class CompanionUpdater {
         identity: CompanionReleaseIdentity,
         teamIdentifier: String,
         enabled: Bool,
-        minimumQueuedEventCount: Int,
+        queuedEventCount: Int,
+        preparedForUpdate: Bool,
         frozen: ProtectedStateSnapshot,
         pathCheck: () throws -> Void
     ) throws -> CompanionUpdateStatus {
@@ -596,14 +629,14 @@ public final class CompanionUpdater {
                     try operations.healthStatus()
                 }
                 if status.daemonRunning,
-                   !status.preparedForUpdate,
+                   status.preparedForUpdate == preparedForUpdate,
                    status.verifiedApplication.identity == identity,
                    status.verifiedApplication.teamIdentifier == teamIdentifier,
                    status.enabled == enabled,
                    status.enrollmentValid,
                    status.collectorStateValid,
                    status.activeRunCount == 0,
-                   status.queuedEventCount >= minimumQueuedEventCount {
+                   status.queuedEventCount == queuedEventCount {
                     return status
                 }
             } catch CompanionUpdaterError.protectedStateChanged {
@@ -1602,6 +1635,43 @@ public final class CompanionUpdateLock {
             }
             throw CompanionUpdaterError.unsafeFilesystem
         }
+    }
+
+    public static func isHeldByAnotherProcess(paths: AgentPaths) throws -> Bool {
+        let stateDescriptor: Int32
+        do {
+            guard let existing = try OwnerOnlyDirectory.openExisting(paths.stateDirectory) else {
+                return false
+            }
+            stateDescriptor = existing
+        } catch {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        defer { Darwin.close(stateDescriptor) }
+        let descriptor = Darwin.openat(
+            stateDescriptor,
+            paths.updateLock.lastPathComponent,
+            O_RDWR | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return false }
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o777 == 0o600,
+              metadata.st_nlink == 1 else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        if companionUpdaterFlock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+            _ = companionUpdaterFlock(descriptor, LOCK_UN)
+            return false
+        }
+        if errno == EWOULDBLOCK || errno == EAGAIN { return true }
+        throw CompanionUpdaterError.unsafeFilesystem
     }
 
     deinit { unlock() }

@@ -33,19 +33,41 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
-    func testSecondActiveRunCheckRefusesBeforeQuiescence() throws {
+    func testPrepareActiveRunRefusalDoesNotRestartUnpreparedDaemon() throws {
         try withHarness { harness in
             harness.preparedStatus = harness.oldStatus(activeRunCount: 1)
-            harness.healthStatuses = [harness.oldStatus()]
 
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                 XCTAssertEqual(error as? CompanionUpdaterError, .activeRun)
             }
             XCTAssertTrue(harness.log.values.contains("status-recheck"))
             XCTAssertTrue(harness.log.values.contains("prepare-daemon"))
-            XCTAssertEqual(harness.bootoutCallCount, 1)
-            XCTAssertEqual(harness.bootstrapCallCount, 1)
+            XCTAssertEqual(harness.bootoutCallCount, 0)
+            XCTAssertEqual(harness.bootstrapCallCount, 0)
+            XCTAssertEqual(harness.resumePreparedCallCount, 0)
+            XCTAssertEqual(harness.restartCallCount, 0)
             XCTAssertEqual(try harness.installedMarker(), "old")
+        }
+    }
+
+    func testPreparedReplacementCommitsBeforeEnabledUploadCanDrainOutbox() throws {
+        try withHarness { harness in
+            harness.healthStatuses = [harness.newStatus(preparedForUpdate: true)]
+            harness.resumePreparedSideEffect = {
+                let outbox = try Outbox(directory: harness.paths.outboxDirectory)
+                let first = try XCTUnwrap(outbox.records(limit: 100).first)
+                try outbox.acknowledge([first])
+            }
+
+            XCTAssertEqual(
+                try harness.makeUpdater().run(),
+                .updated(from: harness.oldIdentity, to: harness.newIdentity)
+            )
+            XCTAssertEqual(harness.resumePreparedCallCount, 1)
+            XCTAssertEqual(
+                try Outbox.queuedCount(inExistingDirectory: harness.paths.outboxDirectory),
+                1
+            )
         }
     }
 
@@ -141,7 +163,7 @@ final class CompanionUpdaterTests: XCTestCase {
         try withHarness { harness in
             harness.healthStatuses = [
                 harness.newStatus(enabled: false),
-                harness.oldStatus(enabled: true),
+                harness.oldStatus(enabled: true, preparedForUpdate: true),
             ]
             let before = try harness.protectedBytes()
 
@@ -158,7 +180,7 @@ final class CompanionUpdaterTests: XCTestCase {
 
     func testAcceptedPreparationBootoutFailureRestartsUnchangedApplicationWithoutTerminalRecovery() throws {
         try withHarness { harness in
-            harness.healthStatuses = [harness.oldStatus()]
+            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
             harness.bootoutSideEffect = { call in
                 if call == 0 { throw InjectedUpdaterFailure.responseLost }
             }
@@ -181,7 +203,7 @@ final class CompanionUpdaterTests: XCTestCase {
 
     func testNoSwapRecoveryPreservesUnknownFailedBlockerWithStagedCandidate() throws {
         try withHarness { harness in
-            harness.healthStatuses = [harness.oldStatus()]
+            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
             let blockerBytes = Data("unrelated-failed-blocker".utf8)
             var blockerInode: UInt64?
             let protectedBefore = try harness.protectedBytes()
@@ -217,7 +239,7 @@ final class CompanionUpdaterTests: XCTestCase {
 
     func testPreSwapRefusalRestartsUnchangedApplicationAndRetainsUnownedBlocker() throws {
         try withHarness { harness in
-            harness.healthStatuses = [harness.oldStatus()]
+            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
             harness.beforeSwap = {
                 try FileManager.default.createDirectory(
                     at: harness.paths.rollbackApplication,
@@ -306,8 +328,10 @@ final class CompanionUpdaterTests: XCTestCase {
 
     func testUpdateLockExcludesIndependentProcessWhileHeld() throws {
         try withHarness { harness in
+            XCTAssertFalse(try CompanionUpdateLock.isHeldByAnotherProcess(paths: harness.paths))
             let held = try CompanionUpdateLock(paths: harness.paths)
             defer { held.unlock() }
+            XCTAssertTrue(try CompanionUpdateLock.isHeldByAnotherProcess(paths: harness.paths))
             var descriptors = [Int32](repeating: -1, count: 2)
             guard Darwin.pipe(&descriptors) == 0 else { throw POSIXError(.EIO) }
             let lockPath = strdup(harness.paths.updateLock.path)
@@ -637,7 +661,7 @@ final class CompanionUpdaterTests: XCTestCase {
     func testAcceptedPrepareWithLostResponseRestartsUnchangedInstalledApplication() throws {
         try withHarness { harness in
             harness.prepareSideEffect = { throw InjectedUpdaterFailure.responseLost }
-            harness.healthStatuses = [harness.oldStatus()]
+            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
 
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                 XCTAssertEqual(error as? InjectedUpdaterFailure, .responseLost)
@@ -649,13 +673,13 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
-    func testInvalidPrepareResponseRestartsUnchangedInstalledApplication() throws {
+    func testAmbiguousInvalidPrepareResponseRestartsUnchangedInstalledApplication() throws {
         try withHarness { harness in
-            harness.preparedStatus = harness.oldStatus(activeRunCount: 1)
-            harness.healthStatuses = [harness.oldStatus()]
+            harness.preparedStatus = harness.oldStatus()
+            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
 
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .activeRun)
+                XCTAssertEqual(error as? CompanionUpdaterError, .invalidStatus)
             }
             XCTAssertEqual(harness.bootoutCallCount, 1)
             XCTAssertEqual(harness.bootstrapCallCount, 1)
@@ -714,7 +738,7 @@ final class CompanionUpdaterTests: XCTestCase {
             try withHarness { harness in
                 harness.healthStatuses = [
                     harness.newStatus(enabled: false),
-                    harness.oldStatus(enabled: true),
+                    harness.oldStatus(enabled: true, preparedForUpdate: true),
                 ]
                 switch failure {
                 case .bootstrap:
@@ -1196,7 +1220,8 @@ private final class UpdaterHarness: @unchecked Sendable {
             enrollmentValid: true,
             collectorStateValid: true,
             activeRunCount: 0,
-            queuedEventCount: 2
+            queuedEventCount: 2,
+            preparedForUpdate: true
         )]
 
         try privateDirectory(paths.supportDirectory)
@@ -1252,7 +1277,10 @@ private final class UpdaterHarness: @unchecked Sendable {
         )
     }
 
-    func newStatus(enabled: Bool = true) -> CompanionUpdateStatus {
+    func newStatus(
+        enabled: Bool = true,
+        preparedForUpdate: Bool = true
+    ) -> CompanionUpdateStatus {
         CompanionUpdateStatus(
             verifiedApplication: .init(identity: newIdentity, teamIdentifier: "REDLATTICE"),
             daemonRunning: true,
@@ -1260,7 +1288,8 @@ private final class UpdaterHarness: @unchecked Sendable {
             enrollmentValid: true,
             collectorStateValid: true,
             activeRunCount: 0,
-            queuedEventCount: 2
+            queuedEventCount: 2,
+            preparedForUpdate: preparedForUpdate
         )
     }
 
@@ -1346,7 +1375,11 @@ private final class UpdaterHarness: @unchecked Sendable {
                 prepareDaemon: {
                     try self.assertFrozenState()
                     try self.prepareSideEffect()
-                    return self.preparedStatus
+                    if self.preparedStatus.activeRunCount > 0,
+                       !self.preparedStatus.preparedForUpdate {
+                        return .refusedActiveRun
+                    }
+                    return .prepared(self.preparedStatus)
                 },
                 bootout: {
                     let call = self.variableLock.withLock { () -> Int in

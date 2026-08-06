@@ -74,6 +74,26 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(resumeCalls, 2)
     }
 
+    func testSerializedPreparationCanStartQuiescedUntilExplicitCommit() {
+        let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.start-prepared")
+        var resumed = false
+        let preparation = SerializedUpdatePreparation(
+            workQueue: queue,
+            activeRunCount: { 0 },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            initiallyPrepared: true,
+            resume: { resumed = true }
+        )
+
+        XCTAssertTrue(preparation.isPrepared)
+        XCTAssertTrue(preparation.resume().ok)
+        XCTAssertTrue(resumed)
+        XCTAssertFalse(preparation.isPrepared)
+    }
+
     func testSerializedPrepareUpdateRefusesActiveRunWithoutPausingAnything() {
         let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.prepare-refusal")
         var actions: [String] = []

@@ -54,6 +54,7 @@ private final class DaemonRuntime: @unchecked Sendable {
     private let uploader: Uploader
     private let heartbeat: Heartbeat
     private let releaseChecker: ReleaseChecker?
+    private let startsPreparedForUpdate: Bool
     private let workQueue = DispatchQueue(
         label: "com.redlattice.runtime-raiders.daemon",
         qos: .utility
@@ -83,6 +84,7 @@ private final class DaemonRuntime: @unchecked Sendable {
         pauseUploader: { [weak self] in self?.uploader.setEnabled(false) },
         pauseHeartbeat: { [weak self] in self?.heartbeat.setEnabled(false) },
         pauseWatcher: { [weak self] in self?.watcher.stop() },
+        initiallyPrepared: startsPreparedForUpdate,
         resume: { [weak self] in
             guard let self else { throw CLIError.invalidRuntimeConfiguration }
             guard controller.enabled else {
@@ -116,6 +118,7 @@ private final class DaemonRuntime: @unchecked Sendable {
 
     init(inputs: RuntimeInputs) throws {
         self.inputs = inputs
+        startsPreparedForUpdate = try CompanionUpdateLock.isHeldByAnotherProcess(paths: paths)
         registry = try AdapterRegistry.enabled(surfaces: inputs.surfaces, codexRoot: inputs.codexRoot)
         outbox = try Outbox(directory: paths.outboxDirectory)
         controller = try AgentController(
@@ -158,16 +161,19 @@ private final class DaemonRuntime: @unchecked Sendable {
             self?.handle(request) ?? ControlResponse(ok: false, message: "daemon unavailable")
         }
         do {
+            if startsPreparedForUpdate { controller.pauseCollection() }
             let files = try watcher.discoverProviderFiles()
             try controller.install(existingFiles: files)
-            updateQueue.async { [releaseChecker] in
-                _ = releaseChecker?.checkIfDue()
+            if !startsPreparedForUpdate {
+                updateQueue.async { [releaseChecker] in
+                    _ = releaseChecker?.checkIfDue()
+                }
+                try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
+                scheduleReadContinuationIfNeeded()
+                uploader.schedule(enabled: controller.enabled)
+                heartbeat.setEnabled(controller.enabled)
+                if controller.enabled { try watcher.start() }
             }
-            try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
-            scheduleReadContinuationIfNeeded()
-            uploader.schedule(enabled: controller.enabled)
-            heartbeat.setEnabled(controller.enabled)
-            if controller.enabled { try watcher.start() }
             while !stopLock.withLock({ stopping }) {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
             }
@@ -436,6 +442,22 @@ private struct LiveUpdateStatusProvider {
             request: ControlRequest(command: command),
             to: paths.controlSocket
         )
+        return try validatedStatus(response)
+    }
+
+    func prepareForUpdate() throws -> CompanionDaemonPreparationResult {
+        let response = try ControlSocketClient.send(
+            request: ControlRequest(command: .prepareUpdate),
+            to: paths.controlSocket
+        )
+        if !response.ok,
+           response.message == SerializedUpdatePreparation.activeRunRefusalMessage {
+            return .refusedActiveRun
+        }
+        return .prepared(try validatedStatus(response))
+    }
+
+    private func validatedStatus(_ response: ControlResponse) throws -> CompanionUpdateStatus {
         guard response.ok,
               let data = response.message.data(using: .utf8),
               let status = try? JSONDecoder().decode(AgentStatus.self, from: data) else {
@@ -557,7 +579,7 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
                 )
             },
             availableCapacity: availableCapacity,
-            prepareDaemon: { try statusProvider.status(command: .prepareUpdate) },
+            prepareDaemon: { try statusProvider.prepareForUpdate() },
             bootout: launchd.bootout,
             bootstrap: launchd.bootstrap,
             proveDaemonStopped: launchd.proveStopped,
@@ -646,12 +668,16 @@ private func runStableRecovery(paths: AgentPaths) throws {
         },
         bootstrap: launchd.bootstrap,
         verifyDisabledHealth: {
-            let status = try LiveUpdateStatusProvider(
+            let statusProvider = LiveUpdateStatusProvider(
                 paths: paths,
                 surfaces: enrollment.enabledSurfaces,
                 enrollment: enrollment,
                 trustRoot: trustRoot
-            ).status(command: .status)
+            )
+            let observed = try statusProvider.status(command: .status)
+            let status = observed.preparedForUpdate
+                ? try statusProvider.status(command: .resumeUpdate)
+                : observed
             return status.verifiedApplication == trustRoot.verifiedSelf &&
                 !status.enabled && !status.preparedForUpdate && status.activeRunCount == 0
         }

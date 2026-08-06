@@ -1281,7 +1281,13 @@ public final class AgentController: @unchecked Sendable {
                 && file.nextOrdinal >= 0
                 && validSeedBoundary(file)
                 && Set(file.adapterSnapshots.keys) == expected
-                && file.adapterSnapshots.values.allSatisfy { $0.count <= 65_536 }
+                && file.adapterSnapshots.allSatisfy { surface, snapshot in
+                    guard snapshot.count <= 65_536,
+                          let adapter = try? CodexAdapter(snapshot: snapshot) else {
+                        return false
+                    }
+                    return adapter.expectedSurface.rawValue == surface
+                }
         }
     }
 

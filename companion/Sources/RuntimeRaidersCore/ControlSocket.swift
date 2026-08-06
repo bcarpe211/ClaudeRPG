@@ -100,6 +100,8 @@ public enum CompanionSelfCheck {
 }
 
 public final class SerializedUpdatePreparation: @unchecked Sendable {
+    public static let activeRunRefusalMessage = "active Run prevents update"
+
     private let workQueue: DispatchQueue
     private let activeRunCount: () throws -> Int
     private let pauseAcceptance: () -> Void
@@ -120,6 +122,7 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
         pauseUploader: @escaping () -> Void,
         pauseHeartbeat: @escaping () -> Void,
         pauseWatcher: @escaping () -> Void,
+        initiallyPrepared: Bool = false,
         resume: @escaping () throws -> Void = {},
         acceptedResponse: @escaping () throws -> ControlResponse = {
             ControlResponse(ok: true, message: "prepared for update")
@@ -131,6 +134,7 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
         self.pauseUploader = pauseUploader
         self.pauseHeartbeat = pauseHeartbeat
         self.pauseWatcher = pauseWatcher
+        prepared = initiallyPrepared
         resumeAction = resume
         self.acceptedResponse = acceptedResponse
     }
@@ -139,7 +143,7 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
         workQueue.sync {
             do {
                 guard try activeRunCount() == 0 else {
-                    return ControlResponse(ok: false, message: "active Run prevents update")
+                    return ControlResponse(ok: false, message: Self.activeRunRefusalMessage)
                 }
                 pauseAcceptance()
                 pauseUploader()

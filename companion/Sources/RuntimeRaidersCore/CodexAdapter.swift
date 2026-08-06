@@ -177,16 +177,21 @@ public struct CodexAdapter: ProviderAdapter {
             return []
         }
 
-        guard let payload = record["payload"] as? [String: Any],
-              let eventTime = Self.timestampMS(record["timestamp"] as? String) else {
+        guard type == "turn_context" || type == "event_msg" else { return [] }
+        guard !rejectedSurface, verifiedSurface == expectedSurface else { return [] }
+        guard let payload = record["payload"] as? [String: Any] else {
+            reject(.unsupportedContract)
             return []
         }
-        guard !rejectedSurface, verifiedSurface == expectedSurface else { return [] }
 
         if type == "turn_context" {
-            guard let nativeID = payload["turn_id"] as? String,
+            guard let eventTime = Self.timestampMS(record["timestamp"] as? String),
+                  let nativeID = payload["turn_id"] as? String,
                   !nativeID.isEmpty,
-                  nativeID.utf8.count <= 4_096 else { return [] }
+                  nativeID.utf8.count <= 4_096 else {
+                reject(.unsupportedContract)
+                return []
+            }
             pendingContext = PendingContext(
                 nativeID: nativeID,
                 model: Self.displayValue(payload["model"]),
@@ -197,7 +202,18 @@ public struct CodexAdapter: ProviderAdapter {
             return activatePendingRun(observedAt: observedAt)
         }
 
-        guard type == "event_msg", let eventType = payload["type"] as? String else {
+        guard let eventType = payload["type"] as? String else {
+            reject(.unsupportedContract)
+            return []
+        }
+        guard eventType == "task_started"
+                || eventType == "token_count"
+                || eventType == "task_complete" else {
+            // Unknown event labels remain unrecognized noise.
+            return []
+        }
+        guard let eventTime = Self.timestampMS(record["timestamp"] as? String) else {
+            reject(.unsupportedContract)
             return []
         }
         switch eventType {
@@ -218,7 +234,10 @@ public struct CodexAdapter: ProviderAdapter {
             activeEffort = nil
             return activatePendingRun(observedAt: observedAt)
         case "token_count":
-            guard let usage = Self.usage(from: payload) else { return [] }
+            guard let usage = Self.usage(from: payload) else {
+                reject(.unsupportedContract)
+                return []
+            }
             if let nativeID = activeNativeID, let startedAt = activeStartedAt {
                 guard eventTime >= startedAt, Self.isCumulative(usage, atLeast: activeUsage) else {
                     reject(.unsupportedContract)
