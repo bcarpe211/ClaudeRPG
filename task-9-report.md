@@ -75,3 +75,26 @@ terminal recovery command rule, and v2 consumed-sequence recovery rule.
 `npm test -- tests/runtime-raiders-publication-docs.test.ts` passed 16/16 and
 `git diff --check` passed. No live signing, Caddy, publication, provider,
 install, or office action occurred; all evidence remains pending.
+
+## Fix Round 2
+
+### RED
+
+Added a structural documentation contract for the real owner-only update state:
+the prior cadence prose failed because it offered no validated timestamp source,
+computed due time, pre-due refusal, or enforced restart ordering.
+
+### GREEN
+
+The pending off-state canary block now reads only
+`~/Library/Application Support/Runtime Raiders/state/update-state.json`, rejects
+nonregular/symlinked or non-owner-`0600` state, extracts and bounds only the
+numeric `lastCheckAttemptMS`, prints the derived UTC due time, refuses an early
+restart, then runs the fixed launchd target followed by status and doctor. It
+never prints the state file or adds a CLI field.
+
+### Tests and concerns
+
+The focused docs suite passed 17/17. This is documentation-only and no state,
+launchd, network, installation, or provider action was performed. The current
+controller-owned `.superpowers` progress ledger remains deliberately unstaged.

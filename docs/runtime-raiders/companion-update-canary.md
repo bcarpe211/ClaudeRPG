@@ -50,12 +50,29 @@ v2 release.
 
 Publication does not trigger discovery. The daemon checks only at startup when
 the persisted last attempt is at least 24 hours old. After sequence-2
-publication, keep collection off and record the last-attempt timestamp. At the
-recorded 24-hour due boundary, restart exactly the installed launchd job:
+publication, keep collection off. The timestamp is not in status/doctor; read
+only the owner-only state file below and print only the derived UTC due time.
+At or after that 24-hour due boundary, restart exactly the installed launchd job:
 
 ```sh
 (
   set -eu
+  UPDATE_STATE="$HOME/Library/Application Support/Runtime Raiders/state/update-state.json"
+  test -f "$UPDATE_STATE"
+  test ! -L "$UPDATE_STATE"
+  test "$(stat -f '%u:%Lp' "$UPDATE_STATE")" = "$(id -u):600"
+  LAST_ATTEMPT_MS="$(plutil -extract lastCheckAttemptMS raw -o - "$UPDATE_STATE")"
+  case "$LAST_ATTEMPT_MS" in ''|*[!0-9]*) exit 1 ;; esac
+  test "${#LAST_ATTEMPT_MS}" -le 16
+  test "$LAST_ATTEMPT_MS" -le 9007199168340991
+  DUE_MS=$((LAST_ATTEMPT_MS + 86400000))
+  NOW_MS=$(( $(date +%s) * 1000 ))
+  printf 'Runtime Raiders update check due UTC: '
+  date -u -r $((DUE_MS / 1000)) '+%Y-%m-%dT%H:%M:%SZ'
+  test "$NOW_MS" -ge "$DUE_MS" || {
+    printf '%s\n' 'Runtime Raiders update check is not due; refusing restart.' >&2
+    exit 1
+  }
   launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"
   raiders status
   raiders doctor

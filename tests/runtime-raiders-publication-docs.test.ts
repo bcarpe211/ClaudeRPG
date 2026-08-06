@@ -257,6 +257,32 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(packet).toContain('### H. Sequence-2 publication');
   });
 
+  it('derives the off-state notification due boundary from validated owner-only update state', () => {
+    const canary = readDoc('docs/runtime-raiders/companion-update-canary.md');
+    const stateLine = canary.indexOf('UPDATE_STATE="$HOME/Library/Application Support/Runtime Raiders/state/update-state.json"');
+    const block = canary.slice(
+      canary.lastIndexOf('(\n  set -eu', stateLine),
+      canary.indexOf('## Manual update proof and recovery'),
+    );
+    for (const requirement of [
+      'set -eu',
+      'test -f "$UPDATE_STATE"',
+      'test ! -L "$UPDATE_STATE"',
+      "stat -f '%u:%Lp' \"$UPDATE_STATE\"",
+      'plutil -extract lastCheckAttemptMS raw -o - "$UPDATE_STATE"',
+      'LAST_ATTEMPT_MS',
+      'DUE_MS=$((LAST_ATTEMPT_MS + 86400000))',
+      'date -u -r $((DUE_MS / 1000))',
+      'test "$NOW_MS" -ge "$DUE_MS"',
+      'launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"',
+      'raiders status',
+      'raiders doctor',
+    ]) expect(block).toContain(requirement);
+    expect(block.indexOf('test -f "$UPDATE_STATE"')).toBeLessThan(block.indexOf('plutil -extract'));
+    expect(block.indexOf('plutil -extract')).toBeLessThan(block.indexOf('DUE_MS='));
+    expect(block.indexOf('test "$NOW_MS" -ge "$DUE_MS"')).toBeLessThan(block.indexOf('launchctl kickstart'));
+  });
+
   it('does not present unapproved 2026-08-04 work as verified evidence', () => {
     for (const document of [runbook, checklist, operations, packet]) {
       expect(document).not.toContain('2026-08-04');
