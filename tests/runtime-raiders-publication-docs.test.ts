@@ -264,23 +264,42 @@ describe('Runtime Raiders artifact-publication documentation', () => {
       canary.lastIndexOf('(\n  set -eu', stateLine),
       canary.indexOf('## Manual update proof and recovery'),
     );
-    for (const requirement of [
+    const orderedContract = [
       'set -eu',
+      'UPDATE_STATE="$HOME/Library/Application Support/Runtime Raiders/state/update-state.json"',
       'test -f "$UPDATE_STATE"',
       'test ! -L "$UPDATE_STATE"',
-      "stat -f '%u:%Lp' \"$UPDATE_STATE\"",
-      'plutil -extract lastCheckAttemptMS raw -o - "$UPDATE_STATE"',
-      'LAST_ATTEMPT_MS',
+      'test "$(stat -f \'%u:%Lp\' "$UPDATE_STATE")" = "$(id -u):600"',
+      'LAST_ATTEMPT_MS="$(plutil -extract lastCheckAttemptMS raw -o - "$UPDATE_STATE")"',
+      'case "$LAST_ATTEMPT_MS" in \'\'|*[!0-9]*) exit 1 ;; esac',
+      'test "${#LAST_ATTEMPT_MS}" -le 16',
+      'test "$LAST_ATTEMPT_MS" -le 9007199168340991',
       'DUE_MS=$((LAST_ATTEMPT_MS + 86400000))',
-      'date -u -r $((DUE_MS / 1000))',
+      'NOW_MS=$(( $(date +%s) * 1000 ))',
+      "printf 'Runtime Raiders update check due UTC: '",
+      "date -u -r $((DUE_MS / 1000)) '+%Y-%m-%dT%H:%M:%SZ'",
       'test "$NOW_MS" -ge "$DUE_MS"',
+      "printf '%s\\n' 'Runtime Raiders update check is not due; refusing restart.' >&2",
       'launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"',
       'raiders status',
       'raiders doctor',
-    ]) expect(block).toContain(requirement);
-    expect(block.indexOf('test -f "$UPDATE_STATE"')).toBeLessThan(block.indexOf('plutil -extract'));
-    expect(block.indexOf('plutil -extract')).toBeLessThan(block.indexOf('DUE_MS='));
-    expect(block.indexOf('test "$NOW_MS" -ge "$DUE_MS"')).toBeLessThan(block.indexOf('launchctl kickstart'));
+    ];
+    const assertOrdered = (text: string): void => {
+      let previous = -1;
+      for (const statement of orderedContract) {
+        const next = text.indexOf(statement, previous + 1);
+        expect(next, statement).toBeGreaterThan(previous);
+        previous = next;
+      }
+    };
+    assertOrdered(block);
+
+    const statusDoctorDrift = block.replace(
+      'raiders status\n  raiders doctor',
+      'raiders doctor\n  raiders status',
+    );
+    expect(() => assertOrdered(statusDoctorDrift)).toThrow();
+    expect(() => assertOrdered(block.replace('test ! -L "$UPDATE_STATE"\n', ''))).toThrow();
   });
 
   it('does not present unapproved 2026-08-04 work as verified evidence', () => {

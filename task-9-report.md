@@ -98,3 +98,24 @@ never prints the state file or adds a CLI field.
 The focused docs suite passed 17/17. This is documentation-only and no state,
 launchd, network, installation, or provider action was performed. The current
 controller-owned `.superpowers` progress ledger remains deliberately unstaged.
+
+## Fix Round 3
+
+### Contract strengthening
+
+Expanded the cadence test from phrase presence plus three partial comparisons
+to one exact ordered shell contract. It now locks down strict mode, state path,
+regular/nonsymlink/owner-`0600` validation, exact `plutil` extraction, numeric
+rejection and both bounds, exact due/current-time arithmetic, UTC output,
+pre-due refusal, fixed launchd target, and status-before-doctor ordering.
+
+The accepted canary block already matched the full requested contract, so a
+natural RED against the document was not available without introducing a fake
+requirement. Instead, the test includes two mutation witnesses and proves it
+rejects removed nonsymlink validation and swapped status/doctor order.
+
+### Tests and concerns
+
+The focused documentation suite passed 17/17 with no runbook change. This round
+is test/report-only; no live action occurred and the controller-owned
+`.superpowers` ledger remains excluded.
