@@ -94,6 +94,96 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertFalse(preparation.isPrepared)
     }
 
+    func testBroadUpdateLockAloneStartsDaemonNormally() throws {
+        let fixture = try PreparedStartupFixture()
+        defer { fixture.cleanup() }
+        let updateLock = try CompanionUpdateLock(paths: fixture.paths)
+        defer { updateLock.unlock() }
+        let actions = PreparedStartupActionLog()
+        let startup = try PreparedDaemonStartupCoordinator(
+            paths: fixture.paths,
+            deferredStart: { actions.append("runtime-start") }
+        )
+
+        try startup.start()
+
+        XCTAssertFalse(startup.startsPrepared)
+        XCTAssertEqual(actions.values, ["runtime-start"])
+    }
+
+    func testExplicitPreparedStartupLeaseDefersProviderAndRuntimeWork() throws {
+        let fixture = try PreparedStartupFixture()
+        defer { fixture.cleanup() }
+        let lease = try CompanionPreparedStartupLease(paths: fixture.paths)
+        defer { lease.unlock() }
+        let actions = PreparedStartupActionLog()
+        let startup = try PreparedDaemonStartupCoordinator(
+            paths: fixture.paths,
+            deferredStart: {
+                actions.append("provider-discovery")
+                actions.append("provider-install")
+                actions.append("release-discovery")
+                actions.append("outbox-prune")
+                actions.append("read-continuation")
+                actions.append("upload")
+                actions.append("heartbeat")
+                actions.append("watcher")
+            }
+        )
+
+        try startup.start()
+
+        XCTAssertTrue(startup.startsPrepared)
+        XCTAssertEqual(actions.values, [])
+    }
+
+    func testExplicitResumePerformsDeferredStartupExactlyOnce() throws {
+        let fixture = try PreparedStartupFixture()
+        defer { fixture.cleanup() }
+        let lease = try CompanionPreparedStartupLease(paths: fixture.paths)
+        defer { lease.unlock() }
+        let actions = PreparedStartupActionLog()
+        let startup = try PreparedDaemonStartupCoordinator(
+            paths: fixture.paths,
+            deferredStart: { actions.append("deferred-start") }
+        )
+        try startup.start()
+
+        try startup.resume()
+        try startup.resume()
+
+        XCTAssertEqual(actions.values, ["deferred-start"])
+    }
+
+    func testAbandonedPreparedStartupLeaseSelfResumesRunningDaemon() throws {
+        let fixture = try PreparedStartupFixture()
+        defer { fixture.cleanup() }
+        let lease = try CompanionPreparedStartupLease(paths: fixture.paths)
+        let actions = PreparedStartupActionLog()
+        let startup = try PreparedDaemonStartupCoordinator(
+            paths: fixture.paths,
+            deferredStart: { actions.append("deferred-start") }
+        )
+        try startup.start()
+        let resumed = expectation(description: "prepared daemon self-resumes")
+        startup.monitorAbandonment(
+            on: DispatchQueue(label: "com.redlattice.runtime-raiders.tests.prepared-abandonment")
+        ) {
+            do {
+                try startup.resume()
+            } catch {
+                XCTFail("unexpected resume failure: \(error)")
+            }
+            resumed.fulfill()
+        }
+
+        lease.unlock()
+        wait(for: [resumed], timeout: 2)
+
+        XCTAssertEqual(actions.values, ["deferred-start"])
+        XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: fixture.paths))
+    }
+
     func testSerializedPrepareUpdateRefusesActiveRunWithoutPausingAnything() {
         let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.prepare-refusal")
         var actions: [String] = []
@@ -426,7 +516,10 @@ final class ControlProtocolTests: XCTestCase {
                 XCTAssertEqual(phase, .rollbackOnly)
                 log.append("verify-restored")
             },
-            bootstrap: { log.append("bootstrap") },
+            bootstrap: {
+                XCTAssertNotNil(try CompanionPreparedStartupLease.observe(paths: paths))
+                log.append("bootstrap")
+            },
             verifyDisabledHealth: {
                 log.append("health")
                 return true
@@ -1232,5 +1325,32 @@ final class ControlProtocolTests: XCTestCase {
             decoding: try Data(contentsOf: app.appendingPathComponent("marker")),
             as: UTF8.self
         )
+    }
+}
+
+private final class PreparedStartupFixture {
+    let root: URL
+    let paths: AgentPaths
+
+    init() throws {
+        root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-prepared-startup-\(UUID().uuidString)", isDirectory: true)
+        paths = AgentPaths(applicationSupportDirectory: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private final class PreparedStartupActionLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    var values: [String] { lock.withLock { storage } }
+
+    func append(_ value: String) {
+        lock.withLock { storage.append(value) }
     }
 }

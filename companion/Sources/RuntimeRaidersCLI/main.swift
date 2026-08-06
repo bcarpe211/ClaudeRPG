@@ -54,7 +54,7 @@ private final class DaemonRuntime: @unchecked Sendable {
     private let uploader: Uploader
     private let heartbeat: Heartbeat
     private let releaseChecker: ReleaseChecker?
-    private let startsPreparedForUpdate: Bool
+    private var startupCoordinator: PreparedDaemonStartupCoordinator!
     private let workQueue = DispatchQueue(
         label: "com.redlattice.runtime-raiders.daemon",
         qos: .utility
@@ -84,22 +84,11 @@ private final class DaemonRuntime: @unchecked Sendable {
         pauseUploader: { [weak self] in self?.uploader.setEnabled(false) },
         pauseHeartbeat: { [weak self] in self?.heartbeat.setEnabled(false) },
         pauseWatcher: { [weak self] in self?.watcher.stop() },
-        initiallyPrepared: startsPreparedForUpdate,
+        initiallyPrepared: startupCoordinator.startsPrepared,
         resume: { [weak self] in
             guard let self else { throw CLIError.invalidRuntimeConfiguration }
-            guard controller.enabled else {
-                controller.pauseCollection()
-                uploader.setEnabled(false)
-                heartbeat.setEnabled(false)
-                watcher.stop()
-                return
-            }
             do {
-                try watcher.start()
-                controller.resumeCollectionAfterUpdate()
-                scheduleReadContinuationIfNeeded()
-                uploader.schedule(enabled: true)
-                heartbeat.setEnabled(true)
+                try startupCoordinator.resume()
             } catch {
                 controller.pauseCollection()
                 uploader.setEnabled(false)
@@ -118,7 +107,6 @@ private final class DaemonRuntime: @unchecked Sendable {
 
     init(inputs: RuntimeInputs) throws {
         self.inputs = inputs
-        startsPreparedForUpdate = try CompanionUpdateLock.isHeldByAnotherProcess(paths: paths)
         registry = try AdapterRegistry.enabled(surfaces: inputs.surfaces, codexRoot: inputs.codexRoot)
         outbox = try Outbox(directory: paths.outboxDirectory)
         controller = try AgentController(
@@ -154,25 +142,32 @@ private final class DaemonRuntime: @unchecked Sendable {
             paths: paths,
             installed: inputs.releaseIdentity
         )
+        startupCoordinator = try PreparedDaemonStartupCoordinator(paths: paths) { [weak self] in
+            guard let self else { throw CLIError.invalidRuntimeConfiguration }
+            let files = try watcher.discoverProviderFiles()
+            try controller.install(existingFiles: files)
+            try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
+            if controller.enabled { try watcher.start() }
+            updateQueue.async { [releaseChecker] in
+                _ = releaseChecker?.checkIfDue()
+            }
+            scheduleReadContinuationIfNeeded()
+            uploader.schedule(enabled: controller.enabled)
+            heartbeat.setEnabled(controller.enabled)
+        }
     }
 
     func run() throws {
+        if startupCoordinator.startsPrepared { controller.pauseCollection() }
         try control.startRequests { [weak self] request in
             self?.handle(request) ?? ControlResponse(ok: false, message: "daemon unavailable")
         }
         do {
-            if startsPreparedForUpdate { controller.pauseCollection() }
-            let files = try watcher.discoverProviderFiles()
-            try controller.install(existingFiles: files)
-            if !startsPreparedForUpdate {
-                updateQueue.async { [releaseChecker] in
-                    _ = releaseChecker?.checkIfDue()
+            try startupCoordinator.start()
+            if startupCoordinator.startsPrepared {
+                startupCoordinator.monitorAbandonment(on: updateQueue) { [weak self] in
+                    self?.resumeAfterAbandonedPreparation()
                 }
-                try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
-                scheduleReadContinuationIfNeeded()
-                uploader.schedule(enabled: controller.enabled)
-                heartbeat.setEnabled(controller.enabled)
-                if controller.enabled { try watcher.start() }
             }
             while !stopLock.withLock({ stopping }) {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
@@ -225,6 +220,12 @@ private final class DaemonRuntime: @unchecked Sendable {
     }
 
     private func handle(_ request: ControlRequest) -> ControlResponse {
+        if updatePreparation.isPrepared,
+           request.command != .status,
+           request.command != .prepareUpdate,
+           request.command != .resumeUpdate {
+            return ControlResponse(ok: false, message: "daemon prepared for update")
+        }
         switch request.command {
         case .daemon:
             return ControlResponse(ok: false, message: "daemon is already running")
@@ -313,6 +314,16 @@ private final class DaemonRuntime: @unchecked Sendable {
             updateAvailability: releaseChecker?.availability(),
             preparedForUpdate: updatePreparation.isPrepared
         )
+    }
+
+    private func resumeAfterAbandonedPreparation() {
+        let response = updatePreparation.resume()
+        guard !response.ok,
+              updatePreparation.isPrepared,
+              !stopLock.withLock({ stopping }) else { return }
+        updateQueue.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
+            self?.resumeAfterAbandonedPreparation()
+        }
     }
 
     fileprivate static func serverHealthy() -> Bool {

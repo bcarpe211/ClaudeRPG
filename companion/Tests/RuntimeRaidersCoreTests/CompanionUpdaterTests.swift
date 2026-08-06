@@ -53,6 +53,11 @@ final class CompanionUpdaterTests: XCTestCase {
     func testPreparedReplacementCommitsBeforeEnabledUploadCanDrainOutbox() throws {
         try withHarness { harness in
             harness.healthStatuses = [harness.newStatus(preparedForUpdate: true)]
+            harness.bootstrapSideEffect = { _ in
+                XCTAssertNotNil(
+                    try CompanionPreparedStartupLease.observe(paths: harness.paths)
+                )
+            }
             harness.resumePreparedSideEffect = {
                 let outbox = try Outbox(directory: harness.paths.outboxDirectory)
                 let first = try XCTUnwrap(outbox.records(limit: 100).first)

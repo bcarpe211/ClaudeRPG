@@ -226,6 +226,8 @@ public final class CompanionUpdater {
 
         let transaction = try UpdateFileTransaction(paths: paths)
         try transaction.assertPriorMatches(priorSeal)
+        var preparedStartupLease: CompanionPreparedStartupLease?
+        defer { preparedStartupLease?.unlock() }
         var preparationAttempted = false
         var quiescenceAuthorized = false
         var verifiedCandidateIdentity: CompanionReleaseIdentity?
@@ -392,6 +394,7 @@ public final class CompanionUpdater {
             try withFrozenBoundary(frozen) { try transaction.swap() }
 
             operations.observe(.bootstrap)
+            try armPreparedStartupLease(&preparedStartupLease)
             try withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
                 try transaction.assertInstalledCandidateUnchanged()
             }) {
@@ -410,6 +413,8 @@ public final class CompanionUpdater {
             )
             try transaction.markCandidateHealthPassed(identity: candidateIdentity)
             try operations.resumePreparedDaemon()
+            preparedStartupLease?.unlock()
+            preparedStartupLease = nil
 
             operations.observe(.cleanup)
             // Health and explicit daemon resume have committed the new bundle.
@@ -431,7 +436,8 @@ public final class CompanionUpdater {
                     transaction: transaction,
                     initial: initial,
                     candidateIdentity: verifiedCandidateIdentity,
-                    frozen: frozen
+                    frozen: frozen,
+                    preparedStartupLease: &preparedStartupLease
                 )
             }
             if preparationAttempted {
@@ -440,7 +446,8 @@ public final class CompanionUpdater {
                     transaction: transaction,
                     initial: initial,
                     candidateIdentity: verifiedCandidateIdentity,
-                    frozen: frozen
+                    frozen: frozen,
+                    preparedStartupLease: &preparedStartupLease
                 )
             } else {
                 try? transaction.cleanupBeforeSwap()
@@ -454,7 +461,8 @@ public final class CompanionUpdater {
         transaction: UpdateFileTransaction,
         initial: CompanionUpdateStatus,
         candidateIdentity: CompanionReleaseIdentity?,
-        frozen: ProtectedStateSnapshot
+        frozen: ProtectedStateSnapshot,
+        preparedStartupLease: inout CompanionPreparedStartupLease?
     ) throws -> CompanionUpdateResult {
         let hadSwapped = transaction.hasSwapped
         do {
@@ -466,6 +474,7 @@ public final class CompanionUpdater {
                     try transaction.rollback()
                 }
             }
+            try armPreparedStartupLease(&preparedStartupLease)
             try withFrozenBoundary(frozen, allowNewOutboxEntries: true, pathCheck: {
                 try transaction.assertPriorInstalledUnchanged()
             }) {
@@ -481,6 +490,8 @@ public final class CompanionUpdater {
                 pathCheck: { try transaction.assertPriorInstalledUnchanged() }
             )
             try operations.resumePreparedDaemon()
+            preparedStartupLease?.unlock()
+            preparedStartupLease = nil
             try transaction.assertPriorInstalledUnchanged()
             if hadSwapped {
                 try transaction.cleanupAfterRollback()
@@ -504,7 +515,8 @@ public final class CompanionUpdater {
         transaction: UpdateFileTransaction,
         initial: CompanionUpdateStatus,
         candidateIdentity: CompanionReleaseIdentity?,
-        frozen: ProtectedStateSnapshot
+        frozen: ProtectedStateSnapshot,
+        preparedStartupLease: inout CompanionPreparedStartupLease?
     ) throws -> CompanionUpdateResult {
         do {
             try withFrozenBoundary(frozen, pathCheck: {
@@ -512,6 +524,7 @@ public final class CompanionUpdater {
             }) {
                 try operations.bootout()
             }
+            try armPreparedStartupLease(&preparedStartupLease)
             try withFrozenBoundary(frozen, pathCheck: {
                 try transaction.assertPriorInstalledUnchanged()
             }) {
@@ -527,6 +540,8 @@ public final class CompanionUpdater {
                 pathCheck: { try transaction.assertPriorInstalledUnchanged() }
             )
             try operations.resumePreparedDaemon()
+            preparedStartupLease?.unlock()
+            preparedStartupLease = nil
             try transaction.cleanupBeforeSwap()
         } catch {
             return try enterTerminalRecovery(
@@ -536,6 +551,14 @@ public final class CompanionUpdater {
             )
         }
         throw updateError
+    }
+
+    private func armPreparedStartupLease(
+        _ lease: inout CompanionPreparedStartupLease?
+    ) throws {
+        if lease == nil {
+            lease = try CompanionPreparedStartupLease(paths: paths)
+        }
     }
 
     private func enterTerminalRecovery(
@@ -1695,8 +1718,15 @@ private struct ProtectedStateSnapshot: Equatable {
                 stateDescriptor,
                 prefix: "state",
                 excludedNames: includeUpdateState
-                    ? [paths.updateLock.lastPathComponent]
-                    : [paths.updateLock.lastPathComponent, paths.updateState.lastPathComponent],
+                    ? [
+                        paths.updateLock.lastPathComponent,
+                        paths.preparedStartupLease.lastPathComponent,
+                    ]
+                    : [
+                        paths.updateLock.lastPathComponent,
+                        paths.preparedStartupLease.lastPathComponent,
+                        paths.updateState.lastPathComponent,
+                    ],
                 entries: &entries
             )
         }

@@ -7,6 +7,7 @@ public struct AgentPaths: Equatable, Sendable {
     public let controlSocket: URL
     public let updateState: URL
     public let updateLock: URL
+    public let preparedStartupLease: URL
     public let installedApplication: URL
     public let rollbackApplication: URL
     public let failedApplication: URL
@@ -19,6 +20,10 @@ public struct AgentPaths: Equatable, Sendable {
         controlSocket = supportDirectory.appendingPathComponent("agent.sock", isDirectory: false)
         updateState = stateDirectory.appendingPathComponent("update-state.json", isDirectory: false)
         updateLock = stateDirectory.appendingPathComponent("update.lock", isDirectory: false)
+        preparedStartupLease = stateDirectory.appendingPathComponent(
+            "prepared-startup.lock",
+            isDirectory: false
+        )
         installedApplication = supportDirectory.appendingPathComponent(
             "Runtime Raiders Agent.app",
             isDirectory: true

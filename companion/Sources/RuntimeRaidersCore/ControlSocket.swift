@@ -574,6 +574,8 @@ public final class StableUpdateRecovery {
     public func run() throws {
         let updateLock = try CompanionUpdateLock(paths: paths)
         defer { updateLock.unlock() }
+        var preparedStartupLease: CompanionPreparedStartupLease?
+        defer { preparedStartupLease?.unlock() }
         let phase = try operations.phase()
         try operations.verifyBundles(phase)
         try operations.persistDisabled()
@@ -585,6 +587,7 @@ public final class StableUpdateRecovery {
         try operations.restore(phase)
         do {
             try operations.verifyRestoredBundle(phase)
+            preparedStartupLease = try CompanionPreparedStartupLease(paths: paths)
             try operations.bootstrap()
             let start = operations.monotonicNow()
             guard start.isFinite else {
@@ -592,7 +595,11 @@ public final class StableUpdateRecovery {
             }
             let deadline = start + Self.healthTimeout
             repeat {
-                if (try? operations.verifyDisabledHealth()) == true { return }
+                if (try? operations.verifyDisabledHealth()) == true {
+                    preparedStartupLease?.unlock()
+                    preparedStartupLease = nil
+                    return
+                }
                 let now = operations.monotonicNow()
                 guard now.isFinite, now < deadline else {
                     throw StableUpdateRecoveryError.healthVerificationFailed
