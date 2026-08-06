@@ -118,6 +118,7 @@ exec /usr/bin/perl -MFcntl=:flock -e '
 test "$1" = -c && test "$3" = --
 case "$2" in
   '%u:%g:%a') mode=$(/usr/bin/stat -f %Lp "$4"); printf '0:0:%s\\n' "$mode" ;;
+  '%d:%i') /usr/bin/stat -f '%d:%i' "$4" ;;
   '%u:%g')
     case "$4" in
       */current) printf '%s\\n' "\${RUNTIME_RAIDERS_TEST_SELECTOR_OWNER:-0:0}" ;;
@@ -155,26 +156,37 @@ printf 'chown %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"`);
 
   executable(join(fakes, 'curl'), `
 printf 'curl %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
+first_argument=\${1:-}
+if test -n "\${RUNTIME_RAIDERS_TEST_CURL_CONFIG:-}" && test "$first_argument" != --disable; then
+  printf 'curl-config-loaded\\n' >> "$RUNTIME_RAIDERS_TEST_LOG"
+  exit 64
+fi
+test "$first_argument" = --disable
+shift
 output=
 url=
 max_size=
 saw_proto=0
 saw_fail=0
 saw_max_time=0
+saw_no_location=0
 while test "$#" -gt 0; do
   case "$1" in
-    --output) output=$2; shift 2 ;;
+    --output) test -z "$output" && test "$#" -ge 2; output=$2; shift 2 ;;
     --max-filesize) max_size=$2; shift 2 ;;
     --proto) test "$2" = '=https'; saw_proto=1; shift 2 ;;
     --max-time) test "$2" = 30; saw_max_time=1; shift 2 ;;
     --fail) saw_fail=1; shift ;;
+    --no-location) saw_no_location=1; shift ;;
     --silent|--show-error) shift ;;
-    --location|--location-trusted) exit 64 ;;
+    --disable|--location|--location-trusted|--config|-K|--next) exit 64 ;;
     https://*) test -z "$url"; url=$1; shift ;;
     *) exit 64 ;;
   esac
 done
-test "$saw_proto" = 1 && test "$saw_fail" = 1 && test "$saw_max_time" = 1
+test -n "$output" && test -n "$url"
+test "$saw_proto" = 1 && test "$saw_fail" = 1 && test "$saw_max_time" = 1 &&
+  test "$saw_no_location" = 1
 case "$url:$max_size" in
   'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip:134217728')
     test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_ZIP_FETCH:-0}" = 0 || exit 22
@@ -357,6 +369,23 @@ function postCommitBashEnv(f: PublicationFixture, action: 'fail-output' | 'signa
     '',
   ].join('\n'));
   return bashEnv;
+}
+
+function rollbackRaceEnvironment(f: PublicationFixture, replacementSelector: string): NodeJS.ProcessEnv {
+  const hook = join(f.root, 'rollback-race');
+  const state = join(f.root, 'rollback-race.state');
+  executable(hook, `
+test ! -e "$RUNTIME_RAIDERS_TEST_ROLLBACK_HOOK_STATE"
+printf 'rollback-race\\n' >> "$RUNTIME_RAIDERS_TEST_LOG"
+printf 'called\\n' > "$RUNTIME_RAIDERS_TEST_ROLLBACK_HOOK_STATE"
+candidate="$RUNTIME_RAIDERS_ARTIFACT_ROOT/.current.out-of-band.$$"
+/bin/ln -s "$RUNTIME_RAIDERS_TEST_OUT_OF_BAND_SELECTOR" "$candidate"
+/bin/mv -h "$candidate" "$RUNTIME_RAIDERS_ARTIFACT_ROOT/current"`);
+  return {
+    RUNTIME_RAIDERS_TEST_BEFORE_ROLLBACK_MUTATION: hook,
+    RUNTIME_RAIDERS_TEST_ROLLBACK_HOOK_STATE: state,
+    RUNTIME_RAIDERS_TEST_OUT_OF_BAND_SELECTOR: replacementSelector,
+  };
 }
 
 function expectRejectedBeforeSelection(f: PublicationFixture, result: ReturnType<typeof run>) {
@@ -780,6 +809,32 @@ describe('Runtime Raiders artifact publication', () => {
     expect(existsSync(join(f.artifactRoot, 'releases', releaseSha))).toBe(false);
   });
 
+  it('disables curl configuration and redirects before each exact public re-fetch', () => {
+    const f = publicationFixture();
+    const curlConfig = join(f.root, 'curlrc');
+    writeFileSync(curlConfig, [
+      'location',
+      'url = "https://example.invalid/extra-transfer"',
+      'output = "unexpected-output"',
+      '',
+    ].join('\n'));
+
+    const published = runPublish(f, { RUNTIME_RAIDERS_TEST_CURL_CONFIG: curlConfig });
+
+    expect(published.status, published.stderr).toBe(0);
+    const curlCommands = readFileSync(f.commandLog, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('curl '));
+    expect(curlCommands).toHaveLength(2);
+    expect(curlCommands[0]).toMatch(
+      /^curl --disable --no-location --proto =https --fail --silent --show-error --max-time 30 --max-filesize 134217728 --output \S+ https:\/\/raiders\.redlattice\.com\/downloads\/runtime-raiders-agent\.zip$/,
+    );
+    expect(curlCommands[1]).toMatch(
+      /^curl --disable --no-location --proto =https --fail --silent --show-error --max-time 30 --max-filesize 65536 --output \S+ https:\/\/raiders\.redlattice\.com\/downloads\/runtime-raiders-agent\.update\.json$/,
+    );
+    expect(readFileSync(f.commandLog, 'utf8')).not.toContain('curl-config-loaded');
+  });
+
   it.each([
     ['ZIP', 'RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_ZIP_FETCH'],
     ['JSON', 'RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_MANIFEST_FETCH'],
@@ -808,6 +863,46 @@ describe('Runtime Raiders artifact publication', () => {
 
     expectContentFreeFailure(f, failed);
     expect(existsSync(join(f.artifactRoot, 'current'))).toBe(false);
+    expect(releaseBytes(f.artifactRoot, releaseSha).updateManifest).toEqual(
+      readFileSync(f.files.updateManifest),
+    );
+    expectNoTemporaryPublicationPaths(f.artifactRoot);
+  });
+
+  it('preserves an out-of-band selector that appears before restoring a prior selector', () => {
+    const priorSha = 'a'.repeat(40);
+    const outOfBandSelector = `releases/${'c'.repeat(40)}`;
+    const f = publicationFixture();
+    setPublicationIdentity(f, priorSha, 1);
+    expect(runPublish(f).status).toBe(0);
+    setPublicationIdentity(f, releaseSha, 2);
+
+    const failed = runPublish(f, {
+      RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_MANIFEST_FETCH: '1',
+      ...rollbackRaceEnvironment(f, outOfBandSelector),
+    });
+
+    expectContentFreeFailure(f, failed);
+    expect(readFileSync(f.commandLog, 'utf8')).toContain('rollback-race\n');
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(outOfBandSelector);
+    expect(releaseBytes(f.artifactRoot, releaseSha).updateManifest).toEqual(
+      readFileSync(f.files.updateManifest),
+    );
+    expectNoTemporaryPublicationPaths(f.artifactRoot);
+  });
+
+  it('preserves an out-of-band selector that appears before removing a first selector', () => {
+    const outOfBandSelector = `releases/${'c'.repeat(40)}`;
+    const f = publicationFixture();
+
+    const failed = runPublish(f, {
+      RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_MANIFEST_FETCH: '1',
+      ...rollbackRaceEnvironment(f, outOfBandSelector),
+    });
+
+    expectContentFreeFailure(f, failed);
+    expect(readFileSync(f.commandLog, 'utf8')).toContain('rollback-race\n');
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(outOfBandSelector);
     expect(releaseBytes(f.artifactRoot, releaseSha).updateManifest).toEqual(
       readFileSync(f.files.updateManifest),
     );
@@ -999,7 +1094,7 @@ describe('Runtime Raiders artifact publication', () => {
     const commands = readFileSync(environment.commandLog, 'utf8');
     expect(commands.match(/install -d -o root -g root -m 0755/g)).toHaveLength(2);
     expect(commands.match(/install -o root -g root -m 0644/g)).toHaveLength(4);
-    expect(commands).toContain(`curl --proto =https --fail --silent --show-error --max-time 30 --max-filesize 134217728 --output`);
+    expect(commands).toContain(`curl --disable --no-location --proto =https --fail --silent --show-error --max-time 30 --max-filesize 134217728 --output`);
     expect(commands).toContain(zipUrl);
     expect(commands).toContain('https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json');
     expect(commands).not.toContain('--location');

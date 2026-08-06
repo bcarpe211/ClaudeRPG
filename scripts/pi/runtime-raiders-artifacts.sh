@@ -31,6 +31,7 @@ require_companion_version() {
 sha256_file() { sha256sum -- "$1" 2>/dev/null | awk 'NR == 1 && NF >= 1 { print $1; exit }'; }
 metadata() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null; }
 ownership() { stat -c '%u:%g' -- "$1" 2>/dev/null; }
+selector_identity() { stat -c '%d:%i' -- "$1" 2>/dev/null; }
 
 require_directory() {
   test -d "$1" && test ! -L "$1" || die "$2 must be a nonsymlink directory"
@@ -370,8 +371,10 @@ capture_previous_selector() {
 restore_previous_selector() {
   local selected_selector="releases/$RELEASE_SHA"
   local actual_selector
+  local observed_identity
   test -L "$CURRENT" || return 1
   test "$(ownership "$CURRENT")" = '0:0' || return 1
+  observed_identity=$(selector_identity "$CURRENT") || return 1
   actual_selector=$(readlink "$CURRENT" 2>/dev/null) || return 1
   test "$actual_selector" = "$selected_selector" || return 1
   if test -n "$PREVIOUS_SELECTOR"; then
@@ -381,6 +384,17 @@ restore_previous_selector() {
     fi
     ln -s -- "$PREVIOUS_SELECTOR" "$rollback_candidate" 2>/dev/null || return 1
     TEMP_SELECTOR=$rollback_candidate
+  fi
+  if [[ ${RUNTIME_RAIDERS_TEST_MODE:-0} == 1 ]] &&
+      test -n "${RUNTIME_RAIDERS_TEST_BEFORE_ROLLBACK_MUTATION:-}"; then
+    "$RUNTIME_RAIDERS_TEST_BEFORE_ROLLBACK_MUTATION" || return 1
+  fi
+  test -L "$CURRENT" || return 1
+  test "$(ownership "$CURRENT")" = '0:0' || return 1
+  test "$(selector_identity "$CURRENT")" = "$observed_identity" || return 1
+  actual_selector=$(readlink "$CURRENT" 2>/dev/null) || return 1
+  test "$actual_selector" = "$selected_selector" || return 1
+  if test -n "$PREVIOUS_SELECTOR"; then
     mv -T -- "$TEMP_SELECTOR" "$CURRENT" 2>/dev/null || return 1
     TEMP_SELECTOR=
   else
@@ -403,13 +417,13 @@ verify_selected_public_release() {
   test "$(metadata "$VERIFY")" = '0:0:700' || return 1
   fetched_zip=$VERIFY/runtime-raiders-agent.zip
   fetched_manifest=$VERIFY/runtime-raiders-agent.update.json
-  "$CURL" --proto '=https' --fail --silent --show-error --max-time 30 \
+  "$CURL" --disable --no-location --proto '=https' --fail --silent --show-error --max-time 30 \
     --max-filesize 134217728 --output "$fetched_zip" "$PUBLIC_ZIP_URL" || return 1
   require_regular_file "$fetched_zip" 'fetched public ZIP'
   byte_count=$(wc -c < "$fetched_zip" 2>/dev/null | tr -d ' ') || return 1
   [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le 134217728 || return 1
   test "$(sha256_file "$fetched_zip")" = "$ZIP_SHA256" || return 1
-  "$CURL" --proto '=https' --fail --silent --show-error --max-time 30 \
+  "$CURL" --disable --no-location --proto '=https' --fail --silent --show-error --max-time 30 \
     --max-filesize 65536 --output "$fetched_manifest" "$PUBLIC_UPDATE_MANIFEST_URL" || return 1
   require_regular_file "$fetched_manifest" 'fetched public update manifest'
   byte_count=$(wc -c < "$fetched_manifest" 2>/dev/null | tr -d ' ') || return 1
