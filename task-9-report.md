@@ -119,3 +119,10 @@ rejects removed nonsymlink validation and swapped status/doctor order.
 The focused documentation suite passed 17/17 with no runbook change. This round
 is test/report-only; no live action occurred and the controller-owned
 `.superpowers` ledger remains excluded.
+
+## Fix Round 4
+
+The ordered cadence contract now requires the pre-due refusal's specific
+`exit 1` after its message and before the exact launchd restart. A mutation
+witness removes that exit and proves the contract assertion fails. This round
+changes only the test and report; the accepted canary document remains intact.

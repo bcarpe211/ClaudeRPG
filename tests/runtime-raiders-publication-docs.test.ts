@@ -280,6 +280,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
       "date -u -r $((DUE_MS / 1000)) '+%Y-%m-%dT%H:%M:%SZ'",
       'test "$NOW_MS" -ge "$DUE_MS"',
       "printf '%s\\n' 'Runtime Raiders update check is not due; refusing restart.' >&2",
+      'exit 1\n  }',
       'launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"',
       'raiders status',
       'raiders doctor',
@@ -300,6 +301,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     );
     expect(() => assertOrdered(statusDoctorDrift)).toThrow();
     expect(() => assertOrdered(block.replace('test ! -L "$UPDATE_STATE"\n', ''))).toThrow();
+    expect(() => assertOrdered(block.replace('exit 1\n  }\n  launchctl kickstart', '}\n  launchctl kickstart'))).toThrow();
   });
 
   it('does not present unapproved 2026-08-04 work as verified evidence', () => {
