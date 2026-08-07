@@ -124,7 +124,7 @@ private struct Parser {
             let externalAttributes = try u32(cursor + 38)
             let localOffset = try u32(cursor + 42)
             guard needed < 45,
-                  flags == 0,
+                  flags == 0 || flags == 0x0008,
                   method == 0 || method == 8,
                   compressed != UInt32.max,
                   uncompressed != UInt32.max,
@@ -209,11 +209,25 @@ private struct Parser {
     ) throws -> Range<Int> {
         guard try u32(offset) == 0x04034b50,
               try u16(offset + 6) == flags,
-              try u16(offset + 8) == method,
-              try u32(offset + 14) == crc,
-              try u32(offset + 18) == compressed,
-              try u32(offset + 22) == uncompressed else {
+              try u16(offset + 8) == method else {
             throw invalid
+        }
+        let localCRC = try u32(offset + 14)
+        let localCompressed = try u32(offset + 18)
+        let localUncompressed = try u32(offset + 22)
+        if flags == 0 {
+            guard localCRC == crc,
+                  localCompressed == compressed,
+                  localUncompressed == uncompressed else {
+                throw invalid
+            }
+        } else {
+            guard flags == 0x0008,
+                  localCRC == 0,
+                  localCompressed == 0,
+                  localUncompressed == 0 else {
+                throw invalid
+            }
         }
         let nameLength = Int(try u16(offset + 26))
         let extraLength = Int(try u16(offset + 28))
@@ -226,6 +240,17 @@ private struct Parser {
             throw invalid
         }
         try rejectZip64Extra(range: extraStart..<dataStart)
+        if flags == 0x0008 {
+            let descriptorEnd = try checked(dataEnd, plus: 16)
+            guard descriptorEnd <= centralOffset,
+                  try u32(dataEnd) == 0x08074b50,
+                  try u32(dataEnd + 4) == crc,
+                  try u32(dataEnd + 8) == compressed,
+                  try u32(dataEnd + 12) == uncompressed else {
+                throw invalid
+            }
+            return offset..<descriptorEnd
+        }
         return offset..<dataEnd
     }
 

@@ -221,12 +221,21 @@ INFO_PLIST="$APP/Contents/Info.plist"
 codesign --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 --all-architectures -R="$REQUIREMENT" "$APP"
 NOTARY_ZIP="$WORK/notary.zip"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
 xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$RUNTIME_RAIDERS_NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 codesign --verify --strict --verbose=2 --all-architectures -R="$REQUIREMENT" "$APP"
-(cd "$WORK" && /usr/bin/zip -q -r -X "$STAGED_OUTPUT/runtime-raiders-agent.zip" 'Runtime Raiders Agent.app')
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$STAGED_OUTPUT/runtime-raiders-agent.zip"
+ARCHIVE_VALIDATION="$(mktemp -d "$WORK/archive-validation.XXXXXX")"
+/usr/bin/ditto -x -k "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$ARCHIVE_VALIDATION"
+PACKAGED_APP="$ARCHIVE_VALIDATION/Runtime Raiders Agent.app"
+[ -d "$PACKAGED_APP" ] && [ ! -L "$PACKAGED_APP" ] || {
+  echo "release archive extraction validation failed" >&2
+  exit 1
+}
+codesign --verify --strict --verbose=2 --all-architectures -R="$REQUIREMENT" "$PACKAGED_APP"
+xcrun stapler validate "$PACKAGED_APP"
 "$RELEASE_VALIDATOR" "$STAGED_OUTPUT/runtime-raiders-agent.zip" || {
   echo "release archive shape validation failed" >&2
   exit 1

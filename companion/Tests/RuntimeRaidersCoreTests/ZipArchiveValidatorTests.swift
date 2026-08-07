@@ -13,6 +13,160 @@ final class ZipArchiveValidatorTests: XCTestCase {
         }
     }
 
+    func testAcceptsExactSignedDataDescriptorForm() throws {
+        let entries = [
+            validEntries()[0],
+            ZipEntry(
+                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                flags: 0x0008,
+                data: Data("abc".utf8)
+            ),
+        ]
+        try withArchive(entries: entries) { archive in
+            XCTAssertEqual(
+                try ZipArchiveValidator.validate(archive),
+                ZipArchiveSummary(entryCount: 2, totalUncompressedSize: 3)
+            )
+        }
+    }
+
+    func testAcceptsArchiveCreatedByMacOSDitto() throws {
+        let staging = temporaryURL(prefix: "rr-ditto-source")
+        let archive = temporaryURL(prefix: "rr-ditto-archive").appendingPathExtension("zip")
+        defer {
+            try? FileManager.default.removeItem(at: staging)
+            try? FileManager.default.removeItem(at: archive)
+        }
+        let app = staging.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        try Data("plist".utf8).write(to: contents.appendingPathComponent("Info.plist"))
+
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = [
+            "-c", "-k", "--sequesterRsrc", "--keepParent", app.path, archive.path,
+        ]
+        try ditto.run()
+        ditto.waitUntilExit()
+        XCTAssertEqual(ditto.terminationStatus, 0)
+
+        XCTAssertEqual(
+            try ZipArchiveValidator.validate(archive),
+            ZipArchiveSummary(entryCount: 3, totalUncompressedSize: 5)
+        )
+    }
+
+    func testRejectsUnsupportedGeneralPurposeFlagBitsAndCombinations() throws {
+        for flags: UInt16 in [0x0001, 0x0002, 0x0004, 0x0009, 0x0800] {
+            try assertInvalid(entries: [
+                validEntries()[0],
+                ZipEntry(
+                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                    flags: flags,
+                    data: Data("abc".utf8)
+                ),
+            ])
+        }
+    }
+
+    func testRejectsDescriptorEntriesWithoutExactZeroLocalPlaceholders() throws {
+        for placeholders in [
+            (crc: UInt32(1), compressed: UInt32(0), uncompressed: UInt32(0)),
+            (crc: UInt32(0), compressed: UInt32(1), uncompressed: UInt32(0)),
+            (crc: UInt32(0), compressed: UInt32(0), uncompressed: UInt32(1)),
+        ] {
+            try assertInvalid(entries: [
+                validEntries()[0],
+                ZipEntry(
+                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                    flags: 0x0008,
+                    data: Data("abc".utf8),
+                    localCRC: placeholders.crc,
+                    localCompressedSize: placeholders.compressed,
+                    localUncompressedSize: placeholders.uncompressed
+                ),
+            ])
+        }
+    }
+
+    func testRejectsCentralAndLocalDescriptorFlagMismatch() throws {
+        try assertInvalid(entries: [
+            validEntries()[0],
+            ZipEntry(
+                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                flags: 0x0008,
+                localFlags: 0,
+                data: Data("abc".utf8)
+            ),
+        ])
+        try assertInvalid(entries: [
+            validEntries()[0],
+            ZipEntry(
+                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                flags: 0,
+                localFlags: 0x0008,
+                data: Data("abc".utf8)
+            ),
+        ])
+    }
+
+    func testRejectsMissingTruncatedOrUnsignedDataDescriptors() throws {
+        for descriptor in [
+            Data(),
+            Data(repeating: 0, count: 15),
+            dataDescriptor(signature: nil, crc: 0, compressedSize: 3, uncompressedSize: 3),
+        ] {
+            try assertInvalid(entries: [
+                validEntries()[0],
+                ZipEntry(
+                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                    flags: 0x0008,
+                    data: Data("abc".utf8),
+                    dataDescriptor: descriptor
+                ),
+            ])
+        }
+    }
+
+    func testRejectsWrongSignatureAndMismatchedDescriptorValues() throws {
+        for descriptor in [
+            dataDescriptor(signature: 0x08074b51, crc: 0, compressedSize: 3, uncompressedSize: 3),
+            dataDescriptor(signature: 0x08074b50, crc: 1, compressedSize: 3, uncompressedSize: 3),
+            dataDescriptor(signature: 0x08074b50, crc: 0, compressedSize: 2, uncompressedSize: 3),
+            dataDescriptor(signature: 0x08074b50, crc: 0, compressedSize: 3, uncompressedSize: 2),
+        ] {
+            try assertInvalid(entries: [
+                validEntries()[0],
+                ZipEntry(
+                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                    flags: 0x0008,
+                    data: Data("abc".utf8),
+                    dataDescriptor: descriptor
+                ),
+            ])
+        }
+    }
+
+    func testRejectsZip64LengthDataDescriptor() throws {
+        var descriptor = dataDescriptor(
+            signature: 0x08074b50,
+            crc: 0,
+            compressedSize: 3,
+            uncompressedSize: 3
+        )
+        descriptor.append(Data(repeating: 0, count: 8))
+        try assertInvalid(entries: [
+            validEntries()[0],
+            ZipEntry(
+                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+                flags: 0x0008,
+                data: Data("abc".utf8),
+                dataDescriptor: descriptor
+            ),
+        ])
+    }
+
     func testRejectsUnexpectedOrMissingApplicationRoot() throws {
         for entries in [
             [ZipEntry(name: "Other.app/", directory: true)],
@@ -212,6 +366,20 @@ final class ZipArchiveValidatorTests: XCTestCase {
         URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
     }
+
+    private func dataDescriptor(
+        signature: UInt32?,
+        crc: UInt32,
+        compressedSize: UInt32,
+        uncompressedSize: UInt32
+    ) -> Data {
+        var data = Data()
+        if let signature { data.appendLE(signature) }
+        data.appendLE(crc)
+        data.appendLE(compressedSize)
+        data.appendLE(uncompressedSize)
+        return data
+    }
 }
 
 private struct ZipEntry {
@@ -219,34 +387,59 @@ private struct ZipEntry {
     let localNameBytes: [UInt8]
     let method: UInt16
     let flags: UInt16
+    let localFlags: UInt16
     let data: Data
+    let crc32: UInt32
     let uncompressedSize: UInt32
     let unixMode: UInt32
     let centralCompressedSize: UInt32?
     let localHeaderOffset: UInt32?
+    let localCRC: UInt32
+    let localCompressedSize: UInt32
+    let localUncompressedSize: UInt32
+    let dataDescriptor: Data?
 
     init(
         name: String,
         localName: String? = nil,
         method: UInt16 = 0,
         flags: UInt16 = 0,
+        localFlags: UInt16? = nil,
         data: Data = Data(),
+        crc32: UInt32 = 0,
         uncompressedSize: UInt32? = nil,
         directory: Bool = false,
         unixMode: UInt32? = nil,
         centralCompressedSize: UInt32? = nil,
-        localHeaderOffset: UInt32? = nil
+        localHeaderOffset: UInt32? = nil,
+        localCRC: UInt32? = nil,
+        localCompressedSize: UInt32? = nil,
+        localUncompressedSize: UInt32? = nil,
+        dataDescriptor: Data? = nil
     ) {
+        let resolvedUncompressedSize = uncompressedSize ?? UInt32(data.count)
+        let resolvedCentralCompressedSize = centralCompressedSize ?? UInt32(data.count)
+        let usesDataDescriptor = flags == 0x0008
         self.init(
             nameBytes: Array(name.utf8),
             localNameBytes: Array((localName ?? name).utf8),
             method: method,
             flags: flags,
+            localFlags: localFlags ?? flags,
             data: data,
-            uncompressedSize: uncompressedSize ?? UInt32(data.count),
+            crc32: crc32,
+            uncompressedSize: resolvedUncompressedSize,
             unixMode: unixMode ?? UInt32((directory ? S_IFDIR | 0o755 : S_IFREG | 0o644)),
             centralCompressedSize: centralCompressedSize,
-            localHeaderOffset: localHeaderOffset
+            localHeaderOffset: localHeaderOffset,
+            localCRC: localCRC ?? (usesDataDescriptor ? 0 : crc32),
+            localCompressedSize: localCompressedSize ?? (usesDataDescriptor ? 0 : UInt32(data.count)),
+            localUncompressedSize: localUncompressedSize ?? (usesDataDescriptor ? 0 : resolvedUncompressedSize),
+            dataDescriptor: dataDescriptor ?? (usesDataDescriptor ? Self.dataDescriptor(
+                crc: crc32,
+                compressedSize: resolvedCentralCompressedSize,
+                uncompressedSize: resolvedUncompressedSize
+            ) : nil)
         )
     }
 
@@ -256,11 +449,17 @@ private struct ZipEntry {
             localNameBytes: nameBytes,
             method: 0,
             flags: 0,
+            localFlags: 0,
             data: data,
+            crc32: 0,
             uncompressedSize: UInt32(data.count),
             unixMode: UInt32(S_IFREG | 0o644),
             centralCompressedSize: nil,
-            localHeaderOffset: nil
+            localHeaderOffset: nil,
+            localCRC: 0,
+            localCompressedSize: UInt32(data.count),
+            localUncompressedSize: UInt32(data.count),
+            dataDescriptor: nil
         )
     }
 
@@ -269,21 +468,46 @@ private struct ZipEntry {
         localNameBytes: [UInt8],
         method: UInt16,
         flags: UInt16,
+        localFlags: UInt16,
         data: Data,
+        crc32: UInt32,
         uncompressedSize: UInt32,
         unixMode: UInt32,
         centralCompressedSize: UInt32?,
-        localHeaderOffset: UInt32?
+        localHeaderOffset: UInt32?,
+        localCRC: UInt32,
+        localCompressedSize: UInt32,
+        localUncompressedSize: UInt32,
+        dataDescriptor: Data?
     ) {
         self.nameBytes = nameBytes
         self.localNameBytes = localNameBytes
         self.method = method
         self.flags = flags
+        self.localFlags = localFlags
         self.data = data
+        self.crc32 = crc32
         self.uncompressedSize = uncompressedSize
         self.unixMode = unixMode
         self.centralCompressedSize = centralCompressedSize
         self.localHeaderOffset = localHeaderOffset
+        self.localCRC = localCRC
+        self.localCompressedSize = localCompressedSize
+        self.localUncompressedSize = localUncompressedSize
+        self.dataDescriptor = dataDescriptor
+    }
+
+    private static func dataDescriptor(
+        crc: UInt32,
+        compressedSize: UInt32,
+        uncompressedSize: UInt32
+    ) -> Data {
+        var data = Data()
+        data.appendLE(UInt32(0x08074b50))
+        data.appendLE(crc)
+        data.appendLE(compressedSize)
+        data.appendLE(uncompressedSize)
+        return data
     }
 }
 
@@ -305,17 +529,20 @@ private struct ZipBuilder {
             actualOffsets.append(UInt32(archive.count))
             archive.appendLE(UInt32(0x04034b50))
             archive.appendLE(UInt16(20))
-            archive.appendLE(entry.flags)
+            archive.appendLE(entry.localFlags)
             archive.appendLE(entry.method)
             archive.appendLE(UInt16(0))
             archive.appendLE(UInt16(0))
-            archive.appendLE(UInt32(0))
-            archive.appendLE(UInt32(entry.data.count))
-            archive.appendLE(entry.uncompressedSize)
+            archive.appendLE(entry.localCRC)
+            archive.appendLE(entry.localCompressedSize)
+            archive.appendLE(entry.localUncompressedSize)
             archive.appendLE(UInt16(entry.localNameBytes.count))
             archive.appendLE(UInt16(0))
             archive.append(contentsOf: entry.localNameBytes)
             archive.append(entry.data)
+            if let dataDescriptor = entry.dataDescriptor {
+                archive.append(dataDescriptor)
+            }
         }
 
         archive.append(Data(repeating: 0xa5, count: options.undeclaredBytesBeforeCentralDirectory))
@@ -329,7 +556,7 @@ private struct ZipBuilder {
             archive.appendLE(entry.method)
             archive.appendLE(UInt16(0))
             archive.appendLE(UInt16(0))
-            archive.appendLE(UInt32(0))
+            archive.appendLE(entry.crc32)
             archive.appendLE(entry.centralCompressedSize ?? UInt32(entry.data.count))
             archive.appendLE(entry.uncompressedSize)
             archive.appendLE(UInt16(entry.nameBytes.count))

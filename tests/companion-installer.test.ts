@@ -328,13 +328,27 @@ function buildCacheIdentity(path: string): string[] {
 
 type ReleaseBuilderFixture = { build: string; repository: string; releaseSHA: string };
 
-function disposableReleaseBuilder(root: string): ReleaseBuilderFixture {
+type ReleaseBuilderFixtureOptions = {
+  interceptAbsoluteDitto?: boolean;
+};
+
+function disposableReleaseBuilder(
+  root: string,
+  options: ReleaseBuilderFixtureOptions = {},
+): ReleaseBuilderFixture {
   const repository = join(root, 'repository');
   const fixtureBuild = join(repository, 'scripts/release/build-runtime-raiders-agent.sh');
   const fixtureInstaller = join(repository, 'companion/packaging/install.sh');
   mkdirSync(join(repository, 'scripts/release'), { recursive: true });
   mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
-  writeFileSync(fixtureBuild, readFileSync(build));
+  let fixtureBuildContents = readFileSync(build, 'utf8');
+  if (options.interceptAbsoluteDitto) {
+    fixtureBuildContents = fixtureBuildContents.replaceAll(
+      '/usr/bin/ditto',
+      '"$RUNTIME_RAIDERS_TEST_DITTO"',
+    );
+  }
+  writeFileSync(fixtureBuild, fixtureBuildContents);
   writeFileSync(fixtureInstaller, readFileSync(installer));
   writeFileSync(join(repository, 'companion/RELEASE'), readFileSync(join(process.cwd(), 'companion/RELEASE')));
   execFileSync('/usr/bin/git', ['init', '-q'], { cwd: repository });
@@ -1409,10 +1423,19 @@ describe('Runtime Raiders release build', () => {
     }
   });
 
-  it('builds, signs, notarizes, staples, rezips, and checksums a universal app without publishing', () => {
-    // Catches a release that writes its test build into the repository cache.
+  it('creates, extracts, and revalidates the notarized ditto archive before emitting a quartet', () => {
+    // Catches final packaging that drops macOS signature metadata or trusts only the pre-archive app.
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-release-flow-'));
     try {
+      const builderContents = readFileSync(build, 'utf8');
+      expect(builderContents).toContain(
+        '/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$STAGED_OUTPUT/runtime-raiders-agent.zip"',
+      );
+      expect(builderContents).toContain(
+        '/usr/bin/ditto -x -k "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$ARCHIVE_VALIDATION"',
+      );
+      expect(builderContents).not.toContain('/usr/bin/zip');
+
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
       const log = join(root, 'commands.log');
@@ -1435,22 +1458,30 @@ describe('Runtime Raiders release build', () => {
       ]);
       executable(join(fake, 'xcrun'), ['printf "xcrun %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"']);
       executable(join(fake, 'shasum'), [
+        'printf "shasum %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
         'if [ "$FAKE_RELEASE_SHASUM_FAIL" = 1 ]; then exit 1; fi',
         'exec /usr/bin/shasum "$@"',
       ]);
       const output = join(root, 'output');
       const scratch = join(root, 'scratch');
       const releaseValidator = productionReleaseValidator(root);
-      const fixture = disposableReleaseBuilder(root);
+      const loggingReleaseValidator = join(root, 'logging-release-validator');
+      executable(loggingReleaseValidator, [
+        'printf "release-validator %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+        'exec "$RUNTIME_RAIDERS_TEST_PRODUCTION_RELEASE_VALIDATOR" "$@"',
+      ]);
+      const fixture = disposableReleaseBuilder(root, { interceptAbsoluteDitto: true });
       const repositoryCacheBefore = buildCacheIdentity(join(process.cwd(), 'companion/.build'));
       const result = invoke(fixture.build, releaseBuildArgs(fixture.releaseSHA, '--output', output, '--scratch-path', scratch), {
         ...process.env,
         PATH: fake + ':/usr/bin:/bin',
         RUNTIME_RAIDERS_TEST_LOG: log,
+        RUNTIME_RAIDERS_TEST_DITTO: join(fake, 'ditto'),
         RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
         RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
         RUNTIME_RAIDERS_TEAM_ID: teamId,
-        RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR: releaseValidator,
+        RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR: loggingReleaseValidator,
+        RUNTIME_RAIDERS_TEST_PRODUCTION_RELEASE_VALIDATOR: releaseValidator,
         FAKE_RELEASE_SHASUM_FAIL: '0',
       });
       expect(result.status, result.stderr).toBe(0);
@@ -1509,11 +1540,149 @@ describe('Runtime Raiders release build', () => {
       expect(commands).toContain('--wait');
       expect(commands).toContain('xcrun stapler staple');
       expect(commands).toContain('xcrun stapler validate');
-      const dittoCommands = commands.split('\n').filter((line) => line.startsWith('ditto '));
-      expect(dittoCommands).toHaveLength(1);
-      expect(dittoCommands[0]).toContain('--sequesterRsrc');
-      expect(zipFacts).not.toContain('extended local header:                          yes');
+      const commandLines = commands.trim().split('\n');
+      const dittoCommands = commandLines.filter((line) => line.startsWith('ditto '));
+      expect(dittoCommands).toHaveLength(3);
+      expect(dittoCommands.filter((line) => line.includes('-c -k --sequesterRsrc --keepParent'))).toHaveLength(2);
+      expect(dittoCommands.filter((line) => line.startsWith('ditto -x -k '))).toHaveLength(1);
+      expect(commandLines.filter((line) => line.startsWith('xcrun notarytool submit '))).toHaveLength(1);
+      expect(commandLines.filter((line) => line.startsWith('xcrun stapler staple '))).toHaveLength(1);
+      expect(commandLines.filter((line) => line.startsWith('codesign --verify '))).toHaveLength(3);
+      expect(commandLines.filter((line) => line.startsWith('xcrun stapler validate '))).toHaveLength(2);
+
+      const notaryCreate = commandLines.findIndex((line) =>
+        line.startsWith('ditto -c -k --sequesterRsrc --keepParent ') && line.endsWith('/notary.zip'));
+      const notarySubmit = commandLines.findIndex((line) => line.startsWith('xcrun notarytool submit '));
+      const staple = commandLines.findIndex((line) => line.startsWith('xcrun stapler staple '));
+      const finalCreate = commandLines.findIndex((line) =>
+        line.startsWith('ditto -c -k --sequesterRsrc --keepParent ') &&
+        line.endsWith('/runtime-raiders-agent.zip'));
+      const extract = commandLines.findIndex((line) => line.startsWith('ditto -x -k '));
+      const extractedCodesign = commandLines.findIndex((line) =>
+        line.startsWith('codesign --verify ') && line.includes('/archive-validation.'));
+      const extractedStapler = commandLines.findIndex((line) =>
+        line.startsWith('xcrun stapler validate ') && line.includes('/archive-validation.'));
+      const archiveValidator = commandLines.findIndex((line) => line.startsWith('release-validator '));
+      const checksum = commandLines.findIndex((line) => line.startsWith('shasum -a 256 '));
+      expect([
+        notaryCreate,
+        notarySubmit,
+        staple,
+        finalCreate,
+        extract,
+        extractedCodesign,
+        extractedStapler,
+        archiveValidator,
+        checksum,
+      ].every((index) => index >= 0)).toBe(true);
+      expect(notaryCreate).toBeLessThan(notarySubmit);
+      expect(notarySubmit).toBeLessThan(staple);
+      expect(staple).toBeLessThan(finalCreate);
+      expect(finalCreate).toBeLessThan(extract);
+      expect(extract).toBeLessThan(extractedCodesign);
+      expect(extractedCodesign).toBeLessThan(extractedStapler);
+      expect(extractedStapler).toBeLessThan(archiveValidator);
+      expect(archiveValidator).toBeLessThan(checksum);
+      expect(zipFacts).toContain('extended local header:                          yes');
       expect(commands).not.toMatch(/upload|publish|aws|s3|rsync|scp/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('aborts on post-extraction codesign failure without emitting or replacing a quartet', () => {
+    // Catches trusting pre-archive verification when packaging has invalidated the emitted app.
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-packaged-signature-'));
+    try {
+      const fake = join(root, 'fakes');
+      mkdirSync(fake, { recursive: true });
+      const log = join(root, 'commands.log');
+      fakeReleaseSwift(fake);
+      executable(join(fake, 'lipo'), [
+        'output=""; while [ "$#" -gt 0 ]; do if [ "$1" = "-output" ]; then output="$2"; shift 2; else shift; fi; done',
+        'printf universal > "$output"',
+      ]);
+      executable(join(fake, 'ditto'), [
+        'printf "ditto %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+        'if [ "$1" = -x ]; then',
+        '  /usr/bin/ditto "$@"',
+        '  : > "$4/Runtime Raiders Agent.app/Contents/.post-extraction"',
+        '  exit 0',
+        'fi',
+        'exec /usr/bin/ditto "$@"',
+      ]);
+      executable(join(fake, 'codesign'), [
+        'printf "codesign %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+        'verify=0; last=""',
+        'for argument in "$@"; do [ "$argument" = --verify ] && verify=1; last="$argument"; done',
+        'if [ "$verify" -eq 1 ] && [ -f "$last/Contents/.post-extraction" ]; then',
+        '  printf "post-extraction codesign failure\\n" >&2',
+        '  exit 86',
+        'fi',
+      ]);
+      executable(join(fake, 'xcrun'), [
+        'printf "xcrun %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+      ]);
+      executable(join(fake, 'shasum'), [
+        'printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"',
+      ]);
+      const fixture = disposableReleaseBuilder(root, { interceptAbsoluteDitto: true });
+      const environment = {
+        ...process.env,
+        PATH: fake + ':/usr/bin:/bin',
+        RUNTIME_RAIDERS_TEST_LOG: log,
+        RUNTIME_RAIDERS_TEST_DITTO: join(fake, 'ditto'),
+        RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+        RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+        RUNTIME_RAIDERS_TEAM_ID: teamId,
+      };
+
+      const firstOutput = join(root, 'first-output');
+      const first = invoke(
+        fixture.build,
+        releaseBuildArgs(
+          fixture.releaseSHA,
+          '--output', firstOutput,
+          '--scratch-path', join(root, 'first-scratch'),
+        ),
+        environment,
+      );
+      expect(first.status).not.toBe(0);
+      expect(first.stderr).toContain('post-extraction codesign failure');
+      expect(existsSync(firstOutput)).toBe(false);
+      const firstCommands = readFileSync(log, 'utf8').trim().split('\n');
+      const firstVerifications = firstCommands.filter((line) => line.startsWith('codesign --verify '));
+      expect(firstVerifications).toHaveLength(3);
+      expect(firstVerifications[0]).not.toContain('/archive-validation.');
+      expect(firstVerifications[1]).not.toContain('/archive-validation.');
+      expect(firstVerifications[2]).toContain('/archive-validation.');
+      expect(firstCommands.filter((line) => line.startsWith('xcrun notarytool submit '))).toHaveLength(1);
+
+      writeFileSync(log, '');
+      const existingOutput = join(root, 'existing-output');
+      const quartet = [
+        'install.sh',
+        'runtime-raiders-agent.zip',
+        'runtime-raiders-agent.zip.sha256',
+        'runtime-raiders-agent.update.json',
+      ];
+      mkdirSync(existingOutput, { recursive: true });
+      for (const target of quartet) writeFileSync(join(existingOutput, target), `old ${target}`);
+
+      const replacement = invoke(
+        fixture.build,
+        releaseBuildArgs(
+          fixture.releaseSHA,
+          '--output', existingOutput,
+          '--scratch-path', join(root, 'replacement-scratch'),
+        ),
+        environment,
+      );
+      expect(replacement.status).not.toBe(0);
+      expect(replacement.stderr).toContain('post-extraction codesign failure');
+      for (const target of quartet) {
+        expect(readFileSync(join(existingOutput, target), 'utf8')).toBe(`old ${target}`);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
