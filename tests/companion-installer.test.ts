@@ -13,7 +13,7 @@ const enrollmentCode = 'c'.repeat(43);
 const teamId = 'ABCDE12345';
 const releaseSHA = 'd'.repeat(40);
 const companionVersion = '0.2.0';
-const releaseSequence = '1';
+const releaseSequence = '2';
 const updateProtocolVersion = '1';
 
 function executable(path: string, lines: string[]): void {
@@ -356,7 +356,7 @@ describe('Runtime Raiders companion installer', () => {
     const mutations: Array<[string, Partial<CandidateIdentity>]> = [
       ['bundle ID', { bundleID: 'com.redlattice.other-agent' }],
       ['companion version', { companionVersion: '0.2.1' }],
-      ['release sequence', { releaseSequence: '2' }],
+      ['release sequence', { releaseSequence: '3' }],
       ['release SHA', { releaseSHA: 'e'.repeat(40) }],
       ['update protocol', { updateProtocolVersion: '2' }],
     ];
@@ -1236,7 +1236,7 @@ describe('Runtime Raiders release build', () => {
       ).trim();
       expect(value('CFBundleIdentifier')).toBe('com.redlattice.runtime-raiders-agent');
       expect(value('CFBundleShortVersionString')).toBe('0.2.0');
-      expect(value('RuntimeRaidersReleaseSequence')).toBe('1');
+      expect(value('RuntimeRaidersReleaseSequence')).toBe('2');
       expect(value('RuntimeRaidersReleaseSHA')).toBe(fixture.releaseSHA);
       expect(value('RuntimeRaidersUpdateProtocolVersion')).toBe('1');
     } finally {
@@ -1479,7 +1479,7 @@ describe('Runtime Raiders release build', () => {
       expect(readFileSync(join(output, 'runtime-raiders-agent.update.json'), 'utf8')).toBe(JSON.stringify({
         companion_version: companionVersion,
         manifest_version: 1,
-        release_sequence: 1,
+        release_sequence: 2,
         release_sha: fixture.releaseSHA,
         update_protocol_version: 1,
         zip_sha256: zipDigest,

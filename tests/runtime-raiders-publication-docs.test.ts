@@ -91,6 +91,16 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(operations).toMatch(/verify[^.]*SHA-256[^.]*before execution/i);
   });
 
+  it('documents sequence-2 publication recovery and defers manual update proof to sequence 3', () => {
+    expect(operations).toContain('Sequence 1 is withdrawn and consumed');
+    expect(operations).toContain('release_sequence=2');
+    expect(operations).toContain('## Install the sequence-2 canary locally and persistently off');
+    expect(operations).toMatch(/publisher[\s\S]*all four[\s\S]*bounded retries/i);
+    expect(operations).toMatch(/verification failure[\s\S]*restores[\s\S]*selector/i);
+    expect(operations).toMatch(/sequence 2 becomes the initial installed-off canary/i);
+    expect(operations).toMatch(/manual `raiders update` proof[\s\S]*sequence 3/i);
+  });
+
   it('keeps the routine pipe distinct from the verified local canary installer', () => {
     for (const document of [runbook, operations]) {
       expect(document).not.toMatch(/--code(?:\s|=)/);
@@ -101,7 +111,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     const routine = operations.slice(operations.indexOf('## Routine office installation'));
     expect(routine).toContain('curl --fail --silent --show-error https://raiders.redlattice.com/install.sh | /bin/sh');
     const installedOff = operations.slice(
-      operations.indexOf('## Install the sequence-1 canary'),
+      operations.indexOf('## Install the sequence-2 canary'),
       operations.indexOf('## Routine office installation'),
     );
     expect(installedOff).toContain('--output "$CANARY_INSTALLER"');

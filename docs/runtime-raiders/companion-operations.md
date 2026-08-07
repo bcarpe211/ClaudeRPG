@@ -13,21 +13,29 @@ code. The exact public URLs are `/install.sh`, the ZIP, its checksum, and
 `/downloads/runtime-raiders-agent.update.json` under
 `https://raiders.redlattice.com`.
 
-Build from the exact clean `RELEASE_SHA`. `companion/RELEASE` is tracked and
-has four exact lines: its format version, companion version, monotonic release
-sequence, and update protocol version. Sequence 1 and sequence 2 have distinct
-reviewed commits and immutable release directories; version strings do not
-authorize a downgrade. The build signs, notarizes, staples, validates, and
-transactionally emits all four files. Record these four separate values only in
-the restricted operator record: `INSTALLER_SHA256`, `ZIP_SHA256`,
-`CHECKSUM_SHA256`, and `UPDATE_MANIFEST_SHA256`, plus `RELEASE_SEQUENCE` and
-`COMPANION_VERSION`.
+Sequence 1 is withdrawn and consumed. Its immutable release directory is
+evidence; never reuse, reselect, modify, delete, or repackage it. This recovery
+uses a new clean `RELEASE_SHA` with exactly this tracked identity:
 
-Approval order is: Caddy route preparation; sequence-1 publication;
-sequence-1 installed-off canary; sequence-2 build/review/publication; manual
-update proof; bounded live provider canary; then office activation. Passing one
-gate never implies the next. Caddy preparation leaves
-`/var/lib/runtime-raiders/current` absent and all four URLs return `404`.
+```text
+version=1
+companion_version=0.2.0
+release_sequence=2
+update_protocol_version=1
+```
+
+Version strings do not authorize a downgrade or sequence reuse. The build
+signs, notarizes, staples, validates, and transactionally emits all four files.
+Record these four separate values only in the restricted operator record:
+`INSTALLER_SHA256`, `ZIP_SHA256`, `CHECKSUM_SHA256`, and
+`UPDATE_MANIFEST_SHA256`, plus `RELEASE_SEQUENCE` and `COMPANION_VERSION`.
+
+Approval order is: Caddy route preparation; recovery sequence-2
+build/review/publication; sequence-2 installed-off canary; separately reviewed
+and published sequence 3; manual update proof; bounded live provider canary;
+then office activation. Passing one gate never implies the next. Caddy
+preparation leaves `/var/lib/runtime-raiders/current` absent and all four URLs
+return `404`.
 
 ## Publish one reviewed quartet
 
@@ -52,19 +60,49 @@ four reviewed files in one root-controlled, nonsymlink `SOURCE_DIR` beneath
 )
 ```
 
-Independently download the four URLs and require each recorded digest, HTTP
-`200`, `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`; also
-require `/health` to be `200`. Record aggregate statuses, headers, digests, and
-UTC time only—not contents, source paths, native IDs, prompts, responses,
-tokens, credentials, provider fragments, or environment data.
+The publisher verifies all four exact HTTPS objects before returning success:
+
+- `/install.sh`, at most 1 MiB;
+- `/downloads/runtime-raiders-agent.zip`, at most 128 MiB;
+- `/downloads/runtime-raiders-agent.zip.sha256`, at most 4 KiB; and
+- `/downloads/runtime-raiders-agent.update.json`, at most 64 KiB.
+
+Each object must return HTTP `200`, match its separately approved SHA-256, and
+carry exact `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`
+headers. The update manifest must also pass the canonical manifest validator.
+The publisher then requires both
+`https://raiders.redlattice.com/health` and
+`http://127.0.0.1:8080/health` without retaining either body.
+
+Public availability uses bounded retries: at most five attempts, a three-second
+connect timeout and 15-second total timeout per attempt, with one second between
+failures. Only transport failures and non-`200` status are retried. Size,
+digest, header, and canonical-manifest failures after HTTP `200` fail
+immediately. Local health has one five-second attempt. Content-free stderr
+checkpoints report only fixed labels, attempts, results, and categories; stable
+publication status remains on stdout. Never record bodies, raw header blocks,
+paths, native IDs, prompts, responses, tokens, credentials, provider fragments,
+or environment data.
+
+A publisher verification failure automatically restores the prior selector or,
+for a first publication, removes the new first selector. It returns failure
+after preserving the failed immutable release and cleaning temporary
+verification files. Independent checking is secondary acceptance only: it
+cannot override publisher failure or turn a failed publication into success.
+
+After publisher success, independently check the same four objects, approved
+digests, required headers, canonical manifest, and both health paths. If this
+secondary acceptance fails, first inspect publication status. Withdraw only if
+status still selects the exact approved `$RELEASE_SHA`; never withdraw an
+unknown selection or a selector that changed out of band.
 
 The artifact command accepts existing v1 releases for recovery/status, but a
 new updater-capable publication is v2 and has the quartet metadata. It rejects
 duplicate/non-monotonic v2 sequences. A withdrawn v2 release remains immutable
 for diagnosis, but its sequence is consumed: recovery requires a new clean SHA
-and strictly higher sequence, never reselection of the withdrawn v2 release. On a
-publication, digest, header, or health failure, withdraw only the exact active
-release:
+and strictly higher sequence, never reselection of the withdrawn v2 release.
+For the secondary-failure case where status still selects the approved SHA, use
+only this exact-SHA withdrawal:
 
 ```sh
 (
@@ -74,16 +112,19 @@ release:
 )
 ```
 
-Recovery acceptance is `unpublished`, all four URLs return `404`, and both
-internal health URLs remain `200`. Withdrawal changes neither Caddy nor Node
-and does not delete an immutable release directory.
+After a first-selector removal or approved-SHA withdrawal, recovery acceptance
+is `unpublished`, all four URLs return `404`, and both health URLs remain `200`.
+If the publisher restored a prior selector, require status and all public
+verification to match that exact prior release instead. Rollback and withdrawal
+change neither Caddy nor Node and do not delete an immutable release directory.
 
-## Install the sequence-1 canary locally and persistently off
+## Install the sequence-2 canary locally and persistently off
 
-This controlled installed-off canary is not routine onboarding. After
-sequence-1 publication acceptance and a distinct installation approval, use a
-locally downloaded installer: verify its recorded SHA-256 before execution and
-execute that local file. Never pipe the canary installer, ZIP, or manifest to a shell.
+Sequence 2 becomes the initial installed-off canary. This controlled canary is
+not routine onboarding. After sequence-2 publisher and secondary acceptance and
+a distinct installation approval, use a locally downloaded installer: verify
+its recorded SHA-256 before execution and execute that local file. Never pipe
+the canary installer, ZIP, or manifest to a shell.
 
 ```sh
 (
@@ -113,6 +154,11 @@ owner-only enrollment, cursors, and outbox across an upgrade or automatic
 rollback.
 
 ## Already-installed player: manual update only
+
+Sequence 2 is installed locally, digest-verified, and persistently off; it is not
+the update target. The manual `raiders update` proof moves to reviewed and
+published sequence 3 under separately named build, publication, and proof
+approvals.
 
 For an already-installed player, use only `raiders update`.
 Do not run or pipe an installer, ZIP, or manifest. The foreground command
