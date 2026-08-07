@@ -52,6 +52,43 @@ final class CompanionReleaseTests: XCTestCase {
         XCTAssertThrowsError(try CompanionReleaseIdentity.load(from: invalidBundle))
     }
 
+    func testBundleIdentityReloadsMetadataAfterSwapAtSamePath() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-release-swap-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installedURL = root.appendingPathComponent("Current.bundle", isDirectory: true)
+        let installedBundle = try makeBundle(
+            at: installedURL,
+            infoDictionary: validInfoDictionary()
+        )
+        XCTAssertEqual(try CompanionReleaseIdentity.load(from: installedBundle).releaseSequence, 1)
+
+        var replacementInfo = validInfoDictionary()
+        replacementInfo["CFBundleShortVersionString"] = "0.2.1"
+        replacementInfo["RuntimeRaidersReleaseSequence"] = 2
+        replacementInfo["RuntimeRaidersReleaseSHA"] = String(repeating: "b", count: 40)
+        let replacementBundle = try makeBundle(
+            at: root.appendingPathComponent("Replacement.bundle", isDirectory: true),
+            infoDictionary: replacementInfo
+        )
+        try FileManager.default.moveItem(
+            at: installedURL,
+            to: root.appendingPathComponent("Prior.bundle", isDirectory: true)
+        )
+        try FileManager.default.moveItem(at: replacementBundle.bundleURL, to: installedURL)
+
+        let bundleAtReusedPath = try XCTUnwrap(Bundle(url: installedURL))
+        XCTAssertEqual(
+            try CompanionReleaseIdentity.load(from: bundleAtReusedPath),
+            CompanionReleaseIdentity(
+                releaseSequence: 2,
+                releaseSHA: String(repeating: "b", count: 40),
+                companionVersion: "0.2.1",
+                updateProtocolVersion: 1
+            )
+        )
+    }
+
     private func validInfoDictionary() -> [String: Any] {
         [
             "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",

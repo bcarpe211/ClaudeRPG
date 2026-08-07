@@ -8,7 +8,14 @@ public struct CompanionReleaseIdentity: Codable, Equatable, Sendable {
     public let updateProtocolVersion: Int
 
     public static func load(from bundle: Bundle = .main) throws -> Self {
-        guard let infoDictionary = bundle.infoDictionary else {
+        let infoURL = bundle.bundleURL
+            .appendingPathComponent("Contents/Info.plist", isDirectory: false)
+        guard let data = try? Data(contentsOf: infoURL),
+              let infoDictionary = try? PropertyListSerialization.propertyList(
+                  from: data,
+                  options: [],
+                  format: nil
+              ) as? [String: Any] else {
             throw ReleaseContractError.invalidIdentity
         }
         return try parse(infoDictionary: infoDictionary)
