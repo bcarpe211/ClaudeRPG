@@ -99,9 +99,11 @@ function fixture() {
   const artifactRoot = join(root, 'store');
   const fakes = join(root, 'fakes');
   const commandLog = join(root, 'commands.log');
+  const curlState = join(root, 'curl-state');
   mkdirSync(join(artifactRoot, 'releases'), { recursive: true, mode: 0o755 });
   chmodSync(artifactRoot, 0o755);
   mkdirSync(fakes);
+  mkdirSync(curlState);
   writeFileSync(commandLog, '');
 
   executable(join(fakes, 'id'), `
@@ -185,21 +187,34 @@ url=
 max_size=
 protocol=
 write_out=
+connect_timeout=
+max_time=
+seen_no_location=0
+seen_fail=0
+seen_silent=0
+seen_show_error=0
 while test "$#" -gt 0; do
   case "$1" in
-    --connect-timeout) test "$2" = 3; shift 2 ;;
-    --max-time) case "$2" in 5|15) ;; *) exit 64 ;; esac; shift 2 ;;
+    --connect-timeout) test -z "$connect_timeout"; connect_timeout=$2; shift 2 ;;
+    --max-time) test -z "$max_time"; max_time=$2; shift 2 ;;
     --dump-header) test -z "$headers"; headers=$2; shift 2 ;;
     --write-out) test "$2" = '%{http_code}'; write_out=1; shift 2 ;;
-    --max-filesize) max_size=$2; shift 2 ;;
-    --proto) case "$2" in '=https'|'=http') protocol=$2 ;; *) exit 64 ;; esac; shift 2 ;;
+    --max-filesize) test -z "$max_size"; max_size=$2; shift 2 ;;
+    --proto) test -z "$protocol"; case "$2" in '=https'|'=http') protocol=$2 ;; *) exit 64 ;; esac; shift 2 ;;
     --output) test -z "$output"; output=$2; shift 2 ;;
-    --fail|--silent|--show-error|--no-location) shift ;;
+    --no-location) test "$seen_no_location" = 0; seen_no_location=1; shift ;;
+    --fail) test "$seen_fail" = 0; seen_fail=1; shift ;;
+    --silent) test "$seen_silent" = 0; seen_silent=1; shift ;;
+    --show-error) test "$seen_show_error" = 0; seen_show_error=1; shift ;;
     --disable|--location|--location-trusted|--config|-K|--next) exit 64 ;;
     https://*|http://127.0.0.1:8080/health) test -z "$url"; url=$1; shift ;;
     *) exit 64 ;;
   esac
 done
+test "$connect_timeout" = 3
+case "$max_time" in 5|15) ;; *) exit 64 ;; esac
+test "$seen_no_location" = 1 && test "$seen_fail" = 1 &&
+  test "$seen_silent" = 1 && test "$seen_show_error" = 1
 test -n "$output" && test -n "$url" && test -n "$protocol" && test -n "$write_out"
 case "$url:$max_size" in
   'https://raiders.redlattice.com/install.sh:1048576')
@@ -214,52 +229,75 @@ case "$url:$max_size" in
   'http://127.0.0.1:8080/health:') label=local-health ;;
   *) exit 64 ;;
 esac
+selected_release=$(/usr/bin/readlink "$RUNTIME_RAIDERS_ARTIFACT_ROOT/current")
+selected_sha=\${selected_release##*/}
+count_file="$RUNTIME_RAIDERS_TEST_CURL_STATE_DIR/$selected_sha-$label"
+count=0
+test ! -f "$count_file" || count=$(/bin/cat "$count_file")
+count=$((count + 1))
+printf '%s\\n' "$count" > "$count_file"
+if test "\${RUNTIME_RAIDERS_TEST_FAIL_LABEL:-}" = "$label" &&
+    test "$count" -le "\${RUNTIME_RAIDERS_TEST_FAIL_ATTEMPTS:-0}"; then
+  case "\${RUNTIME_RAIDERS_TEST_FAIL_MODE:-transport}" in
+    transport) exit 28 ;;
+    status) printf '503'; exit 22 ;;
+    *) exit 64 ;;
+  esac
+fi
 case "$label" in
   installer)
-    test "$protocol" = '=https' && test "$output" != /dev/null && test -n "$headers" || exit 64
+    test "$protocol" = '=https' && test "$max_time" = 15 && test "$output" != /dev/null &&
+      test -n "$headers" || exit 64
     test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_INSTALLER_FETCH:-0}" = 0 || exit 22
     corrupt=\${RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_INSTALLER_FETCH:-0}
     missing_no_store=\${RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_MISSING_NO_STORE:-0}
     missing_nosniff=\${RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_MISSING_NOSNIFF:-0}
     ;;
   zip)
-    test "$protocol" = '=https' && test "$output" != /dev/null && test -n "$headers" || exit 64
+    test "$protocol" = '=https' && test "$max_time" = 15 && test "$output" != /dev/null &&
+      test -n "$headers" || exit 64
     test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_ZIP_FETCH:-0}" = 0 || exit 22
     corrupt=\${RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_ZIP_FETCH:-0}
     missing_no_store=\${RUNTIME_RAIDERS_TEST_PUBLIC_ZIP_MISSING_NO_STORE:-0}
     missing_nosniff=\${RUNTIME_RAIDERS_TEST_PUBLIC_ZIP_MISSING_NOSNIFF:-0}
     ;;
   checksum)
-    test "$protocol" = '=https' && test "$output" != /dev/null && test -n "$headers" || exit 64
+    test "$protocol" = '=https' && test "$max_time" = 15 && test "$output" != /dev/null &&
+      test -n "$headers" || exit 64
     test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_CHECKSUM_FETCH:-0}" = 0 || exit 22
     corrupt=\${RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_CHECKSUM_FETCH:-0}
     missing_no_store=\${RUNTIME_RAIDERS_TEST_PUBLIC_CHECKSUM_MISSING_NO_STORE:-0}
     missing_nosniff=\${RUNTIME_RAIDERS_TEST_PUBLIC_CHECKSUM_MISSING_NOSNIFF:-0}
     ;;
   manifest)
-    test "$protocol" = '=https' && test "$output" != /dev/null && test -n "$headers" || exit 64
+    test "$protocol" = '=https' && test "$max_time" = 15 && test "$output" != /dev/null &&
+      test -n "$headers" || exit 64
     test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_MANIFEST_FETCH:-0}" = 0 || exit 22
     corrupt=\${RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_MANIFEST_FETCH:-0}
     missing_no_store=\${RUNTIME_RAIDERS_TEST_PUBLIC_MANIFEST_MISSING_NO_STORE:-0}
     missing_nosniff=\${RUNTIME_RAIDERS_TEST_PUBLIC_MANIFEST_MISSING_NOSNIFF:-0}
     ;;
   public-health)
-    test "$protocol" = '=https' && test "$output" = /dev/null && test -z "$headers" || exit 64
+    test "$protocol" = '=https' && test "$max_time" = 15 && test "$output" = /dev/null &&
+      test -z "$headers" || exit 64
     test "\${RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_HEALTH:-0}" = 0 || exit 22
     printf '200'
     exit 0
     ;;
   local-health)
-    test "$protocol" = '=http' && test "$output" = /dev/null && test -z "$headers" || exit 64
+    test "$protocol" = '=http' && test "$max_time" = 5 && test "$output" = /dev/null &&
+      test -z "$headers" || exit 64
     test "\${RUNTIME_RAIDERS_TEST_FAIL_LOCAL_HEALTH:-0}" = 0 || exit 22
     printf '200'
     exit 0
     ;;
 esac
+curl_result=0
 /bin/cp "$source" "$output"
 if test "$corrupt" = 1; then printf '%s\\n' 'corrupt public artifact' > "$output"; fi
 if test "$label" = installer && test "\${RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_OVERSIZED:-0}" = 1; then
   /usr/bin/perl -e 'print "x" x 1048577' > "$output"
+  curl_result=63
 fi
 {
   printf '%s\\n' 'HTTP/2 200'
@@ -267,7 +305,12 @@ fi
   if test "$missing_nosniff" != 1; then printf '%s\\n' 'X-Content-Type-Options: nosniff'; fi
   printf '\\n'
 } > "$headers"
-printf '200'`);
+printf '200'
+exit "$curl_result"`);
+
+  executable(join(fakes, 'sleep'), `
+test "$#" = 1 && test "$1" = 1
+printf 'sleep 1\\n' >> "$RUNTIME_RAIDERS_TEST_LOG"`);
 
   executable(join(fakes, 'mv'), `
 printf 'mv %s\\n' "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"
@@ -334,7 +377,7 @@ esac
 if test "\${1:-}" = --; then shift; fi
 exec /bin/rmdir "$@"`);
 
-  return { root, artifactRoot, fakes, commandLog };
+  return { root, artifactRoot, fakes, commandLog, curlState };
 }
 
 function publicationFixture(selectedReleaseSha = releaseSha) {
@@ -369,8 +412,10 @@ function run(
       RUNTIME_RAIDERS_TEST_MODE: '1',
       RUNTIME_RAIDERS_ARTIFACT_ROOT: environment.artifactRoot,
       RUNTIME_RAIDERS_TEST_LOG: environment.commandLog,
+      RUNTIME_RAIDERS_TEST_CURL_STATE_DIR: environment.curlState,
       RUNTIME_RAIDERS_CURL: join(environment.fakes, 'curl'),
       RUNTIME_RAIDERS_NODE: join(environment.fakes, 'node'),
+      RUNTIME_RAIDERS_SLEEP: join(environment.fakes, 'sleep'),
       RUNTIME_RAIDERS_TEST_REAL_NODE: process.execPath,
       ...extraEnvironment,
     },
@@ -589,8 +634,10 @@ function runScript(
       RUNTIME_RAIDERS_TEST_MODE: '1',
       RUNTIME_RAIDERS_ARTIFACT_ROOT: environment.artifactRoot,
       RUNTIME_RAIDERS_TEST_LOG: environment.commandLog,
+      RUNTIME_RAIDERS_TEST_CURL_STATE_DIR: environment.curlState,
       RUNTIME_RAIDERS_CURL: join(environment.fakes, 'curl'),
       RUNTIME_RAIDERS_NODE: join(environment.fakes, 'node'),
+      RUNTIME_RAIDERS_SLEEP: join(environment.fakes, 'sleep'),
       RUNTIME_RAIDERS_TEST_REAL_NODE: process.execPath,
     },
   });
@@ -896,38 +943,179 @@ describe('Runtime Raiders artifact publication', () => {
       .filter((line) => line.startsWith('curl '));
     expect(curlCommands).toHaveLength(6);
     for (const [label, url, maxBytes] of publicTargets) {
-      expect(curlCommands.some((line) =>
-        line.includes(`--max-filesize ${maxBytes}`) && line.endsWith(` ${url}`),
-      ), label).toBe(true);
+      const command = curlCommands.find((line) => line.endsWith(` ${url}`));
+      expect(command, label).toMatch(new RegExp(
+        '^curl --disable --no-location --proto =https --fail --silent --show-error ' +
+        '--connect-timeout 3 --max-time 15 --max-filesize ' + maxBytes +
+        ' --dump-header \\S+ --output \\S+ --write-out %\\{http_code\\} ' +
+        url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
+      ));
       for (const category of ['status', 'size', 'digest', 'cache-control', 'nosniff', 'complete']) {
         expect(published.stderr).toContain(
-          `verify label=${label} attempt=1/1 result=ok category=${category}`,
+          `verify label=${label} attempt=1/5 result=ok category=${category}`,
         );
       }
     }
-    expect(curlCommands.some((line) => line.endsWith(` ${publicHealthURL}`))).toBe(true);
-    expect(curlCommands.some((line) => line.endsWith(` ${localHealthURL}`))).toBe(true);
+    expect(curlCommands).toContain(
+      'curl --disable --no-location --proto =https --fail --silent --show-error ' +
+      '--connect-timeout 3 --max-time 15 --output /dev/null --write-out %{http_code} ' + publicHealthURL,
+    );
+    expect(curlCommands).toContain(
+      'curl --disable --no-location --proto =http --fail --silent --show-error ' +
+      '--connect-timeout 3 --max-time 5 --output /dev/null --write-out %{http_code} ' + localHealthURL,
+    );
     expect(published.stderr).not.toContain(f.root);
     expect(readFileSync(f.commandLog, 'utf8')).not.toContain('curl-config-loaded');
   });
 
+  it('succeeds on the third attempt after two transient request failures', () => {
+    const f = publicationFixture();
+
+    const published = runPublish(f, {
+      RUNTIME_RAIDERS_TEST_FAIL_LABEL: 'installer',
+      RUNTIME_RAIDERS_TEST_FAIL_ATTEMPTS: '2',
+      RUNTIME_RAIDERS_TEST_FAIL_MODE: 'transport',
+    });
+
+    expect(published.status, published.stderr).toBe(0);
+    expect(published.stderr).toContain(
+      'label=installer attempt=1/5 result=retry category=request',
+    );
+    expect(published.stderr).toContain(
+      'label=installer attempt=2/5 result=retry category=request',
+    );
+    expect(published.stderr).toContain(
+      'label=installer attempt=3/5 result=ok category=complete',
+    );
+    const commandLog = readFileSync(f.commandLog, 'utf8');
+    expect(commandLog.split('\n').filter((line) =>
+      line.startsWith('curl ') && line.endsWith(' https://raiders.redlattice.com/install.sh'),
+    )).toHaveLength(3);
+    expect(commandLog.match(/^sleep 1$/gm)).toHaveLength(2);
+  });
+
+  it('stops after five availability attempts and restores the prior selector', () => {
+    const priorSha = 'a'.repeat(40);
+    const f = publicationFixture();
+    setPublicationIdentity(f, priorSha, 1);
+    expect(runPublish(f).status).toBe(0);
+    writeFileSync(f.commandLog, '');
+    setPublicationIdentity(f, releaseSha, 2);
+
+    const failed = runPublish(f, {
+      RUNTIME_RAIDERS_TEST_FAIL_LABEL: 'zip',
+      RUNTIME_RAIDERS_TEST_FAIL_ATTEMPTS: '5',
+      RUNTIME_RAIDERS_TEST_FAIL_MODE: 'status',
+    });
+
+    expectContentFreeFailure(f, failed);
+    expect(failed.stderr).toContain('label=zip attempt=5/5 result=fail category=status');
+    const commandLog = readFileSync(f.commandLog, 'utf8');
+    expect(commandLog.split('\n').filter((line) =>
+      line.startsWith('curl ') && line.endsWith(
+        ' https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip',
+      ),
+    )).toHaveLength(5);
+    expect(commandLog.match(/^sleep 1$/gm)).toHaveLength(4);
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
+  });
+
   it.each([
-    ['installer digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_INSTALLER_FETCH', 'installer', 'digest', true],
-    ['ZIP digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_ZIP_FETCH', 'zip', 'digest', true],
-    ['checksum digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_CHECKSUM_FETCH', 'checksum', 'digest', true],
-    ['manifest digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_MANIFEST_FETCH', 'manifest', 'digest', true],
-    ['oversized installer', 'RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_OVERSIZED', 'installer', 'size', true],
-    ['missing cache-control', 'RUNTIME_RAIDERS_TEST_PUBLIC_ZIP_MISSING_NO_STORE', 'zip', 'cache-control', true],
-    ['missing nosniff', 'RUNTIME_RAIDERS_TEST_PUBLIC_CHECKSUM_MISSING_NOSNIFF', 'checksum', 'nosniff', true],
-    ['invalid canonical manifest', 'RUNTIME_RAIDERS_TEST_INVALID_CANONICAL_PUBLIC_MANIFEST', 'manifest', 'manifest', true],
-    ['public health', 'RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_HEALTH', 'public-health', 'status', true],
-    ['local health', 'RUNTIME_RAIDERS_TEST_FAIL_LOCAL_HEALTH', 'local-health', 'status', false],
+    [
+      'digest',
+      'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_ZIP_FETCH',
+      'zip',
+      'digest',
+      'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip',
+    ],
+    [
+      'header',
+      'RUNTIME_RAIDERS_TEST_PUBLIC_ZIP_MISSING_NO_STORE',
+      'zip',
+      'cache-control',
+      'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip',
+    ],
+    [
+      'canonical manifest',
+      'RUNTIME_RAIDERS_TEST_INVALID_CANONICAL_PUBLIC_MANIFEST',
+      'manifest',
+      'manifest',
+      'https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json',
+    ],
+  ])('does not retry a deterministic %s failure after HTTP 200', (
+    _name,
+    failure,
+    label,
+    category,
+    url,
+  ) => {
+    const f = publicationFixture();
+
+    const failed = runPublish(f, { [failure]: '1' });
+
+    expectContentFreeFailure(f, failed);
+    expect(failed.stderr).toContain(
+      `label=${label} attempt=1/5 result=fail category=${category}`,
+    );
+    const commandLog = readFileSync(f.commandLog, 'utf8');
+    expect(commandLog.split('\n').filter((line) =>
+      line.startsWith('curl ') && line.endsWith(` ${url}`),
+    )).toHaveLength(1);
+    expect(commandLog).not.toContain('sleep 1\n');
+  });
+
+  it('retries public health availability but gives local health one attempt and no sleep', () => {
+    const publicFixture = publicationFixture();
+    const publicResult = runPublish(publicFixture, {
+      RUNTIME_RAIDERS_TEST_FAIL_LABEL: 'public-health',
+      RUNTIME_RAIDERS_TEST_FAIL_ATTEMPTS: '1',
+      RUNTIME_RAIDERS_TEST_FAIL_MODE: 'transport',
+    });
+    expect(publicResult.status, publicResult.stderr).toBe(0);
+    expect(publicResult.stderr).toContain(
+      'label=public-health attempt=1/5 result=retry category=request',
+    );
+    expect(publicResult.stderr).toContain(
+      'label=public-health attempt=2/5 result=ok category=complete',
+    );
+    expect(readFileSync(publicFixture.commandLog, 'utf8').match(/^sleep 1$/gm)).toHaveLength(1);
+
+    const localFixture = publicationFixture();
+    const localResult = runPublish(localFixture, {
+      RUNTIME_RAIDERS_TEST_FAIL_LABEL: 'local-health',
+      RUNTIME_RAIDERS_TEST_FAIL_ATTEMPTS: '5',
+      RUNTIME_RAIDERS_TEST_FAIL_MODE: 'status',
+    });
+    expectContentFreeFailure(localFixture, localResult);
+    expect(localResult.stderr).toContain(
+      'label=local-health attempt=1/1 result=fail category=status',
+    );
+    const localLog = readFileSync(localFixture.commandLog, 'utf8');
+    expect(localLog.split('\n').filter((line) =>
+      line.startsWith('curl ') && line.endsWith(` ${localHealthURL}`),
+    )).toHaveLength(1);
+    expect(localLog).not.toContain('sleep 1\n');
+  });
+
+  it.each([
+    ['installer digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_INSTALLER_FETCH', 'installer', 'digest', true, 1, 5],
+    ['ZIP digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_ZIP_FETCH', 'zip', 'digest', true, 1, 5],
+    ['checksum digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_CHECKSUM_FETCH', 'checksum', 'digest', true, 1, 5],
+    ['manifest digest', 'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_MANIFEST_FETCH', 'manifest', 'digest', true, 1, 5],
+    ['oversized installer', 'RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_OVERSIZED', 'installer', 'size', true, 1, 5],
+    ['missing cache-control', 'RUNTIME_RAIDERS_TEST_PUBLIC_ZIP_MISSING_NO_STORE', 'zip', 'cache-control', true, 1, 5],
+    ['missing nosniff', 'RUNTIME_RAIDERS_TEST_PUBLIC_CHECKSUM_MISSING_NOSNIFF', 'checksum', 'nosniff', true, 1, 5],
+    ['invalid canonical manifest', 'RUNTIME_RAIDERS_TEST_INVALID_CANONICAL_PUBLIC_MANIFEST', 'manifest', 'manifest', true, 1, 5],
+    ['public health', 'RUNTIME_RAIDERS_TEST_FAIL_PUBLIC_HEALTH', 'public-health', 'request', true, 5, 5],
+    ['local health', 'RUNTIME_RAIDERS_TEST_FAIL_LOCAL_HEALTH', 'local-health', 'request', false, 1, 1],
   ])('restores selection or removes a first selector after %s verification failure', (
     _name,
     failure,
     label,
     category,
     hasPriorSelector,
+    expectedAttempt,
+    expectedMaxAttempts,
   ) => {
     const priorSha = 'a'.repeat(40);
     const sensitive = 'do-not-log-sensitive-marker';
@@ -947,7 +1135,7 @@ describe('Runtime Raiders artifact publication', () => {
     expect(failed.stderr).not.toContain(sensitive);
     expect(failed.stderr.split('\n').filter((line) => line.includes('result=fail'))).toEqual([
       'runtime-raiders-artifacts: verify label=' + label +
-        ' attempt=1/1 result=fail category=' + category,
+        ` attempt=${expectedAttempt}/${expectedMaxAttempts} result=fail category=` + category,
     ]);
     if (hasPriorSelector) {
       expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe('releases/' + priorSha);

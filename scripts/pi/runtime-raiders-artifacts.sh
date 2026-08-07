@@ -6,10 +6,12 @@ PRODUCTION_ROOT=/var/lib/runtime-raiders
 ARTIFACT_ROOT=$PRODUCTION_ROOT
 CURL=/usr/bin/curl
 NODE=/usr/bin/node
+SLEEP=/usr/bin/sleep
 if [[ ${RUNTIME_RAIDERS_TEST_MODE:-0} == 1 ]]; then
   ARTIFACT_ROOT=${RUNTIME_RAIDERS_ARTIFACT_ROOT:?test artifact root is required}
   CURL=${RUNTIME_RAIDERS_CURL:?test curl is required}
   NODE=${RUNTIME_RAIDERS_NODE:?test node is required}
+  SLEEP=${RUNTIME_RAIDERS_SLEEP:?test sleep is required}
 fi
 RELEASES=$ARTIFACT_ROOT/releases
 CURRENT=$ARTIFACT_ROOT/current
@@ -24,6 +26,11 @@ INSTALLER_MAX_BYTES=1048576
 ZIP_MAX_BYTES=134217728
 CHECKSUM_MAX_BYTES=4096
 UPDATE_MANIFEST_MAX_BYTES=65536
+PUBLIC_VERIFY_ATTEMPTS=5
+PUBLIC_CONNECT_TIMEOUT=3
+PUBLIC_TOTAL_TIMEOUT=15
+PUBLIC_RETRY_DELAY=1
+LOCAL_HEALTH_TOTAL_TIMEOUT=5
 
 die() { printf 'runtime-raiders-artifacts: %s\n' "$1" >&2; exit 1; }
 verification_checkpoint() {
@@ -448,12 +455,18 @@ verify_public_artifact() {
   while test "$attempt" -le "$max_attempts"; do
     rm -f -- "$output" "$headers"
     category=
-    if ! status=$("$CURL" --disable --no-location --proto '=https' --fail --silent --show-error \
-      --connect-timeout 3 --max-time 15 --max-filesize "$max_bytes" \
-      --dump-header "$headers" --output "$output" --write-out '%{http_code}' "$url"); then
-      category=status
-    elif test "$status" != 200; then
-      category=status
+    status=
+    if status=$("$CURL" --disable --no-location --proto '=https' --fail --silent --show-error \
+      --connect-timeout "$PUBLIC_CONNECT_TIMEOUT" --max-time "$PUBLIC_TOTAL_TIMEOUT" \
+      --max-filesize "$max_bytes" --dump-header "$headers" --output "$output" \
+      --write-out '%{http_code}' "$url"); then
+      :
+    fi
+    if test "$status" != 200; then
+      case $status in
+        ''|000) category=request ;;
+        *) category=status ;;
+      esac
     else
       verification_checkpoint "$label" "$attempt" "$max_attempts" ok status
       if ! { test -f "$output" && test ! -L "$output" && test -s "$output"; }; then
@@ -476,16 +489,28 @@ verify_public_artifact() {
                 category=nosniff
               else
                 verification_checkpoint "$label" "$attempt" "$max_attempts" ok nosniff
-                verification_checkpoint "$label" "$attempt" "$max_attempts" ok complete
-                return 0
+                if test "$label" = manifest &&
+                    ! ( validate_public_manifest "$output" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
+                      "$COMPANION_VERSION" "$ZIP_SHA256" ) >/dev/null 2>&1; then
+                  category=manifest
+                else
+                  verification_checkpoint "$label" "$attempt" "$max_attempts" ok complete
+                  return 0
+                fi
               fi
             fi
           fi
         fi
       fi
+      verification_checkpoint "$label" "$attempt" "$max_attempts" fail "$category"
+      return 1
     fi
-    verification_checkpoint "$label" "$attempt" "$max_attempts" fail "$category"
-    test "$attempt" -lt "$max_attempts" || return 1
+    if test "$attempt" -ge "$max_attempts"; then
+      verification_checkpoint "$label" "$attempt" "$max_attempts" fail "$category"
+      return 1
+    fi
+    verification_checkpoint "$label" "$attempt" "$max_attempts" retry "$category"
+    "$SLEEP" "$PUBLIC_RETRY_DELAY" || return 1
     attempt=$((attempt + 1))
   done
   return 1
@@ -499,17 +524,37 @@ verify_health() {
   local max_attempts=$5
   local attempt=1
   local status
+  local curl_status
+  local category
 
   while test "$attempt" -le "$max_attempts"; do
+    status=
+    curl_status=0
     if status=$("$CURL" --disable --no-location --proto "$protocol" --fail --silent --show-error \
-      --connect-timeout 3 --max-time "$max_time" --output /dev/null --write-out '%{http_code}' "$url") &&
-        test "$status" = 200; then
+      --connect-timeout "$PUBLIC_CONNECT_TIMEOUT" --max-time "$max_time" \
+      --output /dev/null --write-out '%{http_code}' "$url"); then
+      curl_status=0
+    else
+      curl_status=$?
+    fi
+    if test "$curl_status" -ne 0; then
+      case $status in
+        ''|000) category=request ;;
+        *) category=status ;;
+      esac
+    elif test "$status" != 200; then
+      category=status
+    else
       verification_checkpoint "$label" "$attempt" "$max_attempts" ok status
       verification_checkpoint "$label" "$attempt" "$max_attempts" ok complete
       return 0
     fi
-    verification_checkpoint "$label" "$attempt" "$max_attempts" fail status
-    test "$attempt" -lt "$max_attempts" || return 1
+    if test "$attempt" -ge "$max_attempts"; then
+      verification_checkpoint "$label" "$attempt" "$max_attempts" fail "$category"
+      return 1
+    fi
+    verification_checkpoint "$label" "$attempt" "$max_attempts" retry "$category"
+    "$SLEEP" "$PUBLIC_RETRY_DELAY" || return 1
     attempt=$((attempt + 1))
   done
   return 1
@@ -533,19 +578,16 @@ verify_selected_public_release() {
   fetched_checksum=$VERIFY/runtime-raiders-agent.zip.sha256
   fetched_manifest=$VERIFY/runtime-raiders-agent.update.json
   verify_public_artifact installer "$PUBLIC_INSTALLER_URL" "$INSTALLER_MAX_BYTES" "$fetched_installer" \
-    "$INSTALLER_SHA256" 1 || return 1
-  verify_public_artifact zip "$PUBLIC_ZIP_URL" "$ZIP_MAX_BYTES" "$fetched_zip" "$ZIP_SHA256" 1 || return 1
+    "$INSTALLER_SHA256" "$PUBLIC_VERIFY_ATTEMPTS" || return 1
+  verify_public_artifact zip "$PUBLIC_ZIP_URL" "$ZIP_MAX_BYTES" "$fetched_zip" "$ZIP_SHA256" \
+    "$PUBLIC_VERIFY_ATTEMPTS" || return 1
   verify_public_artifact checksum "$PUBLIC_CHECKSUM_URL" "$CHECKSUM_MAX_BYTES" "$fetched_checksum" \
-    "$CHECKSUM_SHA256" 1 || return 1
+    "$CHECKSUM_SHA256" "$PUBLIC_VERIFY_ATTEMPTS" || return 1
   verify_public_artifact manifest "$PUBLIC_UPDATE_MANIFEST_URL" "$UPDATE_MANIFEST_MAX_BYTES" \
-    "$fetched_manifest" "$UPDATE_MANIFEST_SHA256" 1 || return 1
-  if ! ( validate_public_manifest "$fetched_manifest" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
-      "$COMPANION_VERSION" "$ZIP_SHA256" ) >/dev/null 2>&1; then
-    verification_checkpoint manifest 1 1 fail manifest
-    return 1
-  fi
-  verify_health public-health "$PUBLIC_HEALTH_URL" '=https' 15 1 || return 1
-  verify_health local-health "$LOCAL_HEALTH_URL" '=http' 5 1 || return 1
+    "$fetched_manifest" "$UPDATE_MANIFEST_SHA256" "$PUBLIC_VERIFY_ATTEMPTS" || return 1
+  verify_health public-health "$PUBLIC_HEALTH_URL" '=https' "$PUBLIC_TOTAL_TIMEOUT" \
+    "$PUBLIC_VERIFY_ATTEMPTS" || return 1
+  verify_health local-health "$LOCAL_HEALTH_URL" '=http' "$LOCAL_HEALTH_TOTAL_TIMEOUT" 1 || return 1
 }
 
 select_release() {
