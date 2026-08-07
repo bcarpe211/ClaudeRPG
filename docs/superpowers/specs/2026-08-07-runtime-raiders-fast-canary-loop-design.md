@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 
-**Status:** Approved in conversation; written review pending
+**Status:** Approved
 
 **Scope:** A fast, isolated companion-installer regression loop and the narrow
 already-disabled upgrade correction. This work does not create or publish a
@@ -129,4 +129,3 @@ or installer regression.
   test, and package-script changes.
 - No release metadata, public artifact, Pi, Caddy, installed companion, or
   collection state is changed.
-
