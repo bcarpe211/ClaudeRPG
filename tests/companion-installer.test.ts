@@ -12,8 +12,8 @@ const secret = 'b'.repeat(64);
 const enrollmentCode = 'c'.repeat(43);
 const teamId = 'ABCDE12345';
 const releaseSHA = 'd'.repeat(40);
-const companionVersion = '0.2.0';
-const releaseSequence = '2';
+const companionVersion = '0.2.1';
+const releaseSequence = '3';
 const updateProtocolVersion = '1';
 
 function executable(path: string, lines: string[]): void {
@@ -369,8 +369,8 @@ describe('Runtime Raiders companion installer', () => {
     // Catches an installer that verifies only the signature while accepting the wrong signed release.
     const mutations: Array<[string, Partial<CandidateIdentity>]> = [
       ['bundle ID', { bundleID: 'com.redlattice.other-agent' }],
-      ['companion version', { companionVersion: '0.2.1' }],
-      ['release sequence', { releaseSequence: '3' }],
+      ['companion version', { companionVersion: '0.2.2' }],
+      ['release sequence', { releaseSequence: '4' }],
       ['release SHA', { releaseSHA: 'e'.repeat(40) }],
       ['update protocol', { updateProtocolVersion: '2' }],
     ];
@@ -1249,8 +1249,8 @@ describe('Runtime Raiders release build', () => {
         '/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', capturedPlist], { encoding: 'utf8' },
       ).trim();
       expect(value('CFBundleIdentifier')).toBe('com.redlattice.runtime-raiders-agent');
-      expect(value('CFBundleShortVersionString')).toBe('0.2.0');
-      expect(value('RuntimeRaidersReleaseSequence')).toBe('2');
+      expect(value('CFBundleShortVersionString')).toBe(companionVersion);
+      expect(value('RuntimeRaidersReleaseSequence')).toBe(releaseSequence);
       expect(value('RuntimeRaidersReleaseSHA')).toBe(fixture.releaseSHA);
       expect(value('RuntimeRaidersUpdateProtocolVersion')).toBe('1');
     } finally {
@@ -1510,7 +1510,7 @@ describe('Runtime Raiders release build', () => {
       expect(readFileSync(join(output, 'runtime-raiders-agent.update.json'), 'utf8')).toBe(JSON.stringify({
         companion_version: companionVersion,
         manifest_version: 1,
-        release_sequence: 2,
+        release_sequence: Number(releaseSequence),
         release_sha: fixture.releaseSHA,
         update_protocol_version: 1,
         zip_sha256: zipDigest,
