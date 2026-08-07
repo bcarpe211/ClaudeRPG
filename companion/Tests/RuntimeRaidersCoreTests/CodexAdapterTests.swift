@@ -161,6 +161,59 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(try CodexAdapter(snapshot: snapshot).compatibilityIssue, .unsupportedContract)
     }
 
+    func testPrepareForSeedingClearsPersistedCompatibilityRejection() throws {
+        var payload = validSessionPayload(for: .codexCLI)
+        payload["cli_version"] = ""
+        var rejected = CodexAdapter(expectedSurface: .codexCLI)
+        _ = try startRun(adapter: &rejected, payload: payload)
+        XCTAssertEqual(rejected.compatibilityIssue, .unsupportedContract)
+
+        var restored = try CodexAdapter(snapshot: rejected.snapshot())
+        restored.prepareForSeeding()
+
+        XCTAssertNil(restored.compatibilityIssue)
+    }
+
+    func testUnsupportedHistoricalRecordDuringSeedingDoesNotPoisonFutureValidLifecycle() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        adapter.consumeDuringSeeding(
+            line: Data(#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"historical","source":"exec","cli_version":"old"}}"#.utf8),
+            source: .init(ordinal: 0),
+            observedAt: observedAt
+        )
+        XCTAssertNil(adapter.compatibilityIssue)
+
+        adapter.consumeDuringSeeding(
+            line: try sessionMetadata(
+                payload: validSessionPayload(for: .codexCLI),
+                timestampSecond: 1
+            ),
+            source: .init(ordinal: 1),
+            observedAt: observedAt
+        )
+        adapter.consumeDuringSeeding(
+            line: Data(#"{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{}}"#.utf8),
+            source: .init(ordinal: 2),
+            observedAt: observedAt
+        )
+        XCTAssertNil(adapter.compatibilityIssue)
+
+        let observations = [
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"turn_context","payload":{"turn_id":"future-turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ].enumerated().flatMap { index, line in
+            adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index + 3)),
+                observedAt: observedAt
+            )
+        }
+
+        XCTAssertNil(adapter.compatibilityIssue)
+        XCTAssertEqual(observations.last?.state, .completed)
+    }
+
     func testActiveRunStateSurvivesSnapshotWithoutExposingNativeID() throws {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         XCTAssertEqual(try startRun(adapter: &adapter, payload: validSessionPayload(for: .codexCLI)).count, 1)

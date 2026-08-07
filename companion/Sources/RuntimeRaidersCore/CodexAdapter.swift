@@ -128,6 +128,9 @@ public struct CodexAdapter: ProviderAdapter {
     }
 
     mutating func prepareForSeeding() {
+        verifiedSurface = nil
+        rejectedSurface = false
+        storedCompatibilityIssue = nil
         clearLifecycle()
     }
 
@@ -136,7 +139,11 @@ public struct CodexAdapter: ProviderAdapter {
         source: ProviderRecordSource,
         observedAt: Int64
     ) {
+        let seededSurface = verifiedSurface
         _ = consume(line: line, source: source, observedAt: observedAt)
+        if rejectedSurface { verifiedSurface = seededSurface }
+        rejectedSurface = false
+        storedCompatibilityIssue = nil
         clearLifecycle()
     }
 
