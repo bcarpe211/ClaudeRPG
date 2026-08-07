@@ -15,6 +15,12 @@ preparation. It does not prove mutable production, network, final-build, or Mac
 state. Every operational fact below must be freshly recorded outside Git at its
 named boundary.
 
+Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
+reuse, reselect, modify, delete, or repackage it. This packet follows the
+authoritative recovery contract in
+[`companion-operations.md`](companion-operations.md): sequence 2 is the initial
+installed-off canary and sequence 3 is the manual update target.
+
 ## Approved release sequence
 
 1. Implement and test the publication mechanism, freeze the final release SHA,
@@ -29,12 +35,12 @@ named boundary.
 6. Separately authorize the recorded production cutover while all collectors
    remain absent.
 7. Accept the deployed server through sections 5.1 and 5.2 of the runbook.
-8. Separately authorize sequence-1 quartet publication and independently verify
+8. Separately authorize sequence-2 quartet publication and independently verify
    all four HTTPS digests.
-9. Separately authorize sequence-1 installation on one canary and prove its
+9. Separately authorize sequence-2 installation on one canary and prove its
    daemon is live but collection is persistently off.
-10. Separately authorize sequence-2 build, review, and signing from its clean SHA.
-11. Separately approve sequence-2 quartet publication.
+10. Separately authorize sequence-3 build, review, and signing from its clean SHA.
+11. Separately approve sequence-3 quartet publication.
 12. Separately authorize the manual `raiders update` proof while still off.
 13. Separately authorize the bounded live provider canary, then require
    `raiders off` before seeking office activation.
@@ -115,15 +121,17 @@ the newly authorized cutover window.
 - [ ] Independently download and verify all four HTTPS responses, require
       `no-store` and `nosniff`, and confirm `/health` remains `200`.
 - [ ] Generate a fresh one-time enrollment command without recording its code.
-- [ ] Separately authorize sequence-1 installation on one canary; use only the locally
+- [ ] Separately authorize sequence-2 installation on one canary; use only the locally
       downloaded, SHA-256-verified installer and prove `daemonRunning=true`,
       `enabled=false`, and `persistedState=disabled` before activation.
 
-If publication acceptance fails, run
-`scripts/pi/runtime-raiders-artifacts.sh withdraw --release-sha "$RELEASE_SHA"`.
-Require `status` to report `unpublished`, all four artifact URLs to return
-`404`, and both health routes to remain `200`. Publication and withdrawal do
-not reload Caddy or restart Node.
+If publisher verification fails, do not run a separate withdrawal: the
+publisher automatically restores the prior selector or removes a new first
+selector. If secondary acceptance fails, inspect status first and withdraw only
+if it still selects the exact approved `$RELEASE_SHA`; never withdraw an unknown
+selection or one changed out of band. After an approved-SHA withdrawal or
+first-selector removal, require `status` to report `unpublished`, all four
+artifact URLs to return `404`, and both health routes to remain `200`.
 
 ## Fresh values required in the restricted operator record
 
@@ -205,27 +213,27 @@ literal recorded value; do not approve a placeholder.
 
 ### F. Installed-off canary
 
-> After four-digest sequence-1 publication acceptance, I authorize independently
+> After four-digest sequence-2 publication acceptance, I authorize independently
 > downloading and installing the recorded quartet on one approved canary. The
 > locally downloaded installer must match its recorded SHA-256 before execution,
 > and the daemon must be live with collection persistently off. This does not
 > authorize `raiders on`.
 
-### G. Sequence-2 build, review, and signing
+### G. Sequence-3 build, review, and signing
 
-> With the sequence-1 canary still persistently off, I authorize review and
-> signing only of the new clean-SHA sequence-2 quartet. This does not authorize
+> With the sequence-2 canary still persistently off, I authorize review and
+> signing only of the new clean-SHA sequence-3 quartet. This does not authorize
 > publication, update execution, or collection.
 
-### H. Sequence-2 publication
+### H. Sequence-3 publication
 
 > After signing review accepts the recorded clean SHA, protocol, sequence,
-> version, and four digests, I authorize only sequence-2 publication. This does
+> version, and four digests, I authorize only sequence-3 publication. This does
 > not authorize installation, update execution, collection, or office rollout.
 
 ### I. Manual update proof
 
-> After sequence-2 publication acceptance, I authorize only the installed
+> After sequence-3 publication acceptance, I authorize only the installed
 > canary to run `raiders update` and prove its signed version/sequence, daemon
 > health, disabled state, enrollment, cursors, and outbox. This does not
 > authorize `raiders on`.

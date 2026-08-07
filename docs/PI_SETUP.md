@@ -58,11 +58,16 @@ companion installation, or activation. Follow
 [`docs/RUNTIME_RAIDERS_CUTOVER.md`](RUNTIME_RAIDERS_CUTOVER.md) and record these
 separate gates in order before onboarding anyone:
 
+Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence and
+never reuse, reselect, modify, delete, or repackage it. Follow the authoritative
+companion procedure in
+[`docs/runtime-raiders/companion-operations.md`](runtime-raiders/companion-operations.md).
+
 1. Caddy preparation approval;
-2. sequence-1 publication approval;
-3. installed-off sequence-1 canary acceptance;
-4. clean sequence-2 build, review, and signing;
-5. separate sequence-2 publication;
+2. sequence-2 publication approval;
+3. installed-off sequence-2 canary acceptance;
+4. clean sequence-3 build, review, and signing;
+5. separate sequence-3 publication;
 6. deterministic off-state notification and `raiders status` proof;
 7. manual `raiders update` proof;
 8. separately approved bounded `raiders on` proof with one official Codex Desktop

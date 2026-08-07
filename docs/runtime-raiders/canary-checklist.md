@@ -6,6 +6,11 @@ candidate. Record counts, outcome, and timestamp only. Do not record prompts,
 responses, source files, paths, native IDs, credentials, or provider
 configuration.
 
+Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
+reuse, reselect, modify, delete, or repackage it. The authoritative recovery
+procedure is [`companion-operations.md`](companion-operations.md): sequence 2 is
+the initial installed-off canary and sequence 3 is the manual update target.
+
 ## Automated evidence
 
 | Gate | Count | Status | Timestamp (UTC) |
@@ -83,10 +88,10 @@ manifest URL is `https://raiders.redlattice.com/downloads/runtime-raiders-agent.
 | Artifact routes unpublished, 4/4 return 404 | 0/4 | waits for fail-closed Caddy preparation | — |
 | Production cutover | 0 | not run; separately authorized action | — |
 | Deployed server acceptance | 0 | waits for authorized cutover and section 5 | — |
-| Signed quartet published, 4/4 digests verified | 0/4 | waits for server acceptance and separate sequence-1 publication approval | — |
-| Installed sequence-1 artifact, daemon live and persistently off | 0 | waits for verified publication and separate installation approval | — |
-| Sequence-2 quartet published, 4/4 digests verified | 0/4 | waits for rebuilt/reviewed sequence 2 and separate publication approval | — |
-| Manual sequence-2 update proof | 0 | waits for one notification, `raiders update`, and disabled-state acceptance | — |
+| Sequence-2 quartet published, 4/4 digests verified | 0/4 | waits for server acceptance and separate recovery publication approval | — |
+| Installed sequence-2 artifact, daemon live and persistently off | 0 | waits for verified sequence-2 publication and separate installation approval | — |
+| Sequence-3 quartet published, 4/4 digests verified | 0/4 | waits for rebuilt/reviewed sequence 3 and separate publication approval | — |
+| Manual sequence-3 update proof | 0 | waits for one notification, `raiders update`, and disabled-state acceptance | — |
 | Bounded live provider canary | 0 | waits for separate `raiders on` approval; turn off before office approval | — |
 | Office activation | 0 | waits for live-canary acceptance and separate approval | — |
 
@@ -109,7 +114,8 @@ matches the restricted release record; do not pipe the remote installer, ZIP,
 or manifest into a shell. Discovery while off is an anonymous static GET only
 to the trusted game server; it produces no additional provider telemetry.
 
-The complete two-sequence pending record is
-[`companion-update-canary.md`](companion-update-canary.md). It is the authority
+The complete recovery two-sequence pending record is
+[`companion-update-canary.md`](companion-update-canary.md). It records the
+sequence-2-to-sequence-3 proof; `companion-operations.md` remains the authority
 for the manual `raiders update` proof and its separate bounded live-provider
-gate; this checklist does not imply either action.
+gate. This checklist does not imply either action.

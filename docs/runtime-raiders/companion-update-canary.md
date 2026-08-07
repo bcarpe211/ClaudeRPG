@@ -2,20 +2,26 @@
 
 Status: **pending — this record authorizes nothing.** Record aggregate status/timestamps only. Never record prompts, responses, record paths, native IDs, tokens, credentials, or provider fragments.
 
+Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
+reuse, reselect, modify, delete, or repackage it. The authoritative procedure is
+[`companion-operations.md`](companion-operations.md); this record applies its
+sequence-2 installed-off and sequence-3 manual-update lifecycle.
+
 ## Required order
 
-1. build/sign/notarize/staple sequence 1 from its exact clean SHA;
-2. separately approve Caddy route preparation and sequence-1 publication;
-3. install sequence 1 with collection persistently off;
-4. commit `companion/RELEASE` version `0.2.1`, sequence `2`, producing a new SHA;
-5. rebuild/review/sign and separately approve sequence-2 publication;
-6. observe one notification and matching `raiders status` availability;
-7. run `raiders update` manually and verify signing, version, sequence, daemon health, disabled state, enrollment, cursors, and outbox;
-8. confirm no second notification for sequence 2;
-9. separately authorize a bounded `raiders on` canary;
-10. complete one official Codex Desktop root Run and one Codex CLI root Run;
-11. verify `codex_desktop` and `codex_cli`, content-free storage, Raid Power, model, and effort; and
-12. run `raiders off` before seeking separate office activation.
+1. preserve withdrawn sequence 1 as immutable evidence;
+2. build/sign/notarize/staple sequence 2 from its exact clean SHA;
+3. separately approve Caddy route preparation and sequence-2 publication;
+4. install sequence 2 with collection persistently off;
+5. commit `companion/RELEASE` version `0.2.1`, sequence `3`, producing a new SHA;
+6. rebuild/review/sign and separately approve sequence-3 publication;
+7. observe one notification and matching `raiders status` availability;
+8. run `raiders update` manually and verify signing, version, sequence, daemon health, disabled state, enrollment, cursors, and outbox;
+9. confirm no second notification for sequence 3;
+10. separately authorize a bounded `raiders on` canary;
+11. complete one official Codex Desktop root Run and one Codex CLI root Run;
+12. verify `codex_desktop` and `codex_cli`, content-free storage, Raid Power, model, and effort; and
+13. run `raiders off` before seeking separate office activation.
 
 No step implies the next. Model and effort are display-only; Raid Power is the
 score. The manifest and ZIP are never piped or executed.
@@ -41,15 +47,16 @@ without approval.
 
 Record the clean SHA, sequence, companion version, protocol, four digests, and
 sign/notary/staple validation status. Sequence 2 must be a new clean SHA and a
-strictly higher sequence. A withdrawal removes only `current`; its immutable
-diagnostic directory remains, its v2 sequence is consumed, and recovery needs a
-new clean SHA with a strictly higher sequence—not reselection of the withdrawn
-v2 release.
+strictly higher sequence than withdrawn sequence 1. Sequence 3 must also use a
+new clean SHA and strictly higher sequence. A withdrawal removes only `current`;
+its immutable diagnostic directory remains and its sequence is consumed, so
+recovery always needs a new clean SHA with a strictly higher sequence—not
+reselection of a withdrawn release.
 
 ## Deterministic off-state notification proof
 
 Publication does not trigger discovery. The daemon checks only at startup when
-the persisted last attempt is at least 24 hours old. After sequence-2
+the persisted last attempt is at least 24 hours old. After sequence-3
 publication, keep collection off. The timestamp is not in status/doctor; read
 only the owner-only state file below and print only the derived UTC due time.
 At or after that 24-hour due boundary, restart exactly the installed launchd job:
@@ -79,7 +86,7 @@ At or after that 24-hour due boundary, restart exactly the installed launchd job
 )
 ```
 
-Accept only one notification and cached sequence-2 availability with disabled
+Accept only one notification and cached sequence-3 availability with disabled
 intent. Record restart UTC, due UTC, notification count, and status/doctor
 aggregate fields. If the cadence cannot be waited or a test clock is not
 separately authorized, stop: do not claim notification evidence, alter state,
@@ -87,7 +94,8 @@ or publish again.
 
 ## Manual update proof and recovery
 
-Before and after `raiders update`, run `raiders status` and `raiders doctor`.
+Before and after the sequence-2-to-sequence-3 `raiders update`, run
+`raiders status` and `raiders doctor`.
 Record only release identity/update availability, disabled intent, enrollment
 present/absent, compatibility reason, cursors/surfaces aggregate, active Run
 count, and outbox/queue count. Require the sequence/version/SHA/protocol to

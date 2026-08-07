@@ -9,6 +9,15 @@ The dungeon may be resting; the safety gates are not. A failed, unknown, stale,
 or incomplete gate is a **NO-GO**. Leave the current service unchanged and
 reschedule. Never improvise a partial rebrand or mixed scoring deployment.
 
+Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
+reuse, reselect, modify, delete, or repackage it. The authoritative companion
+release contract is [`docs/runtime-raiders/companion-operations.md`](runtime-raiders/companion-operations.md).
+The recovery lifecycle is Caddy preparation → sequence-2 publication →
+installed-off sequence-2 canary → sequence-3 build/review/signing → sequence-3
+publication → notification/status proof → manual `raiders update` → bounded
+`raiders on` proof → `raiders off` → separate office activation. No step
+authorizes the next.
+
 ## Authority and operating boundaries
 
 Each boundary needs its own explicit authorization. Approval for one row does
@@ -966,8 +975,12 @@ download_exact_https 4096 /dev/null /dev/null \
 )
 ```
 
-Any publication, status, digest, header, or health failure blocks installation
-and requires exact-SHA withdrawal:
+Any publication, status, digest, header, or health failure blocks installation.
+The publisher automatically restores the prior selector or removes a new first
+selector when its verification fails; do not run a separate withdrawal. If
+secondary acceptance fails, inspect status first. Withdraw only if status still
+selects the exact approved `$RELEASE_SHA`; never withdraw an unknown selection
+or one changed out of band. Only that exact-selection case permits:
 
 ```sh
 (
@@ -977,9 +990,11 @@ and requires exact-SHA withdrawal:
 )
 ```
 
-After withdrawal, `sudo scripts/pi/runtime-raiders-artifacts.sh status` must
-report `unpublished`. Verify all four artifact URLs return `404` and both
-internal health URLs remain `200`:
+After an approved-SHA withdrawal or automatic first-selector removal,
+`sudo scripts/pi/runtime-raiders-artifacts.sh status` must report `unpublished`.
+Verify all four artifact URLs return `404` and both internal health URLs remain
+`200`. If the publisher restored a prior selector, instead require status and
+public verification to match that exact prior release:
 
 ```sh
 (
@@ -1060,10 +1075,10 @@ Complete the deployed-server, publication, and installed-off rows in
 `docs/runtime-raiders/canary-checklist.md`. Installing off does not authorize
 canary activation. The continuation is the separately approved two-sequence
 record in `docs/runtime-raiders/companion-update-canary.md`: while still off,
-publish a newly reviewed sequence-2 build/review/sign and separately publish it,
+build/review/sign a new clean-SHA sequence 3 and separately publish it,
 then after the 24-hour startup-check due boundary restart its fixed launchd job,
-observe one availability notification and run only `raiders update` on the
-already-installed companion. Discovery is
+observe one sequence-3 availability notification and run only `raiders update`
+on the already-installed sequence-2 companion. Discovery is
 an anonymous static GET only to the trusted game server's fixed
 `runtime-raiders-agent.update.json` URL and may occur while collection is off;
 it sends no provider telemetry. The manifest and ZIP are never executed or
@@ -1072,13 +1087,13 @@ piped. No manual-update proof authorizes `raiders on`.
 ## 6. Canary activation, office activation, and acceptance
 
 The required post-cutover lifecycle is Caddy preparation approval →
-sequence-1 publication → installed-off sequence-1 canary → sequence-2 build,
-review, and signing → sequence-2 publication → notification/status proof →
+sequence-2 publication → installed-off sequence-2 canary → sequence-3 build,
+review, and signing → sequence-3 publication → notification/status proof →
 manual `raiders update` → bounded `raiders on` Codex Desktop and Codex CLI
 proof → `raiders off` proof → separate office activation → routine onboarding.
 No arrow implies the next authority.
 
-Only after the sequence-2 manual update proof remains disabled may the
+Only after the sequence-3 manual update proof remains disabled may the
 activation owner separately authorize bounded canary enablement.
 
 1. Reconfirm the approved canary reports the exact live-disabled state, then run

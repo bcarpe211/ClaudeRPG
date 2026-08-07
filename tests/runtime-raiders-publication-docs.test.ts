@@ -8,6 +8,7 @@ const runbook = readDoc('docs/RUNTIME_RAIDERS_CUTOVER.md');
 const checklist = readDoc('docs/runtime-raiders/canary-checklist.md');
 const operations = readDoc('docs/runtime-raiders/companion-operations.md');
 const packet = readDoc('docs/runtime-raiders/cutover-authorization-packet.md');
+const updateCanary = readDoc('docs/runtime-raiders/companion-update-canary.md');
 const backlog = readDoc('docs/BACKLOG.md');
 const piSetup = readDoc('docs/PI_SETUP.md');
 
@@ -49,8 +50,8 @@ describe('Runtime Raiders artifact-publication documentation', () => {
       '### D. Production cutover',
       '### E. Signed companion publication',
       '### F. Installed-off canary',
-      '### G. Sequence-2 build, review, and signing',
-      '### H. Sequence-2 publication',
+      '### G. Sequence-3 build, review, and signing',
+      '### H. Sequence-3 publication',
       '### I. Manual update proof',
       '### J. Bounded live provider canary',
       '### K. Office activation',
@@ -80,10 +81,10 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     for (const row of [
       'Caddy release store prepared, selector absent',
       'Artifact routes unpublished, 4/4 return 404',
-      'Signed quartet published, 4/4 digests verified',
-      'Installed sequence-1 artifact, daemon live and persistently off',
       'Sequence-2 quartet published, 4/4 digests verified',
-      'Manual sequence-2 update proof',
+      'Installed sequence-2 artifact, daemon live and persistently off',
+      'Sequence-3 quartet published, 4/4 digests verified',
+      'Manual sequence-3 update proof',
     ]) {
       expect(checklist).toContain(row);
     }
@@ -99,6 +100,59 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(operations).toMatch(/verification failure[\s\S]*restores[\s\S]*selector/i);
     expect(operations).toMatch(/sequence 2 becomes the initial installed-off canary/i);
     expect(operations).toMatch(/manual `raiders update` proof[\s\S]*sequence 3/i);
+  });
+
+  it('keeps every active operator surface on the recovery lifecycle', () => {
+    for (const document of [runbook, piSetup, checklist, packet, updateCanary]) {
+      expect(document).toContain('Sequence 1 is withdrawn and consumed');
+      expect(document).toContain('companion-operations.md');
+      for (const staleAuthority of [
+        /sequence-1 publication/i,
+        /installed-off sequence-1/i,
+        /installed sequence-1/i,
+        /manual sequence-2 update proof/i,
+        /build\/sign\/notarize\/staple sequence 1/i,
+        /install sequence 1/i,
+      ]) expect(document).not.toMatch(staleAuthority);
+    }
+  });
+
+  it('locks the exact publisher verification and secondary-withdrawal contract', () => {
+    const quartet = [
+      ['`/install.sh`', '1 MiB'],
+      ['`/downloads/runtime-raiders-agent.zip`', '128 MiB'],
+      ['`/downloads/runtime-raiders-agent.zip.sha256`', '4 KiB'],
+      ['`/downloads/runtime-raiders-agent.update.json`', '64 KiB'],
+    ];
+    for (const [object, bound] of quartet) {
+      expect(operations).toContain(`${object}, at most ${bound}`);
+    }
+    expect(operations).toContain('separately approved SHA-256');
+    expect(operations).toContain('HTTP `200`');
+    expect(operations).toContain('exact `Cache-Control: no-store`');
+    expect(operations).toContain('`X-Content-Type-Options: nosniff`');
+    expect(operations).toContain('canonical manifest validator');
+    expect(operations).toContain('https://raiders.redlattice.com/health');
+    expect(operations).toContain('http://127.0.0.1:8080/health');
+    expect(operations).toContain('at most five attempts');
+    expect(operations).toMatch(/three-second\s+connect timeout/);
+    expect(operations).toContain('15-second total timeout');
+    expect(operations).toMatch(/one second\s+between\s+failures/);
+    expect(operations).toMatch(/only transport failures and non-`200` status are retried/i);
+    expect(operations).toMatch(/Size,\s*digest, header, and canonical-manifest failures after HTTP `200` fail\s+immediately\./);
+    expect(operations).toContain('Local health has one five-second attempt');
+    expect(operations).toMatch(/content-free stderr\s+checkpoints[\s\S]*stable\s+publication status remains on stdout/i);
+    expect(operations).toMatch(/verification failure automatically restores the prior selector[\s\S]*removes the new first selector/i);
+    expect(operations).toMatch(/secondary acceptance[\s\S]*cannot override publisher failure/i);
+    expect(operations).toMatch(/withdraw only if\s+status still selects the exact approved `\$RELEASE_SHA`[\s\S]*never withdraw an\s+unknown selection/i);
+  });
+
+  it('keeps active publication recovery subordinate to automatic rollback and exact selection', () => {
+    for (const document of [runbook, packet]) {
+      expect(document).toMatch(/publisher[^.]*automatically restores the prior selector[^.]*removes[^.]*first\s+selector/i);
+      expect(document).toMatch(/secondary acceptance fails[\s\S]*inspect status[\s\S]*withdraw only[\s\S]*exact approved `\$RELEASE_SHA`/i);
+      expect(document).toMatch(/never withdraw an\s+unknown\s+selection/i);
+    }
   });
 
   it('keeps the routine pipe distinct from the verified local canary installer', () => {
@@ -166,8 +220,8 @@ describe('Runtime Raiders artifact-publication documentation', () => {
   });
 
   it('keeps Pi setup onboarding behind publication and both canary approvals', () => {
-    const publication = piSetup.indexOf('sequence-1 publication');
-    const installedOff = piSetup.indexOf('installed-off sequence-1');
+    const publication = piSetup.indexOf('sequence-2 publication');
+    const installedOff = piSetup.indexOf('installed-off sequence-2');
     const liveCanary = piSetup.indexOf('bounded `raiders on`');
     const officeApproval = piSetup.indexOf('office activation approval');
     const onboarding = piSetup.indexOf('Each teammate registers');
@@ -188,25 +242,25 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(operations).toMatch(/anonymous static GET[\s\S]*collection is off/i);
   });
 
-  it('keeps the two-sequence live provider proof and privacy record pending', () => {
-    const canary = readDoc('docs/runtime-raiders/companion-update-canary.md');
+  it('keeps the recovery two-sequence live provider proof and privacy record pending', () => {
     for (const step of [
-      '1. build/sign/notarize/staple sequence 1',
-      '2. separately approve Caddy route preparation and sequence-1 publication',
-      '3. install sequence 1 with collection persistently off',
-      '4. commit `companion/RELEASE` version `0.2.1`, sequence `2`',
-      '5. rebuild/review/sign and separately approve sequence-2 publication',
-      '6. observe one notification and matching `raiders status` availability',
-      '7. run `raiders update` manually',
-      '8. confirm no second notification for sequence 2',
-      '9. separately authorize a bounded `raiders on` canary',
-      '10. complete one official Codex Desktop root Run and one Codex CLI root Run',
-      '11. verify `codex_desktop` and `codex_cli`',
-      '12. run `raiders off` before seeking separate office activation',
-    ]) expect(canary).toContain(step);
-    expect(canary).toContain('aggregate status/timestamps only');
-    expect(canary).toMatch(/never record prompts, responses, record paths, native IDs, tokens, credentials, or provider fragments/i);
-    expect(canary).toMatch(/pending/i);
+      '1. preserve withdrawn sequence 1 as immutable evidence',
+      '2. build/sign/notarize/staple sequence 2 from its exact clean SHA',
+      '3. separately approve Caddy route preparation and sequence-2 publication',
+      '4. install sequence 2 with collection persistently off',
+      '5. commit `companion/RELEASE` version `0.2.1`, sequence `3`',
+      '6. rebuild/review/sign and separately approve sequence-3 publication',
+      '7. observe one notification and matching `raiders status` availability',
+      '8. run `raiders update` manually',
+      '9. confirm no second notification for sequence 3',
+      '10. separately authorize a bounded `raiders on` canary',
+      '11. complete one official Codex Desktop root Run and one Codex CLI root Run',
+      '12. verify `codex_desktop` and `codex_cli`',
+      '13. run `raiders off` before seeking separate office activation',
+    ]) expect(updateCanary).toContain(step);
+    expect(updateCanary).toContain('aggregate status/timestamps only');
+    expect(updateCanary).toMatch(/never record prompts, responses, record paths, native IDs, tokens, credentials, or provider fragments/i);
+    expect(updateCanary).toMatch(/pending/i);
   });
 
   it('makes publication, withdrawal, and canary snippets fail fast in isolated subshells', () => {
@@ -230,8 +284,8 @@ describe('Runtime Raiders artifact-publication documentation', () => {
 
   it('requires the complete off-to-office lifecycle in the primary runbook and Pi onboarding', () => {
     const required = [
-      'Caddy preparation', 'sequence-1 publication', 'installed-off',
-      'sequence-2 build', 'sequence-2 publication', 'notification',
+      'Caddy preparation', 'sequence-2 publication', 'installed-off',
+      'sequence-3 build', 'sequence-3 publication', 'notification',
       'raiders update', 'raiders on', 'Codex Desktop', 'Codex CLI',
       'raiders off', 'office activation',
     ];
@@ -250,29 +304,27 @@ describe('Runtime Raiders artifact-publication documentation', () => {
   });
 
   it('documents build, cadence, no-reselection, approval fields, and update recovery evidence', () => {
-    const canary = readDoc('docs/runtime-raiders/companion-update-canary.md');
-    expect(canary).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
-    expect(canary).toContain('scripts/release/build-runtime-raiders-agent.sh --release-sha "$RELEASE_SHA"');
-    expect(canary).toContain('launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"');
-    expect(canary).toContain('24-hour due boundary');
-    expect(canary).toContain('raiders status');
-    expect(canary).toContain('raiders doctor');
-    expect(canary).toContain('Runtime Raiders Agent.rollback.app/Contents/MacOS/runtime-raiders-agent" __recover-update');
+    expect(updateCanary).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
+    expect(updateCanary).toContain('scripts/release/build-runtime-raiders-agent.sh --release-sha "$RELEASE_SHA"');
+    expect(updateCanary).toContain('launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"');
+    expect(updateCanary).toContain('24-hour due boundary');
+    expect(updateCanary).toContain('raiders status');
+    expect(updateCanary).toContain('raiders doctor');
+    expect(updateCanary).toContain('Runtime Raiders Agent.rollback.app/Contents/MacOS/runtime-raiders-agent" __recover-update');
     expect(operations).toMatch(/withdrawn v2[^.]*new clean SHA[^.]*higher sequence/i);
     expect(operations).not.toMatch(/withdrawn v2[^.]*reselected/i);
     for (const field of ['release sequence', 'companion version', 'installer sha-256', 'zip sha-256', 'checksum-file sha-256', 'update-manifest sha-256']) {
       expect(packet.toLowerCase()).toContain(field);
     }
-    expect(packet).toContain('### G. Sequence-2 build, review, and signing');
-    expect(packet).toContain('### H. Sequence-2 publication');
+    expect(packet).toContain('### G. Sequence-3 build, review, and signing');
+    expect(packet).toContain('### H. Sequence-3 publication');
   });
 
   it('derives the off-state notification due boundary from validated owner-only update state', () => {
-    const canary = readDoc('docs/runtime-raiders/companion-update-canary.md');
-    const stateLine = canary.indexOf('UPDATE_STATE="$HOME/Library/Application Support/Runtime Raiders/state/update-state.json"');
-    const block = canary.slice(
-      canary.lastIndexOf('(\n  set -eu', stateLine),
-      canary.indexOf('## Manual update proof and recovery'),
+    const stateLine = updateCanary.indexOf('UPDATE_STATE="$HOME/Library/Application Support/Runtime Raiders/state/update-state.json"');
+    const block = updateCanary.slice(
+      updateCanary.lastIndexOf('(\n  set -eu', stateLine),
+      updateCanary.indexOf('## Manual update proof and recovery'),
     );
     const orderedContract = [
       'set -eu',
