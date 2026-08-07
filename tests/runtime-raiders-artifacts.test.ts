@@ -241,6 +241,21 @@ if test "\${RUNTIME_RAIDERS_TEST_FAIL_LABEL:-}" = "$label" &&
   case "\${RUNTIME_RAIDERS_TEST_FAIL_MODE:-transport}" in
     transport) exit 28 ;;
     status) printf '503'; exit 22 ;;
+    partial-18|partial-28)
+      test "$output" != /dev/null && test -n "$headers"
+      printf 'part' > "$output"
+      {
+        printf '%s\\n' 'HTTP/2 200'
+        printf '%s\\n' 'Cache-Control: no-store'
+        printf '%s\\n' 'X-Content-Type-Options: nosniff'
+        printf '\\n'
+      } > "$headers"
+      printf '200'
+      case "$RUNTIME_RAIDERS_TEST_FAIL_MODE" in
+        partial-18) exit 18 ;;
+        partial-28) exit 28 ;;
+      esac
+      ;;
     *) exit 64 ;;
   esac
 fi
@@ -994,6 +1009,73 @@ describe('Runtime Raiders artifact publication', () => {
     expect(commandLog.match(/^sleep 1$/gm)).toHaveLength(2);
   });
 
+  it('retries post-header partial transfers and succeeds on the third attempt', () => {
+    const f = publicationFixture();
+
+    const published = runPublish(f, {
+      RUNTIME_RAIDERS_TEST_FAIL_LABEL: 'installer',
+      RUNTIME_RAIDERS_TEST_FAIL_ATTEMPTS: '2',
+      RUNTIME_RAIDERS_TEST_FAIL_MODE: 'partial-18',
+    });
+
+    expect(published.status, published.stderr).toBe(0);
+    expect(published.stderr.split('\n').filter((line) =>
+      line.includes('verify label=installer'),
+    )).toEqual([
+      'runtime-raiders-artifacts: verify label=installer attempt=1/5 result=retry category=request',
+      'runtime-raiders-artifacts: verify label=installer attempt=2/5 result=retry category=request',
+      'runtime-raiders-artifacts: verify label=installer attempt=3/5 result=ok category=status',
+      'runtime-raiders-artifacts: verify label=installer attempt=3/5 result=ok category=size',
+      'runtime-raiders-artifacts: verify label=installer attempt=3/5 result=ok category=digest',
+      'runtime-raiders-artifacts: verify label=installer attempt=3/5 result=ok category=cache-control',
+      'runtime-raiders-artifacts: verify label=installer attempt=3/5 result=ok category=nosniff',
+      'runtime-raiders-artifacts: verify label=installer attempt=3/5 result=ok category=complete',
+    ]);
+    const commandLog = readFileSync(f.commandLog, 'utf8');
+    expect(commandLog.split('\n').filter((line) =>
+      line.startsWith('curl ') && line.endsWith(' https://raiders.redlattice.com/install.sh'),
+    )).toHaveLength(3);
+    expect(commandLog.match(/^sleep 1$/gm)).toHaveLength(2);
+  });
+
+  it('exhausts five post-header partial transfers without leaking and restores selection', () => {
+    const priorSha = 'a'.repeat(40);
+    const sensitive = 'post-header-partial-sensitive-marker';
+    const f = publicationFixture();
+    setPublicationIdentity(f, priorSha, 1);
+    expect(runPublish(f).status).toBe(0);
+    writeFileSync(f.commandLog, '');
+    setPublicationIdentity(f, releaseSha, 2);
+
+    const failed = runPublish(f, {
+      RUNTIME_RAIDERS_TEST_FAIL_LABEL: 'zip',
+      RUNTIME_RAIDERS_TEST_FAIL_ATTEMPTS: '5',
+      RUNTIME_RAIDERS_TEST_FAIL_MODE: 'partial-28',
+      RUNTIME_RAIDERS_TEST_SENSITIVE: sensitive,
+    });
+
+    expectContentFreeFailure(f, failed);
+    expect(failed.stderr).not.toContain(sensitive);
+    expect(failed.stderr.split('\n').filter((line) =>
+      line.includes('verify label=zip'),
+    )).toEqual([
+      'runtime-raiders-artifacts: verify label=zip attempt=1/5 result=retry category=request',
+      'runtime-raiders-artifacts: verify label=zip attempt=2/5 result=retry category=request',
+      'runtime-raiders-artifacts: verify label=zip attempt=3/5 result=retry category=request',
+      'runtime-raiders-artifacts: verify label=zip attempt=4/5 result=retry category=request',
+      'runtime-raiders-artifacts: verify label=zip attempt=5/5 result=fail category=request',
+    ]);
+    const commandLog = readFileSync(f.commandLog, 'utf8');
+    expect(commandLog.split('\n').filter((line) =>
+      line.startsWith('curl ') && line.endsWith(
+        ' https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip',
+      ),
+    )).toHaveLength(5);
+    expect(commandLog.match(/^sleep 1$/gm)).toHaveLength(4);
+    expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe(`releases/${priorSha}`);
+    expectNoTemporaryPublicationPaths(f.artifactRoot);
+  });
+
   it('stops after five availability attempts and restores the prior selector', () => {
     const priorSha = 'a'.repeat(40);
     const f = publicationFixture();
@@ -1021,6 +1103,13 @@ describe('Runtime Raiders artifact publication', () => {
   });
 
   it.each([
+    [
+      'size',
+      'RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_OVERSIZED',
+      'installer',
+      'size',
+      'https://raiders.redlattice.com/install.sh',
+    ],
     [
       'digest',
       'RUNTIME_RAIDERS_TEST_CORRUPT_PUBLIC_ZIP_FETCH',

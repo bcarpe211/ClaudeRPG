@@ -449,6 +449,7 @@ verify_public_artifact() {
   local attempt=1
   local headers=$VERIFY/$label.headers
   local status
+  local curl_status
   local byte_count
   local category
 
@@ -456,15 +457,19 @@ verify_public_artifact() {
     rm -f -- "$output" "$headers"
     category=
     status=
+    curl_status=0
     if status=$("$CURL" --disable --no-location --proto '=https' --fail --silent --show-error \
       --connect-timeout "$PUBLIC_CONNECT_TIMEOUT" --max-time "$PUBLIC_TOTAL_TIMEOUT" \
       --max-filesize "$max_bytes" --dump-header "$headers" --output "$output" \
       --write-out '%{http_code}' "$url"); then
-      :
+      curl_status=0
+    else
+      curl_status=$?
     fi
-    if test "$status" != 200; then
+    if test "$status" != 200 ||
+        { test "$curl_status" -ne 0 && test "$curl_status" -ne 63; }; then
       case $status in
-        ''|000) category=request ;;
+        ''|000|200) category=request ;;
         *) category=status ;;
       esac
     else
