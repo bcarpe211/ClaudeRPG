@@ -935,12 +935,56 @@ remains `200`:
   VERIFY_DIR="$(mktemp -d)"
   trap 'rm -rf "$VERIFY_DIR"' EXIT
 chmod 0700 "$VERIFY_DIR"
+header_has_exact_value() {
+  awk -v wanted_name="$2" -v wanted_value="$3" '
+    {
+      sub(/\r$/, "")
+      if ($0 ~ /^HTTP\/1\.[0-9][[:space:]]+[0-9][0-9][0-9]([[:space:]].*)?$/ ||
+          $0 ~ /^HTTP\/2[[:space:]]+[0-9][0-9][0-9]([[:space:]].*)?$/) {
+        have_status = 1
+        in_headers = 1
+        block_ended = 0
+        occurrences = 0
+        exact = 0
+        malformed = 0
+        next
+      }
+      if (!in_headers) next
+      if ($0 == "") {
+        in_headers = 0
+        block_ended = 1
+        next
+      }
+      separator = index($0, ":")
+      if (separator == 0) {
+        candidate = $0
+        sub(/[[:space:]].*$/, "", candidate)
+        if (tolower(candidate) == tolower(wanted_name)) malformed = 1
+        next
+      }
+      raw_name = substr($0, 1, separator - 1)
+      name = raw_name
+      value = substr($0, separator + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (tolower(name) == tolower(wanted_name)) {
+        occurrences++
+        if (raw_name != name) malformed = 1
+        if (value == wanted_value) exact++
+      }
+    }
+    END {
+      exit(have_status && block_ended && !malformed &&
+        occurrences == 1 && exact == 1 ? 0 : 1)
+    }
+  ' "$1"
+}
 download_exact_https() {
   max_bytes=$1
   output=$2
   headers=$3
   url=$4
-  status="$(curl --silent --show-error --proto '=https' \
+  status="$(curl --silent --show-error --suppress-connect-headers --proto '=https' \
     --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 120 \
     --max-filesize "$max_bytes" --dump-header "$headers" --output "$output" \
     --write-out '%{http_code}' "$url")" || return 1
@@ -967,8 +1011,8 @@ test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.zip.sha256" | awk '{print $
 test "$(sha256sum "$VERIFY_DIR/runtime-raiders-agent.update.json" | awk '{print $1}')" = \
   "$UPDATE_MANIFEST_SHA256"
 for headers in "$VERIFY_DIR"/*.headers; do
-  tr -d '\r' < "$headers" | grep -Fxi 'Cache-Control: no-store'
-  tr -d '\r' < "$headers" | grep -Fxi 'X-Content-Type-Options: nosniff'
+  header_has_exact_value "$headers" 'Cache-Control' 'no-store'
+  header_has_exact_value "$headers" 'X-Content-Type-Options' 'nosniff'
 done
 download_exact_https 4096 /dev/null /dev/null \
   'https://raiders.redlattice.com/health'

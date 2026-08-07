@@ -41,16 +41,44 @@ header_has_exact_value() {
   awk -v wanted_name="$2" -v wanted_value="$3" '
     {
       sub(/\r$/, "")
+      if ($0 ~ /^HTTP\/1\.[0-9][[:space:]]+[0-9][0-9][0-9]([[:space:]].*)?$/ ||
+          $0 ~ /^HTTP\/2[[:space:]]+[0-9][0-9][0-9]([[:space:]].*)?$/) {
+        have_status = 1
+        in_headers = 1
+        block_ended = 0
+        occurrences = 0
+        exact = 0
+        malformed = 0
+        next
+      }
+      if (!in_headers) next
+      if ($0 == "") {
+        in_headers = 0
+        block_ended = 1
+        next
+      }
       separator = index($0, ":")
-      if (separator == 0) next
-      name = substr($0, 1, separator - 1)
+      if (separator == 0) {
+        candidate = $0
+        sub(/[[:space:]].*$/, "", candidate)
+        if (tolower(candidate) == tolower(wanted_name)) malformed = 1
+        next
+      }
+      raw_name = substr($0, 1, separator - 1)
+      name = raw_name
       value = substr($0, separator + 1)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-      if (tolower(name) == tolower(wanted_name) &&
-          tolower(value) == tolower(wanted_value)) found = 1
+      if (tolower(name) == tolower(wanted_name)) {
+        occurrences++
+        if (raw_name != name) malformed = 1
+        if (value == wanted_value) exact++
+      }
     }
-    END { exit(found ? 0 : 1) }
+    END {
+      exit(have_status && block_ended && !malformed &&
+        occurrences == 1 && exact == 1 ? 0 : 1)
+    }
   ' "$1"
 }
 require_root() { test "$(id -u)" = 0 || die 'root is required'; }
@@ -459,7 +487,8 @@ verify_public_artifact() {
     status=
     curl_status=0
     if status=$("$CURL" --disable --no-location --proto '=https' --fail --silent --show-error \
-      --connect-timeout "$PUBLIC_CONNECT_TIMEOUT" --max-time "$PUBLIC_TOTAL_TIMEOUT" \
+      --suppress-connect-headers --connect-timeout "$PUBLIC_CONNECT_TIMEOUT" \
+      --max-time "$PUBLIC_TOTAL_TIMEOUT" \
       --max-filesize "$max_bytes" --dump-header "$headers" --output "$output" \
       --write-out '%{http_code}' "$url"); then
       curl_status=0

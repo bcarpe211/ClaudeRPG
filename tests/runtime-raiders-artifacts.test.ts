@@ -193,6 +193,7 @@ seen_no_location=0
 seen_fail=0
 seen_silent=0
 seen_show_error=0
+seen_suppress_connect_headers=0
 while test "$#" -gt 0; do
   case "$1" in
     --connect-timeout) test -z "$connect_timeout"; connect_timeout=$2; shift 2 ;;
@@ -206,6 +207,11 @@ while test "$#" -gt 0; do
     --fail) test "$seen_fail" = 0; seen_fail=1; shift ;;
     --silent) test "$seen_silent" = 0; seen_silent=1; shift ;;
     --show-error) test "$seen_show_error" = 0; seen_show_error=1; shift ;;
+    --suppress-connect-headers)
+      test "$seen_suppress_connect_headers" = 0
+      seen_suppress_connect_headers=1
+      shift
+      ;;
     --disable|--location|--location-trusted|--config|-K|--next) exit 64 ;;
     https://*|http://127.0.0.1:8080/health) test -z "$url"; url=$1; shift ;;
     *) exit 64 ;;
@@ -228,6 +234,10 @@ case "$url:$max_size" in
   'https://raiders.redlattice.com/health:') label=public-health ;;
   'http://127.0.0.1:8080/health:') label=local-health ;;
   *) exit 64 ;;
+esac
+case "$label" in
+  installer|zip|checksum|manifest) test "$seen_suppress_connect_headers" = 1 ;;
+  public-health|local-health) test "$seen_suppress_connect_headers" = 0 ;;
 esac
 selected_release=$(/usr/bin/readlink "$RUNTIME_RAIDERS_ARTIFACT_ROOT/current")
 selected_sha=\${selected_release##*/}
@@ -314,12 +324,86 @@ if test "$label" = installer && test "\${RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_O
   /usr/bin/perl -e 'print "x" x 1048577' > "$output"
   curl_result=63
 fi
-{
-  printf '%s\\n' 'HTTP/2 200'
-  if test "$missing_no_store" != 1; then printf '%s\\n' 'Cache-Control: no-store'; fi
-  if test "$missing_nosniff" != 1; then printf '%s\\n' 'X-Content-Type-Options: nosniff'; fi
-  printf '\\n'
-} > "$headers"
+case "\${RUNTIME_RAIDERS_TEST_PUBLIC_HEADER_SCENARIO:-single-exact}" in
+  single-exact)
+    {
+      printf '%s\\n' 'HTTP/2 200'
+      if test "$missing_no_store" != 1; then printf '%s\\n' 'Cache-Control: no-store'; fi
+      if test "$missing_nosniff" != 1; then printf '%s\\n' 'X-Content-Type-Options: nosniff'; fi
+      printf '\\n'
+    } > "$headers"
+    ;;
+  earlier-exact-final-missing)
+    printf '%s\\n' \
+      'HTTP/1.1 200 Connection established' \
+      'Cache-Control: no-store' \
+      'X-Content-Type-Options: nosniff' \
+      '' \
+      'HTTP/2 200' \
+      'X-Content-Type-Options: nosniff' \
+      '' > "$headers"
+    ;;
+  earlier-exact-final-conflicting)
+    printf '%s\\n' \
+      'HTTP/1.1 200 Connection established' \
+      'Cache-Control: no-store' \
+      'X-Content-Type-Options: nosniff' \
+      '' \
+      'HTTP/2 200' \
+      'Cache-Control: private' \
+      'X-Content-Type-Options: nosniff' \
+      '' > "$headers"
+    ;;
+  earlier-conflicting-final-exact)
+    printf '%s\\n' \
+      'HTTP/1.1 200 Connection established' \
+      'Cache-Control: private' \
+      'X-Content-Type-Options: invalid' \
+      '' \
+      'HTTP/2 200' \
+      'Cache-Control: no-store' \
+      'X-Content-Type-Options: nosniff' \
+      '' > "$headers"
+    ;;
+  final-duplicate-exact)
+    printf '%s\\n' \
+      'HTTP/2 200' \
+      'Cache-Control: no-store' \
+      'Cache-Control: no-store' \
+      'X-Content-Type-Options: nosniff' \
+      '' > "$headers"
+    ;;
+  final-conflicting-duplicate)
+    printf '%s\\n' \
+      'HTTP/2 200' \
+      'Cache-Control: no-store' \
+      'Cache-Control: private' \
+      'X-Content-Type-Options: nosniff' \
+      '' > "$headers"
+    ;;
+  earlier-exact-final-malformed)
+    printf '%s\\n' \
+      'HTTP/1.1 200 Connection established' \
+      'Cache-Control: no-store' \
+      'X-Content-Type-Options: nosniff' \
+      '' \
+      'HTTP/2 200' \
+      'Cache-Control no-store' \
+      'X-Content-Type-Options: nosniff' \
+      '' > "$headers"
+    ;;
+  earlier-exact-final-malformed-name)
+    printf '%s\\n' \
+      'HTTP/1.1 200 Connection established' \
+      'Cache-Control: no-store' \
+      '' \
+      'HTTP/2 200' \
+      'Cache-Control : no-store' \
+      'X-Content-Type-Options: nosniff' \
+      '' > "$headers"
+    ;;
+  *) exit 64 ;;
+esac
 printf '200'
 exit "$curl_result"`);
 
@@ -961,7 +1045,7 @@ describe('Runtime Raiders artifact publication', () => {
       const command = curlCommands.find((line) => line.endsWith(` ${url}`));
       expect(command, label).toMatch(new RegExp(
         '^curl --disable --no-location --proto =https --fail --silent --show-error ' +
-        '--connect-timeout 3 --max-time 15 --max-filesize ' + maxBytes +
+        '--suppress-connect-headers --connect-timeout 3 --max-time 15 --max-filesize ' + maxBytes +
         ' --dump-header \\S+ --output \\S+ --write-out %\\{http_code\\} ' +
         url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
       ));
@@ -981,6 +1065,46 @@ describe('Runtime Raiders artifact publication', () => {
     );
     expect(published.stderr).not.toContain(f.root);
     expect(readFileSync(f.commandLog, 'utf8')).not.toContain('curl-config-loaded');
+  });
+
+  it.each([
+    ['earlier exact and final missing', 'earlier-exact-final-missing', false],
+    ['earlier exact and final conflicting', 'earlier-exact-final-conflicting', false],
+    ['earlier conflicting and final exact', 'earlier-conflicting-final-exact', true],
+    ['duplicate exact final field', 'final-duplicate-exact', false],
+    ['conflicting duplicate final field', 'final-conflicting-duplicate', false],
+    ['earlier exact and malformed final field', 'earlier-exact-final-malformed', false],
+    ['earlier exact and malformed final name', 'earlier-exact-final-malformed-name', false],
+  ])('binds required headers to the final response block: %s', (
+    _name,
+    headerScenario,
+    shouldPass,
+  ) => {
+    const f = publicationFixture();
+
+    const published = runPublish(f, {
+      RUNTIME_RAIDERS_TEST_PUBLIC_HEADER_SCENARIO: headerScenario,
+    });
+
+    if (shouldPass) {
+      expect(published.status, published.stderr).toBe(0);
+      expect(readlinkSync(join(f.artifactRoot, 'current'))).toBe('releases/' + releaseSha);
+      return;
+    }
+    expectContentFreeFailure(f, published);
+    expect(published.stderr.split('\n').filter((line) => line.includes('result=fail'))).toEqual([
+      'runtime-raiders-artifacts: verify label=installer attempt=1/5 result=fail category=cache-control',
+    ]);
+    const commandLog = readFileSync(f.commandLog, 'utf8');
+    expect(commandLog.split('\n').filter((line) =>
+      line.startsWith('curl ') && line.endsWith(' https://raiders.redlattice.com/install.sh'),
+    )).toHaveLength(1);
+    expect(commandLog).not.toContain('sleep 1\n');
+    expect(existsSync(join(f.artifactRoot, 'current'))).toBe(false);
+    expect(releaseBytes(f.artifactRoot, releaseSha).installer).toEqual(
+      readFileSync(f.files.installer),
+    );
+    expectNoTemporaryPublicationPaths(f.artifactRoot);
   });
 
   it('succeeds on the third attempt after two transient request failures', () => {

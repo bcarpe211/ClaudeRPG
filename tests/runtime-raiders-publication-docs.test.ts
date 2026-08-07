@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const readDoc = (path: string): string => readFileSync(resolve(path), 'utf8');
@@ -19,6 +21,40 @@ const artifactUrls = [
   'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256',
   'https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json',
 ];
+
+function secondaryHeaderStatus(
+  headerLines: string[],
+  name = 'Cache-Control',
+  value = 'no-store',
+): number {
+  const publication = runbook.slice(
+    runbook.indexOf('### 5.3 Publish the exact signed quartet'),
+    runbook.indexOf('### 5.4 Install one verified-off canary'),
+  );
+  const functionStart = publication.indexOf('header_has_exact_value() {');
+  const functionEnd = publication.indexOf('\ndownload_exact_https() {', functionStart);
+  if (functionStart < 0 || functionEnd < 0) return 127;
+  const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-runbook-headers-'));
+  const headers = join(root, 'headers');
+  try {
+    writeFileSync(headers, headerLines.join('\r\n') + '\r\n');
+    const result = spawnSync('bash', [
+      '-c',
+      [
+        'set -eu',
+        publication.slice(functionStart, functionEnd),
+        'header_has_exact_value "$1" "$2" "$3"',
+      ].join('\n'),
+      'runtime-raiders-runbook-header-check',
+      headers,
+      name,
+      value,
+    ], { encoding: 'utf8' });
+    return result.status ?? 127;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 describe('Runtime Raiders artifact-publication documentation', () => {
   it('binds every operational document to the fixed artifact root', () => {
@@ -185,11 +221,76 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(publication).toContain("--proto '=https'");
     expect(publication).toContain("--proto-redir '=https'");
     expect(publication).toContain('--max-redirs 0');
+    expect(publication).toContain('--suppress-connect-headers');
     expect(publication).toContain('--connect-timeout 10');
     expect(publication).toContain('--max-time 120');
     for (const bound of ['1048576', '134217728', '4096']) {
       expect(publication).toContain(`download_exact_https ${bound}`);
     }
+  });
+
+  it.each([
+    ['earlier exact and final missing', [
+      'HTTP/1.1 200 Connection established',
+      'Cache-Control: no-store',
+      '',
+      'HTTP/2 200',
+      'X-Content-Type-Options: nosniff',
+      '',
+    ], false],
+    ['earlier exact and final conflicting', [
+      'HTTP/1.1 200 Connection established',
+      'Cache-Control: no-store',
+      '',
+      'HTTP/2 200',
+      'Cache-Control: private',
+      '',
+    ], false],
+    ['earlier conflicting and final exact', [
+      'HTTP/1.1 200 Connection established',
+      'Cache-Control: private',
+      '',
+      'HTTP/2 200',
+      'Cache-Control: no-store',
+      '',
+    ], true],
+    ['duplicate exact final field', [
+      'HTTP/2 200',
+      'Cache-Control: no-store',
+      'Cache-Control: no-store',
+      '',
+    ], false],
+    ['conflicting duplicate final field', [
+      'HTTP/2 200',
+      'Cache-Control: no-store',
+      'Cache-Control: private',
+      '',
+    ], false],
+    ['later trailer cannot supply final field', [
+      'HTTP/2 200',
+      'X-Content-Type-Options: nosniff',
+      '',
+      'Cache-Control: no-store',
+    ], false],
+    ['value comparison remains case-sensitive', [
+      'HTTP/2 200',
+      'Cache-Control: No-Store',
+      '',
+    ], false],
+    ['malformed final field name fails closed', [
+      'HTTP/1.1 200 Connection established',
+      'Cache-Control: no-store',
+      '',
+      'HTTP/2 200',
+      'Cache-Control : no-store',
+      '',
+    ], false],
+  ])('binds secondary required headers to the final response block: %s', (
+    _name,
+    headerLines,
+    shouldPass,
+  ) => {
+    expect(secondaryHeaderStatus(headerLines as string[]) === 0).toBe(shouldPass);
   });
 
   it('makes Caddy preparation one transactional block with rollback armed before replacement', () => {
