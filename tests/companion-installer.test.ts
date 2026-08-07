@@ -12,8 +12,13 @@ const secret = 'b'.repeat(64);
 const enrollmentCode = 'c'.repeat(43);
 const teamId = 'ABCDE12345';
 const releaseSHA = 'd'.repeat(40);
-const companionVersion = '0.2.2';
-const releaseSequence = '4';
+const releaseContract = readFileSync(join(process.cwd(), 'companion/RELEASE'), 'utf8')
+  .trimEnd()
+  .split('\n')
+  .map((line) => line.split('=', 2))
+  .reduce<Record<string, string>>((values, [key, value]) => ({ ...values, [key]: value }), {});
+const companionVersion = releaseContract.companion_version;
+const releaseSequence = releaseContract.release_sequence;
 const updateProtocolVersion = '1';
 
 function executable(path: string, lines: string[]): void {
@@ -369,8 +374,8 @@ describe('Runtime Raiders companion installer', () => {
     // Catches an installer that verifies only the signature while accepting the wrong signed release.
     const mutations: Array<[string, Partial<CandidateIdentity>]> = [
       ['bundle ID', { bundleID: 'com.redlattice.other-agent' }],
-      ['companion version', { companionVersion: '0.2.3' }],
-      ['release sequence', { releaseSequence: '5' }],
+      ['companion version', { companionVersion: companionVersion === '9.9.9' ? '9.9.8' : '9.9.9' }],
+      ['release sequence', { releaseSequence: String(Number(releaseSequence) + 1) }],
       ['release SHA', { releaseSHA: 'e'.repeat(40) }],
       ['update protocol', { updateProtocolVersion: '2' }],
     ];
