@@ -125,14 +125,6 @@ status_from() {
   status_output="$("$1" status)" || return 1
 }
 
-status_reports_live() {
-  status_from "$1" || return 1
-  case "$status_output" in
-    *'"daemonRunning":true'*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 status_is_offline_disabled() {
   status_from "$1" || return 1
   case "$status_output" in
@@ -411,8 +403,16 @@ if [ -d "$APP" ]; then
   codesign --verify --strict -R="$REQUIREMENT" "$APP"
   CONTROL_EXECUTABLE="$EXECUTABLE"
 fi
-if status_reports_live "$CONTROL_EXECUTABLE"; then
-  "$CONTROL_EXECUTABLE" off >/dev/null 2>&1 || true
+prior_live_disabled=0
+if status_from "$CONTROL_EXECUTABLE"; then
+  case "$status_output" in
+    *'"daemonRunning":true'*'"enabled":false'*'"persistedState":"disabled"'*)
+      prior_live_disabled=1
+      ;;
+    *'"daemonRunning":true'*)
+      "$CONTROL_EXECUTABLE" off >/dev/null 2>&1 || true
+      ;;
+  esac
 fi
 if ! launch_job_absent; then
   launchctl bootout "gui/$(id -u)/$LABEL" || {
@@ -429,6 +429,10 @@ wait_for_daemon_stopped "$CANDIDATE_EXECUTABLE" || {
   exit 1
 }
 if ! status_is_offline_disabled "$CANDIDATE_EXECUTABLE"; then
+  [ "$prior_live_disabled" -eq 0 ] || {
+    echo "Runtime Raiders could not preserve the existing disabled collector state" >&2
+    exit 1
+  }
   persist_fresh_off_state
 fi
 status_is_offline_disabled "$CANDIDATE_EXECUTABLE" || {

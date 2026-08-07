@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check:player-copy": "node tools/runtime-raiders/check-player-copy.mjs"
+    "check:player-copy": "node tools/runtime-raiders/check-player-copy.mjs",
+    "canary:upgrade-test": "sh -n companion/packaging/install.sh && vitest run tests/companion-installer.test.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

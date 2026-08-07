@@ -465,6 +465,44 @@ describe('Runtime Raiders companion installer', () => {
     }
   });
 
+  it('preserves a live already-disabled collector byte-for-byte without invoking off', () => {
+    // Catches quiescence that destructively turns off an already-disabled installation.
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-disabled-upgrade-'));
+    try {
+      const home = join(root, 'home');
+      const commandDir = join(home, 'bin');
+      mkdirSync(commandDir, { recursive: true });
+      const base = env(home, fakes(root), artifact(root, 'installed', true), commandDir);
+      expect(invoke(renderedInstaller(root), installerArgs(root), base).status).toBe(0);
+      const state = join(
+        home,
+        'Library/Application Support/Runtime Raiders/state/collector-state.json',
+      );
+      const preserved = '{"enabled":false,"files":{"synthetic.jsonl":{"adapterSnapshots":{"codex_cli":"Y2xp","codex_desktop":"ZGVza3RvcA=="},"cursor":{"offset":17,"partialLine":""},"nextOrdinal":4,"seeding":true}},"version":1}\n';
+      writeFileSync(state, preserved);
+      writeFileSync(join(home, 'commands.log'), '');
+      writeFileSync(join(home, 'binary.log'), '');
+      const replacement = artifact(root, 'replacement', true);
+
+      const result = invoke(renderedInstaller(root), installerArgs(root), {
+        ...base,
+        ...env(home, join(root, 'fakes'), replacement, commandDir),
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(state, 'utf8')).toBe(preserved);
+      const binaryLog = readFileSync(join(home, 'binary.log'), 'utf8');
+      expect(binaryLog).toContain('installed:status\n');
+      expect(binaryLog).not.toContain('installed:off\n');
+      const commands = readFileSync(join(home, 'commands.log'), 'utf8');
+      expect(commands).not.toContain('/api/raiders/enroll');
+      expect(commands).not.toContain('endpoint /api/runs/events');
+      expect(commands).not.toContain('endpoint /api/raiders/heartbeat');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('recovers an unavailable app-present install with missing state before replacement', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-missing-state-'));
     try {
