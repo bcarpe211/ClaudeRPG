@@ -13,10 +13,39 @@ if [[ ${RUNTIME_RAIDERS_TEST_MODE:-0} == 1 ]]; then
 fi
 RELEASES=$ARTIFACT_ROOT/releases
 CURRENT=$ARTIFACT_ROOT/current
-PUBLIC_ZIP_URL=https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip
-PUBLIC_UPDATE_MANIFEST_URL=https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json
+PUBLIC_ORIGIN=https://raiders.redlattice.com
+PUBLIC_INSTALLER_URL=$PUBLIC_ORIGIN/install.sh
+PUBLIC_ZIP_URL=$PUBLIC_ORIGIN/downloads/runtime-raiders-agent.zip
+PUBLIC_CHECKSUM_URL=$PUBLIC_ORIGIN/downloads/runtime-raiders-agent.zip.sha256
+PUBLIC_UPDATE_MANIFEST_URL=$PUBLIC_ORIGIN/downloads/runtime-raiders-agent.update.json
+PUBLIC_HEALTH_URL=$PUBLIC_ORIGIN/health
+LOCAL_HEALTH_URL=http://127.0.0.1:8080/health
+INSTALLER_MAX_BYTES=1048576
+ZIP_MAX_BYTES=134217728
+CHECKSUM_MAX_BYTES=4096
+UPDATE_MANIFEST_MAX_BYTES=65536
 
 die() { printf 'runtime-raiders-artifacts: %s\n' "$1" >&2; exit 1; }
+verification_checkpoint() {
+  printf 'runtime-raiders-artifacts: verify label=%s attempt=%s/%s result=%s category=%s%s\n' \
+    "$1" "$2" "$3" "$4" "$5" "${6:+ detail=$6}" >&2
+}
+header_has_exact_value() {
+  awk -v wanted_name="$2" -v wanted_value="$3" '
+    {
+      sub(/\r$/, "")
+      separator = index($0, ":")
+      if (separator == 0) next
+      name = substr($0, 1, separator - 1)
+      value = substr($0, separator + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (tolower(name) == tolower(wanted_name) &&
+          tolower(value) == tolower(wanted_value)) found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$1"
+}
 require_root() { test "$(id -u)" = 0 || die 'root is required'; }
 require_release_sha() { [[ $1 =~ ^[0-9a-f]{40}$ ]] || die 'invalid release SHA'; }
 require_digest() { [[ $1 =~ ^[0-9a-f]{64}$ ]] || die "invalid $2 SHA-256"; }
@@ -403,11 +432,95 @@ restore_previous_selector() {
   SELECTOR_CHANGED=0
 }
 
+verify_public_artifact() {
+  local label=$1
+  local url=$2
+  local max_bytes=$3
+  local output=$4
+  local expected_sha256=$5
+  local max_attempts=$6
+  local attempt=1
+  local headers=$VERIFY/$label.headers
+  local status
+  local byte_count
+  local category
+
+  while test "$attempt" -le "$max_attempts"; do
+    rm -f -- "$output" "$headers"
+    category=
+    if ! status=$("$CURL" --disable --no-location --proto '=https' --fail --silent --show-error \
+      --connect-timeout 3 --max-time 15 --max-filesize "$max_bytes" \
+      --dump-header "$headers" --output "$output" --write-out '%{http_code}' "$url"); then
+      category=status
+    elif test "$status" != 200; then
+      category=status
+    else
+      verification_checkpoint "$label" "$attempt" "$max_attempts" ok status
+      if ! { test -f "$output" && test ! -L "$output" && test -s "$output"; }; then
+        category=size
+      else
+        byte_count=$(wc -c < "$output" 2>/dev/null | tr -d ' ') || byte_count=
+        if ! [[ $byte_count =~ ^[1-9][0-9]*$ ]] || ! test "$byte_count" -le "$max_bytes"; then
+          category=size
+        else
+          verification_checkpoint "$label" "$attempt" "$max_attempts" ok size
+          if test "$(sha256_file "$output")" != "$expected_sha256"; then
+            category=digest
+          else
+            verification_checkpoint "$label" "$attempt" "$max_attempts" ok digest
+            if ! header_has_exact_value "$headers" 'Cache-Control' 'no-store'; then
+              category=cache-control
+            else
+              verification_checkpoint "$label" "$attempt" "$max_attempts" ok cache-control
+              if ! header_has_exact_value "$headers" 'X-Content-Type-Options' 'nosniff'; then
+                category=nosniff
+              else
+                verification_checkpoint "$label" "$attempt" "$max_attempts" ok nosniff
+                verification_checkpoint "$label" "$attempt" "$max_attempts" ok complete
+                return 0
+              fi
+            fi
+          fi
+        fi
+      fi
+    fi
+    verification_checkpoint "$label" "$attempt" "$max_attempts" fail "$category"
+    test "$attempt" -lt "$max_attempts" || return 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+verify_health() {
+  local label=$1
+  local url=$2
+  local protocol=$3
+  local max_time=$4
+  local max_attempts=$5
+  local attempt=1
+  local status
+
+  while test "$attempt" -le "$max_attempts"; do
+    if status=$("$CURL" --disable --no-location --proto "$protocol" --fail --silent --show-error \
+      --connect-timeout 3 --max-time "$max_time" --output /dev/null --write-out '%{http_code}' "$url") &&
+        test "$status" = 200; then
+      verification_checkpoint "$label" "$attempt" "$max_attempts" ok status
+      verification_checkpoint "$label" "$attempt" "$max_attempts" ok complete
+      return 0
+    fi
+    verification_checkpoint "$label" "$attempt" "$max_attempts" fail status
+    test "$attempt" -lt "$max_attempts" || return 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 verify_selected_public_release() {
   local created_verify
+  local fetched_installer
   local fetched_zip
+  local fetched_checksum
   local fetched_manifest
-  local byte_count
   created_verify=$(mktemp -d -- "$ARTIFACT_ROOT/.verify.XXXXXXXXXX" 2>/dev/null) || return 1
   VERIFY=$created_verify
   case $VERIFY in
@@ -415,22 +528,24 @@ verify_selected_public_release() {
     *) return 1 ;;
   esac
   test "$(metadata "$VERIFY")" = '0:0:700' || return 1
+  fetched_installer=$VERIFY/install.sh
   fetched_zip=$VERIFY/runtime-raiders-agent.zip
+  fetched_checksum=$VERIFY/runtime-raiders-agent.zip.sha256
   fetched_manifest=$VERIFY/runtime-raiders-agent.update.json
-  "$CURL" --disable --no-location --proto '=https' --fail --silent --show-error --max-time 30 \
-    --max-filesize 134217728 --output "$fetched_zip" "$PUBLIC_ZIP_URL" || return 1
-  require_regular_file "$fetched_zip" 'fetched public ZIP'
-  byte_count=$(wc -c < "$fetched_zip" 2>/dev/null | tr -d ' ') || return 1
-  [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le 134217728 || return 1
-  test "$(sha256_file "$fetched_zip")" = "$ZIP_SHA256" || return 1
-  "$CURL" --disable --no-location --proto '=https' --fail --silent --show-error --max-time 30 \
-    --max-filesize 65536 --output "$fetched_manifest" "$PUBLIC_UPDATE_MANIFEST_URL" || return 1
-  require_regular_file "$fetched_manifest" 'fetched public update manifest'
-  byte_count=$(wc -c < "$fetched_manifest" 2>/dev/null | tr -d ' ') || return 1
-  [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le 65536 || return 1
-  test "$(sha256_file "$fetched_manifest")" = "$UPDATE_MANIFEST_SHA256" || return 1
-  validate_public_manifest "$fetched_manifest" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
-    "$COMPANION_VERSION" "$ZIP_SHA256"
+  verify_public_artifact installer "$PUBLIC_INSTALLER_URL" "$INSTALLER_MAX_BYTES" "$fetched_installer" \
+    "$INSTALLER_SHA256" 1 || return 1
+  verify_public_artifact zip "$PUBLIC_ZIP_URL" "$ZIP_MAX_BYTES" "$fetched_zip" "$ZIP_SHA256" 1 || return 1
+  verify_public_artifact checksum "$PUBLIC_CHECKSUM_URL" "$CHECKSUM_MAX_BYTES" "$fetched_checksum" \
+    "$CHECKSUM_SHA256" 1 || return 1
+  verify_public_artifact manifest "$PUBLIC_UPDATE_MANIFEST_URL" "$UPDATE_MANIFEST_MAX_BYTES" \
+    "$fetched_manifest" "$UPDATE_MANIFEST_SHA256" 1 || return 1
+  if ! ( validate_public_manifest "$fetched_manifest" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
+      "$COMPANION_VERSION" "$ZIP_SHA256" ) >/dev/null 2>&1; then
+    verification_checkpoint manifest 1 1 fail manifest
+    return 1
+  fi
+  verify_health public-health "$PUBLIC_HEALTH_URL" '=https' 15 1 || return 1
+  verify_health local-health "$LOCAL_HEALTH_URL" '=http' 5 1 || return 1
 }
 
 select_release() {
@@ -709,7 +824,7 @@ publish_command() {
   validate_release "$release_target" "$RELEASE_SHA"
   select_release "$RELEASE_SHA"
   if ! verify_selected_public_release; then
-    die 'selected public release verification failed'
+    return 1
   fi
   rm -rf -- "$VERIFY" 2>/dev/null || die 'failed to remove public verification directory'
   VERIFY=''
