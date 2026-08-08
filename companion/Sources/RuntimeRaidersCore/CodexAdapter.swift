@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum CodexAdapterSnapshotError: Error, Equatable {
@@ -30,6 +31,7 @@ public struct CodexAdapter: ProviderAdapter {
     )
 
     public let expectedSurface: RunSurface
+    public private(set) var requiresReseeding = false
     private var verifiedSurface: RunSurface?
     private var rejectedSurface = false
     private var storedCompatibilityIssue: CodexCompatibilityIssue?
@@ -44,6 +46,9 @@ public struct CodexAdapter: ProviderAdapter {
     private var activeContextOrdinal: Int64?
     private var activeCompletedOrdinal: Int64?
     private var activeUsage = zeroUsage
+    private var sessionMetadataFingerprint: String?
+    private var sessionTotalUsage: UsageCountersV1?
+    private var usesSessionTotalUsage: Bool?
     private var activeModel: String?
     private var activeEffort: String?
 
@@ -57,7 +62,7 @@ public struct CodexAdapter: ProviderAdapter {
     public init(snapshot: Data) throws {
         guard snapshot.count <= 65_536,
               let state = try? JSONDecoder().decode(PersistedState.self, from: snapshot),
-              state.version == 1,
+              state.version == 1 || state.version == 2,
               state.expectedSurface == .codexCLI || state.expectedSurface == .codexDesktop,
               state.verifiedSurface == nil || state.verifiedSurface == state.expectedSurface,
               Self.validOptionalIdentity(state.activeNativeID),
@@ -78,11 +83,14 @@ public struct CodexAdapter: ProviderAdapter {
               Self.validOptionalInteger(state.pendingCompletion?.ordinal),
               Self.validOptionalInteger(state.pendingCompletion?.observedAt),
               Self.validUsage(state.activeUsage),
+              Self.validFingerprint(state.sessionMetadataFingerprint),
+              state.sessionTotalUsage.map(Self.validUsage) ?? true,
               state.pendingUsage.map(Self.validUsage) ?? true,
               Self.consistent(state) else {
             throw CodexAdapterSnapshotError.invalidSnapshot
         }
         expectedSurface = state.expectedSurface
+        requiresReseeding = state.version == 1
         verifiedSurface = state.verifiedSurface
         rejectedSurface = state.rejectedSurface
         storedCompatibilityIssue = state.compatibilityIssue
@@ -97,13 +105,16 @@ public struct CodexAdapter: ProviderAdapter {
         activeContextOrdinal = state.activeContextOrdinal
         activeCompletedOrdinal = state.activeCompletedOrdinal
         activeUsage = state.activeUsage
+        sessionMetadataFingerprint = state.sessionMetadataFingerprint
+        sessionTotalUsage = state.sessionTotalUsage
+        usesSessionTotalUsage = state.usesSessionTotalUsage
         activeModel = state.activeModel
         activeEffort = state.activeEffort
     }
 
     public func snapshot() throws -> Data {
         let state = PersistedState(
-            version: 1,
+            version: requiresReseeding ? 1 : 2,
             expectedSurface: expectedSurface,
             verifiedSurface: verifiedSurface,
             rejectedSurface: rejectedSurface,
@@ -119,6 +130,9 @@ public struct CodexAdapter: ProviderAdapter {
             activeContextOrdinal: activeContextOrdinal,
             activeCompletedOrdinal: activeCompletedOrdinal,
             activeUsage: activeUsage,
+            sessionMetadataFingerprint: sessionMetadataFingerprint,
+            sessionTotalUsage: sessionTotalUsage,
+            usesSessionTotalUsage: usesSessionTotalUsage,
             activeModel: activeModel,
             activeEffort: activeEffort
         )
@@ -129,8 +143,12 @@ public struct CodexAdapter: ProviderAdapter {
 
     mutating func prepareForSeeding() {
         verifiedSurface = nil
+        requiresReseeding = false
         rejectedSurface = false
         storedCompatibilityIssue = nil
+        sessionMetadataFingerprint = nil
+        sessionTotalUsage = nil
+        usesSessionTotalUsage = nil
         clearLifecycle()
     }
 
@@ -144,6 +162,10 @@ public struct CodexAdapter: ProviderAdapter {
         if rejectedSurface { verifiedSurface = seededSurface }
         rejectedSurface = false
         storedCompatibilityIssue = nil
+        // Seeding intentionally inspects only a bounded prefix before pinning the
+        // cursor to captured EOF. A total observed in that prefix is therefore
+        // not a safe baseline for the first live record after the boundary.
+        sessionTotalUsage = nil
         clearLifecycle()
     }
 
@@ -175,10 +197,33 @@ public struct CodexAdapter: ProviderAdapter {
                     ? .unsupportedSource : .unsupportedContract)
                 return []
             }
+            let fingerprint = Self.fingerprint(line)
+            if let sessionMetadataFingerprint {
+                guard sessionMetadataFingerprint == fingerprint else {
+                    reject(.unsupportedContract)
+                    return []
+                }
+                return []
+            }
+            guard verifiedSurface == nil else {
+                // A legacy snapshot can have verified provenance without the
+                // fingerprint introduced by this version. A later metadata
+                // record cannot be proven identical and therefore fails closed.
+                reject(.unsupportedContract)
+                return []
+            }
+            sessionMetadataFingerprint = fingerprint
             if surface == expectedSurface {
                 verifiedSurface = surface
+                // A live metadata record at the beginning of a new provider
+                // file proves that its session-cumulative usage starts at zero.
+                // Bounded seeding clears this value before crossing to live data.
+                sessionTotalUsage = Self.zeroUsage
+                usesSessionTotalUsage = nil
             } else {
                 verifiedSurface = nil
+                sessionTotalUsage = nil
+                usesSessionTotalUsage = nil
                 clearLifecycle()
             }
             return []
@@ -245,12 +290,51 @@ public struct CodexAdapter: ProviderAdapter {
                 reject(.unsupportedContract)
                 return []
             }
-            if let nativeID = activeNativeID, let startedAt = activeStartedAt {
-                guard eventTime >= startedAt, Self.isCumulative(usage, atLeast: activeUsage) else {
+            let usesSessionTotal = usage.total != nil
+            guard usesSessionTotalUsage == nil
+                    || usesSessionTotalUsage == usesSessionTotal else {
+                reject(.unsupportedContract)
+                return []
+            }
+            usesSessionTotalUsage = usesSessionTotal
+            let runUsage: UsageCountersV1
+            if let total = usage.total {
+                let delta: UsageCountersV1
+                if let sessionTotalUsage {
+                    guard let next = Self.delta(total, after: sessionTotalUsage) else {
+                        reject(.unsupportedContract)
+                        return []
+                    }
+                    delta = next
+                } else {
+                    // An upgrade or bounded seed can know the session provenance
+                    // without knowing its cumulative EOF total. Establish the
+                    // live baseline without credit so a repeated boundary record
+                    // can never re-award historical usage.
+                    guard Self.isCumulative(total, atLeast: usage.last) else {
+                        reject(.unsupportedContract)
+                        return []
+                    }
+                    delta = Self.zeroUsage
+                }
+                sessionTotalUsage = total
+                let current = activeNativeID == nil ? pendingUsage ?? Self.zeroUsage : activeUsage
+                guard let accumulated = Self.add(current, delta) else {
                     reject(.unsupportedContract)
                     return []
                 }
-                activeUsage = usage
+                runUsage = accumulated
+            } else {
+                sessionTotalUsage = nil
+                runUsage = usage.last
+            }
+            if let nativeID = activeNativeID, let startedAt = activeStartedAt {
+                guard eventTime >= startedAt,
+                      Self.isCumulative(runUsage, atLeast: activeUsage) else {
+                    reject(.unsupportedContract)
+                    return []
+                }
+                activeUsage = runUsage
                 return [observation(
                     nativeID: nativeID,
                     sequence: source.ordinal,
@@ -264,11 +348,11 @@ public struct CodexAdapter: ProviderAdapter {
                 reject(.unsupportedContract)
                 return []
             }
-            guard pendingUsage.map({ Self.isCumulative(usage, atLeast: $0) }) ?? true else {
+            guard pendingUsage.map({ Self.isCumulative(runUsage, atLeast: $0) }) ?? true else {
                 reject(.unsupportedContract)
                 return []
             }
-            pendingUsage = usage
+            pendingUsage = runUsage
             return []
         case "task_complete":
             if let startedAt = activeStartedAt, eventTime < startedAt {
@@ -390,7 +474,12 @@ public struct CodexAdapter: ProviderAdapter {
         )
     }
 
-    private static func usage(from payload: [String: Any]) -> UsageCountersV1? {
+    private struct UsageObservation {
+        let last: UsageCountersV1
+        let total: UsageCountersV1?
+    }
+
+    private static func usage(from payload: [String: Any]) -> UsageObservation? {
         guard let info = payload["info"] as? [String: Any],
               let usage = info["last_token_usage"] as? [String: Any],
               let input = integer(usage["input_tokens"]),
@@ -400,12 +489,69 @@ public struct CodexAdapter: ProviderAdapter {
               let reasoning = integer(usage["reasoning_output_tokens"]) else {
             return nil
         }
-        return UsageCountersV1(
+        let last = UsageCountersV1(
             input: input,
             output: output,
             cacheRead: cacheRead,
             cacheWrite: cacheWrite,
             reasoningOutput: reasoning
+        )
+        guard info.keys.contains("total_token_usage") else {
+            return UsageObservation(last: last, total: nil)
+        }
+        guard let total = info["total_token_usage"] as? [String: Any],
+              let totalInput = integer(total["input_tokens"]),
+              let totalOutput = integer(total["output_tokens"]),
+              let totalCacheRead = integer(total["cached_input_tokens"]),
+              let totalCacheWrite = integer(total["cache_write_input_tokens"]),
+              let totalReasoning = integer(total["reasoning_output_tokens"]) else {
+            return nil
+        }
+        return UsageObservation(
+            last: last,
+            total: UsageCountersV1(
+                input: totalInput,
+                output: totalOutput,
+                cacheRead: totalCacheRead,
+                cacheWrite: totalCacheWrite,
+                reasoningOutput: totalReasoning
+            )
+        )
+    }
+
+    private static func delta(
+        _ total: UsageCountersV1,
+        after previous: UsageCountersV1?
+    ) -> UsageCountersV1? {
+        let baseline = previous ?? zeroUsage
+        guard isCumulative(total, atLeast: baseline) else { return nil }
+        return UsageCountersV1(
+            input: total.input - baseline.input,
+            output: total.output - baseline.output,
+            cacheRead: total.cacheRead - baseline.cacheRead,
+            cacheWrite: total.cacheWrite - baseline.cacheWrite,
+            reasoningOutput: total.reasoningOutput - baseline.reasoningOutput
+        )
+    }
+
+    private static func add(
+        _ left: UsageCountersV1,
+        _ right: UsageCountersV1
+    ) -> UsageCountersV1? {
+        let pairs = [
+            (left.input, right.input),
+            (left.output, right.output),
+            (left.cacheRead, right.cacheRead),
+            (left.cacheWrite, right.cacheWrite),
+            (left.reasoningOutput, right.reasoningOutput),
+        ]
+        guard pairs.allSatisfy({ $0.0 <= maximumSafeInteger - $0.1 }) else { return nil }
+        return UsageCountersV1(
+            input: left.input + right.input,
+            output: left.output + right.output,
+            cacheRead: left.cacheRead + right.cacheRead,
+            cacheWrite: left.cacheWrite + right.cacheWrite,
+            reasoningOutput: left.reasoningOutput + right.reasoningOutput
         )
     }
 
@@ -495,6 +641,16 @@ public struct CodexAdapter: ProviderAdapter {
             .allSatisfy { (0...maximumSafeInteger).contains($0) }
     }
 
+    private static func fingerprint(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func validFingerprint(_ value: String?) -> Bool {
+        guard let value else { return true }
+        return value.utf8.count == 64
+            && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
     private static func consistent(_ state: PersistedState) -> Bool {
         if state.rejectedSurface && state.verifiedSurface != nil { return false }
         let activeValues: [Any?] = [
@@ -533,6 +689,18 @@ public struct CodexAdapter: ProviderAdapter {
         ) {
             return false
         }
+        if let sessionTotal = state.sessionTotalUsage {
+            if !isCumulative(sessionTotal, atLeast: state.activeUsage) { return false }
+            if let pending = state.pendingUsage,
+               !isCumulative(sessionTotal, atLeast: pending) { return false }
+        }
+        switch (state.usesSessionTotalUsage, state.sessionTotalUsage) {
+        case (.some(true), .some), (.some(true), .none), (.some(false), .none), (.none, .none):
+            break
+        case (.none, .some(let total)) where total == zeroUsage:
+            break
+        default: return false
+        }
         return true
     }
 
@@ -565,6 +733,9 @@ public struct CodexAdapter: ProviderAdapter {
         let activeContextOrdinal: Int64?
         let activeCompletedOrdinal: Int64?
         let activeUsage: UsageCountersV1
+        let sessionMetadataFingerprint: String?
+        let sessionTotalUsage: UsageCountersV1?
+        let usesSessionTotalUsage: Bool?
         let activeModel: String?
         let activeEffort: String?
 
@@ -573,6 +744,9 @@ public struct CodexAdapter: ProviderAdapter {
             case pendingStartedAt, pendingStartedOrdinal, pendingUsage, pendingContext, pendingCompletion
             case activeNativeID, activeStartedAt, activeStartedOrdinal, activeContextOrdinal
             case activeCompletedOrdinal, activeUsage, activeModel, activeEffort
+            case sessionMetadataFingerprint
+            case sessionTotalUsage
+            case usesSessionTotalUsage
         }
 
         init(
@@ -592,6 +766,9 @@ public struct CodexAdapter: ProviderAdapter {
             activeContextOrdinal: Int64?,
             activeCompletedOrdinal: Int64?,
             activeUsage: UsageCountersV1,
+            sessionMetadataFingerprint: String?,
+            sessionTotalUsage: UsageCountersV1?,
+            usesSessionTotalUsage: Bool?,
             activeModel: String?,
             activeEffort: String?
         ) {
@@ -611,6 +788,9 @@ public struct CodexAdapter: ProviderAdapter {
             self.activeContextOrdinal = activeContextOrdinal
             self.activeCompletedOrdinal = activeCompletedOrdinal
             self.activeUsage = activeUsage
+            self.sessionMetadataFingerprint = sessionMetadataFingerprint
+            self.sessionTotalUsage = sessionTotalUsage
+            self.usesSessionTotalUsage = usesSessionTotalUsage
             self.activeModel = activeModel
             self.activeEffort = activeEffort
         }
@@ -634,6 +814,9 @@ public struct CodexAdapter: ProviderAdapter {
                 activeContextOrdinal: try container.decodeIfPresent(Int64.self, forKey: .activeContextOrdinal),
                 activeCompletedOrdinal: try container.decodeIfPresent(Int64.self, forKey: .activeCompletedOrdinal),
                 activeUsage: try container.decode(UsageCountersV1.self, forKey: .activeUsage),
+                sessionMetadataFingerprint: try container.decodeIfPresent(String.self, forKey: .sessionMetadataFingerprint),
+                sessionTotalUsage: try container.decodeIfPresent(UsageCountersV1.self, forKey: .sessionTotalUsage),
+                usesSessionTotalUsage: try container.decodeIfPresent(Bool.self, forKey: .usesSessionTotalUsage),
                 activeModel: try container.decodeIfPresent(String.self, forKey: .activeModel),
                 activeEffort: try container.decodeIfPresent(String.self, forKey: .activeEffort)
             )

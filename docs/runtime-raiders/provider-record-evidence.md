@@ -19,22 +19,42 @@ Disabled means unsupported. Runtime Raiders must not scan those providers' roots
 
 | Surface | Verified version | Local record root | Launch provenance | Run identity | Usage | Lifecycle |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex Desktop | `0.146.0-alpha.3.1` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The approved Desktop session had bounded nonempty string `id` and `originator` fields and the nested `session_meta.payload.source.subagent.thread_spawn` structure described below. No scalar marker value or path participates in identity. | String `turn_context.payload.turn_id` | `event_msg` / `token_count` / `payload.info.last_token_usage`; numeric input, cached input, cache-write input, output, reasoning output, and total fields | `session_meta`, `event_msg.task_started`, `turn_context`, zero or more cumulative token observations, `event_msg.task_complete` |
-| Codex CLI | `codex-cli 0.146.0-alpha.3.1` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The isolated CLI canary created exactly one new record with bounded nonempty string `id`, `originator`, and `source` fields. The string source shape is structurally distinct from Desktop. No scalar marker value or path participates in identity. | String `turn_context.payload.turn_id`, also matched by the canary's user response metadata | Same cumulative `last_token_usage` object and numeric fields as Desktop | Same verified lifecycle as Desktop; the bounded process exited successfully and wrote `task_complete` |
+| Codex Desktop | bounded string version metadata; structurally verified through `0.146.0-alpha.9.2` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The approved Desktop session had bounded nonempty string `id` and `originator` fields and the nested `session_meta.payload.source.subagent.thread_spawn` structure described below. No scalar marker value or path participates in identity. | String `turn_context.payload.turn_id` | `event_msg` / `token_count`; prefer monotonic `payload.info.total_token_usage` session deltas, with the older cumulative `last_token_usage` shape as a compatibility fallback | `session_meta`, `event_msg.task_started`, `turn_context`, zero or more token observations, `event_msg.task_complete` |
+| Codex CLI | bounded string version metadata; live root record verified with `codex-cli 0.146.0-alpha.9.2` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | The isolated CLI canary created exactly one new record with bounded nonempty string `id`, `originator`, and `source` fields. The string source shape is structurally distinct from Desktop. No scalar marker value or path participates in identity. | String `turn_context.payload.turn_id`, also matched by the canary's user response metadata | Same session-total delta and legacy fallback rules as Desktop | Same verified lifecycle as Desktop; the bounded process exited successfully and wrote `task_complete` |
 | Omp | unverified | not scanned | disabled | unsupported | unsupported | unsupported |
 | Claude Code | unverified | not scanned | disabled | unsupported | unsupported | unsupported |
 
 ## Collector contract fixed by this evidence
 
 - A stable Codex `turn_id` is the provider-native Run identity. The opaque Run key is derived from the provider plus `turn_id`; launch surface is display/provenance only and is not key material. The same underlying `turn_id` observed through Desktop and CLI therefore deduplicates to one Run.
-- `last_token_usage` is a cumulative per-Run observation. Keep the newest valid observation for a Run; never sum repeated observations.
+- Current records expose session-cumulative `total_token_usage` plus per-model-call
+  `last_token_usage`. Derive each Run's cumulative counters only from positive,
+  component-wise session-total deltas. A repeated session total contributes zero;
+  a decreasing total fails closed. Persist the session-total baseline across a
+  daemon restart so prior work is never re-counted. When that baseline is
+  intentionally unknown after an older snapshot upgrade or bounded historical
+  seeding, the first live record establishes it but contributes zero; its total
+  must still be at least its per-call `last_token_usage` component-wise. This
+  conservative one-record undercount prevents a repeated boundary record from
+  re-awarding prior work. Later records contribute only session-total deltas.
+  Historical seeding never retains a total from the inspected prefix because the
+  cursor is pinned to a later captured EOF boundary, but it does retain the
+  observed usage format so a cross-boundary format change still fails closed.
+- Older verified records without `total_token_usage` retain the original
+  cumulative `last_token_usage` behavior. If `total_token_usage` is present it
+  must be complete and valid; never fall back around a malformed total or
+  switch usage formats inside one provider session. A byte-identical repeat of
+  the first validated `session_meta` is ignored using only a locally persisted
+  SHA-256 fingerprint; any different second metadata record fails closed rather
+  than resetting an established accounting baseline. The fingerprint is never
+  uploaded.
 - A Run is complete only after `task_complete`. A partial final line, cancellation, failure-like terminal, or missing completion remains incomplete and must not be promoted to a completed Run.
 - Duplicate records are idempotent. Reordered records remain pending until their required identity and lifecycle facts are available.
 - Distinct `turn_id` values remain separate Runs, including the paired parallel fixtures, and must never be merged.
 - Launch provenance comes from the verified `session_meta` shape/runtime marker, never from `cwd`, a project name, or a path.
 
-The launch predicate is structural and fail-closed. Both surfaces require exact
-`payload.cli_version == "0.146.0-alpha.3.1"` plus bounded, nonempty string
+The launch predicate is structural and fail-closed. Both surfaces require a
+bounded, nonempty string `payload.cli_version` plus bounded, nonempty string
 `payload.id` and `payload.originator`. CLI additionally requires a bounded,
 nonempty string `payload.source`. Desktop requires `payload.source` to contain
 only `subagent`, containing only `thread_spawn`, whose exact fields are

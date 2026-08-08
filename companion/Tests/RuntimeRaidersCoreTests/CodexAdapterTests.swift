@@ -73,19 +73,20 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertTrue(adapter.consume(line: forbidden, source: .init(ordinal: 99), observedAt: observedAt).isEmpty)
     }
 
-    func testInvalidUsageAndThreadTotalsNeverBecomeUsage() {
+    func testMalformedTotalUsageCannotFallbackToMalformedLastUsage() {
         var adapter = CodexAdapter(expectedSurface: .codexCLI)
         let lines = [
             #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
             #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
             #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
-            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":999},"last_token_usage":{"input_tokens":true,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":999},"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
         ]
         let output = lines.enumerated().flatMap { index, line in
             adapter.consume(line: Data(line.utf8), source: .init(ordinal: Int64(index)), observedAt: observedAt)
         }
         XCTAssertEqual(output.count, 1)
         XCTAssertEqual(output.last?.usage.input, 0)
+        XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
     }
 
     func testSurfaceMustMatchVerifiedSessionMetadata() throws {
@@ -236,6 +237,272 @@ final class CodexAdapterTests: XCTestCase {
         ).isEmpty)
         XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
         XCTAssertFalse(adapter.hasActiveRun)
+    }
+
+    func testSessionTotalsProducePerRunDeltasWhenLastCallUsageDecreases() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let lines = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn-1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":18,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":8,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:05Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"turn-2"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":22,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:01:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":22,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:01:05Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":25,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":3,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:01:06Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        let observations = lines.enumerated().flatMap { index, line in
+            adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+        let completed = observations.filter { $0.state == .completed }
+
+        XCTAssertNil(adapter.compatibilityIssue)
+        XCTAssertEqual(completed.map(\.usage.input), [18, 7])
+    }
+
+    func testOldSnapshotEstablishesUnknownSessionTotalWithoutCredit() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let legacyRun = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"legacy-turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":40,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        for (index, line) in legacyRun.enumerated() {
+            _ = adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+        var oldSnapshot = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: adapter.snapshot()) as? [String: Any]
+        )
+        oldSnapshot.removeValue(forKey: "sessionTotalUsage")
+        oldSnapshot.removeValue(forKey: "usesSessionTotalUsage")
+        oldSnapshot.removeValue(forKey: "sessionMetadataFingerprint")
+        var restored = try CodexAdapter(
+            snapshot: JSONSerialization.data(withJSONObject: oldSnapshot)
+        )
+
+        let newRun = [
+            #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"new-turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":5,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:01:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        let observations = newRun.enumerated().flatMap { index, line in
+            restored.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index + legacyRun.count)),
+                observedAt: observedAt
+            )
+        }
+
+        XCTAssertNil(restored.compatibilityIssue)
+        XCTAssertEqual(observations.last?.state, .completed)
+        XCTAssertEqual(observations.last?.usage.input, 0)
+    }
+
+    func testUnknownSeedBaselineDoesNotRecreditRepeatedTotal() {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        adapter.prepareForSeeding()
+        let history = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+        ]
+        for (index, line) in history.enumerated() {
+            adapter.consumeDuringSeeding(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+        let live = [
+            #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:01:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        let observations = live.enumerated().flatMap { index, line in
+            adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index + history.count)),
+                observedAt: observedAt
+            )
+        }
+
+        XCTAssertNil(adapter.compatibilityIssue)
+        XCTAssertEqual(observations.last?.state, .completed)
+        XCTAssertEqual(observations.last?.usage.input, 0)
+    }
+
+    func testUsageFormatCannotSwitchAcrossSeedBoundary() {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        adapter.prepareForSeeding()
+        let history = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+        ]
+        for (index, line) in history.enumerated() {
+            adapter.consumeDuringSeeding(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+        let live = [
+            #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":15,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":5,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+        ]
+        for (index, line) in live.enumerated() {
+            _ = adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index + history.count)),
+                observedAt: observedAt
+            )
+        }
+
+        XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
+        XCTAssertFalse(adapter.hasActiveRun)
+    }
+
+    func testSessionTotalBaselineSurvivesSnapshotAcrossRuns() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let firstRun = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn-1"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        for (index, line) in firstRun.enumerated() {
+            _ = adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+
+        var restored = try CodexAdapter(snapshot: adapter.snapshot())
+        let secondRun = [
+            #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"turn-2"}}"#,
+            #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":14,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:01:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        let observations = secondRun.enumerated().flatMap { index, line in
+            restored.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index + firstRun.count)),
+                observedAt: observedAt
+            )
+        }
+
+        XCTAssertNil(restored.compatibilityIssue)
+        XCTAssertEqual(observations.last?.state, .completed)
+        XCTAssertEqual(observations.last?.usage.input, 4)
+    }
+
+    func testSnapshotRejectsSessionTotalBelowActiveRunUsage() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let lines = [
+            #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+        ]
+        for (index, line) in lines.enumerated() {
+            _ = adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+        var snapshot = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: adapter.snapshot()) as? [String: Any]
+        )
+        snapshot["sessionTotalUsage"] = [
+            "input": 0,
+            "output": 0,
+            "cache_read": 0,
+            "cache_write": 0,
+            "reasoning_output": 0,
+        ]
+
+        XCTAssertThrowsError(
+            try CodexAdapter(snapshot: JSONSerialization.data(withJSONObject: snapshot))
+        )
+    }
+
+    func testUsageFormatCannotSwitchMidSession() throws {
+        let total = #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#
+        let laterLegacy = #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":15,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#
+        let legacy = #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#
+        let laterTotal = #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":15,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":5,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#
+
+        for records in [[total, laterLegacy], [legacy, laterTotal]] {
+            var adapter = CodexAdapter(expectedSurface: .codexCLI)
+            _ = try startRun(adapter: &adapter, payload: validSessionPayload(for: .codexCLI))
+            for (index, line) in records.enumerated() {
+                _ = adapter.consume(
+                    line: Data(line.utf8),
+                    source: .init(ordinal: Int64(index + 3)),
+                    observedAt: observedAt
+                )
+            }
+            XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
+            XCTAssertFalse(adapter.hasActiveRun)
+        }
+    }
+
+    func testExactDuplicateSessionMetadataIsIdempotentWithoutResettingAccounting() throws {
+        let metadata = #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#
+        let lines = [
+            metadata,
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            metadata,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":15,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":5,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:05Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let observations = lines.enumerated().flatMap { index, line in
+            adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index)),
+                observedAt: observedAt
+            )
+        }
+
+        XCTAssertNil(adapter.compatibilityIssue)
+        XCTAssertEqual(observations.last?.state, .completed)
+        XCTAssertEqual(observations.last?.usage.input, 15)
+    }
+
+    func testDifferentSecondSessionMetadataFailsClosed() {
+        var adapter = CodexAdapter(expectedSurface: .codexCLI)
+        let first = #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session-a","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#
+        let second = #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session-b","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#
+
+        _ = adapter.consume(
+            line: Data(first.utf8), source: .init(ordinal: 0), observedAt: observedAt
+        )
+        XCTAssertTrue(adapter.consume(
+            line: Data(second.utf8), source: .init(ordinal: 1), observedAt: observedAt
+        ).isEmpty)
+        XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
     }
 
     func testPreStartEventTimestampFailsClosedWithContractReason() throws {

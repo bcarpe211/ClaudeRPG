@@ -438,8 +438,10 @@ public final class AgentController: @unchecked Sendable {
                 stateWasMissing = true
             }
             self.stateDirectoryDescriptor = stateDirectoryDescriptor
+            let migratedLegacySnapshots = try migrateLegacyAdapterSnapshots()
             acceptingCollection = state.enabled
-            if stateWasMissing { try persist() }
+                && !state.files.values.contains(where: \.seeding)
+            if stateWasMissing || migratedLegacySnapshots { try persist() }
         } catch {
             Darwin.close(stateDirectoryDescriptor)
             throw error
@@ -1225,6 +1227,27 @@ public final class AgentController: @unchecked Sendable {
         var adapters = try restoredAdapters(from: snapshots)
         for index in adapters.indices { adapters[index].prepareForSeeding() }
         return try self.snapshots(of: adapters)
+    }
+
+    private func migrateLegacyAdapterSnapshots() throws -> Bool {
+        var migrated = false
+        for path in state.files.keys {
+            guard var fileState = state.files[path] else { continue }
+            let adapters = try restoredAdapters(from: fileState.adapterSnapshots)
+            guard adapters.contains(where: \.requiresReseeding) else { continue }
+            fileState.seeding = true
+            fileState.adapterSnapshots = try snapshotsPreparedForSeeding(
+                from: fileState.adapterSnapshots
+            )
+            fileState.cursor = JSONLCursor()
+            fileState.nextOrdinal = 0
+            fileState.seedTargetOffset = nil
+            fileState.seedFileIdentity = nil
+            fileState.seedTargetCheckpoint = nil
+            state.files[path] = fileState
+            migrated = true
+        }
+        return migrated
     }
 
     private func restoredAdapters(from snapshots: [String: Data]) throws -> [CodexAdapter] {

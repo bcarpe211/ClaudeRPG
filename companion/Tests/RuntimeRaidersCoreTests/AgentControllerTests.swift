@@ -936,6 +936,135 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testLargeExistingCodexFileEstablishesPostBoundaryTotalWithoutCredit() throws {
+        try withHarness(readLimitBytes: 4_096) { harness in
+            var history = lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+            ])
+            while history.count <= 70_000 {
+                history.append(lines([
+                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"response_item","payload":{}}"#,
+                ]))
+            }
+            history.append(lines([
+                #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            ]))
+            let file = try harness.makeFile("large-session-total.jsonl", contents: history)
+
+            try harness.controller.install(existingFiles: [file])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+            XCTAssertTrue(harness.controller.isAcceptingCollection)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+
+            try append(lines([
+                #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+                #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"post-boundary-turn"}}"#,
+                #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1005,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":5,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+                #"{"timestamp":"2026-01-01T00:01:04Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+            ]), to: file)
+            try harness.controller.processChangedFiles([file])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+
+            let completed = try harness.outbox.records(limit: 100)
+                .map(\.event)
+                .filter { $0.state == .completed }
+            XCTAssertEqual(completed.count, 1)
+            XCTAssertEqual(completed.last?.usage.input, 0)
+        }
+    }
+
+    func testLegacyRejectedSnapshotMigratesThroughCapturedEOFBeforeFutureRun() throws {
+        try withHarness { harness in
+            let file = try harness.makeFile(
+                "legacy-rejected-session.jsonl",
+                contents: lines([
+                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+                    #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+                ])
+            )
+            try harness.controller.install(existingFiles: [file])
+
+            var rejected = CodexAdapter(expectedSurface: .codexCLI)
+            let rejectedLines = [
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"1.0.0"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"old-turn"}}"#,
+                #"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+                #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":3,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+            ]
+            for (index, line) in rejectedLines.enumerated() {
+                _ = rejected.consume(
+                    line: Data(line.utf8),
+                    source: .init(ordinal: Int64(index)),
+                    observedAt: now
+                )
+            }
+            XCTAssertEqual(rejected.compatibilityIssue, .unsupportedContract)
+            var oldSnapshot = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: rejected.snapshot()) as? [String: Any]
+            )
+            oldSnapshot["version"] = 1
+            oldSnapshot.removeValue(forKey: "sessionMetadataFingerprint")
+            oldSnapshot.removeValue(forKey: "sessionTotalUsage")
+            oldSnapshot.removeValue(forKey: "usesSessionTotalUsage")
+            let oldSnapshotData = try JSONSerialization.data(withJSONObject: oldSnapshot)
+            XCTAssertNoThrow(try CodexAdapter(snapshot: oldSnapshotData))
+
+            let stateFile = harness.paths.stateDirectory
+                .appendingPathComponent("collector-state.json")
+            var state = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: stateFile))
+                    as? [String: Any]
+            )
+            var files = try XCTUnwrap(state["files"] as? [String: Any])
+            var fileState = try XCTUnwrap(files[file.path] as? [String: Any])
+            var snapshots = try XCTUnwrap(fileState["adapterSnapshots"] as? [String: Any])
+            snapshots[RunSurface.codexCLI.rawValue] = oldSnapshotData.base64EncodedString()
+            fileState["adapterSnapshots"] = snapshots
+            files[file.path] = fileState
+            state["files"] = files
+            try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+                .write(to: stateFile)
+            XCTAssertEqual(
+                try AgentController.persistedCollectorState(
+                    paths: harness.paths,
+                    surfaces: [.codexCLI]
+                ),
+                .enabled
+            )
+
+            let upgraded = try harness.makeController()
+            XCTAssertFalse(upgraded.isAcceptingCollection)
+            try upgraded.install(existingFiles: [file])
+            while upgraded.hasPendingReadWork {
+                try upgraded.continuePendingWork()
+            }
+            XCTAssertTrue(upgraded.isAcceptingCollection)
+
+            try append(lines([
+                #"{"timestamp":"2026-01-01T00:01:01Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+                #"{"timestamp":"2026-01-01T00:01:02Z","type":"turn_context","payload":{"turn_id":"future-turn"}}"#,
+                #"{"timestamp":"2026-01-01T00:01:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1005,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":5,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+                #"{"timestamp":"2026-01-01T00:01:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1008,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0},"last_token_usage":{"input_tokens":3,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}}}"#,
+                #"{"timestamp":"2026-01-01T00:01:05Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+            ]), to: file)
+            try upgraded.processChangedFiles([file])
+            while upgraded.hasPendingReadWork {
+                try upgraded.continuePendingWork()
+            }
+
+            let completed = try harness.outbox.records(limit: 100)
+                .map(\.event)
+                .filter { $0.state == .completed }
+            XCTAssertEqual(completed.count, 1)
+            XCTAssertEqual(completed.last?.usage.input, 3)
+        }
+    }
+
     func testCapturedTailRewriteRepinsCurrentEOFBeforeScoringExtensions() throws {
         try withHarness(readLimitBytes: 64) { harness in
             let metadata = lines([
