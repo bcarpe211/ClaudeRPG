@@ -1037,9 +1037,23 @@ final class AgentControllerTests: XCTestCase {
                 .enabled
             )
 
+            let legacyStateBytes = try Data(contentsOf: stateFile)
+            let lease = try CompanionPreparedStartupLease(paths: harness.paths)
+            defer { lease.unlock() }
             let upgraded = try harness.makeController()
+            let startup = try PreparedDaemonStartupCoordinator(paths: harness.paths) {
+                try upgraded.install(existingFiles: [file])
+            }
+
+            try startup.start()
+
+            XCTAssertTrue(startup.startsPrepared)
+            XCTAssertEqual(try Data(contentsOf: stateFile), legacyStateBytes)
             XCTAssertFalse(upgraded.isAcceptingCollection)
-            try upgraded.install(existingFiles: [file])
+
+            try startup.resume()
+
+            XCTAssertNotEqual(try Data(contentsOf: stateFile), legacyStateBytes)
             while upgraded.hasPendingReadWork {
                 try upgraded.continuePendingWork()
             }

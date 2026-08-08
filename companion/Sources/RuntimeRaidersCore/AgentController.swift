@@ -438,10 +438,10 @@ public final class AgentController: @unchecked Sendable {
                 stateWasMissing = true
             }
             self.stateDirectoryDescriptor = stateDirectoryDescriptor
-            let migratedLegacySnapshots = try migrateLegacyAdapterSnapshots()
+            _ = try migrateLegacyAdapterSnapshots()
             acceptingCollection = state.enabled
                 && !state.files.values.contains(where: \.seeding)
-            if stateWasMissing || migratedLegacySnapshots { try persist() }
+            if stateWasMissing { try persist() }
         } catch {
             Darwin.close(stateDirectoryDescriptor)
             throw error
