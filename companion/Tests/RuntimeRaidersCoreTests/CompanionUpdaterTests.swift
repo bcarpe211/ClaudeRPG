@@ -152,7 +152,7 @@ final class CompanionUpdaterTests: XCTestCase {
                     ]
                 )
                 XCTAssertEqual(try harness.installedMarker(), "new")
-                XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
                 XCTAssertEqual(
                     try AgentController.persistedEnabled(
                         paths: harness.paths,
@@ -178,8 +178,8 @@ final class CompanionUpdaterTests: XCTestCase {
 
             XCTAssertEqual(try harness.installedMarker(), "old")
             XCTAssertEqual(try harness.protectedBytes(), before)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
         }
     }
 
@@ -202,7 +202,7 @@ final class CompanionUpdaterTests: XCTestCase {
                 true
             )
             XCTAssertFalse(harness.hasUpdateWorkspace)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
         }
     }
 
@@ -214,8 +214,8 @@ final class CompanionUpdaterTests: XCTestCase {
             let protectedBefore = try harness.protectedBytes()
             harness.bootoutSideEffect = { call in
                 guard call == 0 else { return }
-                try writeOwnerFile(blockerBytes, to: harness.paths.failedApplication)
-                blockerInode = try inode(harness.paths.failedApplication)
+                try writeOwnerFile(blockerBytes, to: harness.paths.legacyProtocolOne.failedApplication)
+                blockerInode = try inode(harness.paths.legacyProtocolOne.failedApplication)
                 throw InjectedUpdaterFailure.responseLost
             }
 
@@ -226,10 +226,10 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertEqual(try harness.installedMarker(), "old")
             XCTAssertEqual(try harness.protectedBytes(), protectedBefore)
             XCTAssertEqual(
-                try inode(harness.paths.failedApplication),
+                try inode(harness.paths.legacyProtocolOne.failedApplication),
                 try XCTUnwrap(blockerInode)
             )
-            XCTAssertEqual(try Data(contentsOf: harness.paths.failedApplication), blockerBytes)
+            XCTAssertEqual(try Data(contentsOf: harness.paths.legacyProtocolOne.failedApplication), blockerBytes)
             XCTAssertEqual(harness.bootoutCallCount, 2)
             XCTAssertEqual(harness.bootstrapCallCount, 1)
             XCTAssertEqual(harness.stoppedProofCallCount, 0)
@@ -237,7 +237,7 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.hasUpdateWorkspace)
             XCTAssertFalse(
-                FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path)
+                FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path)
             )
         }
     }
@@ -247,12 +247,12 @@ final class CompanionUpdaterTests: XCTestCase {
             harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
             harness.beforeSwap = {
                 try FileManager.default.createDirectory(
-                    at: harness.paths.rollbackApplication,
+                    at: harness.paths.legacyProtocolOne.rollbackApplication,
                     withIntermediateDirectories: false
                 )
                 try FileManager.default.setAttributes(
                     [.posixPermissions: 0o700],
-                    ofItemAtPath: harness.paths.rollbackApplication.path
+                    ofItemAtPath: harness.paths.legacyProtocolOne.rollbackApplication.path
                 )
             }
 
@@ -262,11 +262,11 @@ final class CompanionUpdaterTests: XCTestCase {
 
             XCTAssertEqual(try harness.installedMarker(), "old")
             XCTAssertTrue(
-                FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path)
+                FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path)
             )
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.hasUpdateWorkspace)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
         }
     }
 
@@ -275,12 +275,12 @@ final class CompanionUpdaterTests: XCTestCase {
             harness.healthStatuses = [harness.newStatus(enabled: false)]
             harness.beforeFirstHealth = {
                 try FileManager.default.createDirectory(
-                    at: harness.paths.failedApplication,
+                    at: harness.paths.legacyProtocolOne.failedApplication,
                     withIntermediateDirectories: false
                 )
                 try FileManager.default.setAttributes(
                     [.posixPermissions: 0o700],
-                    ofItemAtPath: harness.paths.failedApplication.path
+                    ofItemAtPath: harness.paths.legacyProtocolOne.failedApplication.path
                 )
             }
             let enrollmentBefore = try Data(contentsOf: harness.enrollment)
@@ -290,9 +290,9 @@ final class CompanionUpdaterTests: XCTestCase {
                 XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
             }
 
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.installedApplication.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.installedApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
             XCTAssertEqual(try harness.installedMarker(), "new")
             XCTAssertEqual(try Data(contentsOf: harness.enrollment), enrollmentBefore)
             XCTAssertEqual(try Data(contentsOf: harness.outboxRecord), outboxBefore)
@@ -404,15 +404,15 @@ final class CompanionUpdaterTests: XCTestCase {
                 ofItemAtPath: transaction.candidateApplication.path
             )
             try transaction.sealValidatedCandidate()
-            let installedInode = try inode(paths.installedApplication)
+            let installedInode = try inode(paths.legacyProtocolOne.installedApplication)
             let candidateInode = try inode(transaction.candidateApplication)
 
             try transaction.swap()
 
-            XCTAssertEqual(try inode(paths.installedApplication), candidateInode)
-            XCTAssertEqual(try inode(paths.rollbackApplication), installedInode)
-            XCTAssertEqual(try permissions(paths.installedApplication), 0o700)
-            XCTAssertEqual(try permissions(paths.rollbackApplication), 0o700)
+            XCTAssertEqual(try inode(paths.legacyProtocolOne.installedApplication), candidateInode)
+            XCTAssertEqual(try inode(paths.legacyProtocolOne.rollbackApplication), installedInode)
+            XCTAssertEqual(try permissions(paths.legacyProtocolOne.installedApplication), 0o700)
+            XCTAssertEqual(try permissions(paths.legacyProtocolOne.rollbackApplication), 0o700)
             XCTAssertFalse(FileManager.default.fileExists(atPath: transaction.promotedCandidateApplication.path))
         }
     }
@@ -425,7 +425,7 @@ final class CompanionUpdaterTests: XCTestCase {
         let target = root.appendingPathComponent("DO_NOT_TOUCH", isDirectory: true)
         try makeFakeApp(target, marker: "trap")
         try FileManager.default.createSymbolicLink(
-            at: paths.installedApplication,
+            at: paths.legacyProtocolOne.installedApplication,
             withDestinationURL: target
         )
 
@@ -437,27 +437,27 @@ final class CompanionUpdaterTests: XCTestCase {
         try withTransaction { transaction, paths in
             try makeFakeApp(transaction.candidateApplication, marker: "candidate")
             try transaction.sealValidatedCandidate()
-            let oldInode = try inode(paths.installedApplication)
+            let oldInode = try inode(paths.legacyProtocolOne.installedApplication)
             let candidateInode = try inode(transaction.candidateApplication)
             try transaction.swap()
 
             try transaction.rollback()
 
-            XCTAssertEqual(try inode(paths.installedApplication), oldInode)
-            XCTAssertEqual(try inode(paths.failedApplication), candidateInode)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
+            XCTAssertEqual(try inode(paths.legacyProtocolOne.installedApplication), oldInode)
+            XCTAssertEqual(try inode(paths.legacyProtocolOne.failedApplication), candidateInode)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path))
         }
     }
 
     func testCleanupNeverDeletesOnlyVerifiedApplication() throws {
         try withTransaction { transaction, paths in
             try FileManager.default.moveItem(
-                at: paths.installedApplication,
-                to: paths.rollbackApplication
+                at: paths.legacyProtocolOne.installedApplication,
+                to: paths.legacyProtocolOne.rollbackApplication
             )
 
             XCTAssertThrowsError(try transaction.cleanupAfterSuccess())
-            XCTAssertTrue(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path))
         }
     }
 
@@ -467,7 +467,7 @@ final class CompanionUpdaterTests: XCTestCase {
             try Data("trap".utf8).write(to: trap)
             harness.beforeFirstHealth = {
                 try FileManager.default.createSymbolicLink(
-                    at: harness.paths.rollbackApplication.appendingPathComponent("0-trap"),
+                    at: harness.paths.legacyProtocolOne.rollbackApplication.appendingPathComponent("0-trap"),
                     withDestinationURL: trap
                 )
             }
@@ -478,7 +478,7 @@ final class CompanionUpdaterTests: XCTestCase {
             )
             XCTAssertEqual(try harness.installedMarker(), "new")
             XCTAssertEqual(try Data(contentsOf: trap), Data("trap".utf8))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
         }
     }
 
@@ -574,7 +574,7 @@ final class CompanionUpdaterTests: XCTestCase {
             harness.healthStatuses = [harness.newStatus(enabled: false)]
             harness.beforeFirstHealth = {
                 try rewriteSameLengthRestoringModificationTime(
-                    harness.paths.rollbackApplication.appendingPathComponent("marker"),
+                    harness.paths.legacyProtocolOne.rollbackApplication.appendingPathComponent("marker"),
                     with: Data("bad".utf8)
                 )
             }
@@ -583,7 +583,7 @@ final class CompanionUpdaterTests: XCTestCase {
                 XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
             }
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
         }
     }
 
@@ -591,7 +591,7 @@ final class CompanionUpdaterTests: XCTestCase {
         try withHarness { harness in
             harness.beforeCleanup = {
                 try! rewriteSameLengthRestoringModificationTime(
-                    harness.paths.installedApplication.appendingPathComponent("marker"),
+                    harness.paths.legacyProtocolOne.installedApplication.appendingPathComponent("marker"),
                     with: Data("bad".utf8)
                 )
             }
@@ -600,7 +600,7 @@ final class CompanionUpdaterTests: XCTestCase {
                 try harness.makeUpdater().run(),
                 .updated(from: harness.oldIdentity, to: harness.newIdentity)
             )
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
             XCTAssertThrowsError(try harness.makeUpdater().run())
         }
     }
@@ -609,7 +609,7 @@ final class CompanionUpdaterTests: XCTestCase {
         try withHarness { harness in
             harness.beforeCleanup = {
                 try! rewriteSameLengthRestoringModificationTime(
-                    harness.paths.rollbackApplication.appendingPathComponent("marker"),
+                    harness.paths.legacyProtocolOne.rollbackApplication.appendingPathComponent("marker"),
                     with: Data("bad".utf8)
                 )
             }
@@ -618,7 +618,7 @@ final class CompanionUpdaterTests: XCTestCase {
                 try harness.makeUpdater().run(),
                 .updated(from: harness.oldIdentity, to: harness.newIdentity)
             )
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
         }
     }
 
@@ -627,15 +627,15 @@ final class CompanionUpdaterTests: XCTestCase {
             harness.beforeCleanup = {
                 let displaced = harness.paths.supportDirectory
                     .appendingPathComponent("substituted-healthy-candidate.app", isDirectory: true)
-                try! FileManager.default.moveItem(at: harness.paths.installedApplication, to: displaced)
-                try! makeFakeApp(harness.paths.installedApplication, marker: "new")
+                try! FileManager.default.moveItem(at: harness.paths.legacyProtocolOne.installedApplication, to: displaced)
+                try! makeFakeApp(harness.paths.legacyProtocolOne.installedApplication, marker: "new")
             }
 
             XCTAssertEqual(
                 try harness.makeUpdater().run(),
                 .updated(from: harness.oldIdentity, to: harness.newIdentity)
             )
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
             XCTAssertTrue(
                 FileManager.default.fileExists(
                     atPath: harness.paths.supportDirectory
@@ -674,7 +674,7 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertEqual(harness.bootoutCallCount, 1)
             XCTAssertEqual(harness.bootstrapCallCount, 1)
             XCTAssertEqual(try harness.installedMarker(), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
         }
     }
 
@@ -774,17 +774,17 @@ final class CompanionUpdaterTests: XCTestCase {
                         "failure: \(failure)"
                     )
                 }
-                XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
+                XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.rollbackApplication), "old")
                 XCTAssertTrue(
-                    FileManager.default.fileExists(atPath: harness.paths.failedApplication.path),
+                    FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path),
                     "missing failed candidate for \(failure)"
                 )
-                if FileManager.default.fileExists(atPath: harness.paths.failedApplication.path) {
-                    XCTAssertEqual(try marker(harness.paths.failedApplication), "new")
+                if FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path) {
+                    XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.failedApplication), "new")
                 }
                 XCTAssertTrue(
                     FileManager.default.fileExists(
-                        atPath: harness.paths.rollbackApplication
+                        atPath: harness.paths.legacyProtocolOne.rollbackApplication
                             .appendingPathComponent("Contents/MacOS/runtime-raiders-agent").path
                     )
                 )
@@ -800,10 +800,10 @@ final class CompanionUpdaterTests: XCTestCase {
         try withHarness { harness in
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],
-                ofItemAtPath: harness.paths.installedApplication.path
+                ofItemAtPath: harness.paths.legacyProtocolOne.installedApplication.path
             )
-            let installedInode = try inode(harness.paths.installedApplication)
-            let installedMode = try permissions(harness.paths.installedApplication)
+            let installedInode = try inode(harness.paths.legacyProtocolOne.installedApplication)
+            let installedMode = try permissions(harness.paths.legacyProtocolOne.installedApplication)
             harness.prepareSideEffect = { throw InjectedUpdaterFailure.responseLost }
             harness.bootstrapSideEffect = { call in
                 if call == 0 { throw InjectedUpdaterFailure.operation }
@@ -821,25 +821,25 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertEqual(harness.stoppedProofCallCount, 1)
             XCTAssertFalse(harness.daemonRunning)
-            XCTAssertEqual(try inode(harness.paths.installedApplication), installedInode)
-            XCTAssertEqual(try permissions(harness.paths.installedApplication), installedMode)
-            XCTAssertEqual(try marker(harness.paths.installedApplication), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.installedApplication), installedInode)
+            XCTAssertEqual(try permissions(harness.paths.legacyProtocolOne.installedApplication), installedMode)
+            XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.installedApplication), "old")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
         }
     }
 
     func testSwappedPersistenceFailureLeavesSwappedBundleLayoutInodeAndModeUnchanged() throws {
         try withHarness { harness in
-            let priorInode = try inode(harness.paths.installedApplication)
+            let priorInode = try inode(harness.paths.legacyProtocolOne.installedApplication)
             var candidateInode: UInt64?
             var candidateMode: Int?
             var rollbackMode: Int?
             harness.healthStatuses = [harness.newStatus(enabled: false)]
             harness.beforeFirstHealth = {
-                candidateInode = try inode(harness.paths.installedApplication)
-                candidateMode = try permissions(harness.paths.installedApplication)
-                rollbackMode = try permissions(harness.paths.rollbackApplication)
+                candidateInode = try inode(harness.paths.legacyProtocolOne.installedApplication)
+                candidateMode = try permissions(harness.paths.legacyProtocolOne.installedApplication)
+                rollbackMode = try permissions(harness.paths.legacyProtocolOne.rollbackApplication)
             }
             harness.bootoutSideEffect = { call in
                 guard call == 1 else { return }
@@ -855,16 +855,16 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertEqual(harness.stoppedProofCallCount, 1)
             XCTAssertFalse(harness.daemonRunning)
-            XCTAssertEqual(try inode(harness.paths.installedApplication), try XCTUnwrap(candidateInode))
-            XCTAssertEqual(try permissions(harness.paths.installedApplication), try XCTUnwrap(candidateMode))
-            XCTAssertEqual(try marker(harness.paths.installedApplication), "new")
-            XCTAssertEqual(try inode(harness.paths.rollbackApplication), priorInode)
+            XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.installedApplication), try XCTUnwrap(candidateInode))
+            XCTAssertEqual(try permissions(harness.paths.legacyProtocolOne.installedApplication), try XCTUnwrap(candidateMode))
+            XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.installedApplication), "new")
+            XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.rollbackApplication), priorInode)
             XCTAssertEqual(
-                try permissions(harness.paths.rollbackApplication),
+                try permissions(harness.paths.legacyProtocolOne.rollbackApplication),
                 try XCTUnwrap(rollbackMode)
             )
-            XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.rollbackApplication), "old")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
         }
     }
 
@@ -948,7 +948,7 @@ final class CompanionUpdaterTests: XCTestCase {
         try withHarness { harness in
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],
-                ofItemAtPath: harness.paths.installedApplication.path
+                ofItemAtPath: harness.paths.legacyProtocolOne.installedApplication.path
             )
             harness.prepareSideEffect = { throw InjectedUpdaterFailure.responseLost }
             harness.bootstrapSideEffect = { call in
@@ -962,10 +962,10 @@ final class CompanionUpdaterTests: XCTestCase {
                 )
             }
 
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.installedApplication.path))
-            XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
-            XCTAssertEqual(try permissions(harness.paths.rollbackApplication), 0o700)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.installedApplication.path))
+            XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.rollbackApplication), "old")
+            XCTAssertEqual(try permissions(harness.paths.legacyProtocolOne.rollbackApplication), 0o700)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
             XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
         }
     }
@@ -981,28 +981,28 @@ final class CompanionUpdaterTests: XCTestCase {
             var failedMode: Int?
             harness.healthStatuses = [harness.newStatus(enabled: false)]
             harness.beforeFirstHealth = {
-                try writeOwnerFile(blocker, to: harness.paths.failedApplication)
-                installedInode = try inode(harness.paths.installedApplication)
-                installedMode = try permissions(harness.paths.installedApplication)
-                rollbackInode = try inode(harness.paths.rollbackApplication)
-                rollbackMode = try permissions(harness.paths.rollbackApplication)
-                failedInode = try inode(harness.paths.failedApplication)
-                failedMode = try permissions(harness.paths.failedApplication)
+                try writeOwnerFile(blocker, to: harness.paths.legacyProtocolOne.failedApplication)
+                installedInode = try inode(harness.paths.legacyProtocolOne.installedApplication)
+                installedMode = try permissions(harness.paths.legacyProtocolOne.installedApplication)
+                rollbackInode = try inode(harness.paths.legacyProtocolOne.rollbackApplication)
+                rollbackMode = try permissions(harness.paths.legacyProtocolOne.rollbackApplication)
+                failedInode = try inode(harness.paths.legacyProtocolOne.failedApplication)
+                failedMode = try permissions(harness.paths.legacyProtocolOne.failedApplication)
             }
 
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                 XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
             }
 
-            XCTAssertEqual(try marker(harness.paths.installedApplication), "new")
-            XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
-            XCTAssertEqual(try Data(contentsOf: harness.paths.failedApplication), blocker)
-            XCTAssertEqual(try inode(harness.paths.installedApplication), try XCTUnwrap(installedInode))
-            XCTAssertEqual(try permissions(harness.paths.installedApplication), try XCTUnwrap(installedMode))
-            XCTAssertEqual(try inode(harness.paths.rollbackApplication), try XCTUnwrap(rollbackInode))
-            XCTAssertEqual(try permissions(harness.paths.rollbackApplication), try XCTUnwrap(rollbackMode))
-            XCTAssertEqual(try inode(harness.paths.failedApplication), try XCTUnwrap(failedInode))
-            XCTAssertEqual(try permissions(harness.paths.failedApplication), try XCTUnwrap(failedMode))
+            XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.installedApplication), "new")
+            XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.rollbackApplication), "old")
+            XCTAssertEqual(try Data(contentsOf: harness.paths.legacyProtocolOne.failedApplication), blocker)
+            XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.installedApplication), try XCTUnwrap(installedInode))
+            XCTAssertEqual(try permissions(harness.paths.legacyProtocolOne.installedApplication), try XCTUnwrap(installedMode))
+            XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.rollbackApplication), try XCTUnwrap(rollbackInode))
+            XCTAssertEqual(try permissions(harness.paths.legacyProtocolOne.rollbackApplication), try XCTUnwrap(rollbackMode))
+            XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.failedApplication), try XCTUnwrap(failedInode))
+            XCTAssertEqual(try permissions(harness.paths.legacyProtocolOne.failedApplication), try XCTUnwrap(failedMode))
             XCTAssertEqual(
                 try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
                 false
@@ -1078,8 +1078,8 @@ final class CompanionUpdaterTests: XCTestCase {
             try makeFakeApp(transaction.candidateApplication, marker: "candidate")
             try transaction.sealValidatedCandidate()
             let blockerBytes = Data("unrelated-promoted-blocker".utf8)
-            try writeOwnerFile(blockerBytes, to: paths.failedApplication)
-            let blockerInode = try inode(paths.failedApplication)
+            try writeOwnerFile(blockerBytes, to: paths.legacyProtocolOne.failedApplication)
+            let blockerInode = try inode(paths.legacyProtocolOne.failedApplication)
             try FileManager.default.moveItem(
                 at: transaction.candidateApplication,
                 to: transaction.promotedCandidateApplication
@@ -1087,7 +1087,7 @@ final class CompanionUpdaterTests: XCTestCase {
 
             try transaction.cleanupAfterNoSwap()
 
-            XCTAssertEqual(try marker(paths.installedApplication), "installed")
+            XCTAssertEqual(try marker(paths.legacyProtocolOne.installedApplication), "installed")
             XCTAssertFalse(
                 FileManager.default.fileExists(
                     atPath: transaction.promotedCandidateApplication.path
@@ -1096,10 +1096,10 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertFalse(
                 FileManager.default.fileExists(atPath: transaction.workspaceDirectory.path)
             )
-            XCTAssertEqual(try inode(paths.failedApplication), blockerInode)
-            XCTAssertEqual(try Data(contentsOf: paths.failedApplication), blockerBytes)
+            XCTAssertEqual(try inode(paths.legacyProtocolOne.failedApplication), blockerInode)
+            XCTAssertEqual(try Data(contentsOf: paths.legacyProtocolOne.failedApplication), blockerBytes)
             XCTAssertFalse(
-                FileManager.default.fileExists(atPath: paths.rollbackApplication.path)
+                FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path)
             )
         }
     }
@@ -1117,7 +1117,7 @@ final class CompanionUpdaterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let paths = AgentPaths(applicationSupportDirectory: root)
         try privateDirectory(paths.supportDirectory)
-        try makeFakeApp(paths.installedApplication, marker: "installed")
+        try makeFakeApp(paths.legacyProtocolOne.installedApplication, marker: "installed")
         let transaction = try UpdateFileTransaction(paths: paths)
         try body(transaction, paths)
     }
@@ -1232,7 +1232,7 @@ private final class UpdaterHarness: @unchecked Sendable {
         try privateDirectory(paths.supportDirectory)
         try privateDirectory(paths.stateDirectory)
         try privateDirectory(paths.outboxDirectory)
-        try makeFakeApp(paths.installedApplication, marker: "old")
+        try makeFakeApp(paths.legacyProtocolOne.installedApplication, marker: "old")
         try writeOwnerFile(
             Data(#"{"cutover_at":1700000000000,"dedupe_secret":"abababababababababababababababababababababababababababababababab","device_id":"00000000-0000-4000-8000-000000000001","device_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","enabled_surfaces":["codex_cli"],"server_url":"http://127.0.0.1:8765","version":1}"#.utf8),
             to: enrollment
@@ -1445,7 +1445,7 @@ private final class UpdaterHarness: @unchecked Sendable {
         )
     }
 
-    func installedMarker() throws -> String { try marker(paths.installedApplication) }
+    func installedMarker() throws -> String { try marker(paths.legacyProtocolOne.installedApplication) }
 
     func markDaemonStopped() {
         variableLock.withLock { daemonIsRunning = false }

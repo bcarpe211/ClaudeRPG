@@ -474,7 +474,7 @@ private struct LiveUpdateStatusProvider {
               let status = try? JSONDecoder().decode(AgentStatus.self, from: data) else {
             throw CLIError.invalidUpdateState
         }
-        let verified = try trustRoot.verifyApplication(at: paths.installedApplication)
+        let verified = try trustRoot.verifyApplication(at: legacyProtocolOne(paths).installedApplication)
         let persistedState = try AgentController.persistedCollectorState(
             paths: paths,
             surfaces: surfaces
@@ -515,6 +515,28 @@ private func launchAgentURL() -> URL {
         .appendingPathComponent("com.redlattice.runtime-raiders-agent.plist", isDirectory: false)
 }
 
+private struct LegacyProtocolOneCLIPaths {
+    let installedApplication: URL
+    let rollbackApplication: URL
+    let failedApplication: URL
+
+    init(paths: AgentPaths) {
+        installedApplication = paths.legacyFlatApplication
+        rollbackApplication = paths.supportDirectory.appendingPathComponent(
+            "Runtime Raiders Agent.rollback.app",
+            isDirectory: true
+        )
+        failedApplication = paths.supportDirectory.appendingPathComponent(
+            "Runtime Raiders Agent.failed.app",
+            isDirectory: true
+        )
+    }
+}
+
+private func legacyProtocolOne(_ paths: AgentPaths) -> LegacyProtocolOneCLIPaths {
+    LegacyProtocolOneCLIPaths(paths: paths)
+}
+
 private func downloadSynchronously(
     downloader: ArtifactDownloader,
     source: URL,
@@ -548,7 +570,7 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
     let enrollment = try EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
-    let trustRoot = try InstalledTrustRoot(expectedBundleURL: paths.installedApplication)
+    let trustRoot = try InstalledTrustRoot(expectedBundleURL: legacyProtocolOne(paths).installedApplication)
     let statusProvider = LiveUpdateStatusProvider(
         paths: paths,
         surfaces: enrollment.enabledSurfaces,
@@ -621,7 +643,7 @@ private func runStableRecovery(paths: AgentPaths) throws {
     let enrollment = try EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
-    let trustRoot = try InstalledTrustRoot(expectedBundleURL: paths.rollbackApplication)
+    let trustRoot = try InstalledTrustRoot(expectedBundleURL: legacyProtocolOne(paths).rollbackApplication)
     let verifier = CandidateVerifier()
     let layout = try StableRecoveryFileTransaction(paths: paths)
     var boundManifest: ReleaseManifestV1?
@@ -630,7 +652,7 @@ private func runStableRecovery(paths: AgentPaths) throws {
             paths: paths,
             surfaces: enrollment.enabledSurfaces
         ) == .disabled,
-        try trustRoot.verifyApplication(at: paths.rollbackApplication) ==
+        try trustRoot.verifyApplication(at: legacyProtocolOne(paths).rollbackApplication) ==
             trustRoot.verifiedSelf else {
             throw CLIError.invalidUpdateState
         }
@@ -644,7 +666,7 @@ private func runStableRecovery(paths: AgentPaths) throws {
         }
         guard let manifest = boundManifest else { throw CLIError.invalidUpdateState }
         let failedIdentity = try verifier.verify(
-            candidate: paths.failedApplication,
+            candidate: legacyProtocolOne(paths).failedApplication,
             manifest: manifest,
             installed: trustRoot.verifiedSelf.identity,
             installedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
@@ -672,7 +694,7 @@ private func runStableRecovery(paths: AgentPaths) throws {
         restore: { try layout.restore(phase: $0) },
         revertRestored: { try layout.revertRestore(phase: $0) },
         verifyRestoredBundle: { _ in
-            guard try trustRoot.verifyApplication(at: paths.installedApplication) ==
+            guard try trustRoot.verifyApplication(at: legacyProtocolOne(paths).installedApplication) ==
                     trustRoot.verifiedSelf else {
                 throw CLIError.invalidUpdateState
             }

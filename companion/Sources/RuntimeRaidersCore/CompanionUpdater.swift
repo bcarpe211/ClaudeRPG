@@ -881,14 +881,14 @@ public final class UpdateFileTransaction {
         do {
             try Self.requireOwnedDirectory(
                 descriptor: supportDescriptor,
-                name: paths.installedApplication.lastPathComponent
+                name: paths.legacyProtocolOne.installedApplication.lastPathComponent
             )
             priorSeal = try Self.sealTree(
                 parentDescriptor: supportDescriptor,
-                name: paths.installedApplication.lastPathComponent
+                name: paths.legacyProtocolOne.installedApplication.lastPathComponent
             )
-            try Self.requireMissing(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent)
-            try Self.requireMissing(descriptor: supportDescriptor, name: paths.failedApplication.lastPathComponent)
+            try Self.requireMissing(descriptor: supportDescriptor, name: paths.legacyProtocolOne.rollbackApplication.lastPathComponent)
+            try Self.requireMissing(descriptor: supportDescriptor, name: paths.legacyProtocolOne.failedApplication.lastPathComponent)
             try Self.requireMissing(descriptor: supportDescriptor, name: promotedName)
             guard Darwin.mkdirat(supportDescriptor, workspaceName, 0o700) == 0 else {
                 throw Self.posixError()
@@ -926,7 +926,7 @@ public final class UpdateFileTransaction {
         defer { Darwin.close(support) }
         return try sealTree(
             parentDescriptor: support,
-            name: paths.installedApplication.lastPathComponent
+            name: paths.legacyProtocolOne.installedApplication.lastPathComponent
         )
     }
 
@@ -934,7 +934,7 @@ public final class UpdateFileTransaction {
         guard let priorSeal,
               try Self.sealTree(
             parentDescriptor: supportDescriptor,
-            name: paths.installedApplication.lastPathComponent
+            name: paths.legacyProtocolOne.installedApplication.lastPathComponent
         ) == priorSeal else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
@@ -1039,7 +1039,7 @@ public final class UpdateFileTransaction {
         guard let candidateSeal,
               try Self.sealTree(
                   parentDescriptor: supportDescriptor,
-                  name: paths.installedApplication.lastPathComponent
+                  name: paths.legacyProtocolOne.installedApplication.lastPathComponent
               ) == candidateSeal else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
@@ -1054,7 +1054,7 @@ public final class UpdateFileTransaction {
         }
         let installedSize = try Self.treeSize(
             parentDescriptor: supportDescriptor,
-            name: paths.installedApplication.lastPathComponent
+            name: paths.legacyProtocolOne.installedApplication.lastPathComponent
         )
         let (first, overflow1) = installedSize.addingReportingOverflow(candidateUncompressedSize)
         let (total, overflow2) = first.addingReportingOverflow(safetyMargin)
@@ -1065,7 +1065,7 @@ public final class UpdateFileTransaction {
     public func swap() throws {
         try assertCandidateUnchanged()
         try assertPriorInstalledUnchanged()
-        try Self.requireMissing(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent)
+        try Self.requireMissing(descriptor: supportDescriptor, name: paths.legacyProtocolOne.rollbackApplication.lastPathComponent)
         try Self.requireMissing(descriptor: supportDescriptor, name: promotedName)
         guard Darwin.renameat(
             stagingDescriptor,
@@ -1079,22 +1079,22 @@ public final class UpdateFileTransaction {
             try normalizeCandidateRootMode(at: promotedName)
             guard Darwin.renameat(
                 supportDescriptor,
-                paths.installedApplication.lastPathComponent,
+                paths.legacyProtocolOne.installedApplication.lastPathComponent,
                 supportDescriptor,
-                paths.rollbackApplication.lastPathComponent
+                paths.legacyProtocolOne.rollbackApplication.lastPathComponent
             ) == 0 else { throw Self.posixError() }
             do {
                 try Self.setOwnerOnlyMode(
                     descriptor: supportDescriptor,
-                    name: paths.rollbackApplication.lastPathComponent
+                    name: paths.legacyProtocolOne.rollbackApplication.lastPathComponent
                 )
-                try normalizePriorRootMode(at: paths.rollbackApplication.lastPathComponent)
+                try normalizePriorRootMode(at: paths.legacyProtocolOne.rollbackApplication.lastPathComponent)
             } catch {
                 _ = Darwin.renameat(
                     supportDescriptor,
-                    paths.rollbackApplication.lastPathComponent,
+                    paths.legacyProtocolOne.rollbackApplication.lastPathComponent,
                     supportDescriptor,
-                    paths.installedApplication.lastPathComponent
+                    paths.legacyProtocolOne.installedApplication.lastPathComponent
                 )
                 throw error
             }
@@ -1102,13 +1102,13 @@ public final class UpdateFileTransaction {
                 supportDescriptor,
                 promotedName,
                 supportDescriptor,
-                paths.installedApplication.lastPathComponent
+                paths.legacyProtocolOne.installedApplication.lastPathComponent
             ) == 0 else {
                 _ = Darwin.renameat(
                     supportDescriptor,
-                    paths.rollbackApplication.lastPathComponent,
+                    paths.legacyProtocolOne.rollbackApplication.lastPathComponent,
                     supportDescriptor,
-                    paths.installedApplication.lastPathComponent
+                    paths.legacyProtocolOne.installedApplication.lastPathComponent
                 )
                 throw Self.posixError()
             }
@@ -1125,18 +1125,18 @@ public final class UpdateFileTransaction {
         guard hasSwapped else { return }
         try assertInstalledCandidateUnchanged()
         try assertRollbackPriorUnchanged()
-        try Self.requireMissing(descriptor: supportDescriptor, name: paths.failedApplication.lastPathComponent)
+        try Self.requireMissing(descriptor: supportDescriptor, name: paths.legacyProtocolOne.failedApplication.lastPathComponent)
         guard Darwin.renameat(
             supportDescriptor,
-            paths.installedApplication.lastPathComponent,
+            paths.legacyProtocolOne.installedApplication.lastPathComponent,
             supportDescriptor,
-            paths.failedApplication.lastPathComponent
+            paths.legacyProtocolOne.failedApplication.lastPathComponent
         ) == 0 else { throw Self.posixError() }
         guard Darwin.renameat(
             supportDescriptor,
-            paths.rollbackApplication.lastPathComponent,
+            paths.legacyProtocolOne.rollbackApplication.lastPathComponent,
             supportDescriptor,
-            paths.installedApplication.lastPathComponent
+            paths.legacyProtocolOne.installedApplication.lastPathComponent
         ) == 0 else {
             throw Self.posixError()
         }
@@ -1152,7 +1152,7 @@ public final class UpdateFileTransaction {
         try assertRollbackPriorUnchanged()
         try Self.removeTree(
             parentDescriptor: supportDescriptor,
-            name: paths.rollbackApplication.lastPathComponent
+            name: paths.legacyProtocolOne.rollbackApplication.lastPathComponent
         )
         try removeWorkspace()
     }
@@ -1160,7 +1160,7 @@ public final class UpdateFileTransaction {
     public func cleanupAfterRollback() throws {
         try assertPriorInstalledUnchanged()
         try assertFailedCandidateUnchanged()
-        try Self.requireMissing(descriptor: supportDescriptor, name: paths.rollbackApplication.lastPathComponent)
+        try Self.requireMissing(descriptor: supportDescriptor, name: paths.legacyProtocolOne.rollbackApplication.lastPathComponent)
         try removeWorkspace()
     }
 
@@ -1204,9 +1204,9 @@ public final class UpdateFileTransaction {
     }
 
     public func prepareStableRecovery() throws {
-        let installedName = paths.installedApplication.lastPathComponent
-        let rollbackName = paths.rollbackApplication.lastPathComponent
-        let failedName = paths.failedApplication.lastPathComponent
+        let installedName = paths.legacyProtocolOne.installedApplication.lastPathComponent
+        let rollbackName = paths.legacyProtocolOne.rollbackApplication.lastPathComponent
+        let failedName = paths.legacyProtocolOne.failedApplication.lastPathComponent
         let installedExists = Self.exists(descriptor: supportDescriptor, name: installedName)
         let rollbackExists = Self.exists(descriptor: supportDescriptor, name: rollbackName)
         let failedExists = Self.exists(descriptor: supportDescriptor, name: failedName)
@@ -1269,7 +1269,7 @@ public final class UpdateFileTransaction {
         guard let priorSeal,
               try Self.sealTree(
             parentDescriptor: supportDescriptor,
-            name: paths.rollbackApplication.lastPathComponent
+            name: paths.legacyProtocolOne.rollbackApplication.lastPathComponent
         ) == priorSeal else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
@@ -1279,7 +1279,7 @@ public final class UpdateFileTransaction {
         guard let candidateSeal,
               try Self.sealTree(
                   parentDescriptor: supportDescriptor,
-                  name: paths.failedApplication.lastPathComponent
+                  name: paths.legacyProtocolOne.failedApplication.lastPathComponent
               ) == candidateSeal else {
             throw CompanionUpdaterError.unsafeFilesystem
         }

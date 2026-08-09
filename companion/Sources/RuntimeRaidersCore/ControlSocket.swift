@@ -50,14 +50,14 @@ public enum CompanionCommandRouter {
     }
 
     private static func installedExecutable(_ paths: AgentPaths) -> URL {
-        paths.installedApplication.appendingPathComponent(
+        paths.legacyProtocolOne.installedApplication.appendingPathComponent(
             "Contents/MacOS/runtime-raiders-agent",
             isDirectory: false
         )
     }
 
     private static func rollbackExecutable(_ paths: AgentPaths) -> URL {
-        paths.rollbackApplication.appendingPathComponent(
+        paths.legacyProtocolOne.rollbackApplication.appendingPathComponent(
             "Contents/MacOS/runtime-raiders-agent",
             isDirectory: false
         )
@@ -321,10 +321,10 @@ public final class StableRecoveryFileTransaction {
     deinit { Darwin.close(supportDescriptor) }
 
     public func inspectAndNormalize() throws -> StableRecoveryPhase {
-        try requireMissing(paths.installedApplication.lastPathComponent)
-        let rollbackName = paths.rollbackApplication.lastPathComponent
+        try requireMissing(paths.legacyProtocolOne.installedApplication.lastPathComponent)
+        let rollbackName = paths.legacyProtocolOne.rollbackApplication.lastPathComponent
         let rollbackBefore = try ownedDirectory(rollbackName, allowSafeReadableMode: true)
-        let failedName = paths.failedApplication.lastPathComponent
+        let failedName = paths.legacyProtocolOne.failedApplication.lastPathComponent
         let failed: Entry?
         let phase: StableRecoveryPhase
         if exists(failedName) {
@@ -361,18 +361,18 @@ public final class StableRecoveryFileTransaction {
     public func restore(phase: StableRecoveryPhase) throws {
         guard let snapshot, snapshot.phase == phase,
               try ownedDirectory(
-                  paths.rollbackApplication.lastPathComponent,
+                  paths.legacyProtocolOne.rollbackApplication.lastPathComponent,
                   allowSafeReadableMode: false
               ) == snapshot.rollback else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
-        try requireMissing(paths.installedApplication.lastPathComponent)
+        try requireMissing(paths.legacyProtocolOne.installedApplication.lastPathComponent)
         switch (phase, snapshot.failed) {
         case (.rollbackOnly, nil):
-            try requireMissing(paths.failedApplication.lastPathComponent)
+            try requireMissing(paths.legacyProtocolOne.failedApplication.lastPathComponent)
         case let (.rollbackAndFailed, failed?):
             guard try ownedDirectory(
-                paths.failedApplication.lastPathComponent,
+                paths.legacyProtocolOne.failedApplication.lastPathComponent,
                 allowSafeReadableMode: false
             ) == failed else {
                 throw CompanionUpdaterError.unsafeFilesystem
@@ -382,9 +382,9 @@ public final class StableRecoveryFileTransaction {
         }
         guard Darwin.renameat(
             supportDescriptor,
-            paths.rollbackApplication.lastPathComponent,
+            paths.legacyProtocolOne.rollbackApplication.lastPathComponent,
             supportDescriptor,
-            paths.installedApplication.lastPathComponent
+            paths.legacyProtocolOne.installedApplication.lastPathComponent
         ) == 0 else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
@@ -393,7 +393,7 @@ public final class StableRecoveryFileTransaction {
             try synchronize()
             try restoreFault(.installedPostcheck)
             guard try ownedDirectory(
-                paths.installedApplication.lastPathComponent,
+                paths.legacyProtocolOne.installedApplication.lastPathComponent,
                 allowSafeReadableMode: false
             ) == snapshot.rollback else {
                 throw CompanionUpdaterError.unsafeFilesystem
@@ -401,13 +401,13 @@ public final class StableRecoveryFileTransaction {
             if let failed = snapshot.failed {
                 try restoreFault(.failedCandidatePostcheck)
                 guard try ownedDirectory(
-                    paths.failedApplication.lastPathComponent,
+                    paths.legacyProtocolOne.failedApplication.lastPathComponent,
                     allowSafeReadableMode: false
                 ) == failed else {
                     throw CompanionUpdaterError.unsafeFilesystem
                 }
             } else {
-                try requireMissing(paths.failedApplication.lastPathComponent)
+                try requireMissing(paths.legacyProtocolOne.failedApplication.lastPathComponent)
             }
         } catch {
             let postRenameError = error
@@ -423,18 +423,18 @@ public final class StableRecoveryFileTransaction {
     public func revertRestore(phase: StableRecoveryPhase) throws {
         guard let snapshot, snapshot.phase == phase,
               try ownedDirectory(
-                  paths.installedApplication.lastPathComponent,
+                  paths.legacyProtocolOne.installedApplication.lastPathComponent,
                   allowSafeReadableMode: false
               ) == snapshot.rollback else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
-        try requireMissing(paths.rollbackApplication.lastPathComponent)
+        try requireMissing(paths.legacyProtocolOne.rollbackApplication.lastPathComponent)
         switch (phase, snapshot.failed) {
         case (.rollbackOnly, nil):
-            try requireMissing(paths.failedApplication.lastPathComponent)
+            try requireMissing(paths.legacyProtocolOne.failedApplication.lastPathComponent)
         case let (.rollbackAndFailed, failed?):
             guard try ownedDirectory(
-                paths.failedApplication.lastPathComponent,
+                paths.legacyProtocolOne.failedApplication.lastPathComponent,
                 allowSafeReadableMode: false
             ) == failed else {
                 throw CompanionUpdaterError.unsafeFilesystem
@@ -444,29 +444,29 @@ public final class StableRecoveryFileTransaction {
         }
         guard Darwin.renameat(
             supportDescriptor,
-            paths.installedApplication.lastPathComponent,
+            paths.legacyProtocolOne.installedApplication.lastPathComponent,
             supportDescriptor,
-            paths.rollbackApplication.lastPathComponent
+            paths.legacyProtocolOne.rollbackApplication.lastPathComponent
         ) == 0 else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
         try synchronize()
-        try requireMissing(paths.installedApplication.lastPathComponent)
+        try requireMissing(paths.legacyProtocolOne.installedApplication.lastPathComponent)
         guard try ownedDirectory(
-            paths.rollbackApplication.lastPathComponent,
+            paths.legacyProtocolOne.rollbackApplication.lastPathComponent,
             allowSafeReadableMode: false
         ) == snapshot.rollback else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
         if let failed = snapshot.failed {
             guard try ownedDirectory(
-                paths.failedApplication.lastPathComponent,
+                paths.legacyProtocolOne.failedApplication.lastPathComponent,
                 allowSafeReadableMode: false
             ) == failed else {
                 throw CompanionUpdaterError.unsafeFilesystem
             }
         } else {
-            try requireMissing(paths.failedApplication.lastPathComponent)
+            try requireMissing(paths.legacyProtocolOne.failedApplication.lastPathComponent)
         }
     }
 

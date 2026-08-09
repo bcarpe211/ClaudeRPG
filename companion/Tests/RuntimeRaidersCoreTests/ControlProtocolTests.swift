@@ -313,9 +313,9 @@ final class ControlProtocolTests: XCTestCase {
         let paths = AgentPaths(
             applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-internal-routing")
         )
-        let installedExecutable = paths.installedApplication
+        let installedExecutable = paths.legacyProtocolOne.installedApplication
             .appendingPathComponent("Contents/MacOS/runtime-raiders-agent")
-        let rollbackExecutable = paths.rollbackApplication
+        let rollbackExecutable = paths.legacyProtocolOne.rollbackApplication
             .appendingPathComponent("Contents/MacOS/runtime-raiders-agent")
         let otherExecutable = URL(fileURLWithPath: "/private/tmp/runtime-raiders-agent")
 
@@ -585,45 +585,45 @@ final class ControlProtocolTests: XCTestCase {
     func testStableRecoveryLayoutAcceptsSafe0755RollbackOnlyAndRestoresItOwnerOnly() throws {
         let paths = try makeRecoveryPaths("rollback-only")
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o755)
-        let rollbackInode = try recoveryInode(paths.rollbackApplication)
+        try makeRecoveryApp(paths.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o755)
+        let rollbackInode = try recoveryInode(paths.legacyProtocolOne.rollbackApplication)
         let layout = try StableRecoveryFileTransaction(paths: paths)
 
         let phase = try layout.inspectAndNormalize()
 
         XCTAssertEqual(phase, .rollbackOnly)
-        XCTAssertEqual(try recoveryPermissions(paths.rollbackApplication), 0o700)
+        XCTAssertEqual(try recoveryPermissions(paths.legacyProtocolOne.rollbackApplication), 0o700)
         try layout.restore(phase: phase)
-        XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.failedApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.installedApplication), rollbackInode)
+        XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.installedApplication), "old")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.failedApplication.path))
     }
 
     func testStableRecoveryLayoutRequiresExactPostSwapPairAndPreservesAmbiguousState() throws {
         let postSwap = try makeRecoveryPaths("post-swap")
         defer { try? FileManager.default.removeItem(at: postSwap.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(postSwap.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(postSwap.failedApplication, marker: "new", mode: 0o700)
-        let failedInode = try recoveryInode(postSwap.failedApplication)
+        try makeRecoveryApp(postSwap.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(postSwap.legacyProtocolOne.failedApplication, marker: "new", mode: 0o700)
+        let failedInode = try recoveryInode(postSwap.legacyProtocolOne.failedApplication)
         let layout = try StableRecoveryFileTransaction(paths: postSwap)
         let phase = try layout.inspectAndNormalize()
         XCTAssertEqual(phase, .rollbackAndFailed)
         try layout.restore(phase: phase)
-        XCTAssertEqual(try recoveryMarker(postSwap.installedApplication), "old")
-        XCTAssertEqual(try recoveryInode(postSwap.failedApplication), failedInode)
-        XCTAssertEqual(try recoveryMarker(postSwap.failedApplication), "new")
+        XCTAssertEqual(try recoveryMarker(postSwap.legacyProtocolOne.installedApplication), "old")
+        XCTAssertEqual(try recoveryInode(postSwap.legacyProtocolOne.failedApplication), failedInode)
+        XCTAssertEqual(try recoveryMarker(postSwap.legacyProtocolOne.failedApplication), "new")
 
         let ambiguous = try makeRecoveryPaths("ambiguous")
         defer { try? FileManager.default.removeItem(at: ambiguous.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(ambiguous.installedApplication, marker: "installed", mode: 0o755)
-        try makeRecoveryApp(ambiguous.rollbackApplication, marker: "rollback", mode: 0o700)
-        let installedInode = try recoveryInode(ambiguous.installedApplication)
-        let rollbackInode = try recoveryInode(ambiguous.rollbackApplication)
+        try makeRecoveryApp(ambiguous.legacyProtocolOne.installedApplication, marker: "installed", mode: 0o755)
+        try makeRecoveryApp(ambiguous.legacyProtocolOne.rollbackApplication, marker: "rollback", mode: 0o700)
+        let installedInode = try recoveryInode(ambiguous.legacyProtocolOne.installedApplication)
+        let rollbackInode = try recoveryInode(ambiguous.legacyProtocolOne.rollbackApplication)
         let ambiguousLayout = try StableRecoveryFileTransaction(paths: ambiguous)
         XCTAssertThrowsError(try ambiguousLayout.inspectAndNormalize())
-        XCTAssertEqual(try recoveryInode(ambiguous.installedApplication), installedInode)
-        XCTAssertEqual(try recoveryInode(ambiguous.rollbackApplication), rollbackInode)
+        XCTAssertEqual(try recoveryInode(ambiguous.legacyProtocolOne.installedApplication), installedInode)
+        XCTAssertEqual(try recoveryInode(ambiguous.legacyProtocolOne.rollbackApplication), rollbackInode)
 
         let unsafeFailed = try makeRecoveryPaths("unsafe-failed")
         defer {
@@ -631,12 +631,12 @@ final class ControlProtocolTests: XCTestCase {
                 at: unsafeFailed.supportDirectory.deletingLastPathComponent()
             )
         }
-        try makeRecoveryApp(unsafeFailed.rollbackApplication, marker: "rollback", mode: 0o755)
-        try makeRecoveryApp(unsafeFailed.failedApplication, marker: "failed", mode: 0o755)
+        try makeRecoveryApp(unsafeFailed.legacyProtocolOne.rollbackApplication, marker: "rollback", mode: 0o755)
+        try makeRecoveryApp(unsafeFailed.legacyProtocolOne.failedApplication, marker: "failed", mode: 0o755)
         let unsafeLayout = try StableRecoveryFileTransaction(paths: unsafeFailed)
         XCTAssertThrowsError(try unsafeLayout.inspectAndNormalize())
-        XCTAssertEqual(try recoveryPermissions(unsafeFailed.rollbackApplication), 0o755)
-        XCTAssertEqual(try recoveryPermissions(unsafeFailed.failedApplication), 0o755)
+        XCTAssertEqual(try recoveryPermissions(unsafeFailed.legacyProtocolOne.rollbackApplication), 0o755)
+        XCTAssertEqual(try recoveryPermissions(unsafeFailed.legacyProtocolOne.failedApplication), 0o755)
     }
 
     func testStableRecoveryLayoutRevertsExactRollbackAfterEveryPostRenameThrow() throws {
@@ -653,10 +653,10 @@ final class ControlProtocolTests: XCTestCase {
                     at: paths.supportDirectory.deletingLastPathComponent()
                 )
             }
-            try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-            try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-            let rollbackInode = try recoveryInode(paths.rollbackApplication)
-            let failedInode = try recoveryInode(paths.failedApplication)
+            try makeRecoveryApp(paths.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o700)
+            try makeRecoveryApp(paths.legacyProtocolOne.failedApplication, marker: "new", mode: 0o700)
+            let rollbackInode = try recoveryInode(paths.legacyProtocolOne.rollbackApplication)
+            let failedInode = try recoveryInode(paths.legacyProtocolOne.failedApplication)
             var pendingFault: StableRecoveryRestoreFault? = fault
             let layout = try StableRecoveryFileTransaction(
                 paths: paths,
@@ -672,25 +672,25 @@ final class ControlProtocolTests: XCTestCase {
                 XCTAssertTrue($0 is Injected, String(describing: fault))
             }
             let installedExists = FileManager.default.fileExists(
-                atPath: paths.installedApplication.path
+                atPath: paths.legacyProtocolOne.installedApplication.path
             )
             let rollbackExists = FileManager.default.fileExists(
-                atPath: paths.rollbackApplication.path
+                atPath: paths.legacyProtocolOne.rollbackApplication.path
             )
             XCTAssertFalse(installedExists, String(describing: fault))
             XCTAssertTrue(rollbackExists, String(describing: fault))
             guard !installedExists, rollbackExists else { continue }
-            XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.rollbackApplication), "old")
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.rollbackApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.rollbackApplication), "old")
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
+            XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.failedApplication), "new")
 
             let retryPhase = try layout.inspectAndNormalize()
             XCTAssertEqual(retryPhase, .rollbackAndFailed)
             try layout.restore(phase: retryPhase)
-            XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.installedApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.installedApplication), "old")
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
         }
     }
 
@@ -703,16 +703,16 @@ final class ControlProtocolTests: XCTestCase {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-        let failedInode = try recoveryInode(paths.failedApplication)
+        try makeRecoveryApp(paths.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(paths.legacyProtocolOne.failedApplication, marker: "new", mode: 0o700)
+        let failedInode = try recoveryInode(paths.legacyProtocolOne.failedApplication)
         let layout = try StableRecoveryFileTransaction(
             paths: paths,
             restoreFault: { checkpoint in
                 guard checkpoint == .installedPostcheck else { return }
-                try FileManager.default.removeItem(at: paths.installedApplication)
+                try FileManager.default.removeItem(at: paths.legacyProtocolOne.installedApplication)
                 try self.makeRecoveryApp(
-                    paths.installedApplication,
+                    paths.legacyProtocolOne.installedApplication,
                     marker: "intruder",
                     mode: 0o700
                 )
@@ -724,10 +724,10 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertThrowsError(try layout.restore(phase: phase)) { error in
             XCTAssertEqual(error as? StableUpdateRecoveryError, .retrySafetyFailure)
         }
-        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "intruder")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-        XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+        XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.installedApplication), "intruder")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
+        XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.failedApplication), "new")
     }
 
     func testStableRecoveryBootsOutWhenBootstrapStartsDaemonThenThrowsAndRetrySucceeds() throws {
@@ -739,10 +739,10 @@ final class ControlProtocolTests: XCTestCase {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-        let rollbackInode = try recoveryInode(paths.rollbackApplication)
-        let failedInode = try recoveryInode(paths.failedApplication)
+        try makeRecoveryApp(paths.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(paths.legacyProtocolOne.failedApplication, marker: "new", mode: 0o700)
+        let rollbackInode = try recoveryInode(paths.legacyProtocolOne.rollbackApplication)
+        let failedInode = try recoveryInode(paths.legacyProtocolOne.failedApplication)
         let layout = try StableRecoveryFileTransaction(paths: paths)
         var attempt = 0
         var bootouts = 0
@@ -782,16 +782,16 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(bootouts, 2)
         XCTAssertEqual(stoppedProofs, 2)
         XCTAssertFalse(daemonRunning)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.installedApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.installedApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.rollbackApplication), rollbackInode)
+        XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
 
         try recovery.run()
 
         XCTAssertEqual(attempt, 2)
-        XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
+        XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.installedApplication), rollbackInode)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
         XCTAssertTrue(daemonRunning)
     }
 
@@ -811,10 +811,10 @@ final class ControlProtocolTests: XCTestCase {
                     at: paths.supportDirectory.deletingLastPathComponent()
                 )
             }
-            try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-            try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-            let rollbackInode = try recoveryInode(paths.rollbackApplication)
-            let failedInode = try recoveryInode(paths.failedApplication)
+            try makeRecoveryApp(paths.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o700)
+            try makeRecoveryApp(paths.legacyProtocolOne.failedApplication, marker: "new", mode: 0o700)
+            let rollbackInode = try recoveryInode(paths.legacyProtocolOne.rollbackApplication)
+            let failedInode = try recoveryInode(paths.legacyProtocolOne.failedApplication)
             let layout = try StableRecoveryFileTransaction(paths: paths)
             var attempt = 0
             var bootouts = 0
@@ -831,10 +831,10 @@ final class ControlProtocolTests: XCTestCase {
                     },
                     verifyBundles: { phase in
                         XCTAssertEqual(phase, .rollbackAndFailed)
-                        XCTAssertEqual(try self.recoveryInode(paths.rollbackApplication), rollbackInode)
-                        XCTAssertEqual(try self.recoveryMarker(paths.rollbackApplication), "old")
-                        XCTAssertEqual(try self.recoveryInode(paths.failedApplication), failedInode)
-                        XCTAssertEqual(try self.recoveryMarker(paths.failedApplication), "new")
+                        XCTAssertEqual(try self.recoveryInode(paths.legacyProtocolOne.rollbackApplication), rollbackInode)
+                        XCTAssertEqual(try self.recoveryMarker(paths.legacyProtocolOne.rollbackApplication), "old")
+                        XCTAssertEqual(try self.recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
+                        XCTAssertEqual(try self.recoveryMarker(paths.legacyProtocolOne.failedApplication), "new")
                     },
                     persistDisabled: {},
                     bootout: {
@@ -849,9 +849,9 @@ final class ControlProtocolTests: XCTestCase {
                     revertRestored: { try layout.revertRestore(phase: $0) },
                     verifyRestoredBundle: { phase in
                         XCTAssertEqual(phase, .rollbackAndFailed)
-                        XCTAssertEqual(try self.recoveryInode(paths.installedApplication), rollbackInode)
-                        XCTAssertEqual(try self.recoveryMarker(paths.installedApplication), "old")
-                        XCTAssertEqual(try self.recoveryInode(paths.failedApplication), failedInode)
+                        XCTAssertEqual(try self.recoveryInode(paths.legacyProtocolOne.installedApplication), rollbackInode)
+                        XCTAssertEqual(try self.recoveryMarker(paths.legacyProtocolOne.installedApplication), "old")
+                        XCTAssertEqual(try self.recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
                         if attempt == 1, failure == .restoredVerification {
                             throw Injected.operation
                         }
@@ -883,22 +883,22 @@ final class ControlProtocolTests: XCTestCase {
             XCTAssertEqual(stoppedProofs, 2, failure.rawValue)
             XCTAssertFalse(daemonRunning, failure.rawValue)
             XCTAssertFalse(
-                FileManager.default.fileExists(atPath: paths.installedApplication.path),
+                FileManager.default.fileExists(atPath: paths.legacyProtocolOne.installedApplication.path),
                 failure.rawValue
             )
-            XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.rollbackApplication), "old")
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.rollbackApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.rollbackApplication), "old")
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
+            XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.failedApplication), "new")
 
             try recovery.run()
 
             XCTAssertEqual(attempt, 2, failure.rawValue)
-            XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.installedApplication), rollbackInode)
+            XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.installedApplication), "old")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path))
+            XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
+            XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.failedApplication), "new")
             XCTAssertTrue(daemonRunning, failure.rawValue)
         }
     }
@@ -912,9 +912,9 @@ final class ControlProtocolTests: XCTestCase {
                 at: paths.supportDirectory.deletingLastPathComponent()
             )
         }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-        let failedInode = try recoveryInode(paths.failedApplication)
+        try makeRecoveryApp(paths.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(paths.legacyProtocolOne.failedApplication, marker: "new", mode: 0o700)
+        let failedInode = try recoveryInode(paths.legacyProtocolOne.failedApplication)
         let layout = try StableRecoveryFileTransaction(paths: paths)
         var bootouts = 0
         let recovery = StableUpdateRecovery(
@@ -928,9 +928,9 @@ final class ControlProtocolTests: XCTestCase {
                 restore: { try layout.restore(phase: $0) },
                 revertRestored: { try layout.revertRestore(phase: $0) },
                 verifyRestoredBundle: { _ in
-                    try FileManager.default.removeItem(at: paths.installedApplication)
+                    try FileManager.default.removeItem(at: paths.legacyProtocolOne.installedApplication)
                     try self.makeRecoveryApp(
-                        paths.installedApplication,
+                        paths.legacyProtocolOne.installedApplication,
                         marker: "intruder",
                         mode: 0o700
                     )
@@ -945,10 +945,10 @@ final class ControlProtocolTests: XCTestCase {
             XCTAssertEqual(error as? StableUpdateRecoveryError, .retrySafetyFailure)
         }
         XCTAssertEqual(bootouts, 2)
-        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "intruder")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-        XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
+        XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.installedApplication), "intruder")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyProtocolOne.rollbackApplication.path))
+        XCTAssertEqual(try recoveryInode(paths.legacyProtocolOne.failedApplication), failedInode)
+        XCTAssertEqual(try recoveryMarker(paths.legacyProtocolOne.failedApplication), "new")
     }
 
     func testStableRecoveryPollsHealthWithoutRealSleepAndPreservesInstalledOnDeadline() throws {
@@ -983,7 +983,7 @@ final class ControlProtocolTests: XCTestCase {
 
         let timeoutPaths = try makeRecoveryPaths("health-timeout")
         defer { try? FileManager.default.removeItem(at: timeoutPaths.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(timeoutPaths.rollbackApplication, marker: "old", mode: 0o700)
+        try makeRecoveryApp(timeoutPaths.legacyProtocolOne.rollbackApplication, marker: "old", mode: 0o700)
         let timeoutLayout = try StableRecoveryFileTransaction(paths: timeoutPaths)
         var timeoutNow: TimeInterval = 0
         let timedOut = StableUpdateRecovery(paths: timeoutPaths, operations: StableUpdateRecoveryOperations(
@@ -1003,8 +1003,8 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertThrowsError(try timedOut.run()) { error in
             XCTAssertEqual(error as? StableUpdateRecoveryError, .healthVerificationFailed)
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: timeoutPaths.installedApplication.path))
-        XCTAssertEqual(try recoveryMarker(timeoutPaths.rollbackApplication), "old")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: timeoutPaths.legacyProtocolOne.installedApplication.path))
+        XCTAssertEqual(try recoveryMarker(timeoutPaths.legacyProtocolOne.rollbackApplication), "old")
     }
 
     func testStableRecoveryRefusesHeldSharedUpdateLockBeforeEffectsAndReleasesAfterFailure() throws {

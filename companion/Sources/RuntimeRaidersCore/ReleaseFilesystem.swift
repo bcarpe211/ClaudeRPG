@@ -4,6 +4,12 @@ import Foundation
 enum ReleaseFilesystem {
     static let maximumRecordBytes = 16 * 1_024
 
+    enum FaultPhase: Equatable {
+        case afterPartialTemporaryWrite
+        case beforeRename
+        case afterRenameBeforeDirectorySync
+    }
+
     static func openOrCreateOwnerOnlyDirectory(_ url: URL) throws -> Int32 {
         let descriptor = try OwnerOnlyDirectory.openOrCreate(url)
         var metadata = stat()
@@ -68,7 +74,7 @@ enum ReleaseFilesystem {
         _ data: Data,
         directoryDescriptor: Int32,
         name: String,
-        beforeRename: () throws -> Void
+        fault: ((FaultPhase) throws -> Void)?
     ) throws {
         guard !name.isEmpty, name != ".", name != "..", !name.contains("/"),
               !data.isEmpty, data.count <= maximumRecordBytes else {
@@ -95,14 +101,22 @@ enum ReleaseFilesystem {
               metadata.st_nlink == 1 else {
             throw ReleaseContractError.invalidReleaseState
         }
-        try writeAll(data, descriptor: descriptor)
+        if let fault {
+            let split = max(1, data.count / 2)
+            try writeAll(Data(data.prefix(split)), descriptor: descriptor)
+            try fault(.afterPartialTemporaryWrite)
+            try writeAll(Data(data.dropFirst(split)), descriptor: descriptor)
+        } else {
+            try writeAll(data, descriptor: descriptor)
+        }
         try synchronize(descriptor)
         try close(descriptor)
         needsClose = false
-        try beforeRename()
+        try fault?(.beforeRename)
         guard Darwin.renameat(directoryDescriptor, temporary, directoryDescriptor, name) == 0 else {
             throw currentError()
         }
+        try fault?(.afterRenameBeforeDirectorySync)
         try synchronize(directoryDescriptor)
     }
 
@@ -110,7 +124,7 @@ enum ReleaseFilesystem {
         _ data: Data,
         directoryDescriptor: Int32,
         name: String,
-        beforeCommit: () throws -> Void
+        fault: ((FaultPhase) throws -> Void)?
     ) throws {
         guard !name.isEmpty, name != ".", name != "..", !name.contains("/"),
               !data.isEmpty, data.count <= maximumRecordBytes else {
@@ -137,11 +151,18 @@ enum ReleaseFilesystem {
               metadata.st_nlink == 1 else {
             throw ReleaseContractError.invalidReleaseState
         }
-        try writeAll(data, descriptor: descriptor)
+        if let fault {
+            let split = max(1, data.count / 2)
+            try writeAll(Data(data.prefix(split)), descriptor: descriptor)
+            try fault(.afterPartialTemporaryWrite)
+            try writeAll(Data(data.dropFirst(split)), descriptor: descriptor)
+        } else {
+            try writeAll(data, descriptor: descriptor)
+        }
         try synchronize(descriptor)
         try close(descriptor)
         needsClose = false
-        try beforeCommit()
+        try fault?(.beforeRename)
         guard Darwin.linkat(directoryDescriptor, temporary, directoryDescriptor, name, 0) == 0 else {
             throw currentError()
         }

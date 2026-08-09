@@ -12,12 +12,34 @@ final class ReleaseStateTests: XCTestCase {
         XCTAssertEqual(state.fallback, reference(sequence: 8, sha: "b"))
         XCTAssertNil(state.trial)
 
+        let maximumGeneration = stateJSON().replacingOccurrences(
+            of: "\"generation\":7",
+            with: "\"generation\":9007199254740991"
+        )
+        XCTAssertEqual(try ReleaseStateV1.decode(Data(maximumGeneration.utf8)).generation, 9_007_199_254_740_991)
+
+        let validTrial = stateJSON().replacingOccurrences(
+            of: "\"trial\":null",
+            with: "\"trial\":{\"release_sequence\":10,\"release_sha\":\"cccccccccccccccccccccccccccccccccccccccc\",\"companion_version\":\"0.3.10\",\"update_protocol_version\":2}"
+        )
+        XCTAssertEqual(try ReleaseStateV1.decode(Data(validTrial.utf8)).trial?.releaseSequence, 10)
+
         for invalid in [
             stateJSON().replacingOccurrences(of: "\"trial\":null", with: "\"trial\":null,\"path\":\"/tmp/evil\""),
             stateJSON().replacingOccurrences(of: "\"generation\":7", with: "\"generation\":0"),
             stateJSON().replacingOccurrences(of: "\"update_protocol_version\":2", with: "\"update_protocol_version\":1"),
             stateJSON().replacingOccurrences(of: "\"release_sequence\":8", with: "\"release_sequence\":9"),
-            stateJSON().replacingOccurrences(of: "\"fallback\":{", with: "\"fallback\":{\"path\":\"relative\",")
+            stateJSON().replacingOccurrences(of: "\"fallback\":{", with: "\"fallback\":{\"path\":\"relative\","),
+            stateJSON().replacingOccurrences(of: "\"generation\":7", with: "\"generation\":9007199254740992"),
+            stateJSON().replacingOccurrences(
+                of: "\"trial\":null",
+                with: "\"trial\":{\"release_sequence\":9,\"release_sha\":\"cccccccccccccccccccccccccccccccccccccccc\",\"companion_version\":\"0.3.9\",\"update_protocol_version\":2}"
+            ),
+            stateJSON().replacingOccurrences(
+                of: "\"fallback\":{\"release_sequence\":8,\"release_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"companion_version\":\"0.3.8\",\"update_protocol_version\":2}",
+                with: "\"fallback\":{\"release_sequence\":9,\"release_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"companion_version\":\"0.3.9\",\"update_protocol_version\":2}"
+            ),
+            stateJSON().replacingOccurrences(of: "\"release_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"", with: "\"release_sha\":\"not-a-release-sha\"")
         ].enumerated() {
             XCTAssertThrowsError(try ReleaseStateV1.decode(Data(invalid.element.utf8)), "invalid case \(invalid.offset)")
         }
@@ -45,6 +67,12 @@ final class ReleaseStateTests: XCTestCase {
         XCTAssertEqual(paths.launcherExecutable.lastPathComponent, "runtime-raiders-launcher")
         XCTAssertEqual(paths.releaseState.path, root.appendingPathComponent("Runtime Raiders/installation/release-state.json").path)
         XCTAssertEqual(paths.updateJournal.path, root.appendingPathComponent("Runtime Raiders/installation/update-journal.json").path)
+        XCTAssertThrowsError(try paths.releaseDirectory(for: ReleaseReference(
+            releaseSequence: 9,
+            releaseSHA: "../../not-a-sha",
+            companionVersion: "0.3.9",
+            updateProtocolVersion: 2
+        )))
     }
 
     func testInitialStateIsExclusiveAndReplacementUsesGenerationCAS() throws {
@@ -119,7 +147,10 @@ final class ReleaseStateTests: XCTestCase {
         let initial = state(generation: 1, active: reference(sequence: 9, sha: "a"))
         let first = try ReleaseStateStore(paths: paths)
         try first.createInitial(initial)
-        let interrupted = try ReleaseStateStore(paths: paths, beforeRename: { throw Expected.interrupted })
+        let interrupted = try ReleaseStateStore(paths: paths, fault: { phase in
+            guard phase == .beforeRename else { return }
+            throw Expected.interrupted
+        })
         let next = state(
             generation: 2,
             active: reference(sequence: 10, sha: "c"),
@@ -128,6 +159,52 @@ final class ReleaseStateTests: XCTestCase {
 
         XCTAssertThrowsError(try interrupted.replace(expectedGeneration: 1, with: next))
         XCTAssertEqual(try first.load(), initial)
+    }
+
+    func testPartialTemporaryWriteFaultLeavesCompleteOldRecord() throws {
+        enum Expected: Error { case interrupted }
+
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AgentPaths(applicationSupportDirectory: root)
+        let initial = state(generation: 1, active: reference(sequence: 9, sha: "a"))
+        let stable = try ReleaseStateStore(paths: paths)
+        try stable.createInitial(initial)
+        let faulting = try ReleaseStateStore(paths: paths, fault: { phase in
+            guard phase == .afterPartialTemporaryWrite else { return }
+            throw Expected.interrupted
+        })
+        let next = state(
+            generation: 2,
+            active: reference(sequence: 10, sha: "c"),
+            fallback: reference(sequence: 9, sha: "a")
+        )
+
+        XCTAssertThrowsError(try faulting.replace(expectedGeneration: 1, with: next))
+        XCTAssertEqual(try stable.load(), initial)
+    }
+
+    func testPostRenameFaultLeavesCompleteNewRecord() throws {
+        enum Expected: Error { case interrupted }
+
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AgentPaths(applicationSupportDirectory: root)
+        let initial = state(generation: 1, active: reference(sequence: 9, sha: "a"))
+        let stable = try ReleaseStateStore(paths: paths)
+        try stable.createInitial(initial)
+        let faulting = try ReleaseStateStore(paths: paths, fault: { phase in
+            guard phase == .afterRenameBeforeDirectorySync else { return }
+            throw Expected.interrupted
+        })
+        let next = state(
+            generation: 2,
+            active: reference(sequence: 10, sha: "c"),
+            fallback: reference(sequence: 9, sha: "a")
+        )
+
+        XCTAssertThrowsError(try faulting.replace(expectedGeneration: 1, with: next))
+        XCTAssertEqual(try stable.load(), next)
     }
 
     func testConcurrentStoresAllowOnlyOneCASReplacement() throws {
@@ -139,7 +216,8 @@ final class ReleaseStateTests: XCTestCase {
         try initialStore.createInitial(initial)
         let enteredRename = DispatchSemaphore(value: 0)
         let releaseRename = DispatchSemaphore(value: 0)
-        let first = try ReleaseStateStore(paths: paths, beforeRename: {
+        let first = try ReleaseStateStore(paths: paths, fault: { phase in
+            guard phase == .beforeRename else { return }
             enteredRename.signal()
             _ = releaseRename.wait(timeout: .now() + 2)
         })

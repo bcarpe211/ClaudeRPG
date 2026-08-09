@@ -17,12 +17,6 @@ public struct AgentPaths: Equatable, Sendable {
     public let releaseState: URL
     public let updateJournal: URL
 
-    // Legacy recovery remains path-bound until the protocol-1 updater is retired.
-    // These aliases are not protocol-2 selection authority.
-    public let installedApplication: URL
-    public let rollbackApplication: URL
-    public let failedApplication: URL
-
     public init(applicationSupportDirectory: URL) {
         supportDirectory = applicationSupportDirectory
             .appendingPathComponent("Runtime Raiders", isDirectory: true)
@@ -61,15 +55,6 @@ public struct AgentPaths: Equatable, Sendable {
             "update-journal.json",
             isDirectory: false
         )
-        installedApplication = legacyFlatApplication
-        rollbackApplication = supportDirectory.appendingPathComponent(
-            "Runtime Raiders Agent.rollback.app",
-            isDirectory: true
-        )
-        failedApplication = supportDirectory.appendingPathComponent(
-            "Runtime Raiders Agent.failed.app",
-            isDirectory: true
-        )
     }
 
     public init() {
@@ -103,5 +88,34 @@ public struct AgentPaths: Equatable, Sendable {
             "Contents/MacOS/runtime-raiders-agent",
             isDirectory: false
         )
+    }
+}
+
+/// Compatibility-only fixed slots for the protocol-1 updater and recovery code.
+/// Protocol-2 selection uses `ReleaseReference` and `release-state.json` only.
+struct LegacyProtocolOnePaths: Sendable {
+    let installedApplication: URL
+    let rollbackApplication: URL
+    let failedApplication: URL
+
+    init(supportDirectory: URL) {
+        installedApplication = supportDirectory.appendingPathComponent(
+            "Runtime Raiders Agent.app",
+            isDirectory: true
+        )
+        rollbackApplication = supportDirectory.appendingPathComponent(
+            "Runtime Raiders Agent.rollback.app",
+            isDirectory: true
+        )
+        failedApplication = supportDirectory.appendingPathComponent(
+            "Runtime Raiders Agent.failed.app",
+            isDirectory: true
+        )
+    }
+}
+
+extension AgentPaths {
+    var legacyProtocolOne: LegacyProtocolOnePaths {
+        LegacyProtocolOnePaths(supportDirectory: supportDirectory)
     }
 }

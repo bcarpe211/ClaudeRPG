@@ -164,14 +164,17 @@ public final class ReleaseStateStore: @unchecked Sendable {
     private let fileName: String
     private let directoryDescriptor: Int32
     private let lockDescriptor: Int32
-    private let beforeRename: () throws -> Void
+    private let fault: ((ReleaseFilesystem.FaultPhase) throws -> Void)?
     private let lock = NSLock()
 
     public convenience init(paths: AgentPaths) throws {
-        try self.init(paths: paths, beforeRename: {})
+        try self.init(paths: paths, fault: nil)
     }
 
-    init(paths: AgentPaths, beforeRename: @escaping () throws -> Void) throws {
+    init(
+        paths: AgentPaths,
+        fault: ((ReleaseFilesystem.FaultPhase) throws -> Void)?
+    ) throws {
         fileName = paths.releaseState.lastPathComponent
         directoryDescriptor = try ReleaseFilesystem.openOrCreateOwnerOnlyDirectory(
             paths.installationDirectory
@@ -196,7 +199,7 @@ public final class ReleaseStateStore: @unchecked Sendable {
             Darwin.close(directoryDescriptor)
             throw ReleaseContractError.invalidReleaseState
         }
-        self.beforeRename = beforeRename
+        self.fault = fault
     }
 
     deinit {
@@ -276,7 +279,7 @@ public final class ReleaseStateStore: @unchecked Sendable {
             data,
             directoryDescriptor: directoryDescriptor,
             name: fileName,
-            beforeRename: beforeRename
+            fault: fault
         )
     }
 
@@ -291,7 +294,7 @@ public final class ReleaseStateStore: @unchecked Sendable {
             data,
             directoryDescriptor: directoryDescriptor,
             name: fileName,
-            beforeCommit: beforeRename
+            fault: fault
         )
     }
 }
