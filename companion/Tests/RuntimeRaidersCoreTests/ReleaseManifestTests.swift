@@ -3,7 +3,7 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ReleaseManifestTests: XCTestCase {
-    func testManifestAcceptsOnlyTheExactVersionOneShape() throws {
+    func testManifestAcceptsTheExactShapeForProtocolOneAndTwo() throws {
         let manifest = try ReleaseManifestV1.decode(validManifestData())
 
         XCTAssertEqual(manifest.manifestVersion, 1)
@@ -13,6 +13,7 @@ final class ReleaseManifestTests: XCTestCase {
         XCTAssertEqual(manifest.updateProtocolVersion, 1)
         XCTAssertEqual(manifest.zipSHA256, String(repeating: "b", count: 64))
         XCTAssertEqual(manifest.zipURL, ReleaseManifestV1.archiveURL)
+        XCTAssertEqual(try ReleaseManifestV1.decode(validManifestData(protocolVersion: 2)).updateProtocolVersion, 2)
     }
 
     func testManifestRejectsExtraKeysBooleansUnsafeIntegersAndBadStrings() throws {
@@ -22,7 +23,7 @@ final class ReleaseManifestTests: XCTestCase {
             #"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":9007199254740992,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#,
             #"{"manifest_version":1,"companion_version":"0.2.1 bad","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#,
             #"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#,
-            #"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":2,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#,
+            #"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":3,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#,
             #"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#,
             #"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://example.com/runtime-raiders-agent.zip"}"#,
         ]
@@ -77,7 +78,8 @@ final class ReleaseManifestTests: XCTestCase {
         )))
     }
 
-    private func validManifestData() -> Data {
-        Data(#"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#.utf8)
+    private func validManifestData(protocolVersion: Int = 1) -> Data {
+        let document = #"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":%d,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#
+        return Data(String(format: document, protocolVersion).utf8)
     }
 }

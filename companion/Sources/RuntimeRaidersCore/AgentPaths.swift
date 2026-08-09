@@ -8,6 +8,17 @@ public struct AgentPaths: Equatable, Sendable {
     public let updateState: URL
     public let updateLock: URL
     public let preparedStartupLease: URL
+    public let legacyFlatApplication: URL
+    public let launcherDirectory: URL
+    public let launcherApplication: URL
+    public let launcherExecutable: URL
+    public let releasesDirectory: URL
+    public let installationDirectory: URL
+    public let releaseState: URL
+    public let updateJournal: URL
+
+    // Legacy recovery remains path-bound until the protocol-1 updater is retired.
+    // These aliases are not protocol-2 selection authority.
     public let installedApplication: URL
     public let rollbackApplication: URL
     public let failedApplication: URL
@@ -24,10 +35,33 @@ public struct AgentPaths: Equatable, Sendable {
             "prepared-startup.lock",
             isDirectory: false
         )
-        installedApplication = supportDirectory.appendingPathComponent(
+        legacyFlatApplication = supportDirectory.appendingPathComponent(
             "Runtime Raiders Agent.app",
             isDirectory: true
         )
+        launcherDirectory = supportDirectory.appendingPathComponent("launcher", isDirectory: true)
+        launcherApplication = launcherDirectory.appendingPathComponent(
+            "Runtime Raiders Launcher.app",
+            isDirectory: true
+        )
+        launcherExecutable = launcherApplication.appendingPathComponent(
+            "Contents/MacOS/runtime-raiders-launcher",
+            isDirectory: false
+        )
+        releasesDirectory = supportDirectory.appendingPathComponent("releases", isDirectory: true)
+        installationDirectory = supportDirectory.appendingPathComponent(
+            "installation",
+            isDirectory: true
+        )
+        releaseState = installationDirectory.appendingPathComponent(
+            "release-state.json",
+            isDirectory: false
+        )
+        updateJournal = installationDirectory.appendingPathComponent(
+            "update-journal.json",
+            isDirectory: false
+        )
+        installedApplication = legacyFlatApplication
         rollbackApplication = supportDirectory.appendingPathComponent(
             "Runtime Raiders Agent.rollback.app",
             isDirectory: true
@@ -45,5 +79,29 @@ public struct AgentPaths: Equatable, Sendable {
         ).first ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support", isDirectory: true)
         self.init(applicationSupportDirectory: applicationSupport)
+    }
+
+    public func releaseDirectory(for release: ReleaseReference) throws -> URL {
+        guard ReleaseReference.isValid(release) else {
+            throw ReleaseContractError.invalidReleaseState
+        }
+        return releasesDirectory.appendingPathComponent(
+            "sequence-\(release.releaseSequence)-\(release.releaseSHA)",
+            isDirectory: true
+        )
+    }
+
+    public func application(for release: ReleaseReference) throws -> URL {
+        try releaseDirectory(for: release).appendingPathComponent(
+            "Runtime Raiders Agent.app",
+            isDirectory: true
+        )
+    }
+
+    public func executable(for release: ReleaseReference) throws -> URL {
+        try application(for: release).appendingPathComponent(
+            "Contents/MacOS/runtime-raiders-agent",
+            isDirectory: false
+        )
     }
 }

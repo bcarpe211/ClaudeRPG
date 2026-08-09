@@ -210,6 +210,34 @@ final class ReleaseCheckerTests: XCTestCase {
         }
     }
 
+    func testProtocolOneCachedManifestIsReadableAndIgnoredWithoutRewriteByProtocolTwoIdentity() throws {
+        try withPaths { paths in
+            let cached = manifest
+            let store = try UpdateStateStore(paths: paths)
+            try store.save(UpdateStateV1(
+                lastCheckAttemptMS: now,
+                lastObservedReleaseSequence: cached.releaseSequence,
+                cachedManifest: cached
+            ))
+            let originalBytes = try Data(contentsOf: paths.updateState)
+            let protocolTwo = CompanionReleaseIdentity(
+                releaseSequence: 1,
+                releaseSHA: String(repeating: "c", count: 40),
+                companionVersion: "0.2.0",
+                updateProtocolVersion: 2
+            )
+            let checker = try ReleaseChecker(
+                paths: paths,
+                installed: protocolTwo,
+                transport: { _ in throw URLError(.cannotConnectToHost) }
+            )
+
+            XCTAssertEqual(try store.load().cachedManifest, cached)
+            XCTAssertNil(checker.availability())
+            XCTAssertEqual(try Data(contentsOf: paths.updateState), originalBytes)
+        }
+    }
+
     func testForcedFetchRetainsAndReturnsHigherMonotonicCachedManifest() throws {
         try withPaths { paths in
             let higher = try manifest(sequence: 3, version: "0.3.0", shaByte: "d")

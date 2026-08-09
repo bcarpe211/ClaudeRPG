@@ -33,7 +33,10 @@ public struct ReleaseManifestV1: Codable, Equatable, Sendable {
               let releaseSequence = ReleaseContractValidation.positiveSafeInteger(document["release_sequence"]),
               let releaseSHA = document["release_sha"] as? String,
               ReleaseContractValidation.isLowercaseHex(releaseSHA, count: 40),
-              ReleaseContractValidation.positiveSafeInteger(document["update_protocol_version"]) == 1,
+              let updateProtocolVersion = ReleaseContractValidation.positiveSafeInteger(
+                  document["update_protocol_version"]
+              ),
+              [1, 2].contains(updateProtocolVersion),
               let zipSHA256 = document["zip_sha256"] as? String,
               ReleaseContractValidation.isLowercaseHex(zipSHA256, count: 64),
               let zipURLString = document["zip_url"] as? String,
@@ -46,7 +49,7 @@ public struct ReleaseManifestV1: Codable, Equatable, Sendable {
             companionVersion: companionVersion,
             releaseSequence: releaseSequence,
             releaseSHA: releaseSHA,
-            updateProtocolVersion: 1,
+            updateProtocolVersion: Int(updateProtocolVersion),
             zipSHA256: zipSHA256,
             zipURL: archiveURL
         )
