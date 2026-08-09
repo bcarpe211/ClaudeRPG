@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-09
 
-**Status:** Approved in conversation on 2026-08-09; written specification pending user review.
+**Status:** Approved in conversation and accepted in writing on 2026-08-09.
 
 **Scope:** Replace fixed installed, rollback, and failed-candidate application slots with immutable versioned releases selected by a stable signed launcher. Add a one-time protocol-1-to-protocol-2 installer migration and move lifecycle failures ahead of signing and publication. This design does not build, sign, publish, install, activate, or delete a release.
 
