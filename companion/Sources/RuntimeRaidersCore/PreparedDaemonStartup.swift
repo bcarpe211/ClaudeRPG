@@ -133,6 +133,31 @@ public final class CompanionPreparedStartupObservation: @unchecked Sendable {
     }
 }
 
+public enum InstallerPreparedLeaseKeeper {
+    public static let readinessLine = "runtime-raiders-installer-lease-ready\n"
+
+    public static func run(
+        paths: AgentPaths,
+        input: FileHandle = .standardInput,
+        output: FileHandle = .standardOutput
+    ) throws {
+        try run(paths: paths, input: input, output: output, onReady: {})
+    }
+
+    static func run(
+        paths: AgentPaths,
+        input: FileHandle,
+        output: FileHandle,
+        onReady: () throws -> Void
+    ) throws {
+        let lease = try CompanionPreparedStartupLease(paths: paths)
+        try output.write(contentsOf: Data(readinessLine.utf8))
+        try onReady()
+        while let data = try input.read(upToCount: 4_096), !data.isEmpty {}
+        withExtendedLifetime(lease) {}
+    }
+}
+
 public enum PreparedReleaseDisposition: Equatable, Sendable {
     case resumeCommittedActive
     case exitUncommittedTrial

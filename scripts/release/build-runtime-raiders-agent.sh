@@ -107,7 +107,7 @@ case "$RELEASE_SEQUENCE" in ''|0|0*|*[!0-9]*) echo "release_sequence is invalid"
   echo "release_sequence is invalid" >&2
   exit 64
 }
-[ "$UPDATE_PROTOCOL_LINE" = 'update_protocol_version=1' ] || {
+[ "$UPDATE_PROTOCOL_LINE" = 'update_protocol_version=2' ] || {
   echo "update_protocol_version is invalid" >&2
   exit 64
 }

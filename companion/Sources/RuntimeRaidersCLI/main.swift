@@ -733,6 +733,25 @@ private func run() throws {
             try CompanionSelfCheck.encode(CompanionReleaseIdentity.load(from: .main))
         )
         return
+    case .installerLease:
+        try InstallerPreparedLeaseKeeper.run(paths: paths)
+        return
+    case .legacyPrepare:
+        let response = try LegacyMigrationControl().prepare(paths: paths)
+        print(response.message)
+        guard response.ok else { throw CLIError.updateOperationFailed }
+        return
+    case let .installerResume(generation):
+        let response = try ControlSocketClient.send(
+            request: ControlRequest(
+                command: .resumeUpdate,
+                releaseStateGeneration: generation
+            ),
+            to: paths.controlSocket
+        )
+        print(response.message)
+        guard response.ok else { throw CLIError.updateOperationFailed }
+        return
     case let .control(command):
         try runUserControlCommand(command, paths: paths)
     }

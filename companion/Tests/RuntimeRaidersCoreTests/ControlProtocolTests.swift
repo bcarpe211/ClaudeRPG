@@ -681,6 +681,195 @@ final class ControlProtocolTests: XCTestCase {
                 paths: paths
             )
         )
+        for privateCommand in [
+            "__runtime-raiders-installer-lease",
+            "__runtime-raiders-legacy-prepare",
+            "__runtime-raiders-installer-resume",
+        ] {
+            XCTAssertNil(
+                LauncherInvocation(arguments: [privateCommand]),
+                "stable launcher accepted installer-private route \(privateCommand)"
+            )
+        }
+    }
+
+    func testInstallerPrivateRoutesRequireProtocolTwoDirectAgentAndExactActivePath() throws {
+        let paths = AgentPaths(
+            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-installer-routing")
+        )
+        let active = ReleaseReference(
+            releaseSequence: 9,
+            releaseSHA: String(repeating: "a", count: 40),
+            companionVersion: "0.3.0",
+            updateProtocolVersion: 2
+        )
+        let state = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 1,
+            active: active,
+            fallback: nil,
+            trial: nil
+        )
+        let identity = try active.companionReleaseIdentity()
+        let staged = URL(fileURLWithPath: "/private/tmp/staged/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent")
+        let activeExecutable = try paths.executable(for: active)
+        let wrongExecutable = URL(fileURLWithPath: "/private/tmp/not-the-agent")
+        let protocolOne = CompanionReleaseIdentity(
+            releaseSequence: 8,
+            releaseSHA: String(repeating: "b", count: 40),
+            companionVersion: "0.2.6",
+            updateProtocolVersion: 1
+        )
+
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-lease"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerLease
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-legacy-prepare"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .legacyPrepare
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-lease", "extra"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-legacy-prepare"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: protocolOne
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-lease"],
+                executableURL: wrongExecutable,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-resume", "1"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            ),
+            .installerResume(generation: 1)
+        )
+        for badGeneration in ["", "0", "+1", "01", "1.0", "9007199254740992"] {
+            XCTAssertNil(
+                CompanionCommandRouter.installerRoute(
+                    arguments: ["__runtime-raiders-installer-resume", badGeneration],
+                    executableURL: activeExecutable,
+                    paths: paths,
+                    releaseState: state,
+                    releaseIdentity: identity
+                )
+            )
+        }
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-resume", "1"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-resume", "1"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: ReleaseStateV1(
+                    schemaVersion: 1,
+                    generation: 2,
+                    active: active,
+                    fallback: nil,
+                    trial: nil
+                ),
+                releaseIdentity: identity
+            )
+        )
+    }
+
+    func testLegacyMigrationControlUsesOnlyExactBoundedFrameAndResponse() throws {
+        let paths = AgentPaths(
+            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-legacy-control")
+        )
+        var observedFrame = Data()
+        var observedSocket: URL?
+        let control = LegacyMigrationControl(exchange: { frame, socket, maximumBytes, timeout in
+            observedFrame = frame
+            observedSocket = socket
+            XCTAssertEqual(maximumBytes, 4_096)
+            XCTAssertEqual(timeout, 30)
+            return Data(#"{"ok":true,"message":"prepared"}"#.utf8) + Data([0x0A])
+        })
+
+        XCTAssertEqual(try control.prepare(paths: paths), ControlResponse(ok: true, message: "prepared"))
+        XCTAssertEqual(observedFrame, Data(#"{"command":"prepare_update"}"#.utf8) + Data([0x0A]))
+        XCTAssertEqual(observedSocket, paths.controlSocket)
+
+        for response in [
+            Data(),
+            Data(#"{"ok":true}"#.utf8) + Data([0x0A]),
+            Data(#"{"ok":true,"message":"prepared","extra":1}"#.utf8) + Data([0x0A]),
+            Data(repeating: 0x61, count: 4_097),
+        ] {
+            let malformed = LegacyMigrationControl(exchange: { _, _, _, _ in response })
+            XCTAssertThrowsError(try malformed.prepare(paths: paths))
+        }
+        let timedOut = LegacyMigrationControl(exchange: { _, _, _, _ in throw POSIXError(.ETIMEDOUT) })
+        XCTAssertThrowsError(try timedOut.prepare(paths: paths))
+    }
+
+    func testInstallerLeaseKeeperHoldsUntilInputClosesAndWritesOneReadinessLine() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent(
+            "rr-installer-lease-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AgentPaths(applicationSupportDirectory: root)
+        let input = Pipe()
+        let output = Pipe()
+        input.fileHandleForWriting.closeFile()
+        var heldAtReadiness = false
+        try InstallerPreparedLeaseKeeper.run(
+            paths: paths,
+            input: input.fileHandleForReading,
+            output: output.fileHandleForWriting
+        ) {
+            heldAtReadiness = try CompanionPreparedStartupLease.observe(paths: paths) != nil
+        }
+        output.fileHandleForWriting.closeFile()
+        let readiness = output.fileHandleForReading.readDataToEndOfFile()
+        XCTAssertEqual(String(decoding: readiness, as: UTF8.self), "runtime-raiders-installer-lease-ready\n")
+        XCTAssertTrue(heldAtReadiness)
+        XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: paths))
     }
 
     func testDaemonAndInternalCommandsRequireExactSingleArgumentAndPathRules() {

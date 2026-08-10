@@ -20,6 +20,9 @@ public enum CompanionCommandRoute: Equatable, Sendable {
     case control(ControlCommand)
     case foregroundUpdate
     case selfCheck
+    case installerLease
+    case legacyPrepare
+    case installerResume(generation: Int64)
 }
 
 public enum CompanionCommandRouter {
@@ -37,6 +40,27 @@ public enum CompanionCommandRouter {
             return .foregroundUpdate
         case ["__self-check"]:
             return .selfCheck
+        case ["__runtime-raiders-installer-lease"],
+             ["__runtime-raiders-legacy-prepare"]:
+            guard let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            return installerRoute(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            )
+        case let values where values.count == 2 &&
+            values[0] == "__runtime-raiders-installer-resume":
+            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
+                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            return installerRoute(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            )
         case ["daemon"]:
             guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
                   let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
@@ -105,6 +129,62 @@ public enum CompanionCommandRouter {
         default:
             return nil
         }
+    }
+
+    static func installerRoute(
+        arguments: [String],
+        executableURL: URL,
+        paths: AgentPaths,
+        releaseState: ReleaseStateV1?,
+        releaseIdentity: CompanionReleaseIdentity
+    ) -> CompanionCommandRoute? {
+        guard releaseIdentity.updateProtocolVersion == 2,
+              directAgentExecutable(executableURL, paths: paths) else { return nil }
+        switch arguments {
+        case ["__runtime-raiders-installer-lease"]:
+            return .installerLease
+        case ["__runtime-raiders-legacy-prepare"]:
+            return .legacyPrepare
+        case let values where values.count == 2 &&
+            values[0] == "__runtime-raiders-installer-resume":
+            guard let state = releaseState,
+                  ReleaseStateV1.isValid(state),
+                  state.trial == nil,
+                  state.fallback == nil,
+                  state.active == (try? releaseIdentity.releaseReference()),
+                  let generation = canonicalGeneration(values[1]),
+                  generation == state.generation,
+                  let activeExecutable = try? paths.executable(for: state.active),
+                  exactExecutable(executableURL, equals: activeExecutable) else {
+                return nil
+            }
+            return .installerResume(generation: generation)
+        default:
+            return nil
+        }
+    }
+
+    private static func canonicalGeneration(_ raw: String) -> Int64? {
+        guard raw.first != "+",
+              let generation = Int64(raw),
+              String(generation) == raw,
+              (1...ReleaseContractValidation.maximumSafeInteger).contains(generation) else {
+            return nil
+        }
+        return generation
+    }
+
+    private static func directAgentExecutable(_ executable: URL, paths: AgentPaths) -> Bool {
+        guard executable.isFileURL,
+              executable.lastPathComponent == "runtime-raiders-agent" else { return false }
+        let application = executable
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        guard application.lastPathComponent == "Runtime Raiders Agent.app" else { return false }
+        let standardized = application.standardizedFileURL.path
+        return standardized != paths.legacyFlatApplication.standardizedFileURL.path &&
+            !standardized.hasPrefix(paths.launcherDirectory.standardizedFileURL.path + "/")
     }
 
     private static func exactExecutable(_ first: URL, equals second: URL) -> Bool {
