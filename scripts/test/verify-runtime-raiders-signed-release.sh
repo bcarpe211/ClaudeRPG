@@ -117,24 +117,26 @@ IFS=$'\t' read -r RELEASE_SEQUENCE RELEASE_SHA COMPANION_VERSION UPDATE_PROTOCOL
 [ "$UPDATE_PROTOCOL_VERSION" = 2 ] || exit 1
 gate_verify_reviewed_source "$ROOT" "$RELEASE_SHA" \
   companion/packaging/install.sh \
+  scripts/release/build-runtime-raiders-release-validator.sh \
   scripts/release/render-runtime-raiders-installer.sh \
+  scripts/test/runtime-raiders-process-identity.c \
   scripts/test/runtime-raiders-gate-safety.sh || {
   echo "Gate 2 requires the clean reviewed release source at the signed SHA" >&2
   exit 1
 }
 
-scratch="$gate_root/validator-build"
-for architecture in arm64 x86_64; do
-  swift build --disable-sandbox --package-path "$ROOT/companion" --scratch-path "$scratch" \
-    --configuration release --arch "$architecture" --disable-automatic-resolution --skip-update \
-    --product runtime-raiders-release-validator >/dev/null
-done
+identity_helper="$gate_root/runtime-raiders-process-identity"
+/usr/bin/clang -Wall -Wextra -Werror \
+  "$ROOT/scripts/test/runtime-raiders-process-identity.c" \
+  -o "$identity_helper"
+chmod 700 "$identity_helper"
+export GATE_PROCESS_IDENTITY_HELPER="$identity_helper"
+
 validator_bin="$gate_root/runtime-raiders-release-validator"
-/usr/bin/lipo -create \
-  "$scratch/arm64-apple-macosx/release/runtime-raiders-release-validator" \
-  "$scratch/x86_64-apple-macosx/release/runtime-raiders-release-validator" \
-  -output "$validator_bin"
-/usr/bin/lipo -verify_arch arm64 x86_64 "$validator_bin"
+"$ROOT/scripts/release/build-runtime-raiders-release-validator.sh" \
+  "$ROOT/companion" \
+  "$gate_root/validator-build" \
+  "$validator_bin"
 [ -x "$validator_bin" ] || exit 1
 "$validator_bin" "$ARCHIVE"
 
@@ -316,14 +318,14 @@ current_agent="$support/releases/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA/Runtime
 gate_run_without_release_credentials env HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" \
   "$current_agent" __runtime-raiders-installer-lease <"$lease_fifo" >"$lease_ready" &
 lease_pid=$!
-lease_record="$(gate_process_capture held-lease "$lease_pid" "$current_agent")" || exit 1
+lease_record="$(gate_process_capture held-lease "$lease_pid" "$current_agent" __runtime-raiders-installer-lease)" || exit 1
 for _ in $(seq 1 40); do grep -F -x 'runtime-raiders-installer-lease-ready' "$lease_ready" >/dev/null 2>&1 && break; sleep 0.1; done
 grep -F -x 'runtime-raiders-installer-lease-ready' "$lease_ready" >/dev/null
 gate_run_without_release_credentials env HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" \
   "$installed_launcher" daemon >"$gate_root/launcher-fixtures/trial.log" 2>&1 &
 trial_pid=$!
-trial_record="$(gate_process_capture held-trial "$trial_pid" "$installed_launcher" \
-  "$support/releases/sequence-$NEWER_SEQUENCE-$NEWER_SHA/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent")" || exit 1
+trial_record="$(gate_process_capture held-trial "$trial_pid" "$installed_launcher" daemon \
+  "$support/releases/sequence-$NEWER_SEQUENCE-$NEWER_SHA/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent" daemon)" || exit 1
 for _ in $(seq 1 80); do
   [ -S "$support/agent.sock" ] && break
   gate_process_validate_record "$trial_record" || break
@@ -395,7 +397,7 @@ case "$1" in
     pid=$!
     captured=0
     for _ in $(seq 1 40); do
-      if gate_process_capture fake-launchd "$pid" "$RUNTIME_RAIDERS_GATE2_NETWORK_SANDBOX" "$transition" >/dev/null; then
+      if gate_process_capture fake-launchd "$pid" "$transition" daemon >/dev/null; then
         captured=1
         break
       fi
@@ -548,6 +550,21 @@ fingerprint_legacy() {
   gate_fingerprint_migration_surface "$1" "$2"
 }
 
+verify_legacy_runtime() {
+  local home="$1" executable="$2" support socket lock mode
+  support="$home/Library/Application Support/Runtime Raiders"
+  socket="$support/agent.sock"
+  lock="$support/.agent.sock.runtime-raiders.lock"
+  [ -S "$socket" ] && [ ! -L "$socket" ] || return 1
+  [ "$(/usr/bin/stat -f '%u' "$socket")" = "$OWNER" ] || return 1
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+  [ "$(/usr/bin/stat -f '%u:%l' "$lock")" = "$OWNER:1" ] || return 1
+  mode="$(/usr/bin/stat -f '%Lp' "$lock")"
+  (( (8#$mode & 8#077) == 0 )) || return 1
+  gate_run_without_release_credentials env HOME="$home" CFFIXED_USER_HOME="$home" \
+    "$executable" __runtime-raiders-installer-status legacy-running false >/dev/null
+}
+
 injected_installer="$gate_root/install-with-failure-checkpoints.sh"
 awk 'BEGIN { found=0 } $0 == "failure_checkpoint() { :; }" { print "failure_checkpoint() { [ \"${RUNTIME_RAIDERS_GATE2_FAIL_AFTER:-}\" != \"$1\" ] || return 91; }"; found=1; next } { print } END { if (!found) exit 1 }' "$INSTALLER" > "$injected_installer"
 chmod 700 "$injected_installer"
@@ -574,8 +591,7 @@ for boundary in archive-verification enrollment-decision prepare old-job-stop la
   }
   gate_env "$case_home" "$fake_bin/launchctl" print "gui/$OWNER/com.redlattice.runtime-raiders-agent" >/dev/null
   legacy_executable="$case_home/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
-  gate_run_without_release_credentials env HOME="$case_home" CFFIXED_USER_HOME="$case_home" \
-    "$legacy_executable" __runtime-raiders-installer-status legacy-running false >/dev/null
+  verify_legacy_runtime "$case_home" "$legacy_executable"
   gate_env "$case_home" "$fake_bin/launchctl" bootout "gui/$OWNER/com.redlattice.runtime-raiders-agent"
 done
 

@@ -168,25 +168,23 @@ for arch in arm64 x86_64; do
   if [ -n "$SCRATCH" ]; then
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product raiders)
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product runtime-raiders-launcher)
-    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product runtime-raiders-release-validator)
     cp "$SCRATCH/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
     cp "$SCRATCH/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
-    cp "$SCRATCH/$arch-apple-macosx/release/runtime-raiders-release-validator" "$WORK/runtime-raiders-release-validator-$arch"
   else
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product raiders)
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product runtime-raiders-launcher)
-    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product runtime-raiders-release-validator)
     cp "$ROOT/companion/.build/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
     cp "$ROOT/companion/.build/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
-    cp "$ROOT/companion/.build/$arch-apple-macosx/release/runtime-raiders-release-validator" "$WORK/runtime-raiders-release-validator-$arch"
   fi
 done
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
 lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"
-lipo -create "$WORK/runtime-raiders-release-validator-arm64" "$WORK/runtime-raiders-release-validator-x86_64" -output "$WORK/runtime-raiders-release-validator"
 lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-agent"
 lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-launcher"
-lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-release-validator"
+"$ROOT/scripts/release/build-runtime-raiders-release-validator.sh" \
+  "$ROOT/companion" \
+  "$WORK/validator-scratch" \
+  "$WORK/runtime-raiders-release-validator"
 RELEASE_VALIDATOR="$WORK/runtime-raiders-release-validator"
 RELEASE_VALIDATOR_SHA256="$(/usr/bin/shasum -a 256 "$RELEASE_VALIDATOR" | awk 'NR == 1 { print $1 }')"
 case "$RELEASE_VALIDATOR_SHA256" in ''|*[!0-9a-f]*) echo "release validator checksum failed" >&2; exit 1 ;; esac

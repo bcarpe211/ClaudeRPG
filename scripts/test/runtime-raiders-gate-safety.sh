@@ -32,26 +32,53 @@ gate_process_format_identity() {
 }
 
 gate_process_identity_matches() {
-  local identity="$1" expected="$2" start command
+  local identity="$1" expected="$2" argument="${3:-}" start command exact
   [ "$(printf '%s\n' "$identity" | wc -l | tr -d ' ')" -eq 2 ] || return 1
   start="$(printf '%s\n' "$identity" | sed -n '1p')"
   command="$(printf '%s\n' "$identity" | sed -n '2p')"
   case "$start" in start=?*) ;; *) return 1 ;; esac
-  case "$command" in
-    "command=$expected"|"command=$expected "*) return 0 ;;
-    *) return 1 ;;
-  esac
+  exact="command=$expected"
+  [ -z "$argument" ] || exact="$exact $argument"
+  [ "$command" = "$exact" ]
 }
 
 gate_process_probe() {
-  local pid="$1" start command
+  local pid="$1" expected="$2" argument="${3:-}" identity image lsof_device lsof_inode
+  local stat_device stat_inode
+  gate_safe_pid "$pid" || return 4
   if [ -n "${GATE_PROCESS_PROBE:-}" ]; then
-    "$GATE_PROCESS_PROBE" "$pid"
-    return
+    identity="$("$GATE_PROCESS_PROBE" "$pid" "$expected" "$argument")" || return $?
+    gate_process_identity_matches "$identity" "$expected" "$argument" || return 4
+    printf '%s\n' "$identity"
+    return 0
   fi
-  start="$(/bin/ps -p "$pid" -o lstart= 2>/dev/null)" || return 3
-  command="$(/bin/ps -p "$pid" -o command= 2>/dev/null)" || return 3
-  gate_process_format_identity "$start" "$command"
+  [ -n "${GATE_PROCESS_IDENTITY_HELPER:-}" ] || return 4
+  [ -f "$GATE_PROCESS_IDENTITY_HELPER" ] && [ ! -L "$GATE_PROCESS_IDENTITY_HELPER" ] &&
+    [ -x "$GATE_PROCESS_IDENTITY_HELPER" ] || return 4
+  if identity="$("$GATE_PROCESS_IDENTITY_HELPER" "$pid" "$expected" "$argument")"; then :
+  else return $?
+  fi
+  gate_process_identity_matches "$identity" "$expected" "$argument" || return 4
+  image="$(/usr/sbin/lsof -a -p "$pid" -d txt -F fDin 2>/dev/null | /usr/bin/awk -v expected="$expected" '
+    function emit() {
+      if (file == "txt" && name == expected && device != "" && inode != "") {
+        print device " " inode
+        matches += 1
+      }
+    }
+    /^f/ { emit(); file=substr($0,2); device=""; inode=""; name=""; next }
+    /^D/ { device=substr($0,2); next }
+    /^i/ { inode=substr($0,2); next }
+    /^n/ { name=substr($0,2); next }
+    END { emit(); if (matches != 1) exit 4 }
+  ')" || return 4
+  read -r lsof_device lsof_inode <<<"$image"
+  stat_device="$(/usr/bin/stat -f '%d' "$expected" 2>/dev/null)" || return 4
+  stat_inode="$(/usr/bin/stat -f '%i' "$expected" 2>/dev/null)" || return 4
+  [ "$((lsof_device))" = "$stat_device" ] 2>/dev/null || return 4
+  [ "$lsof_inode" = "$stat_inode" ] || return 4
+  printf '%s\ndevice=%s\ninode=%s\npath=%s\nargument=%s\n' \
+    "$identity" "$stat_device" "$stat_inode" "$expected" "$argument"
 }
 
 gate_process_signal() {
@@ -83,33 +110,42 @@ gate_process_allowed_root() {
 }
 
 gate_process_capture() {
-  local label="$1" pid="$2" expected="$3" transition="${4:-}" records allowed record identity admitted
+  local label="$1" pid="$2" expected="$3" argument="${4:-}" transition="${5:-}" transition_argument="${6:-}"
+  local records allowed record identity admitted admitted_argument probe_status
   case "$label" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   gate_safe_pid "$pid" || return 1
   records="$(gate_process_record_root)" || return 1
   allowed="$(gate_process_allowed_root)" || return 1
   case "$expected" in "$allowed"/*) ;; *) return 1 ;; esac
+  case "$expected:$argument:$transition:$transition_argument" in *$'\n'*) return 1 ;; esac
   [ -f "$expected" ] && [ ! -L "$expected" ] && [ -x "$expected" ] || return 1
   if [ -n "$transition" ]; then
     case "$transition" in "$allowed"/*) ;; *) return 1 ;; esac
     [ -f "$transition" ] && [ ! -L "$transition" ] && [ -x "$transition" ] || return 1
   fi
-  identity="$(gate_process_probe "$pid")" || return $?
-  [ -n "$identity" ] && [ "$(printf '%s' "$identity" | wc -c | tr -d ' ')" -le 4096 ] || return 1
-  if gate_process_identity_matches "$identity" "$expected"; then admitted="$expected"
-  elif [ -n "$transition" ] && gate_process_identity_matches "$identity" "$transition"; then admitted="$transition"
-  else return 1
+  if identity="$(gate_process_probe "$pid" "$expected" "$argument")"; then
+    admitted="$expected"
+    admitted_argument="$argument"
+  else
+    probe_status=$?
+    [ -n "$transition" ] && [ "$probe_status" -eq 4 ] || return "$probe_status"
+    identity="$(gate_process_probe "$pid" "$transition" "$transition_argument")" || return $?
+    admitted="$transition"
+    admitted_argument="$transition_argument"
   fi
+  [ -n "$identity" ] && [ "$(printf '%s' "$identity" | wc -c | tr -d ' ')" -le 4096 ] || return 1
   record="$records/$label"
   [ ! -e "$record" ] && [ ! -L "$record" ] || return 1
   (umask 077; mkdir "$record") || return 1
   printf '%s\n' "$pid" > "$record/pid"
   printf '%s\n' "$admitted" > "$record/expected"
+  printf '%s\n' "$admitted_argument" > "$record/argument"
   printf '%s\n' "$identity" > "$record/identity"
-  chmod 600 "$record/pid" "$record/expected" "$record/identity"
+  chmod 600 "$record/pid" "$record/expected" "$record/argument" "$record/identity"
   if [ -n "$transition" ] && [ "$admitted" = "$expected" ]; then
     printf '%s\n' "$transition" > "$record/transition"
-    chmod 600 "$record/transition"
+    printf '%s\n' "$transition_argument" > "$record/transition-argument"
+    chmod 600 "$record/transition" "$record/transition-argument"
   fi
   printf '%s\n' "$record"
 }
@@ -117,54 +153,61 @@ gate_process_capture() {
 # Returns 0 for the exact captured process, 3 if it has exited, and 4 for any
 # malformed record, executable mismatch, start-identity mismatch, or PID reuse.
 gate_process_validate_record() {
-  local record="$1" records allowed pid expected current status current_file count transition
+  local record="$1" records allowed pid expected argument current status current_file count transition transition_argument
   records="$(gate_process_record_root)" || return 4
   case "$record" in "$records"/*) ;; *) return 4 ;; esac
   gate_private_directory "$record" || return 4
   count="$(find "$record" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')"
-  [ "$count" -eq 3 ] || [ "$count" -eq 4 ] || return 4
-  for file in pid expected identity; do gate_private_regular "$record/$file" || return 4; done
+  [ "$count" -eq 4 ] || [ "$count" -eq 6 ] || return 4
+  for file in pid expected argument identity; do gate_private_regular "$record/$file" || return 4; done
   if [ -e "$record/transition" ] || [ -L "$record/transition" ]; then
     gate_private_regular "$record/transition" || return 4
+    gate_private_regular "$record/transition-argument" || return 4
     [ "$(wc -l < "$record/transition" | tr -d ' ')" -eq 1 ] || return 4
   fi
   [ "$(wc -l < "$record/pid" | tr -d ' ')" -eq 1 ] || return 4
   [ "$(wc -l < "$record/expected" | tr -d ' ')" -eq 1 ] || return 4
   pid="$(cat "$record/pid")"
   expected="$(cat "$record/expected")"
+  argument="$(cat "$record/argument")"
   gate_safe_pid "$pid" || return 4
   allowed="$(gate_process_allowed_root)" || return 4
   case "$expected" in "$allowed"/*) ;; *) return 4 ;; esac
   [ -f "$expected" ] && [ ! -L "$expected" ] && [ -x "$expected" ] || return 4
   current_file="$records/.current-$pid-$$"
   (umask 077; : > "$current_file") || return 4
-  if gate_process_probe "$pid" > "$current_file"; then status=0
+  if gate_process_probe "$pid" "$expected" "$argument" > "$current_file"; then status=0
   else status=$?
   fi
   if [ "$status" -eq 3 ]; then rm -f "$current_file"; return 3; fi
+  if [ "$status" -eq 4 ] && [ -f "$record/transition" ]; then
+    transition="$(cat "$record/transition")"
+    transition_argument="$(cat "$record/transition-argument")"
+    if gate_process_probe "$pid" "$transition" "$transition_argument" > "$current_file"; then status=0
+    else status=$?
+    fi
+  fi
   [ "$status" -eq 0 ] || { rm -f "$current_file"; return 4; }
   [ "$(wc -c < "$current_file" | tr -d ' ')" -le 4096 ] || { rm -f "$current_file"; return 4; }
   if cmp -s "$record/identity" "$current_file"; then
-    gate_process_identity_matches "$(cat "$current_file")" "$expected" || {
-      rm -f "$current_file"; return 4
-    }
+    :
   else
     [ -f "$record/transition" ] || { rm -f "$current_file"; return 4; }
     [ "$(sed -n '1p' "$record/identity")" = "$(sed -n '1p' "$current_file")" ] || {
       rm -f "$current_file"; return 4
     }
     transition="$(cat "$record/transition")"
+    transition_argument="$(cat "$record/transition-argument")"
     case "$transition" in "$allowed"/*) ;; *) rm -f "$current_file"; return 4 ;; esac
     [ -f "$transition" ] && [ ! -L "$transition" ] && [ -x "$transition" ] || {
       rm -f "$current_file"; return 4
     }
-    gate_process_identity_matches "$(cat "$current_file")" "$transition" || {
-      rm -f "$current_file"; return 4
-    }
     printf '%s\n' "$transition" > "$record/expected"
+    printf '%s\n' "$transition_argument" > "$record/argument"
     cp "$current_file" "$record/identity"
     chmod 600 "$record/expected" "$record/identity"
     rm -f "$record/transition"
+    rm -f "$record/transition-argument"
   fi
   rm -f "$current_file"
   return 0
@@ -173,7 +216,8 @@ gate_process_validate_record() {
 gate_process_remove_record() {
   local record="$1"
   gate_private_directory "$record" || return 1
-  rm -f "$record/pid" "$record/expected" "$record/identity" "$record/transition"
+  rm -f "$record/pid" "$record/expected" "$record/argument" "$record/identity" \
+    "$record/transition" "$record/transition-argument"
   rmdir "$record"
 }
 
@@ -282,6 +326,13 @@ gate_emit_surface_path() {
   elif [ -d "$path" ]; then
     find -P "$path" -print | LC_ALL=C sort | while IFS= read -r item; do
       item_relative="${item#$home/}"
+      case "$item_relative" in
+        'Library/Application Support/Runtime Raiders/agent.sock'|\
+        'Library/Application Support/Runtime Raiders/.agent.sock.runtime-raiders.lock')
+          printf 'TRANSIENT %s\n' "$item_relative"
+          continue
+          ;;
+      esac
       metadata="$(/usr/bin/stat -f '%d:%i:%p:%u:%g:%l:%f:%z' "$item")" || exit 1
       if [ -L "$item" ]; then
         printf 'SYMLINK %s %s %s\n' "$item_relative" "$metadata" "$(readlink "$item")"
@@ -289,7 +340,9 @@ gate_emit_surface_path() {
       elif [ -f "$item" ]; then
         printf 'FILE %s %s ' "$item_relative" "$metadata"
         /usr/bin/shasum -a 256 "$item" | awk '{print $1}'
-      else printf 'SPECIAL %s %s\n' "$item_relative" "$metadata"
+      else
+        printf 'UNSAFE-SPECIAL %s %s\n' "$item_relative" "$metadata" >&2
+        exit 1
       fi
       gate_emit_xattrs "$item" "$item_relative" || exit 1
     done
@@ -298,8 +351,10 @@ gate_emit_surface_path() {
     printf 'FILE %s %s ' "$relative" "$metadata"
     /usr/bin/shasum -a 256 "$path" | awk '{print $1}'
     gate_emit_xattrs "$path" "$relative"
-  else
+  elif [ ! -e "$path" ] && [ ! -L "$path" ]; then
     printf 'ABSENT %s\n' "$relative"
+  else
+    return 1
   fi
 }
 
@@ -309,12 +364,12 @@ gate_fingerprint_migration_surface() {
   [ -d "$home" ] && [ ! -L "$home" ] || return 1
   [ ! -e "$temporary" ] && [ ! -L "$temporary" ] || return 1
   {
-    gate_emit_surface_path "$home" "$support"
-    gate_emit_surface_path "$home" "$home/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist"
-    gate_emit_surface_path "$home" "$home/.local"
-    gate_emit_surface_path "$home" "$home/.zprofile"
-    gate_emit_surface_path "$home" "$support/launcher"
-    gate_emit_surface_path "$home" "$support/releases"
+    gate_emit_surface_path "$home" "$support" &&
+    gate_emit_surface_path "$home" "$home/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist" &&
+    gate_emit_surface_path "$home" "$home/.local" &&
+    gate_emit_surface_path "$home" "$home/.zprofile" &&
+    gate_emit_surface_path "$home" "$support/launcher" &&
+    gate_emit_surface_path "$home" "$support/releases" &&
     gate_emit_surface_path "$home" "$support/installation"
   } > "$temporary" || { rm -f "$temporary"; return 1; }
   chmod 600 "$temporary"

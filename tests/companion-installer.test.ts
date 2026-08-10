@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 const installer = join(process.cwd(), 'companion/packaging/install.sh');
 const build = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
 const installerRenderer = join(process.cwd(), 'scripts/release/render-runtime-raiders-installer.sh');
+const releaseValidatorBuilder = join(process.cwd(), 'scripts/release/build-runtime-raiders-release-validator.sh');
 const lifecycleGate = join(process.cwd(), 'scripts/test/runtime-raiders-lifecycle.sh');
 const signedReleaseGate = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
 const label = 'com.redlattice.runtime-raiders-agent';
@@ -35,6 +36,7 @@ function executable(path: string, lines: string[]): void {
 }
 
 function fakeReleaseSwift(fake: string, log = false): void {
+  executable(join(fake, 'strip'), ['exit 0']);
   executable(join(fake, 'swift'), [
     'arch=""; scratch=""; product=""',
     'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; --product) product="$2"; shift 2;; *) shift;; esac; done',
@@ -77,6 +79,10 @@ function fakeReleaseLipo(fake: string, log = false): void {
     '    *) exit 72;;',
     '  esac',
     '  if [ "$validator" -eq 0 ]; then [ "$(cat "$2")" = arm64 ] && [ "$(cat "$3")" = x86_64 ] || exit 65; printf "arm64,x86_64" > "$5"; fi',
+    'elif [ "${2:-}" = -verify_arch ]; then',
+    '  [ "$#" -eq 4 ] && [ "$3" = arm64 ] && [ "$4" = x86_64 ] || exit 66',
+    '  case "${1##*/}" in runtime-raiders-release-validator) [ -x "$1" ];; *) [ "$(cat "$1")" = arm64,x86_64 ];; esac || exit 67',
+    '  [ "${FAKE_LIPO_VERIFY_FAIL_TARGET:-}" != "${1##*/}" ] || exit 68',
     'elif [ "$1" = -verify_arch ]; then',
     '  [ "$#" -eq 4 ] && [ "$2" = arm64 ] && [ "$3" = x86_64 ] || exit 66',
     '  case "${4##*/}" in runtime-raiders-release-validator) [ -x "$4" ];; *) [ "$(cat "$4")" = arm64,x86_64 ];; esac || exit 67',
@@ -430,6 +436,7 @@ function disposableReleaseBuilder(
   const repository = join(root, 'repository');
   const fixtureBuild = join(repository, 'scripts/release/build-runtime-raiders-agent.sh');
   const fixtureRenderer = join(repository, 'scripts/release/render-runtime-raiders-installer.sh');
+  const fixtureValidatorBuilder = join(repository, 'scripts/release/build-runtime-raiders-release-validator.sh');
   const fixtureInstaller = join(repository, 'companion/packaging/install.sh');
   mkdirSync(join(repository, 'scripts/release'), { recursive: true });
   mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
@@ -458,12 +465,21 @@ function disposableReleaseBuilder(
     options.rendererFailure ? '#!/bin/sh\nexit 89\n' : readFileSync(installerRenderer),
     { mode: 0o700 },
   );
+  writeFileSync(
+    fixtureValidatorBuilder,
+    readFileSync(releaseValidatorBuilder, 'utf8')
+      .replaceAll('/usr/bin/swift', 'swift')
+      .replaceAll('/usr/bin/codesign', 'codesign')
+      .replaceAll('/usr/bin/strip', 'strip')
+      .replaceAll('/usr/bin/lipo', 'lipo'),
+    { mode: 0o700 },
+  );
   writeFileSync(fixtureInstaller, readFileSync(installer));
   writeFileSync(join(repository, 'companion/RELEASE'), readFileSync(join(process.cwd(), 'companion/RELEASE')));
   execFileSync('/usr/bin/git', ['init', '-q'], { cwd: repository });
   execFileSync('/usr/bin/git', ['config', 'user.email', 'release-test@example.invalid'], { cwd: repository });
   execFileSync('/usr/bin/git', ['config', 'user.name', 'Release Test'], { cwd: repository });
-  execFileSync('/usr/bin/git', ['add', 'scripts/release/build-runtime-raiders-agent.sh', 'scripts/release/render-runtime-raiders-installer.sh', 'companion/packaging/install.sh', 'companion/RELEASE'], { cwd: repository });
+  execFileSync('/usr/bin/git', ['add', 'scripts/release/build-runtime-raiders-agent.sh', 'scripts/release/build-runtime-raiders-release-validator.sh', 'scripts/release/render-runtime-raiders-installer.sh', 'companion/packaging/install.sh', 'companion/RELEASE'], { cwd: repository });
   execFileSync('/usr/bin/git', ['commit', '-qm', 'release fixture'], { cwd: repository });
   const fixtureSHA = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
   return { build: fixtureBuild, repository, releaseSHA: fixtureSHA };
@@ -1572,7 +1588,7 @@ describe('Runtime Raiders release build', () => {
       expect(commands).toContain('xcrun stapler validate');
       const commandLines = commands.trim().split('\n');
       expect(commandLines.filter((line) => line.startsWith('lipo -create '))).toHaveLength(3);
-      expect(commandLines.filter((line) => line.startsWith('lipo -verify_arch arm64 x86_64 '))).toHaveLength(3);
+      expect(commandLines.filter((line) => line.includes(' -verify_arch arm64 x86_64'))).toHaveLength(3);
       expect(commandLines.filter((line) => line.match(/^swift (arm64|x86_64) runtime-raiders-release-validator$/)))
         .toHaveLength(2);
       expect(commandLines.filter((line) => line.startsWith('codesign --force '))).toHaveLength(2);
@@ -1930,7 +1946,8 @@ describe('Runtime Raiders release gates', () => {
       'sh -n companion/packaging/install.sh',
       'bash -n scripts/release/build-runtime-raiders-agent.sh',
       'swift test --disable-sandbox --package-path companion',
-      'npx --no-install vitest run',
+      'bash scripts/test/runtime-raiders-validator-reproducibility.sh',
+      'npx --no-install vitest run --no-file-parallelism',
     ];
     let prior = -1;
     for (const command of orderedCommands) {
@@ -1953,7 +1970,9 @@ describe('Runtime Raiders release gates', () => {
     expect(source).toContain('--disable-automatic-resolution');
     expect(source).toContain('--skip-update');
     expect(source).toContain('npm_config_offline=true');
-    expect(source).not.toMatch(/Library\/Application Support\/Runtime Raiders/);
+    expect(source).toContain('/usr/bin/sandbox-exec');
+    expect(source).toContain('scripts/test/runtime-raiders-gate1.sb');
+    expect(source).toContain('real_support="$original_home/Library/Application Support/Runtime Raiders"');
     expect(source).not.toMatch(/\bCaddy\b|\bPi\b|\bpublish(?:ed|ing|ation)?\b|\braiders[ \t]+on\b/i);
   });
 

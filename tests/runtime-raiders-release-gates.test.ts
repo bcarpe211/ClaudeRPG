@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
@@ -8,16 +8,19 @@ import {
   readFileSync,
   realpathSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createServer } from 'node:net';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
 const gate1 = join(root, 'scripts/test/runtime-raiders-lifecycle.sh');
+const gate1Sandbox = join(root, 'scripts/test/runtime-raiders-gate1.sb');
 const safety = join(root, 'scripts/test/runtime-raiders-gate-safety.sh');
 const renderer = join(root, 'scripts/release/render-runtime-raiders-installer.sh');
 const installerTemplate = join(root, 'companion/packaging/install.sh');
@@ -33,6 +36,72 @@ function bash(script: string, env: NodeJS.ProcessEnv = process.env) {
 }
 
 describe('Runtime Raiders Gate 1 isolation', () => {
+  it('enforces the OS sandbox against absolute live boundaries while preserving local IPC', () => {
+    // Catches PATH-only denial that absolute tools or native sockets can bypass.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-gate1-sandbox-'));
+    try {
+      const inheritedSandbox = process.env.RUNTIME_RAIDERS_GATE1_SANDBOXED === '1';
+      let protectedRoot = inheritedSandbox
+        ? process.env.RUNTIME_RAIDERS_GATE1_PROTECTED ?? ''
+        : join(fixture, 'protected-support');
+      let writableRoot = join(fixture, 'scratch');
+      const probe = join(fixture, 'network-probe.cjs');
+      if (!inheritedSandbox) mkdirSync(protectedRoot);
+      expect(protectedRoot).not.toBe('');
+      mkdirSync(writableRoot);
+      protectedRoot = realpathSync(protectedRoot);
+      writableRoot = realpathSync(writableRoot);
+      writeFileSync(probe, [
+        "const net = require('node:net');",
+        "const mode = process.argv[2];",
+        "const finish = (code) => process.exit(code);",
+        "if (mode === 'outbound') {",
+        "  const socket = net.connect({ host: '198.51.100.1', port: 9 });",
+        "  socket.setTimeout(500, () => { socket.destroy(); finish(72); });",
+        "  socket.on('connect', () => { socket.destroy(); finish(73); });",
+        "  socket.on('error', (error) => finish(error.code === 'EPERM' ? 0 : 74));",
+        "} else {",
+        "  const endpoint = mode === 'unix' ? process.argv[3] : { host: '127.0.0.1', port: 0 };",
+        "  const server = net.createServer((socket) => socket.end());",
+        "  server.listen(endpoint, () => {",
+        "    const address = server.address();",
+        "    const client = net.connect(mode === 'unix' ? endpoint : { host: '127.0.0.1', port: address.port });",
+        "    client.on('connect', () => finish(0));",
+        "    client.on('error', (error) => { console.error(error.code); finish(75); });",
+        "  });",
+        "  server.on('error', () => finish(76));",
+        "}",
+        '',
+      ].join('\n'));
+      const sandbox = (command: string, args: string[] = []) => inheritedSandbox
+        ? spawnSync(command, args, { encoding: 'utf8', timeout: 3_000 })
+        : spawnSync('/usr/bin/sandbox-exec', [
+          '-D', `RUNTIME_RAIDERS_REAL_SUPPORT=${protectedRoot}`,
+          '-D', `RUNTIME_RAIDERS_GATE1_PROTECTED=${protectedRoot}`,
+          '-f', gate1Sandbox,
+          command,
+          ...args,
+        ], { encoding: 'utf8', timeout: 3_000 });
+
+      expect(existsSync(gate1Sandbox)).toBe(true);
+      const protectedWrite = sandbox('/usr/bin/touch', [join(protectedRoot, 'blocked')]);
+      expect(protectedWrite.status, protectedWrite.stderr).not.toBe(0);
+      expect(existsSync(join(protectedRoot, 'blocked'))).toBe(false);
+      expect(sandbox('/usr/bin/touch', [join(writableRoot, 'allowed')]).status).toBe(0);
+      expect(sandbox('/bin/launchctl', ['print', `gui/${process.getuid?.() ?? 501}/com.redlattice.runtime-raiders-gate1-probe`]).status)
+        .not.toBe(0);
+      expect(sandbox('/usr/bin/curl', ['--max-time', '1', 'http://198.51.100.1:9']).status)
+        .not.toBe(0);
+      expect(sandbox(process.execPath, [probe, 'outbound']).status).toBe(0);
+      const loopback = sandbox(process.execPath, [probe, 'loopback']);
+      expect(loopback.status, loopback.stderr).toBe(0);
+      const unix = sandbox(process.execPath, [probe, 'unix', join(writableRoot, 'probe.sock')]);
+      expect(unix.status, unix.stderr).toBe(0);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('runs twice with private homes, offline local tools, explicit scratch, and no package residue', () => {
     // Catches a Gate 1 command reading the caller home, fetching npx packages, or writing companion/.build.
     const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-gate1-behavior-'));
@@ -50,10 +119,22 @@ describe('Runtime Raiders Gate 1 isolation', () => {
       writeFileSync(join(originalHome, 'Library/Application Support/Runtime Raiders/sentinel'), 'untouched\n');
       copyFileSync(gate1, join(repository, 'scripts/test/runtime-raiders-lifecycle.sh'));
       chmodSync(join(repository, 'scripts/test/runtime-raiders-lifecycle.sh'), 0o700);
+      copyFileSync(gate1Sandbox, join(repository, 'scripts/test/runtime-raiders-gate1.sb'));
+      copyFileSync(
+        join(root, 'scripts/test/runtime-raiders-validator-reproducibility.sh'),
+        join(repository, 'scripts/test/runtime-raiders-validator-reproducibility.sh'),
+      );
+      chmodSync(join(repository, 'scripts/test/runtime-raiders-validator-reproducibility.sh'), 0o700);
+      executable(join(repository, 'scripts/release/build-runtime-raiders-release-validator.sh'), [
+        'mkdir -p "$2"',
+        'printf "reproducible-validator\\n" > "$3"',
+        'chmod 755 "$3"',
+        'rm -rf "$2"',
+      ]);
       writeFileSync(join(repository, 'companion/packaging/install.sh'), '#!/bin/sh\nexit 0\n');
       writeFileSync(join(repository, 'scripts/release/build-runtime-raiders-agent.sh'), '#!/bin/bash\nexit 0\n');
       executable(join(fakeBin, 'swift'), [
-        'printf "swift|%s|%s|%s|%s|%s\\n" "$HOME" "$TMPDIR" "$CLANG_MODULE_CACHE_PATH" "$SWIFTPM_MODULECACHE_OVERRIDE" "$*" >> "$GATE_LOG"',
+        'printf "swift|%s|%s|%s|%s|%s|%s\\n" "$HOME" "$TMPDIR" "$CLANG_MODULE_CACHE_PATH" "$SWIFTPM_MODULECACHE_OVERRIDE" "${RUNTIME_RAIDERS_GATE1_SANDBOXED:-}" "$*" >> "$GATE_LOG"',
         'case "$HOME" in "$GATE_OUTER_TMP"/runtime-raiders-gate1.*/home) ;; *) exit 81;; esac',
         'case "$*" in *"--scratch-path $GATE_OUTER_TMP/runtime-raiders-gate1."*"/swift-scratch"*"--disable-automatic-resolution"*"--skip-update"*) ;; *) exit 82;; esac',
       ]);
@@ -90,6 +171,7 @@ describe('Runtime Raiders Gate 1 isolation', () => {
       const lines = readFileSync(log, 'utf8').trim().split('\n');
       expect(lines.filter((line) => line.startsWith('swift|'))).toHaveLength(2);
       expect(lines.filter((line) => line.startsWith('npx|'))).toHaveLength(2);
+      expect(lines.filter((line) => line.startsWith('swift|')).every((line) => line.split('|')[5] === '1')).toBe(true);
       const homes = lines.map((line) => line.split('|')[1]);
       expect(new Set(homes).size).toBe(2);
       expect(homes.every((home) => home !== originalHome)).toBe(true);
@@ -100,6 +182,79 @@ describe('Runtime Raiders Gate 1 isolation', () => {
 });
 
 describe('Runtime Raiders Gate 2 process safety', () => {
+  it('binds a spaced executable image and exact argv while rejecting prefix and replaced images', async () => {
+    // Catches ps command-prefix parsing and pathname-only checks that miss a replaced executable vnode.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-image-'));
+    const children: ReturnType<typeof spawn>[] = [];
+    try {
+      const processRoot = join(fixture, 'processes');
+      let expected = join(fixture, 'agent with space');
+      let collision = `${expected} evil`;
+      const signalLog = join(fixture, 'signals.log');
+      const identityHelper = join(fixture, 'process-identity');
+      mkdirSync(processRoot, { mode: 0o700 });
+      const compile = spawnSync('/usr/bin/clang', [
+        '-Wall', '-Wextra', '-Werror',
+        join(root, 'scripts/test/runtime-raiders-process-identity.c'),
+        '-o', identityHelper,
+      ], { encoding: 'utf8' });
+      expect(compile.status, compile.stderr).toBe(0);
+      copyFileSync('/bin/sleep', expected);
+      copyFileSync('/bin/sleep', collision);
+      chmodSync(expected, 0o700);
+      chmodSync(collision, 0o700);
+      expected = realpathSync(expected);
+      collision = realpathSync(collision);
+      executable(join(fixture, 'signal'), [
+        'printf "%s %s\\n" "$1" "$2" >> "$GATE_SIGNAL_LOG"',
+      ]);
+      const start = (path: string) => {
+        const child = spawn(path, ['30'], { stdio: 'ignore' });
+        children.push(child);
+        return child;
+      };
+      const exactChild = start(expected);
+      const collisionChild = start(collision);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(exactChild.pid).toBeGreaterThan(1);
+      expect(collisionChild.pid).toBeGreaterThan(1);
+      const env = {
+        ...process.env,
+        GATE_PROCESS_ROOT: processRoot,
+        GATE_PROCESS_SIGNAL: join(fixture, 'signal'),
+        GATE_PROCESS_IDENTITY_HELPER: identityHelper,
+        GATE_SIGNAL_LOG: signalLog,
+        GATE_SAFETY: safety,
+        GATE_EXPECTED: expected,
+      };
+
+      const capture = bash(
+        'source "$GATE_SAFETY"; gate_process_capture exact "$GATE_PID" "$GATE_EXPECTED" 30',
+        { ...env, GATE_PID: String(exactChild.pid) },
+      );
+      expect(capture.status, capture.stderr).toBe(0);
+      const collisionCapture = bash(
+        'source "$GATE_SAFETY"; gate_process_capture collision "$GATE_PID" "$GATE_EXPECTED" 30',
+        { ...env, GATE_PID: String(collisionChild.pid) },
+      );
+      expect(collisionCapture.status, collisionCapture.stderr).not.toBe(0);
+
+      const replacement = join(fixture, 'replacement');
+      copyFileSync('/usr/bin/true', replacement);
+      chmodSync(replacement, 0o700);
+      renameSync(replacement, expected);
+      const validate = bash(
+        'source "$GATE_SAFETY"; gate_process_validate_record "$GATE_RECORD"',
+        { ...env, GATE_RECORD: capture.stdout.trim() },
+      );
+      expect(validate.status, validate.stderr).not.toBe(0);
+      expect(existsSync(signalLog) ? readFileSync(signalLog, 'utf8') : '').toBe('');
+    } finally {
+      for (const child of children) child.kill('SIGKILL');
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('formats process start identity separately from its executable command', () => {
     // Catches an exec transition changing the same line that is supposed to pin process start.
     const result = bash('source "$GATE_SAFETY"; gate_process_format_identity "Sun Aug 10 03:00:00 2026" "/tmp/agent daemon"', {
@@ -162,7 +317,7 @@ describe('Runtime Raiders Gate 2 process safety', () => {
       }
 
       writeFileSync(join(state, '44.identity'), `start=100\ncommand=${expected} daemon\n`);
-      const capture = bash('source "$GATE_SAFETY"; gate_process_capture child 44 "$GATE_EXPECTED"', {
+      const capture = bash('source "$GATE_SAFETY"; gate_process_capture child 44 "$GATE_EXPECTED" daemon', {
         ...env,
         GATE_SAFETY: safety,
         GATE_EXPECTED: expected,
@@ -178,7 +333,7 @@ describe('Runtime Raiders Gate 2 process safety', () => {
       expect(reused.status, reused.stderr).not.toBe(0);
 
       writeFileSync(join(state, '45.identity'), 'start=100\ncommand=/tmp/unrelated daemon\n');
-      const wrong = bash('source "$GATE_SAFETY"; gate_process_capture wrong 45 "$GATE_EXPECTED"', {
+      const wrong = bash('source "$GATE_SAFETY"; gate_process_capture wrong 45 "$GATE_EXPECTED" daemon', {
         ...env,
         GATE_SAFETY: safety,
         GATE_EXPECTED: expected,
@@ -186,7 +341,7 @@ describe('Runtime Raiders Gate 2 process safety', () => {
       expect(wrong.status, wrong.stderr).not.toBe(0);
 
       writeFileSync(join(state, '46.identity'), `start=100\ncommand=${expected}.evil daemon\n`);
-      const prefixCollision = bash('source "$GATE_SAFETY"; gate_process_capture prefix 46 "$GATE_EXPECTED"', {
+      const prefixCollision = bash('source "$GATE_SAFETY"; gate_process_capture prefix 46 "$GATE_EXPECTED" daemon', {
         ...env,
         GATE_SAFETY: safety,
         GATE_EXPECTED: expected,
@@ -231,7 +386,7 @@ describe('Runtime Raiders Gate 2 process safety', () => {
       };
       const result = bash([
         'source "$GATE_SAFETY"',
-        'record="$(gate_process_capture stubborn 55 "$GATE_EXPECTED")"',
+        'record="$(gate_process_capture stubborn 55 "$GATE_EXPECTED" daemon)"',
         'gate_process_stop_record "$record"',
       ].join('; '), env);
       expect(result.status, result.stderr).toBe(0);
@@ -273,7 +428,7 @@ describe('Runtime Raiders Gate 2 process safety', () => {
         GATE_LAUNCHER: launcher,
         GATE_AGENT: agent,
       };
-      const capture = bash('source "$GATE_SAFETY"; gate_process_capture launcher 66 "$GATE_LAUNCHER" "$GATE_AGENT"', env);
+      const capture = bash('source "$GATE_SAFETY"; gate_process_capture launcher 66 "$GATE_LAUNCHER" daemon "$GATE_AGENT" daemon', env);
       expect(capture.status, capture.stderr).toBe(0);
       writeFileSync(join(state, '66.identity'), `start=300\ncommand=${agent} daemon\n`);
       const stop = bash('source "$GATE_SAFETY"; gate_process_stop_record "$GATE_RECORD"', {
@@ -413,6 +568,76 @@ describe('Runtime Raiders Gate 2 installer binding', () => {
 });
 
 describe('Runtime Raiders Gate 2 rollback fingerprint', () => {
+  it('ignores only recreated runtime socket and lifetime-lock nodes while retaining other special residue', async () => {
+    // Catches both false rollback failures on daemon restart and broad special-node exclusions.
+    // Darwin's sockaddr_un.sun_path is 104 bytes including its terminator. Keep
+    // this behavioral socket fixture short even when Gate 1 has a deep TMPDIR.
+    const fixture = mkdtempSync('/tmp/rrtf-');
+    const home = join(fixture, 'home');
+    const support = join(home, 'Library/Application Support/Runtime Raiders');
+    const socketPath = join(support, 'agent.sock');
+    const lockPath = join(support, '.agent.sock.runtime-raiders.lock');
+    const replacementSocketPath = join(support, 'replacement.sock');
+    expect(Buffer.byteLength(socketPath)).toBeLessThan(104);
+    expect(Buffer.byteLength(replacementSocketPath)).toBeLessThan(104);
+    const servers: ReturnType<typeof createServer>[] = [];
+    const listen = async (path: string) => {
+      const server = createServer((client) => client.end());
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(path, resolve);
+      });
+      servers.push(server);
+    };
+    const closeAll = async () => {
+      while (servers.length > 0) {
+        const server = servers.pop()!;
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    };
+    const fingerprint = (name: string) => {
+      const destination = join(fixture, name);
+      const result = bash('source "$GATE_SAFETY"; gate_fingerprint_migration_surface "$GATE_HOME" "$GATE_DESTINATION"', {
+        ...process.env,
+        GATE_SAFETY: safety,
+        GATE_HOME: home,
+        GATE_DESTINATION: destination,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return readFileSync(destination, 'utf8');
+    };
+    try {
+      mkdirSync(support, { recursive: true });
+      writeFileSync(lockPath, '');
+      chmodSync(lockPath, 0o600);
+      await listen(socketPath);
+      const before = fingerprint('before');
+      rmSync(socketPath);
+      rmSync(lockPath);
+      writeFileSync(lockPath, '');
+      chmodSync(lockPath, 0o600);
+      await listen(replacementSocketPath);
+      renameSync(replacementSocketPath, socketPath);
+      expect(fingerprint('recreated')).toBe(before);
+
+      const rogue = join(support, 'rollback-residue.pipe');
+      execFileSync('/usr/bin/mkfifo', [rogue]);
+      const rogueResult = bash(
+        'source "$GATE_SAFETY"; gate_fingerprint_migration_surface "$GATE_HOME" "$GATE_DESTINATION"',
+        {
+          ...process.env,
+          GATE_SAFETY: safety,
+          GATE_HOME: home,
+          GATE_DESTINATION: join(fixture, 'rogue-special'),
+        },
+      );
+      expect(rogueResult.status, rogueResult.stderr).not.toBe(0);
+    } finally {
+      await closeAll();
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('detects residue, inode replacement, and xattr mutation without following symlinks', () => {
     // Catches rollback proof that ignores metadata/evidence or hashes through a symlink target.
     const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-fingerprint-'));
