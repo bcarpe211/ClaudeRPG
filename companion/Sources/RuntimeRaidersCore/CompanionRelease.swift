@@ -7,6 +7,18 @@ public struct CompanionReleaseIdentity: Codable, Equatable, Sendable {
     public let companionVersion: String
     public let updateProtocolVersion: Int
 
+    public init(
+        releaseSequence: Int64,
+        releaseSHA: String,
+        companionVersion: String,
+        updateProtocolVersion: Int
+    ) {
+        self.releaseSequence = releaseSequence
+        self.releaseSHA = releaseSHA
+        self.companionVersion = companionVersion
+        self.updateProtocolVersion = updateProtocolVersion
+    }
+
     public static func load(from bundle: Bundle = .main) throws -> Self {
         let infoURL = bundle.bundleURL
             .appendingPathComponent("Contents/Info.plist", isDirectory: false)

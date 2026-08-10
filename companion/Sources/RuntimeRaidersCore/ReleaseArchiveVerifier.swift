@@ -42,11 +42,18 @@ public enum ReleaseArchiveVerificationError: Error, Equatable {
 
 public struct ReleaseArchiveVerifier {
     private let signatureInspector: (URL) throws -> CandidateSignatureFacts
+    private let installerSignatureInspector: (URL, String) throws -> CandidateSignatureFacts
     private let agentIdentityLoader: (URL) throws -> CompanionReleaseIdentity
     private let launcherProtocolLoader: (URL) throws -> Int
 
     public init() {
         signatureInspector = { try SignedBundleTrustInspector().inspect(candidate: $0) }
+        installerSignatureInspector = {
+            try SignedBundleTrustInspector().inspect(
+                candidate: $0,
+                expectedTeamIdentifier: $1
+            )
+        }
         agentIdentityLoader = { application in
             guard let bundle = Bundle(url: application) else {
                 throw ReleaseArchiveVerificationError.untrustedArchive
@@ -64,8 +71,76 @@ public struct ReleaseArchiveVerifier {
         launcherProtocolLoader: @escaping (URL) throws -> Int
     ) {
         self.signatureInspector = signatureInspector
+        installerSignatureInspector = { application, _ in
+            try signatureInspector(application)
+        }
         self.agentIdentityLoader = agentIdentityLoader
         self.launcherProtocolLoader = launcherProtocolLoader
+    }
+
+    public func verifyInstallerRelease(
+        extractedRoot: URL,
+        expected: CompanionReleaseIdentity,
+        expectedTeamIdentifier: String
+    ) throws -> VerifiedReleaseArchive {
+        do {
+            guard (try? expected.releaseReference()) != nil,
+                  expected.updateProtocolVersion == 2,
+                  expectedTeamIdentifier.utf8.count == 10,
+                  expectedTeamIdentifier.utf8.allSatisfy({ byte in
+                      (48...57).contains(byte) || (65...90).contains(byte)
+                  }) else {
+                throw ReleaseArchiveVerificationError.untrustedArchive
+            }
+            try ZipArchiveValidator.validateExtractedTree(extractedRoot)
+            let release = extractedRoot.appendingPathComponent(
+                String(ZipArchiveValidator.releaseRoot.dropLast()),
+                isDirectory: true
+            )
+            let agent = extractedRoot.appendingPathComponent(
+                String(ZipArchiveValidator.agentApplicationRoot.dropLast()),
+                isDirectory: true
+            )
+            let launcher = extractedRoot.appendingPathComponent(
+                String(ZipArchiveValidator.launcherApplicationRoot.dropLast()),
+                isDirectory: true
+            )
+            guard agent.deletingLastPathComponent() == release,
+                  launcher.deletingLastPathComponent() == release else {
+                throw ReleaseArchiveVerificationError.untrustedArchive
+            }
+            let agentSeal = try ReleaseApplicationSeal.capture(agent)
+            let launcherSeal = try ReleaseApplicationSeal.capture(launcher)
+            let agentFacts = try installerSignatureInspector(agent, expectedTeamIdentifier)
+            let launcherFacts = try installerSignatureInspector(launcher, expectedTeamIdentifier)
+            guard trusted(
+                agentFacts,
+                bundleIdentifier: "com.redlattice.runtime-raiders-agent",
+                teamIdentifier: expectedTeamIdentifier
+            ), trusted(
+                launcherFacts,
+                bundleIdentifier: "com.redlattice.runtime-raiders-launcher",
+                teamIdentifier: expectedTeamIdentifier
+            ), try agentIdentityLoader(agent) == expected,
+                  try launcherProtocolLoader(launcher) == 1 else {
+                throw ReleaseArchiveVerificationError.untrustedArchive
+            }
+            try ZipArchiveValidator.validateExtractedTree(extractedRoot)
+            guard try ReleaseApplicationSeal.capture(agent) == agentSeal,
+                  try ReleaseApplicationSeal.capture(launcher) == launcherSeal else {
+                throw ReleaseArchiveVerificationError.untrustedArchive
+            }
+            return VerifiedReleaseArchive(
+                agent: VerifiedReleaseAgent(
+                    application: agent,
+                    identity: try expected.releaseReference()
+                ),
+                launcher: launcher,
+                agentVerificationSeal: agentSeal
+            )
+        } catch {
+            throw ReleaseArchiveVerificationError.untrustedArchive
+        }
     }
 
     public func verify(

@@ -10,6 +10,8 @@ RELEASE_SEQUENCE='__RUNTIME_RAIDERS_RELEASE_SEQUENCE__'
 RELEASE_SHA='__RUNTIME_RAIDERS_RELEASE_SHA__'
 UPDATE_PROTOCOL_VERSION='__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__'
 TEAM_ID='__RUNTIME_RAIDERS_TEAM_ID__'
+RELEASE_VALIDATOR_SHA256='__RUNTIME_RAIDERS_RELEASE_VALIDATOR_SHA256__'
+RELEASE_VALIDATOR_BASE64='__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__'
 LABEL='com.redlattice.runtime-raiders-agent'
 LEGACY_RELEASE_SHA='dec88d4f6ff600f2be92bed3b12dcfce85f84a51'
 MARKER='export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path'
@@ -279,7 +281,9 @@ transaction_committed=0
 lease_started=0
 lease_pid=''
 old_job_stopped=0
+old_job_stop_attempted=0
 new_job_bootstrapped=0
+new_job_bootstrap_attempted=0
 launcher_created=0
 releases_created=0
 installation_created=0
@@ -289,10 +293,12 @@ state_written=0
 plist_replaced=0
 shim_replaced=0
 command_replaced=0
+command_mutation_started=0
 profile_touched=0
 had_profile=0
 had_marker=0
 prior_enabled=0
+legacy_prepare_attempted=0
 
 close_lease() {
   [ "$lease_started" -eq 1 ] || return 0
@@ -315,25 +321,64 @@ job_absent() {
   return "$result"
 }
 
-status_from() { status_output="$("$1" status)"; }
-status_has() { printf '%s' "$status_output" | grep -F "$1" >/dev/null 2>&1; }
+installer_agent_executable() {
+  if [ -x "$CANDIDATE_AGENT_EXECUTABLE" ]; then printf '%s\n' "$CANDIDATE_AGENT_EXECUTABLE"
+  elif [ -x "$RELEASE_EXECUTABLE" ]; then printf '%s\n' "$RELEASE_EXECUTABLE"
+  else return 1
+  fi
+}
 
-wait_for_status() {
-  executable="$1"; expected_enabled="$2"; expected_prepared="$3"
+legacy_status_intent() {
+  helper="$(installer_agent_executable)" || return 1
+  "$LEGACY_EXECUTABLE" status > "$WORK/legacy-status.json" || return 1
+  "$helper" __runtime-raiders-installer-status legacy-running < "$WORK/legacy-status.json"
+}
+
+wait_for_legacy_status() {
+  expected_intent="$1"; expected_prepared="$2"
   attempt=0
   while [ "$attempt" -lt 40 ]; do
-    if status_from "$executable" &&
-       status_has '"daemonRunning":true' &&
-       status_has '"activeRunCount":0' &&
-       status_has '"queuedEventCount":0' &&
-       status_has "\"enabled\":$expected_enabled" &&
-       status_has "\"preparedForUpdate\":$expected_prepared"; then
+    helper="$(installer_agent_executable)" || return 1
+    if "$LEGACY_EXECUTABLE" status > "$WORK/legacy-status.json" &&
+       "$helper" __runtime-raiders-installer-status \
+         "$expected_prepared" "$expected_intent" < "$WORK/legacy-status.json"; then
       return 0
     fi
     attempt=$((attempt + 1))
     sleep 0.25
   done
   return 1
+}
+
+wait_for_candidate_status() {
+  phase="$1"; expected_intent="$2"
+  attempt=0
+  while [ "$attempt" -lt 40 ]; do
+    if "$RELEASE_EXECUTABLE" status > "$WORK/candidate-status.json" &&
+       "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
+         "$phase" 1 "$expected_intent" < "$WORK/candidate-status.json"; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.25
+  done
+  return 1
+}
+
+capture_protected_state() {
+  executable="$1"; destination="$2"
+  temporary="$(mktemp "$WORK/protected-state.XXXXXX")"
+  "$executable" __runtime-raiders-installer-protected-state > "$temporary" || {
+    rm -f "$temporary"
+    return 1
+  }
+  mv "$temporary" "$destination"
+}
+
+assert_protected_state() {
+  executable="$1"; expected="$2"
+  capture_protected_state "$executable" "$WORK/protected-current" &&
+    cmp -s "$expected" "$WORK/protected-current"
 }
 
 safe_remove_created() {
@@ -354,31 +399,28 @@ restore_copy() {
 rollback_transaction() {
   [ "$transaction_active" -eq 1 ] && [ "$transaction_committed" -eq 0 ] || return 0
   transaction_active=0
-  if [ "$new_job_bootstrapped" -eq 1 ] || [ "$old_job_stopped" -eq 1 ]; then
+  rollback_ok=1
+  if [ "$new_job_bootstrap_attempted" -eq 1 ] || [ "$old_job_stop_attempted" -eq 1 ]; then
     launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+    job_absent || rollback_ok=0
   fi
   if [ "$migration" -eq 1 ]; then
     [ "$plist_replaced" -eq 0 ] || restore_copy "$WORK/old.plist" "$PLIST" 600
     [ "$shim_replaced" -eq 0 ] || restore_copy "$WORK/old.shim" "$SHIM" 700
-    if [ "$command_replaced" -eq 1 ]; then
+    if [ "$command_mutation_started" -eq 1 ]; then
       restore_copy "$WORK/old-command-link" "$COMMAND_LINK_FILE" 600
       rm -f "$command_path"
-      /bin/ln -s "$SHIM" "$command_path"
+      /bin/ln -s "$SHIM" "$command_path" || rollback_ok=0
     fi
   else
     [ "$plist_replaced" -eq 0 ] || rm -f "$PLIST"
     [ "$shim_replaced" -eq 0 ] || rm -f "$SHIM"
-    if [ "$command_replaced" -eq 1 ]; then
+    if [ "$command_mutation_started" -eq 1 ]; then
       rm -f "$COMMAND_LINK_FILE"
       [ ! -L "$command_path" ] || rm -f "$command_path"
     fi
   fi
   [ "$state_written" -eq 0 ] || rm -f "$RELEASE_STATE"
-  [ "$release_placed" -eq 0 ] || safe_remove_created "$RELEASE_DIRECTORY" || true
-  [ "$launcher_placed" -eq 0 ] || safe_remove_created "$LAUNCHER_APP" || true
-  [ "$installation_created" -eq 0 ] || safe_remove_created "$INSTALLATION_DIRECTORY" || true
-  [ "$releases_created" -eq 0 ] || safe_remove_created "$RELEASES_DIRECTORY" || true
-  [ "$launcher_created" -eq 0 ] || safe_remove_created "$LAUNCHER_DIRECTORY" || true
   if [ "$profile_touched" -eq 1 ]; then
     if [ "$had_profile" -eq 1 ]; then restore_copy "$WORK/old.profile" "$HOME/.zprofile" 600
     else rm -f "$HOME/.zprofile"
@@ -387,18 +429,31 @@ rollback_transaction() {
     else rm -f "$MARKER_FLAG"
     fi
   fi
-  if [ "$migration" -eq 1 ] && [ "$old_job_stopped" -eq 1 ]; then
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
+  if [ "$migration" -eq 1 ]; then
+    if [ "$old_job_stop_attempted" -eq 1 ] || [ "$new_job_bootstrap_attempted" -eq 1 ]; then
+      launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || rollback_ok=0
+    fi
+    if [ "$legacy_prepare_attempted" -eq 1 ]; then
+      wait_for_legacy_status "$prior_intent" legacy-prepared >/dev/null 2>&1 || rollback_ok=0
+      helper="$(installer_agent_executable)" || rollback_ok=0
+      if [ -n "${helper:-}" ]; then
+        "$helper" __runtime-raiders-legacy-resume >/dev/null 2>&1 || rollback_ok=0
+      fi
+    fi
+    wait_for_legacy_status "$prior_intent" legacy-running >/dev/null 2>&1 || rollback_ok=0
   fi
+  [ "$release_placed" -eq 0 ] || safe_remove_created "$RELEASE_DIRECTORY" || rollback_ok=0
+  [ "$launcher_placed" -eq 0 ] || safe_remove_created "$LAUNCHER_APP" || rollback_ok=0
+  [ "$installation_created" -eq 0 ] || safe_remove_created "$INSTALLATION_DIRECTORY" || rollback_ok=0
+  [ "$releases_created" -eq 0 ] || safe_remove_created "$RELEASES_DIRECTORY" || rollback_ok=0
+  [ "$launcher_created" -eq 0 ] || safe_remove_created "$LAUNCHER_DIRECTORY" || rollback_ok=0
   close_lease
-  if [ "$migration" -eq 1 ] && [ "$old_job_stopped" -eq 1 ]; then
-    wait_for_status "$LEGACY_EXECUTABLE" "$prior_enabled" false >/dev/null 2>&1 || true
-  fi
+  [ "$rollback_ok" -eq 1 ]
 }
 
 cleanup() {
   status=$?
-  rollback_transaction
+  rollback_transaction || status=1
   close_lease
   rm -rf "$WORK"
   trap - EXIT HUP INT TERM
@@ -406,6 +461,18 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
+
+RELEASE_VALIDATOR="$WORK/runtime-raiders-release-validator"
+case "$RELEASE_VALIDATOR_SHA256" in *[!0123456789abcdef]*|'') exit 1 ;; esac
+[ "${#RELEASE_VALIDATOR_SHA256}" -eq 64 ] || exit 1
+printf '%s' "$RELEASE_VALIDATOR_BASE64" | /usr/bin/base64 -D > "$RELEASE_VALIDATOR"
+chmod 700 "$RELEASE_VALIDATOR"
+validator_actual="$(/usr/bin/shasum -a 256 "$RELEASE_VALIDATOR" | awk 'NR == 1 { print $1 }')"
+[ "$validator_actual" = "$RELEASE_VALIDATOR_SHA256" ] || {
+  echo "Runtime Raiders embedded validator verification failed" >&2
+  exit 1
+}
+RELEASE_VALIDATOR_BASE64=''
 
 ARCHIVE="$WORK/runtime-raiders-agent.zip"
 CHECKSUM="$WORK/runtime-raiders-agent.zip.sha256"
@@ -422,6 +489,10 @@ case "$expected" in *[!0123456789abcdef]*|'') exit 1 ;; esac
   echo "Runtime Raiders download checksum verification failed" >&2
   exit 1
 }
+"$RELEASE_VALIDATOR" "$ARCHIVE" || {
+  echo "Runtime Raiders archive structure validation failed" >&2
+  exit 1
+}
 mkdir "$WORK/unpacked"
 ditto -x -k "$ARCHIVE" "$WORK/unpacked"
 CONTAINER="$WORK/unpacked/Runtime Raiders Release"
@@ -431,10 +502,15 @@ CANDIDATE_LAUNCHER="$CONTAINER/Runtime Raiders Launcher.app"
 CANDIDATE_LAUNCHER_EXECUTABLE="$CANDIDATE_LAUNCHER/Contents/MacOS/runtime-raiders-launcher"
 [ "$(find "$WORK/unpacked" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 1 ] &&
   [ "$(find "$CONTAINER" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 2 ] &&
-  [ -x "$CANDIDATE_AGENT_EXECUTABLE" ] && [ -x "$CANDIDATE_LAUNCHER_EXECUTABLE" ] || {
+[ -x "$CANDIDATE_AGENT_EXECUTABLE" ] && [ -x "$CANDIDATE_LAUNCHER_EXECUTABLE" ] || {
     echo "Runtime Raiders archive does not contain the exact two-application release" >&2
     exit 1
   }
+"$RELEASE_VALIDATOR" "$ARCHIVE" "$WORK/unpacked" \
+  "$RELEASE_SEQUENCE" "$RELEASE_SHA" "$VERSION" "$UPDATE_PROTOCOL_VERSION" "$TEAM_ID" || {
+  echo "Runtime Raiders extracted release trust validation failed" >&2
+  exit 1
+}
 AGENT_INFO="$CANDIDATE_AGENT/Contents/Info.plist"
 LAUNCHER_INFO="$CANDIDATE_LAUNCHER/Contents/Info.plist"
 candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$AGENT_INFO")" &&
@@ -461,6 +537,13 @@ printf '%s' "$self_check" | grep -F "\"release_sequence\":$RELEASE_SEQUENCE" >/d
 printf '%s' "$self_check" | grep -F "\"release_sha\":\"$RELEASE_SHA\"" >/dev/null 2>&1 || exit 1
 printf '%s' "$self_check" | grep -F '"update_protocol_version":2' >/dev/null 2>&1 || exit 1
 failure_checkpoint archive-verification
+
+if [ "$migration" -eq 1 ]; then
+  "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-validate-legacy || {
+    echo "Runtime Raiders can migrate only the exact sequence-8 installation" >&2
+    exit 1
+  }
+fi
 
 if [ "$valid_enrollment" -eq 0 ]; then
   response="$WORK/enrollment-response.json"
@@ -490,18 +573,13 @@ fi
 failure_checkpoint enrollment-decision
 
 if [ "$migration" -eq 1 ]; then
-  status_from "$LEGACY_EXECUTABLE" && status_has '"daemonRunning":true' &&
-    status_has '"activeRunCount":0' && status_has '"queuedEventCount":0' &&
-    status_has '"installedReleaseSequence":8' || {
+  prior_intent="$(legacy_status_intent)" || {
       echo "Runtime Raiders cannot safely prepare the sequence-8 daemon" >&2
       exit 1
     }
-  if status_has '"enabled":true' && status_has '"persistedState":"enabled"'; then prior_enabled=true
-  elif status_has '"enabled":false' && status_has '"persistedState":"disabled"'; then prior_enabled=false
-  else echo "Runtime Raiders cannot preserve collection intent" >&2; exit 1
-  fi
+  case "$prior_intent" in enabled|disabled) ;; *) echo "Runtime Raiders cannot preserve collection intent" >&2; exit 1 ;; esac
 else
-  prior_enabled=false
+  prior_intent=disabled
   if [ ! -e "$COLLECTOR_STATE" ]; then
     staged_state="$(mktemp "$STATE/.collector-state.XXXXXX")"
     printf '{"enabled":false,"files":{},"version":1}\n' > "$staged_state"
@@ -514,6 +592,11 @@ else
     }
   fi
 fi
+
+capture_protected_state "$CANDIDATE_AGENT_EXECUTABLE" "$WORK/protected-before" || {
+  echo "Runtime Raiders could not fingerprint protected local state" >&2
+  exit 1
+}
 
 if [ "$migration" -eq 1 ]; then
   cp -p "$PLIST" "$WORK/old.plist"
@@ -539,13 +622,18 @@ grep -F -x 'runtime-raiders-installer-lease-ready' "$WORK/lease.ready" >/dev/nul
 }
 
 if [ "$migration" -eq 1 ]; then
+  legacy_prepare_attempted=1
   "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-legacy-prepare >/dev/null
-  status_from "$LEGACY_EXECUTABLE" && status_has '"preparedForUpdate":true' &&
-    status_has '"activeRunCount":0' || {
+  wait_for_legacy_status "$prior_intent" legacy-prepared || {
       echo "Runtime Raiders legacy daemon did not prepare" >&2
       exit 1
     }
+  assert_protected_state "$CANDIDATE_AGENT_EXECUTABLE" "$WORK/protected-before" || {
+    echo "Runtime Raiders protected local state changed during preparation" >&2
+    exit 1
+  }
   failure_checkpoint prepare
+  old_job_stop_attempted=1
   launchctl bootout "gui/$(id -u)/$LABEL"
   old_job_stopped=1
   job_absent || { echo "Runtime Raiders could not prove the old job stopped" >&2; exit 1; }
@@ -647,22 +735,32 @@ if [ "$fallback_path" -eq 1 ]; then
 fi
 staged_command_record="$(mktemp "$STATE/.command-link.XXXXXX")"
 printf '%s\n' "$command_path" > "$staged_command_record"; chmod 600 "$staged_command_record"
+command_mutation_started=1
 mv "$staged_command_record" "$COMMAND_LINK_FILE"
 rm -f "$command_path"
 /bin/ln -s "$SHIM" "$command_path"
 command_replaced=1
 failure_checkpoint command-link-replacement
 
+new_job_bootstrap_attempted=1
 launchctl bootstrap "gui/$(id -u)" "$PLIST"; new_job_bootstrapped=1
 failure_checkpoint bootstrap
-wait_for_status "$RELEASE_EXECUTABLE" "$prior_enabled" true || {
+wait_for_candidate_status candidate-prepared "$prior_intent" || {
   echo "Runtime Raiders candidate did not reach prepared health" >&2
+  exit 1
+}
+assert_protected_state "$RELEASE_EXECUTABLE" "$WORK/protected-before" || {
+  echo "Runtime Raiders protected local state changed at prepared health" >&2
   exit 1
 }
 failure_checkpoint prepared-health
 "$RELEASE_EXECUTABLE" __runtime-raiders-installer-resume 1 >/dev/null
-wait_for_status "$RELEASE_EXECUTABLE" "$prior_enabled" false || {
+wait_for_candidate_status candidate-resumed "$prior_intent" || {
   echo "Runtime Raiders candidate did not restore collection intent" >&2
+  exit 1
+}
+assert_protected_state "$RELEASE_EXECUTABLE" "$WORK/protected-before" || {
+  echo "Runtime Raiders protected local state changed after resume" >&2
   exit 1
 }
 failure_checkpoint resume

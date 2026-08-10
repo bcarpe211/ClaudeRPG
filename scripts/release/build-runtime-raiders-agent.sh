@@ -168,32 +168,29 @@ for arch in arm64 x86_64; do
   if [ -n "$SCRATCH" ]; then
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product raiders)
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product runtime-raiders-launcher)
+    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product runtime-raiders-release-validator)
     cp "$SCRATCH/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
     cp "$SCRATCH/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
+    cp "$SCRATCH/$arch-apple-macosx/release/runtime-raiders-release-validator" "$WORK/runtime-raiders-release-validator-$arch"
   else
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product raiders)
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product runtime-raiders-launcher)
+    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product runtime-raiders-release-validator)
     cp "$ROOT/companion/.build/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
     cp "$ROOT/companion/.build/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
+    cp "$ROOT/companion/.build/$arch-apple-macosx/release/runtime-raiders-release-validator" "$WORK/runtime-raiders-release-validator-$arch"
   fi
 done
-VALIDATOR_ARCH="$(/usr/bin/uname -m)"
-case "$VALIDATOR_ARCH" in arm64|x86_64) ;; *) echo "unsupported release validator architecture" >&2; exit 1 ;; esac
-if [ -n "$SCRATCH" ]; then
-  (cd "$ROOT/companion" && swift build -c release --arch "$VALIDATOR_ARCH" --scratch-path "$SCRATCH" --product runtime-raiders-release-validator)
-  RELEASE_VALIDATOR="$SCRATCH/$VALIDATOR_ARCH-apple-macosx/release/runtime-raiders-release-validator"
-else
-  (cd "$ROOT/companion" && swift build -c release --arch "$VALIDATOR_ARCH" --product runtime-raiders-release-validator)
-  RELEASE_VALIDATOR="$ROOT/companion/.build/$VALIDATOR_ARCH-apple-macosx/release/runtime-raiders-release-validator"
-fi
-[ -f "$RELEASE_VALIDATOR" ] && [ -x "$RELEASE_VALIDATOR" ] || {
-  echo "release archive validator build failed" >&2
-  exit 1
-}
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
 lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"
+lipo -create "$WORK/runtime-raiders-release-validator-arm64" "$WORK/runtime-raiders-release-validator-x86_64" -output "$WORK/runtime-raiders-release-validator"
 lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-agent"
 lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-launcher"
+lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-release-validator"
+RELEASE_VALIDATOR="$WORK/runtime-raiders-release-validator"
+RELEASE_VALIDATOR_SHA256="$(/usr/bin/shasum -a 256 "$RELEASE_VALIDATOR" | awk 'NR == 1 { print $1 }')"
+case "$RELEASE_VALIDATOR_SHA256" in ''|*[!0-9a-f]*) echo "release validator checksum failed" >&2; exit 1 ;; esac
+[ "${#RELEASE_VALIDATOR_SHA256}" -eq 64 ] || { echo "release validator checksum failed" >&2; exit 1; }
 RELEASE_CONTAINER="$WORK/Runtime Raiders Release"
 AGENT_APP="$RELEASE_CONTAINER/Runtime Raiders Agent.app"
 LAUNCHER_APP="$RELEASE_CONTAINER/Runtime Raiders Launcher.app"
@@ -287,7 +284,9 @@ xcrun stapler validate "$PACKAGED_LAUNCHER_APP"
   echo "release archive identity validation failed" >&2
   exit 1
 }
-"$RELEASE_VALIDATOR" "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$ARCHIVE_VALIDATION" || {
+"$RELEASE_VALIDATOR" "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$ARCHIVE_VALIDATION" \
+  "$RELEASE_SEQUENCE" "$RELEASE_SHA" "$COMPANION_VERSION" \
+  "$PACKAGED_UPDATE_PROTOCOL_VERSION" "$RUNTIME_RAIDERS_TEAM_ID" || {
   echo "release archive shape validation failed" >&2
   exit 1
 }
@@ -314,13 +313,26 @@ printf '%s\n' "$MANIFEST_JSON" > "$STAGED_OUTPUT/runtime-raiders-agent.update.js
   echo "release update manifest validation failed" >&2
   exit 1
 }
+INSTALLER_TEMPLATE="$STAGED_OUTPUT/install.template"
 sed \
   -e "s/__RUNTIME_RAIDERS_TEAM_ID__/$RUNTIME_RAIDERS_TEAM_ID/g" \
   -e "s/__RUNTIME_RAIDERS_COMPANION_VERSION__/$COMPANION_VERSION/g" \
   -e "s/__RUNTIME_RAIDERS_RELEASE_SEQUENCE__/$RELEASE_SEQUENCE/g" \
   -e "s/__RUNTIME_RAIDERS_RELEASE_SHA__/$RELEASE_SHA/g" \
   -e "s/__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__/$PACKAGED_UPDATE_PROTOCOL_VERSION/g" \
-  "$ROOT/companion/packaging/install.sh" > "$STAGED_OUTPUT/install.sh"
+  -e "s/__RUNTIME_RAIDERS_RELEASE_VALIDATOR_SHA256__/$RELEASE_VALIDATOR_SHA256/g" \
+  "$ROOT/companion/packaging/install.sh" > "$INSTALLER_TEMPLATE"
+: > "$STAGED_OUTPUT/install.sh"
+while IFS= read -r line || [ -n "$line" ]; do
+  if [ "$line" = "RELEASE_VALIDATOR_BASE64='__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__'" ]; then
+    printf "RELEASE_VALIDATOR_BASE64='" >> "$STAGED_OUTPUT/install.sh"
+    /usr/bin/base64 < "$RELEASE_VALIDATOR" | /usr/bin/tr -d '\n' >> "$STAGED_OUTPUT/install.sh"
+    printf "'\n" >> "$STAGED_OUTPUT/install.sh"
+  else
+    printf '%s\n' "$line" >> "$STAGED_OUTPUT/install.sh"
+  fi
+done < "$INSTALLER_TEMPLATE"
+rm -f "$INSTALLER_TEMPLATE"
 chmod 755 "$STAGED_OUTPUT/install.sh"
 grep -F '__RUNTIME_RAIDERS_' "$STAGED_OUTPUT/install.sh" >/dev/null && {
   echo "release installer contract rendering failed" >&2

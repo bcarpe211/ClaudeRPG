@@ -34,8 +34,16 @@ public struct LegacyMigrationControl {
     }
 
     public func prepare(paths: AgentPaths) throws -> ControlResponse {
+        try invoke(command: "prepare_update", paths: paths)
+    }
+
+    public func resume(paths: AgentPaths) throws -> ControlResponse {
+        try invoke(command: "resume_update", paths: paths)
+    }
+
+    private func invoke(command: String, paths: AgentPaths) throws -> ControlResponse {
         let response = try exchange(
-            Data(#"{"command":"prepare_update"}"#.utf8) + Data([0x0A]),
+            Data("{\"command\":\"\(command)\"}".utf8) + Data([0x0A]),
             paths.controlSocket,
             maximumFrameBytes,
             timeoutSeconds

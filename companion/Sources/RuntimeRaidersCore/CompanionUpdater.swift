@@ -771,10 +771,14 @@ public final class CompanionUpdateLock {
     }
 }
 
-private struct ProtectedStateSnapshot: Equatable {
-    private let entries: [String: Data]
+struct ProtectedStateSnapshot: Equatable {
+    let entries: [String: Data]
 
-    static func capture(paths: AgentPaths, includeUpdateState: Bool) throws -> Self {
+    static func capture(
+        paths: AgentPaths,
+        includeUpdateState: Bool,
+        additionalStateExclusions: Set<String> = []
+    ) throws -> Self {
         var entries: [String: Data] = [:]
         if let state = try OwnerOnlyDirectory.openExisting(paths.stateDirectory) {
             defer { Darwin.close(state) }
@@ -782,6 +786,7 @@ private struct ProtectedStateSnapshot: Equatable {
                 paths.updateLock.lastPathComponent,
                 paths.preparedStartupLease.lastPathComponent,
             ]
+            exclusions.formUnion(additionalStateExclusions)
             if !includeUpdateState { exclusions.insert(paths.updateState.lastPathComponent) }
             try captureDirectory(
                 state,
@@ -808,10 +813,18 @@ private struct ProtectedStateSnapshot: Equatable {
         excludedNames: Set<String>,
         entries: inout [String: Data]
     ) throws {
+        var initialDirectory = stat()
+        guard Darwin.fstat(descriptor, &initialDirectory) == 0,
+              initialDirectory.st_mode & S_IFMT == S_IFDIR,
+              initialDirectory.st_uid == Darwin.geteuid(),
+              initialDirectory.st_mode & 0o077 == 0 else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
         for name in try directoryNames(descriptor) where !excludedNames.contains(name) {
             var metadata = stat()
             guard Darwin.fstatat(descriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
-                  metadata.st_uid == Darwin.geteuid() else {
+                  metadata.st_uid == Darwin.geteuid(),
+                  metadata.st_mode & 0o077 == 0 else {
                 throw CompanionUpdaterError.unsafeFilesystem
             }
             let path = prefix + "/" + name
@@ -826,11 +839,17 @@ private struct ProtectedStateSnapshot: Equatable {
                 defer { Darwin.close(child) }
                 try captureDirectory(child, prefix: path, excludedNames: [], entries: &entries)
             case S_IFREG where metadata.st_nlink == 1 &&
+                metadata.st_mode & 0o777 == 0o600 &&
                 metadata.st_size >= 0 && metadata.st_size <= 64 * 1_024 * 1_024:
                 entries[path] = try readFile(descriptor, name: name, expected: metadata)
             default:
                 throw CompanionUpdaterError.unsafeFilesystem
             }
+        }
+        var finalDirectory = stat()
+        guard Darwin.fstat(descriptor, &finalDirectory) == 0,
+              sameMetadata(finalDirectory, initialDirectory) else {
+            throw CompanionUpdaterError.unsafeFilesystem
         }
     }
 
@@ -863,9 +882,7 @@ private struct ProtectedStateSnapshot: Equatable {
         var current = stat()
         guard Darwin.fstat(descriptor, &current) == 0,
               current.st_mode & S_IFMT == S_IFREG,
-              current.st_dev == expected.st_dev,
-              current.st_ino == expected.st_ino,
-              current.st_size == expected.st_size else {
+              sameMetadata(current, expected) else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
         var data = Data(count: Int(current.st_size))
@@ -879,6 +896,25 @@ private struct ProtectedStateSnapshot: Equatable {
                 else { throw CompanionUpdaterError.unsafeFilesystem }
             }
         }
+        var final = stat()
+        guard Darwin.fstat(descriptor, &final) == 0,
+              sameMetadata(final, current) else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
         return data
+    }
+
+    private static func sameMetadata(_ first: stat, _ second: stat) -> Bool {
+        first.st_dev == second.st_dev &&
+            first.st_ino == second.st_ino &&
+            first.st_mode == second.st_mode &&
+            first.st_uid == second.st_uid &&
+            first.st_gid == second.st_gid &&
+            first.st_nlink == second.st_nlink &&
+            first.st_size == second.st_size &&
+            first.st_mtimespec.tv_sec == second.st_mtimespec.tv_sec &&
+            first.st_mtimespec.tv_nsec == second.st_mtimespec.tv_nsec &&
+            first.st_ctimespec.tv_sec == second.st_ctimespec.tv_sec &&
+            first.st_ctimespec.tv_nsec == second.st_ctimespec.tv_nsec
     }
 }

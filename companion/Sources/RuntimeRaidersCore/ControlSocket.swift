@@ -23,6 +23,11 @@ public enum CompanionCommandRoute: Equatable, Sendable {
     case installerLease
     case legacyPrepare
     case installerResume(generation: Int64)
+    case installerValidateLegacy
+    case installerLegacyStatus(prepared: Bool, expectedEnabled: Bool?)
+    case installerCandidateStatus(generation: Int64, prepared: Bool, expectedEnabled: Bool)
+    case installerProtectedState
+    case legacyResume
 }
 
 public enum CompanionCommandRouter {
@@ -40,8 +45,7 @@ public enum CompanionCommandRouter {
             return .foregroundUpdate
         case ["__self-check"]:
             return .selfCheck
-        case ["__runtime-raiders-installer-lease"],
-             ["__runtime-raiders-legacy-prepare"]:
+        case let values where installerStandaloneCommand(values):
             guard let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
             return installerRoute(
                 arguments: arguments,
@@ -145,6 +149,29 @@ public enum CompanionCommandRouter {
             return .installerLease
         case ["__runtime-raiders-legacy-prepare"]:
             return .legacyPrepare
+        case ["__runtime-raiders-installer-validate-legacy"]:
+            return .installerValidateLegacy
+        case ["__runtime-raiders-installer-status", "legacy-running"]:
+            return .installerLegacyStatus(prepared: false, expectedEnabled: nil)
+        case let values where values.count == 3 &&
+            values[0] == "__runtime-raiders-installer-status" &&
+            values[1] == "legacy-prepared":
+            guard let enabled = canonicalEnabled(values[2]) else { return nil }
+            return .installerLegacyStatus(prepared: true, expectedEnabled: enabled)
+        case let values where values.count == 4 &&
+            values[0] == "__runtime-raiders-installer-status" &&
+            ["candidate-prepared", "candidate-resumed"].contains(values[1]):
+            guard let generation = canonicalGeneration(values[2]),
+                  let enabled = canonicalEnabled(values[3]) else { return nil }
+            return .installerCandidateStatus(
+                generation: generation,
+                prepared: values[1] == "candidate-prepared",
+                expectedEnabled: enabled
+            )
+        case ["__runtime-raiders-installer-protected-state"]:
+            return .installerProtectedState
+        case ["__runtime-raiders-legacy-resume"]:
+            return .legacyResume
         case let values where values.count == 2 &&
             values[0] == "__runtime-raiders-installer-resume":
             guard let state = releaseState,
@@ -172,6 +199,26 @@ public enum CompanionCommandRouter {
             return nil
         }
         return generation
+    }
+
+    private static func canonicalEnabled(_ raw: String) -> Bool? {
+        switch raw {
+        case "enabled": true
+        case "disabled": false
+        default: nil
+        }
+    }
+
+    private static func installerStandaloneCommand(_ arguments: [String]) -> Bool {
+        guard let command = arguments.first else { return false }
+        return [
+            "__runtime-raiders-installer-lease",
+            "__runtime-raiders-legacy-prepare",
+            "__runtime-raiders-installer-validate-legacy",
+            "__runtime-raiders-installer-status",
+            "__runtime-raiders-installer-protected-state",
+            "__runtime-raiders-legacy-resume",
+        ].contains(command)
     }
 
     private static func directAgentExecutable(_ executable: URL, paths: AgentPaths) -> Bool {

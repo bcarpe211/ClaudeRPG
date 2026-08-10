@@ -741,6 +741,39 @@ private func run() throws {
         print(response.message)
         guard response.ok else { throw CLIError.updateOperationFailed }
         return
+    case .installerValidateLegacy:
+        let trustRoot = try InstalledTrustRoot(expectedBundleURL: Bundle.main.bundleURL)
+        try LegacySequenceEightInstallationValidator().validate(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            paths: paths,
+            expectedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
+        )
+        return
+    case let .installerLegacyStatus(prepared, expectedEnabled):
+        let enabled = try InstallerStatusValidator.validateLegacy(
+            readInstallerStatus(),
+            prepared: prepared,
+            expectedEnabled: expectedEnabled
+        )
+        print(enabled ? "enabled" : "disabled")
+        return
+    case let .installerCandidateStatus(generation, prepared, expectedEnabled):
+        try InstallerStatusValidator.validateCandidate(
+            readInstallerStatus(),
+            identity: CompanionReleaseIdentity.load(from: .main),
+            generation: generation,
+            prepared: prepared,
+            expectedEnabled: expectedEnabled
+        )
+        return
+    case .installerProtectedState:
+        FileHandle.standardOutput.write(try InstallerProtectedStateSnapshot.capture(paths: paths))
+        return
+    case .legacyResume:
+        let response = try LegacyMigrationControl().resume(paths: paths)
+        print(response.message)
+        guard response.ok else { throw CLIError.updateOperationFailed }
+        return
     case let .installerResume(generation):
         let response = try ControlSocketClient.send(
             request: ControlRequest(
@@ -755,6 +788,18 @@ private func run() throws {
     case let .control(command):
         try runUserControlCommand(command, paths: paths)
     }
+}
+
+private func readInstallerStatus() throws -> Data {
+    let maximum = InstallerStatusValidator.maximumStatusBytes
+    var output = Data()
+    while output.count <= maximum {
+        guard let chunk = try FileHandle.standardInput.read(upToCount: maximum + 1 - output.count),
+              !chunk.isEmpty else { break }
+        output.append(chunk)
+    }
+    guard output.count <= maximum else { throw CLIError.invalidUpdateState }
+    return output
 }
 
 private func runUserControlCommand(_ command: ControlCommand, paths: AgentPaths) throws {

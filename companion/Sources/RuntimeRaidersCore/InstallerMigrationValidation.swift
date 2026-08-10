@@ -1,0 +1,578 @@
+import Darwin
+import Foundation
+
+public enum InstallerMigrationValidationError: Error, Equatable {
+    case invalidStatus
+    case protectedStateUnsafe
+    case invalidLegacyInstallation
+}
+
+public enum InstallerStatusValidator {
+    public static let maximumStatusBytes = 16 * 1_024
+
+    private struct LegacyStatus: Decodable {
+        let enabled: Bool
+        let daemonRunning: Bool
+        let persistedState: PersistedCollectorState
+        let serverEnabledSurfaces: [RunSurface]
+        let compiledAdapters: [RunSurface: AdapterHealth]
+        let queuedEventCount: Int
+        let lastSuccessfulUploadMS: Int64?
+        let activeRunCount: Int
+        let installedCompanionVersion: String
+        let installedReleaseSequence: Int64
+        let availableCompanionVersion: String?
+        let availableReleaseSequence: Int64?
+        let updateCommand: String?
+        let preparedForUpdate: Bool
+    }
+
+    private static let legacyKeys: Set<String> = [
+        "activeRunCount", "availableCompanionVersion", "availableReleaseSequence",
+        "compiledAdapters", "daemonRunning", "enabled", "installedCompanionVersion",
+        "installedReleaseSequence", "lastSuccessfulUploadMS", "persistedState",
+        "preparedForUpdate", "queuedEventCount", "serverEnabledSurfaces", "updateCommand",
+    ]
+    private static let candidateKeys = legacyKeys.union(["preparedReleaseStateGeneration"])
+    private static let expectedSurfaces: [RunSurface] = [.codexCLI, .codexDesktop]
+    private static let expectedAdapters: Set<RunSurface> = [
+        .claudeCode, .omp, .codexDesktop, .codexCLI,
+    ]
+
+    @discardableResult
+    public static func validateLegacy(
+        _ data: Data,
+        prepared: Bool,
+        expectedEnabled: Bool?
+    ) throws -> Bool {
+        let body = try strictBody(data, keys: legacyKeys)
+        guard let status = try? JSONDecoder().decode(LegacyStatus.self, from: body),
+              validCommon(
+                enabled: status.enabled,
+                daemonRunning: status.daemonRunning,
+                persistedState: status.persistedState,
+                surfaces: status.serverEnabledSurfaces,
+                adapters: status.compiledAdapters,
+                queuedCount: status.queuedEventCount,
+                lastUpload: status.lastSuccessfulUploadMS,
+                activeRunCount: status.activeRunCount,
+                availableVersion: status.availableCompanionVersion,
+                availableSequence: status.availableReleaseSequence,
+                updateCommand: status.updateCommand,
+                installedSequence: status.installedReleaseSequence
+              ),
+              status.installedCompanionVersion == "0.2.6",
+              status.installedReleaseSequence == 8,
+              status.preparedForUpdate == prepared,
+              expectedEnabled == nil || status.enabled == expectedEnabled else {
+            throw InstallerMigrationValidationError.invalidStatus
+        }
+        return status.enabled
+    }
+
+    public static func validateCandidate(
+        _ data: Data,
+        identity: CompanionReleaseIdentity,
+        generation: Int64,
+        prepared: Bool,
+        expectedEnabled: Bool
+    ) throws {
+        let body = try strictBody(data, keys: candidateKeys)
+        guard (try? identity.releaseReference()) != nil,
+              identity.updateProtocolVersion == 2,
+              (1...ReleaseContractValidation.maximumSafeInteger).contains(generation),
+              let status = try? JSONDecoder().decode(AgentStatus.self, from: body),
+              validCommon(
+                enabled: status.enabled,
+                daemonRunning: status.daemonRunning,
+                persistedState: status.persistedState,
+                surfaces: status.serverEnabledSurfaces,
+                adapters: status.compiledAdapters,
+                queuedCount: status.queuedEventCount,
+                lastUpload: status.lastSuccessfulUploadMS,
+                activeRunCount: status.activeRunCount,
+                availableVersion: status.availableCompanionVersion,
+                availableSequence: status.availableReleaseSequence,
+                updateCommand: status.updateCommand,
+                installedSequence: status.installedReleaseSequence
+              ),
+              status.installedCompanionVersion == identity.companionVersion,
+              status.installedReleaseSequence == identity.releaseSequence,
+              status.enabled == expectedEnabled,
+              status.preparedForUpdate == prepared,
+              status.preparedForUpdate == (status.preparedReleaseStateGeneration != nil),
+              status.preparedReleaseStateGeneration == (prepared ? generation : nil) else {
+            throw InstallerMigrationValidationError.invalidStatus
+        }
+    }
+
+    private static func strictBody(_ data: Data, keys: Set<String>) throws -> Data {
+        guard !data.isEmpty,
+              data.count <= maximumStatusBytes,
+              data.last == 0x0A else {
+            throw InstallerMigrationValidationError.invalidStatus
+        }
+        let body = Data(data.dropLast())
+        guard !body.isEmpty,
+              !body.contains(0x0A),
+              let text = String(data: body, encoding: .utf8),
+              compactAndUniqueTopLevelFields(text, keys: keys),
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let dictionary = object as? [String: Any],
+              Set(dictionary.keys) == keys else {
+            throw InstallerMigrationValidationError.invalidStatus
+        }
+        return body
+    }
+
+    private static func compactAndUniqueTopLevelFields(
+        _ text: String,
+        keys: Set<String>
+    ) -> Bool {
+        var quoted = false
+        var escaped = false
+        for byte in text.utf8 {
+            if quoted {
+                if escaped { escaped = false }
+                else if byte == 0x5C { escaped = true }
+                else if byte == 0x22 { quoted = false }
+            } else if byte == 0x22 {
+                quoted = true
+            } else if [0x09, 0x0A, 0x0D, 0x20].contains(byte) {
+                return false
+            }
+        }
+        guard !quoted, !escaped else { return false }
+        return keys.allSatisfy { key in
+            text.components(separatedBy: "\"\(key)\":").count == 2
+        }
+    }
+
+    private static func validCommon(
+        enabled: Bool,
+        daemonRunning: Bool,
+        persistedState: PersistedCollectorState,
+        surfaces: [RunSurface],
+        adapters: [RunSurface: AdapterHealth],
+        queuedCount: Int,
+        lastUpload: Int64?,
+        activeRunCount: Int,
+        availableVersion: String?,
+        availableSequence: Int64?,
+        updateCommand: String?,
+        installedSequence: Int64
+    ) -> Bool {
+        guard daemonRunning,
+              activeRunCount == 0,
+              queuedCount == 0,
+              persistedState == (enabled ? .enabled : .disabled),
+              surfaces == expectedSurfaces,
+              Set(adapters.keys) == expectedAdapters,
+              adapters.values.allSatisfy({ [.available, .disabled, .unavailable].contains($0) }),
+              lastUpload == nil || lastUpload! >= 0 else { return false }
+        switch (availableVersion, availableSequence, updateCommand) {
+        case (nil, nil, nil):
+            return true
+        case let (.some(version), .some(sequence), .some(command)):
+            return !version.isEmpty && sequence > installedSequence && command == "raiders update"
+        default:
+            return false
+        }
+    }
+}
+
+public enum InstallerProtectedStateSnapshot {
+    private static let header = Data("runtime-raiders-protected-state-v1\n".utf8)
+    private static let exclusions: Set<String> = [
+        "command-link", "path-marker-owned",
+    ]
+
+    public static func capture(paths: AgentPaths) throws -> Data {
+        do {
+            let snapshot = try ProtectedStateSnapshot.capture(
+                paths: paths,
+                includeUpdateState: true,
+                additionalStateExclusions: exclusions
+            )
+            var output = header
+            for (path, data) in snapshot.entries.sorted(by: { $0.key < $1.key }) {
+                let pathBytes = Data(path.utf8)
+                output.append(Data("\(pathBytes.count):\(data.count)\n".utf8))
+                output.append(pathBytes)
+                output.append(data)
+            }
+            return output
+        } catch {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+    }
+}
+
+public struct LegacySequenceEightInstallationValidator {
+    public typealias SignatureInspector = (URL, String) throws -> CandidateSignatureFacts
+    public typealias IdentityLoader = (URL) throws -> CompanionReleaseIdentity
+
+    private let signatureInspector: SignatureInspector
+    private let identityLoader: IdentityLoader
+
+    public init() {
+        signatureInspector = { application, team in
+            try SignedBundleTrustInspector().inspect(
+                candidate: application,
+                expectedTeamIdentifier: team
+            )
+        }
+        identityLoader = { application in
+            guard let bundle = Bundle(url: application) else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            return try CompanionReleaseIdentity.load(from: bundle)
+        }
+    }
+
+    init(
+        signatureInspector: @escaping SignatureInspector,
+        identityLoader: @escaping IdentityLoader
+    ) {
+        self.signatureInspector = signatureInspector
+        self.identityLoader = identityLoader
+    }
+
+    public func validate(
+        homeDirectory: URL,
+        paths: AgentPaths,
+        expectedTeamIdentifier: String
+    ) throws {
+        do {
+            let home = homeDirectory
+            let expectedSupport = home
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+                .appendingPathComponent("Runtime Raiders", isDirectory: true)
+            guard paths.supportDirectory.standardizedFileURL == expectedSupport.standardizedFileURL,
+                  validTeamIdentifier(expectedTeamIdentifier) else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            let library = home.appendingPathComponent("Library", isDirectory: true)
+            let applicationSupport = library.appendingPathComponent(
+                "Application Support", isDirectory: true
+            )
+            let launchAgents = library.appendingPathComponent("LaunchAgents", isDirectory: true)
+            try requireDirectory(home, mode: nil)
+            try requireDirectory(library, mode: nil)
+            try requireDirectory(applicationSupport, mode: nil)
+            try requireDirectory(launchAgents, mode: nil)
+            try requireDirectory(paths.supportDirectory, mode: 0o700)
+            try requireDirectory(paths.stateDirectory, mode: 0o700)
+            try requireDirectory(paths.outboxDirectory, mode: 0o700)
+
+            let application = paths.legacyFlatApplication
+            let contents = application.appendingPathComponent("Contents", isDirectory: true)
+            let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
+            let executable = macOS.appendingPathComponent(
+                "runtime-raiders-agent",
+                isDirectory: false
+            )
+            let info = contents.appendingPathComponent("Info.plist", isDirectory: false)
+            try requireDirectory(application, mode: 0o755)
+            try requireDirectory(contents, mode: 0o755)
+            try requireDirectory(macOS, mode: 0o755)
+            try requireRegularFile(executable, mode: 0o755)
+            try requireRegularFile(info, mode: 0o644)
+            let applicationSeal = try ReleaseApplicationSeal.capture(application)
+
+            let expectedIdentity = CompanionReleaseIdentity(
+                releaseSequence: 8,
+                releaseSHA: "dec88d4f6ff600f2be92bed3b12dcfce85f84a51",
+                companionVersion: "0.2.6",
+                updateProtocolVersion: 1
+            )
+            guard try identityLoader(application) == expectedIdentity else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            let facts = try signatureInspector(application, expectedTeamIdentifier)
+            guard facts.bundleIdentifier == "com.redlattice.runtime-raiders-agent",
+                  facts.teamIdentifier == expectedTeamIdentifier,
+                  facts.signatureValid,
+                  facts.allArchitecturesValid,
+                  facts.hardenedRuntime,
+                  facts.secureTimestampPresent,
+                  facts.gatekeeperNotarized else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            guard try ReleaseApplicationSeal.capture(application) == applicationSeal else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+
+            let plist = launchAgents.appendingPathComponent(
+                "com.redlattice.runtime-raiders-agent.plist",
+                isDirectory: false
+            )
+            let shim = paths.supportDirectory.appendingPathComponent("raiders", isDirectory: false)
+            let commandRecord = paths.stateDirectory.appendingPathComponent(
+                "command-link",
+                isDirectory: false
+            )
+            try requireExactFile(
+                plist,
+                mode: 0o600,
+                expected: canonicalPlist(executable: executable.path)
+            )
+            try requireExactFile(
+                shim,
+                mode: 0o700,
+                expected: canonicalShim(
+                    home: home.path,
+                    support: paths.supportDirectory.path,
+                    executable: executable.path,
+                    commandRecord: commandRecord.path
+                )
+            )
+            try requireRegularFile(commandRecord, mode: 0o600)
+            let record = try readRegularFile(
+                commandRecord,
+                mode: 0o600,
+                maximumBytes: 4_096
+            )
+            guard record.last == 0x0A,
+                  !Data(record.dropLast()).contains(0x0A),
+                  let commandPath = String(data: Data(record.dropLast()), encoding: .utf8),
+                  commandPath.hasPrefix("/"), !commandPath.isEmpty else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            let command = URL(fileURLWithPath: commandPath, isDirectory: false)
+            try requireDirectory(command.deletingLastPathComponent(), mode: nil)
+            try requireSymlink(command, target: shim.path)
+        } catch {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+    }
+
+    private func requireExactFile(_ url: URL, mode: mode_t, expected: String) throws {
+        let actual = try readRegularFile(url, mode: mode, maximumBytes: 1_048_576)
+        guard actual == Data(expected.utf8) else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+    }
+
+    private func readRegularFile(
+        _ url: URL,
+        mode: mode_t,
+        maximumBytes: Int
+    ) throws -> Data {
+        var initial = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &initial) }) == 0,
+              initial.st_mode & S_IFMT == S_IFREG,
+              initial.st_uid == Darwin.geteuid(),
+              initial.st_mode & 0o7777 == mode,
+              initial.st_nlink == 1,
+              initial.st_size >= 0,
+              initial.st_size <= maximumBytes else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        defer { Darwin.close(descriptor) }
+        var current = stat()
+        guard Darwin.fstat(descriptor, &current) == 0,
+              current.st_dev == initial.st_dev,
+              current.st_ino == initial.st_ino,
+              current.st_mode == initial.st_mode,
+              current.st_uid == initial.st_uid,
+              current.st_nlink == initial.st_nlink,
+              current.st_size == initial.st_size else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        var data = Data(count: Int(current.st_size))
+        var offset = 0
+        try data.withUnsafeMutableBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            while offset < bytes.count {
+                let count = Darwin.read(descriptor, base.advanced(by: offset), bytes.count - offset)
+                if count > 0 { offset += count }
+                else if count < 0, errno == EINTR { continue }
+                else { throw InstallerMigrationValidationError.invalidLegacyInstallation }
+            }
+        }
+        var final = stat()
+        guard Darwin.fstat(descriptor, &final) == 0,
+              final.st_dev == current.st_dev,
+              final.st_ino == current.st_ino,
+              final.st_mode == current.st_mode,
+              final.st_uid == current.st_uid,
+              final.st_nlink == current.st_nlink,
+              final.st_size == current.st_size else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        return data
+    }
+
+    private func requireRegularFile(_ url: URL, mode: mode_t) throws {
+        var metadata = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o7777 == mode,
+              metadata.st_nlink == 1 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        Darwin.close(descriptor)
+    }
+
+    private func requireDirectory(_ url: URL, mode: mode_t?) throws {
+        var metadata = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o022 == 0,
+              mode == nil || metadata.st_mode & 0o7777 == mode else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        Darwin.close(descriptor)
+    }
+
+    private func requireSymlink(_ url: URL, target: String) throws {
+        var initial = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &initial) }) == 0,
+              initial.st_mode & S_IFMT == S_IFLNK,
+              initial.st_uid == Darwin.geteuid(),
+              initial.st_nlink == 1 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let count = url.path.withCString { path in
+            Darwin.readlink(path, &buffer, buffer.count - 1)
+        }
+        guard count >= 0 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        let destination = String(
+            decoding: buffer.prefix(Int(count)).map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        var final = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &final) }) == 0,
+              final.st_dev == initial.st_dev,
+              final.st_ino == initial.st_ino,
+              final.st_mode == initial.st_mode,
+              final.st_uid == initial.st_uid,
+              final.st_nlink == initial.st_nlink,
+              destination == target else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+    }
+
+    private func validTeamIdentifier(_ value: String) -> Bool {
+        value.utf8.count == 10 && value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte)
+        }
+    }
+
+    private func canonicalPlist(executable: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key>
+          <string>com.redlattice.runtime-raiders-agent</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>\(executable)</string>
+            <string>daemon</string>
+          </array>
+          <key>RunAtLoad</key>
+          <true/>
+          <key>KeepAlive</key>
+          <true/>
+          <key>ProcessType</key>
+          <string>Background</string>
+        </dict>
+        </plist>
+        """ + "\n"
+    }
+
+    private func canonicalShim(
+        home: String,
+        support: String,
+        executable: String,
+        commandRecord: String
+    ) -> String {
+        let plist = home + "/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist"
+        let shim = support + "/raiders"
+        let markerFlag = support + "/state/path-marker-owned"
+        return """
+        #!/bin/sh
+        set -eu
+        SUPPORT='\(support)'
+        PLIST='\(plist)'
+        SHIM='\(shim)'
+        COMMAND_LINK_FILE='\(commandRecord)'
+        MARKER_FLAG='\(markerFlag)'
+        MARKER='export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path'
+        LABEL='com.redlattice.runtime-raiders-agent'
+        binary='\(executable)'
+        job_absent() {
+          output="$(mktemp /tmp/runtime-raiders-launchctl.XXXXXX)"
+          if launchctl print "gui/$(id -u)/$LABEL" >"$output" 2>&1; then
+            rm -f "$output"
+            return 1
+          else
+            print_status=$?
+          fi
+          [ "$print_status" -eq 113 ] || { rm -f "$output"; return 1; }
+          grep -F 'Could not find service' "$output" >/dev/null 2>&1
+          status=$?
+          rm -f "$output"
+          return $status
+        }
+        if [ "$#" -eq 0 ] || [ "$1" != uninstall ]; then
+          exec "$binary" "$@"
+        fi
+        if "$binary" uninstall; then
+          launchctl bootout "gui/$(id -u)" "$PLIST" || {
+            echo "Runtime Raiders bootout failed; refusing cleanup" >&2
+            exit 1
+          }
+          job_absent || {
+            echo "Runtime Raiders launchd job still present; refusing cleanup" >&2
+            exit 1
+          }
+        elif [ ! -S "$SUPPORT/agent.sock" ] && job_absent; then
+          :
+        else
+          echo "Runtime Raiders daemon did not safely stop; refusing cleanup" >&2
+          exit 1
+        fi
+        if [ -f "$COMMAND_LINK_FILE" ]; then
+          command_path="$(cat "$COMMAND_LINK_FILE")"
+          if [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$SHIM" ]; then
+            rm -f "$command_path"
+          fi
+        fi
+        profile="$HOME/.zprofile"
+        if [ -f "$MARKER_FLAG" ] && [ -f "$profile" ]; then
+          temporary="$(mktemp "$profile.runtime-raiders.XXXXXX")"
+          awk -v marker="$MARKER" 'seen == 0 && $0 == marker { seen = 1; next } { print }' "$profile" > "$temporary"
+          mv "$temporary" "$profile"
+        fi
+        rm -f "$PLIST"
+        rm -rf "$SUPPORT"
+        """ + "\n"
+    }
+}

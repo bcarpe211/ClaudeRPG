@@ -184,6 +184,101 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
         try assertSubstitutionRejected(.launcherInfoDuringProtocolLoad)
     }
 
+    func testInstallerVerificationReturnsExactIdentityAndBothTrustedApplications() throws {
+        try withExtractedRelease { paths in
+            let verified = try makeVerifier(paths: paths).verifyInstallerRelease(
+                extractedRoot: paths.staging,
+                expected: manifestIdentity,
+                expectedTeamIdentifier: teamIdentifier
+            )
+            XCTAssertEqual(verified.agent, VerifiedReleaseAgent(
+                application: paths.agent,
+                identity: try manifestIdentity.releaseReference()
+            ))
+            XCTAssertEqual(verified.launcher, paths.launcher)
+        }
+    }
+
+    func testInstallerVerificationRejectsEveryIncompleteBundleTrustFact() throws {
+        let badAgentFacts = [
+            agentFacts(bundleIdentifier: "com.example.agent"),
+            agentFacts(teamIdentifier: "OTHERTEAM1"),
+            agentFacts(signatureValid: false),
+            agentFacts(allArchitecturesValid: false),
+            agentFacts(hardenedRuntime: false),
+            agentFacts(secureTimestampPresent: false),
+            agentFacts(gatekeeperNotarized: false),
+        ]
+        let badLauncherFacts = [
+            launcherFacts(bundleIdentifier: "com.example.launcher"),
+            launcherFacts(teamIdentifier: "OTHERTEAM1"),
+            launcherFacts(signatureValid: false),
+            launcherFacts(allArchitecturesValid: false),
+            launcherFacts(hardenedRuntime: false),
+            launcherFacts(secureTimestampPresent: false),
+            launcherFacts(gatekeeperNotarized: false),
+        ]
+        for facts in badAgentFacts {
+            try assertInstallerRejected(agentFacts: facts)
+        }
+        for facts in badLauncherFacts {
+            try assertInstallerRejected(launcherFacts: facts)
+        }
+    }
+
+    func testInstallerVerificationRejectsWrongIdentityProtocolAndSubstitution() throws {
+        for identity in [
+            CompanionReleaseIdentity(
+                releaseSequence: manifestIdentity.releaseSequence + 1,
+                releaseSHA: manifestIdentity.releaseSHA,
+                companionVersion: manifestIdentity.companionVersion,
+                updateProtocolVersion: 2
+            ),
+            CompanionReleaseIdentity(
+                releaseSequence: manifestIdentity.releaseSequence,
+                releaseSHA: String(repeating: "f", count: 40),
+                companionVersion: manifestIdentity.companionVersion,
+                updateProtocolVersion: 2
+            ),
+            CompanionReleaseIdentity(
+                releaseSequence: manifestIdentity.releaseSequence,
+                releaseSHA: manifestIdentity.releaseSHA,
+                companionVersion: "0.0.0",
+                updateProtocolVersion: 2
+            ),
+            CompanionReleaseIdentity(
+                releaseSequence: manifestIdentity.releaseSequence,
+                releaseSHA: manifestIdentity.releaseSHA,
+                companionVersion: manifestIdentity.companionVersion,
+                updateProtocolVersion: 1
+            ),
+        ] {
+            try assertInstallerRejected(agentIdentity: identity)
+        }
+        try assertInstallerRejected(launcherProtocolVersion: 2)
+
+        try withExtractedRelease { paths in
+            let verifier = ReleaseArchiveVerifier(
+                signatureInspector: { application in
+                    if application == paths.agent { return self.agentFacts() }
+                    try FileManager.default.removeItem(at: paths.agent)
+                    try FileManager.default.createSymbolicLink(
+                        atPath: paths.agent.path,
+                        withDestinationPath: "/private/tmp"
+                    )
+                    return self.launcherFacts()
+                },
+                agentIdentityLoader: { _ in self.manifestIdentity },
+                launcherProtocolLoader: { _ in 1 }
+            )
+            XCTAssertThrowsError(try verifier.verifyInstallerRelease(
+                extractedRoot: paths.staging,
+                expected: manifestIdentity,
+                expectedTeamIdentifier: teamIdentifier
+            ))
+        }
+    }
+
     private let teamIdentifier = "REDLATTICE"
 
     private var manifest: ReleaseManifestV1 { manifestWithProtocol(2) }
@@ -304,6 +399,37 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
                 file: file,
                 line: line
             ) { error in
+                XCTAssertEqual(
+                    error as? ReleaseArchiveVerificationError,
+                    .untrustedArchive,
+                    file: file,
+                    line: line
+                )
+            }
+        }
+    }
+
+    private func assertInstallerRejected(
+        agentFacts: CandidateSignatureFacts? = nil,
+        launcherFacts: CandidateSignatureFacts? = nil,
+        agentIdentity: CompanionReleaseIdentity? = nil,
+        launcherProtocolVersion: Int = 1,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        try withExtractedRelease { paths in
+            let verifier = makeVerifier(
+                paths: paths,
+                agentFacts: agentFacts,
+                launcherFacts: launcherFacts,
+                agentIdentity: agentIdentity,
+                launcherProtocolVersion: launcherProtocolVersion
+            )
+            XCTAssertThrowsError(try verifier.verifyInstallerRelease(
+                extractedRoot: paths.staging,
+                expected: manifestIdentity,
+                expectedTeamIdentifier: teamIdentifier
+            ), file: file, line: line) { error in
                 XCTAssertEqual(
                     error as? ReleaseArchiveVerificationError,
                     .untrustedArchive,

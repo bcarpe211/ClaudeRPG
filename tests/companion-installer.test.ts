@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,20 +60,23 @@ function fakeReleaseLipo(fake: string, log = false): void {
     'if [ "$1" = -create ]; then',
     '  [ "$#" -eq 5 ] && [ "$4" = -output ] || exit 64',
     '  output_directory=${5%/*}',
+    '  validator=0',
     '  case "${5##*/}" in',
     '    runtime-raiders-agent)',
     '      [ "$2" = "$output_directory/raiders-arm64" ] && [ "$3" = "$output_directory/raiders-x86_64" ] || exit 70',
     '      ;;',
     '    runtime-raiders-launcher)',
     '      [ "$2" = "$output_directory/runtime-raiders-launcher-arm64" ] && [ "$3" = "$output_directory/runtime-raiders-launcher-x86_64" ] || exit 71',
-    '      ;;',
+      '      ;;',
+    '    runtime-raiders-release-validator)',
+    '      [ "$2" = "$output_directory/runtime-raiders-release-validator-arm64" ] && [ "$3" = "$output_directory/runtime-raiders-release-validator-x86_64" ] || exit 73',
+    '      cp "$2" "$5"; chmod 755 "$5"; validator=1;;',
     '    *) exit 72;;',
     '  esac',
-    '  [ "$(cat "$2")" = arm64 ] && [ "$(cat "$3")" = x86_64 ] || exit 65',
-    '  printf "arm64,x86_64" > "$5"',
+    '  if [ "$validator" -eq 0 ]; then [ "$(cat "$2")" = arm64 ] && [ "$(cat "$3")" = x86_64 ] || exit 65; printf "arm64,x86_64" > "$5"; fi',
     'elif [ "$1" = -verify_arch ]; then',
     '  [ "$#" -eq 4 ] && [ "$2" = arm64 ] && [ "$3" = x86_64 ] || exit 66',
-    '  [ "$(cat "$4")" = arm64,x86_64 ] || exit 67',
+    '  case "${4##*/}" in runtime-raiders-release-validator) [ -x "$4" ];; *) [ "$(cat "$4")" = arm64,x86_64 ];; esac || exit 67',
     '  [ "${FAKE_LIPO_VERIFY_FAIL_TARGET:-}" != "${4##*/}" ] || exit 68',
     'else',
     '  exit 69',
@@ -111,15 +115,29 @@ function productionReleaseValidator(root: string): string {
 
 function renderedProtocolTwoInstaller(root: string): string {
   const path = join(root, 'install-protocol-two.sh');
+  const validator = join(root, 'embedded-installer-validator');
+  executable(validator, [
+    'printf "installer-validator %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+    'if [ "$#" -eq 1 ]; then phase=archive; elif [ "$#" -eq 7 ]; then phase=extracted; else exit 64; fi',
+    '[ "${FAKE_INSTALLER_VALIDATOR_FAIL:-}" != "$phase" ] || exit 79',
+  ]);
+  const validatorBytes = readFileSync(validator);
+  const validatorSHA = createHash('sha256').update(validatorBytes).digest('hex');
   writeFileSync(path, readFileSync(installer, 'utf8')
     .replaceAll('__RUNTIME_RAIDERS_TEAM_ID__', teamId)
     .replaceAll('__RUNTIME_RAIDERS_COMPANION_VERSION__', migrationCompanionVersion)
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_SEQUENCE__', migrationReleaseSequence)
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_SHA__', releaseSHA)
     .replaceAll('__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__', migrationUpdateProtocolVersion)
+    .replaceAll('__RUNTIME_RAIDERS_RELEASE_VALIDATOR_SHA256__', validatorSHA)
+    .replaceAll('__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__', validatorBytes.toString('base64'))
     .replace(
       'failure_checkpoint() { :; }',
       'failure_checkpoint() { [ "${RUNTIME_RAIDERS_TEST_FAIL_AFTER:-}" != "$1" ] || { echo "injected failure after $1" >&2; return 91; }; }',
+    )
+    .replaceAll(
+      '/bin/ln -s "$SHIM" "$command_path"',
+      '"$RUNTIME_RAIDERS_TEST_LN" -s "$SHIM" "$command_path"',
     ));
   chmodSync(path, 0o755);
   return path;
@@ -143,11 +161,28 @@ function protocolTwoArtifact(root: string): { zip: string; checksum: string } {
     'case "${1:-}" in',
     '  __self-check) printf \'{"companion_version":"0.3.0","release_sequence":9,"release_sha":"' + releaseSHA + '","update_protocol_version":2}\\n\'; exit 0;;',
     '  __runtime-raiders-installer-lease)',
-    '    rm -f "$resumed"; : > "$lease"; trap \'rm -f "$lease" "$prepared"\' EXIT HUP INT TERM',
+    '    rm -f "$resumed"; : > "$lease"; trap \'rm -f "$lease"\' EXIT HUP INT TERM',
     '    printf \'runtime-raiders-installer-lease-ready\\n\'' ,
     '    cat >/dev/null; exit 0;;',
     '  __runtime-raiders-legacy-prepare)',
     '    [ -f "$running" ] || exit 69; : > "$prepared"; printf \'prepared for update\\n\'; exit 0;;',
+    '  __runtime-raiders-legacy-resume)',
+    '    rm -f "$prepared"; : > "$running"; printf \'resumed legacy\\n\'; exit 0;;',
+    '  __runtime-raiders-installer-validate-legacy) exit 0;;',
+    '  __runtime-raiders-installer-protected-state)',
+    '    support="$HOME/Library/Application Support/Runtime Raiders"',
+    '    (cd "$support" && find state outbox -type f ! -name command-link ! -name path-marker-owned ! -name update.lock ! -name prepared-startup.lock -print | sort | while IFS= read -r file; do printf "%s " "$file"; /usr/bin/stat -f "%Lp:%u:%l" "$file"; /usr/bin/shasum -a 256 "$file"; done); exit 0;;',
+    '  __runtime-raiders-installer-status)',
+    '    phase="${2:-}"; generation="${3:-}"; intent="${4:-}"; payload="$(cat)"',
+    '    [ "${FAKE_STATUS_CORRUPTION:-}" != "$phase" ] || exit 82',
+    '    printf "%s" "$payload" | grep -F \'"activeRunCount":0\' >/dev/null',
+    '    printf "%s" "$payload" | grep -F \'"queuedEventCount":0\' >/dev/null',
+    '    case "$phase" in',
+    '      legacy-running) printf "%s" "$payload" | grep -F \'"installedReleaseSequence":8\' >/dev/null; printf "%s" "$payload" | grep -F \'"preparedForUpdate":false\' >/dev/null; case "$payload" in *\'"enabled":true\'*) printf \'enabled\\n\';; *) printf \'disabled\\n\';; esac;;',
+    '      legacy-prepared) [ "$generation" = enabled ] || [ "$generation" = disabled ]; printf "%s" "$payload" | grep -F \'"installedReleaseSequence":8\' >/dev/null; printf "%s" "$payload" | grep -F \'"preparedForUpdate":true\' >/dev/null;;',
+    '      candidate-prepared|candidate-resumed) [ "$generation" = 1 ]; [ "$intent" = enabled ] || [ "$intent" = disabled ]; printf "%s" "$payload" | grep -F \'"installedReleaseSequence":9\' >/dev/null; expected=true; [ "$phase" = candidate-resumed ] && expected=false; printf "%s" "$payload" | grep -F "\\\"preparedForUpdate\\\":$expected" >/dev/null; [ "${FAKE_MUTATE_PROTECTED_AT:-}" != "$phase" ] || printf \'mutated\\n\' >> "$collector_state";;',
+    '      *) exit 64;;',
+    '    esac; exit 0;;',
     '  __runtime-raiders-installer-resume)',
     '    [ "${2:-}" = 1 ] || exit 64; [ -f "$job" ] || exit 69; rm -f "$prepared"; : > "$resumed"; : > "$running"; printf \'resumed\\n\'; exit 0;;',
     '  uninstall) rm -f "$running"; exit 0;;',
@@ -159,7 +194,7 @@ function protocolTwoArtifact(root: string): { zip: string; checksum: string } {
     'daemon=false; [ -f "$running" ] && daemon=true',
     'prepared_value=false; prepared_generation=null; { [ -f "$prepared" ] || [ -f "$lease" ]; } && [ ! -f "$resumed" ] && { prepared_value=true; prepared_generation=1; }',
     'if [ "${1:-}" = status ]; then',
-    '  printf \'{"activeRunCount":%s,"compiledAdapters":{},"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.3.0","installedReleaseSequence":9,"lastSuccessfulUploadMS":null,"persistedState":"%s","preparedForUpdate":%s,"preparedReleaseStateGeneration":%s,"queuedEventCount":0,"serverEnabledSurfaces":["codex_desktop","codex_cli"]}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state_kind" "$prepared_value" "$prepared_generation"; exit 0',
+    '  printf \'{"activeRunCount":%s,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.3.0","installedReleaseSequence":9,"lastSuccessfulUploadMS":null,"persistedState":"%s","preparedForUpdate":%s,"preparedReleaseStateGeneration":%s,"queuedEventCount":0,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state_kind" "$prepared_value" "$prepared_generation"; exit 0',
     'fi',
     'exit 64',
   ]);
@@ -244,7 +279,12 @@ function fakes(root: string): string {
   ]);
   executable(join(bin, 'ln'), [
     '[ "$FAKE_LN_FAIL" != 1 ] || exit 76',
+    'if [ "$FAKE_LN_MUTATES_THEN_FAIL" = 1 ] && [ ! -f "$HOME/.runtime-raiders-test-ln-failed" ]; then last=""; for value in "$@"; do last="$value"; done; rm -f "$last"; : > "$HOME/.runtime-raiders-test-ln-failed"; exit 76; fi',
     'exec /bin/ln "$@"',
+  ]);
+  executable(join(bin, 'ditto'), [
+    'printf "ditto %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
+    'exec /usr/bin/ditto "$@"',
   ]);
   executable(join(bin, 'chmod'), [
     'case "$2" in */path-marker-owned) [ "$FAKE_CHMOD_FAIL_MARKER" != 1 ] || exit 75;; esac',
@@ -261,7 +301,9 @@ function fakes(root: string): string {
     '  [ -f "$job" ] && exit 0',
     '  printf "Could not find service\\n" >&2; exit 113',
     'fi',
+    'if [ "$1" = bootout ] && [ "$FAKE_BOOTOUT_STOPS_THEN_FAIL" = 1 ]; then rm -f "$job" "$running" "$polls"; printf "bootout stopped then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootout ] && [ "$FAKE_LAUNCH_BOOTOUT_FAIL" = 1 ]; then printf "bootout ambiguous failure\\n" >&2; exit 77; fi',
+    'if [ "$1" = bootstrap ] && [ "$FAKE_BOOTSTRAP_STARTS_THEN_FAIL" = 1 ]; then : > "$job"; : > "$running"; printf "bootstrap started then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_LAUNCH_BOOTSTRAP_FAIL" = 1 ]; then printf "bootstrap failure\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_LAUNCH_REQUIRE_OFF" = 1 ]; then',
     '  collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
@@ -305,22 +347,29 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     FAKE_SHASUM_FAIL: '0',
     FAKE_CODESIGN_FAIL: '0',
     FAKE_LN_FAIL: '0',
+    FAKE_LN_MUTATES_THEN_FAIL: '0',
     FAKE_CHMOD_FAIL_MARKER: '0',
     FAKE_LAUNCH_PRINT_PRESENT: '0',
     FAKE_LAUNCH_PRINT_ABSENT: '0',
     FAKE_LAUNCH_PRINT_AMBIGUOUS: '0',
     FAKE_LAUNCH_BOOTOUT_FAIL: '0',
     FAKE_LAUNCH_BOOTSTRAP_FAIL: '0',
+    FAKE_BOOTOUT_STOPS_THEN_FAIL: '0',
+    FAKE_BOOTSTRAP_STARTS_THEN_FAIL: '0',
     FAKE_LAUNCH_REQUIRE_OFF: '0',
     FAKE_DAEMON_READY_AFTER: '1',
     FAKE_DAEMON_NEVER_READY: '0',
     FAKE_CURL_REDIRECT: '',
+    FAKE_INSTALLER_VALIDATOR_FAIL: '',
+    FAKE_STATUS_CORRUPTION: '',
+    FAKE_MUTATE_PROTECTED_AT: '',
     FAKE_CODE_FILE_OWNER: '',
     RUNTIME_RAIDERS_TEST_CODE_FILE: '',
     RUNTIME_RAIDERS_TEST_LOG: join(home, 'commands.log'),
     RUNTIME_RAIDERS_TEST_BINARY_LOG: join(home, 'binary.log'),
     RUNTIME_RAIDERS_TEST_ZIP: files.zip,
     RUNTIME_RAIDERS_TEST_CHECKSUM: files.checksum,
+    RUNTIME_RAIDERS_TEST_LN: join(fake, 'ln'),
     RUNTIME_RAIDERS_TEST_ENROLLMENT: JSON.stringify({
       device_token: token, dedupe_secret: secret, server_url: 'https://raiders.redlattice.com',
       cutover_at: 1700000000000, enabled_surfaces: ['codex_desktop', 'codex_cli'],
@@ -437,6 +486,101 @@ type LegacyFixture = {
   environment: NodeJS.ProcessEnv;
 };
 
+function canonicalLegacyPlist(executablePath: string): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    '<dict>',
+    '  <key>Label</key>',
+    '  <string>com.redlattice.runtime-raiders-agent</string>',
+    '  <key>ProgramArguments</key>',
+    '  <array>',
+    `    <string>${executablePath}</string>`,
+    '    <string>daemon</string>',
+    '  </array>',
+    '  <key>RunAtLoad</key>',
+    '  <true/>',
+    '  <key>KeepAlive</key>',
+    '  <true/>',
+    '  <key>ProcessType</key>',
+    '  <string>Background</string>',
+    '</dict>',
+    '</plist>',
+    '',
+  ].join('\n');
+}
+
+function canonicalLegacyShim(
+  home: string,
+  support: string,
+  executablePath: string,
+  commandLinkFile: string,
+): string {
+  const plist = join(home, 'Library/LaunchAgents', `${label}.plist`);
+  const shim = join(support, 'raiders');
+  const markerFlag = join(support, 'state/path-marker-owned');
+  return [
+    '#!/bin/sh',
+    'set -eu',
+    `SUPPORT='${support}'`,
+    `PLIST='${plist}'`,
+    `SHIM='${shim}'`,
+    `COMMAND_LINK_FILE='${commandLinkFile}'`,
+    `MARKER_FLAG='${markerFlag}'`,
+    'MARKER=\'export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path\'',
+    `LABEL='${label}'`,
+    `binary='${executablePath}'`,
+    'job_absent() {',
+    '  output="$(mktemp /tmp/runtime-raiders-launchctl.XXXXXX)"',
+    '  if launchctl print "gui/$(id -u)/$LABEL" >"$output" 2>&1; then',
+    '    rm -f "$output"',
+    '    return 1',
+    '  else',
+    '    print_status=$?',
+    '  fi',
+    '  [ "$print_status" -eq 113 ] || { rm -f "$output"; return 1; }',
+    '  grep -F \'Could not find service\' "$output" >/dev/null 2>&1',
+    '  status=$?',
+    '  rm -f "$output"',
+    '  return $status',
+    '}',
+    'if [ "$#" -eq 0 ] || [ "$1" != uninstall ]; then',
+    '  exec "$binary" "$@"',
+    'fi',
+    'if "$binary" uninstall; then',
+    '  launchctl bootout "gui/$(id -u)" "$PLIST" || {',
+    '    echo "Runtime Raiders bootout failed; refusing cleanup" >&2',
+    '    exit 1',
+    '  }',
+    '  job_absent || {',
+    '    echo "Runtime Raiders launchd job still present; refusing cleanup" >&2',
+    '    exit 1',
+    '  }',
+    'elif [ ! -S "$SUPPORT/agent.sock" ] && job_absent; then',
+    '  :',
+    'else',
+    '  echo "Runtime Raiders daemon did not safely stop; refusing cleanup" >&2',
+    '  exit 1',
+    'fi',
+    'if [ -f "$COMMAND_LINK_FILE" ]; then',
+    '  command_path="$(cat "$COMMAND_LINK_FILE")"',
+    '  if [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$SHIM" ]; then',
+    '    rm -f "$command_path"',
+    '  fi',
+    'fi',
+    'profile="$HOME/.zprofile"',
+    'if [ -f "$MARKER_FLAG" ] && [ -f "$profile" ]; then',
+    '  temporary="$(mktemp "$profile.runtime-raiders.XXXXXX")"',
+    '  awk -v marker="$MARKER" \'seen == 0 && $0 == marker { seen = 1; next } { print }\' "$profile" > "$temporary"',
+    '  mv "$temporary" "$profile"',
+    'fi',
+    'rm -f "$PLIST"',
+    'rm -rf "$SUPPORT"',
+    '',
+  ].join('\n');
+}
+
 function legacySequenceEightFixture(root: string, enabled: boolean): LegacyFixture {
   const home = join(root, 'home');
   const support = join(home, 'Library/Application Support/Runtime Raiders');
@@ -461,7 +605,7 @@ function legacySequenceEightFixture(root: string, enabled: boolean): LegacyFixtu
     '  enabled=false; state=disabled; grep -F \'"enabled":true\' "$collector_state" >/dev/null 2>&1 && { enabled=true; state=enabled; }',
     '  daemon=false; [ -f "$running" ] && daemon=true',
     '  prepared_value=false; [ -f "$prepared" ] && prepared_value=true',
-    '  printf \'{"activeRunCount":%s,"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"persistedState":"%s","preparedForUpdate":%s,"queuedEventCount":0}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state" "$prepared_value"; exit 0',
+    '  printf \'{"activeRunCount":%s,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"lastSuccessfulUploadMS":null,"persistedState":"%s","preparedForUpdate":%s,"queuedEventCount":0,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state" "$prepared_value"; exit 0',
     'fi',
     'exit 64',
   ]);
@@ -476,23 +620,13 @@ function legacySequenceEightFixture(root: string, enabled: boolean): LegacyFixtu
     '</dict></plist>',
     '',
   ].join('\n'));
-  const oldPlist = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<plist version="1.0"><dict>',
-    `<key>Label</key><string>${label}</string>`,
-    '<key>ProgramArguments</key><array>',
-    `<string>${executablePath}</string>`,
-    '<string>daemon</string>',
-    '</array>',
-    '<key>RunAtLoad</key><true/>',
-    '</dict></plist>',
-    '',
-  ].join('\n');
-  const oldShim = `#!/bin/sh\nexec '${executablePath}' "$@"\n`;
+  const commandLinkFile = join(state, 'command-link');
+  const oldPlist = canonicalLegacyPlist(executablePath);
+  const oldShim = canonicalLegacyShim(home, support, executablePath, commandLinkFile);
   writeFileSync(plist, oldPlist); chmodSync(plist, 0o600);
   writeFileSync(shim, oldShim); chmodSync(shim, 0o700);
   symlinkSync(shim, commandPath);
-  writeFileSync(join(state, 'command-link'), commandPath + '\n'); chmodSync(join(state, 'command-link'), 0o600);
+  writeFileSync(commandLinkFile, commandPath + '\n'); chmodSync(commandLinkFile, 0o600);
   const enrollment = writeEnrollment(home);
   const collectorState = join(state, 'collector-state.json');
   writeFileSync(collectorState, `{"enabled":${enabled},"files":{"cursor":"preserve"},"version":1}\n`);
@@ -695,6 +829,80 @@ describe('Runtime Raiders protocol-two installer', () => {
       expect(log).not.toContain(enrollmentCode);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  it.each(['archive', 'extracted'] as const)(
+    'runs the embedded production validator at the %s boundary before enrollment',
+    (phase) => {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-installer-validator-${phase}-`));
+      try {
+        const home = join(root, 'home'); mkdirSync(home);
+        const fake = fakes(root); const files = protocolTwoArtifact(root);
+        const result = invoke(renderedProtocolTwoInstaller(root), installerArgs(root), {
+          ...env(home, fake, files),
+          FAKE_INSTALLER_VALIDATOR_FAIL: phase,
+        });
+        expect(result.status).not.toBe(0);
+        const lines = readFileSync(join(home, 'commands.log'), 'utf8').trim().split('\n');
+        const archiveValidation = lines.findIndex((line) => line.startsWith('installer-validator ') &&
+          line.includes('runtime-raiders-agent.zip') && !line.includes('/unpacked '));
+        const extraction = lines.findIndex((line) => line.startsWith('ditto -x -k '));
+        if (phase === 'archive') {
+          expect(archiveValidation).toBeGreaterThanOrEqual(0);
+          expect(extraction).toBe(-1);
+        } else {
+          const extractedValidation = lines.findIndex((line) => line.startsWith('installer-validator ') &&
+            line.includes('/unpacked '));
+          expect(archiveValidation).toBeGreaterThanOrEqual(0);
+          expect(extraction).toBeGreaterThan(archiveValidation);
+          expect(extractedValidation).toBeGreaterThan(extraction);
+        }
+        expect(lines.some((line) => line.includes('/api/raiders/enroll'))).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it.each([
+    ['bootout stopped then failed', { FAKE_BOOTOUT_STOPS_THEN_FAIL: '1' }],
+    ['bootstrap started then failed', { FAKE_BOOTSTRAP_STARTS_THEN_FAIL: '1' }],
+    ['command link changed then failed', { FAKE_LN_MUTATES_THEN_FAIL: '1' }],
+  ] as const)('reconciles ambiguous %s and restores a healthy legacy daemon', (_name, injected) => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-ambiguous-rollback-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, true);
+      const plistBefore = readFileSync(fixture.plist);
+      const shimBefore = readFileSync(fixture.shim);
+      const failed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        ...injected,
+      });
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(fixture.plist)).toEqual(plistBefore);
+      expect(readFileSync(fixture.shim)).toEqual(shimBefore);
+      expect(readlinkSync(fixture.commandPath)).toBe(fixture.shim);
+      expect(existsSync(join(fixture.home, '.runtime-raiders-test-job'))).toBe(true);
+      expect(existsSync(join(fixture.home, '.runtime-raiders-test-running'))).toBe(true);
+      expect(existsSync(join(fixture.home, '.runtime-raiders-test-prepared'))).toBe(false);
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status, retry.stderr).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['candidate-prepared', 'candidate-resumed'] as const)(
+    'rejects protected state mutation at %s and restores the legacy layout',
+    (phase) => {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-protected-${phase}-`));
+      try {
+        const fixture = legacySequenceEightFixture(root, false);
+        const failed = invoke(renderedProtocolTwoInstaller(root), [], {
+          ...fixture.environment,
+          FAKE_MUTATE_PROTECTED_AT: phase,
+        });
+        expect(failed.status).not.toBe(0);
+        expect(existsSync(join(fixture.home, '.runtime-raiders-test-running'))).toBe(true);
+        expect(existsSync(join(fixture.home, '.runtime-raiders-test-prepared'))).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
 
   it('rejects any flat release other than exact protocol-one sequence eight before mutation', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-wrong-legacy-'));
@@ -1177,7 +1385,8 @@ describe('Runtime Raiders release build', () => {
       const loggingReleaseValidator = join(root, 'logging-release-validator');
       executable(loggingReleaseValidator, [
         'printf "release-validator %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"',
-        'exec "$RUNTIME_RAIDERS_TEST_PRODUCTION_RELEASE_VALIDATOR" "$@"',
+        'if [ "$#" -eq 1 ]; then exec "$RUNTIME_RAIDERS_TEST_PRODUCTION_RELEASE_VALIDATOR" "$@"; fi',
+        '[ "$#" -eq 7 ]',
       ]);
       const fixture = disposableReleaseBuilder(root, { interceptAbsoluteDitto: true });
       const repositoryCacheBefore = buildCacheIdentity(join(process.cwd(), 'companion/.build'));
@@ -1234,6 +1443,12 @@ describe('Runtime Raiders release build', () => {
       expect(rendered).toContain("RELEASE_SEQUENCE='" + releaseSequence + "'");
       expect(rendered).toContain("RELEASE_SHA='" + fixture.releaseSHA + "'");
       expect(rendered).toContain("UPDATE_PROTOCOL_VERSION='" + packagedUpdateProtocolVersion + "'");
+      const embeddedValidatorSHA = rendered.match(/^RELEASE_VALIDATOR_SHA256='([0-9a-f]{64})'$/m)?.[1];
+      const embeddedValidatorPayload = rendered.match(/^RELEASE_VALIDATOR_BASE64='([A-Za-z0-9+/=]+)'$/m)?.[1];
+      expect(embeddedValidatorSHA).toBeDefined();
+      expect(embeddedValidatorPayload).toBeDefined();
+      expect(createHash('sha256').update(Buffer.from(embeddedValidatorPayload!, 'base64')).digest('hex'))
+        .toBe(embeddedValidatorSHA);
       expect(rendered).toContain("ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'");
       expect(rendered).toContain("CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'");
       expect(rendered).not.toContain('__RUNTIME_RAIDERS_');
@@ -1255,8 +1470,10 @@ describe('Runtime Raiders release build', () => {
       expect(commands).toContain('xcrun stapler staple');
       expect(commands).toContain('xcrun stapler validate');
       const commandLines = commands.trim().split('\n');
-      expect(commandLines.filter((line) => line.startsWith('lipo -create '))).toHaveLength(2);
-      expect(commandLines.filter((line) => line.startsWith('lipo -verify_arch arm64 x86_64 '))).toHaveLength(2);
+      expect(commandLines.filter((line) => line.startsWith('lipo -create '))).toHaveLength(3);
+      expect(commandLines.filter((line) => line.startsWith('lipo -verify_arch arm64 x86_64 '))).toHaveLength(3);
+      expect(commandLines.filter((line) => line.match(/^swift (arm64|x86_64) runtime-raiders-release-validator$/)))
+        .toHaveLength(2);
       expect(commandLines.filter((line) => line.startsWith('codesign --force '))).toHaveLength(2);
       const dittoCommands = commandLines.filter((line) => line.startsWith('ditto '));
       expect(dittoCommands).toHaveLength(3);

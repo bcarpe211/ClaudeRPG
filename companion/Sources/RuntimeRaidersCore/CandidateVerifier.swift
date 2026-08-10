@@ -197,6 +197,75 @@ struct SignedBundleTrustInspector {
         )
     }
 
+    func inspect(
+        candidate: URL,
+        expectedTeamIdentifier: String
+    ) throws -> CandidateSignatureFacts {
+        guard Self.validTeamIdentifier(expectedTeamIdentifier) else {
+            throw CandidateVerificationError.untrustedCandidate
+        }
+        let candidateCode = try staticCode(at: candidate)
+        guard let information = try signingInformation(for: candidateCode),
+              let identifier = information[kSecCodeInfoIdentifier as String] as? String,
+              let teamIdentifier = information[kSecCodeInfoTeamIdentifier as String] as? String,
+              let flags = information[kSecCodeInfoFlags as String] as? NSNumber,
+              let requirement = try makeDeveloperIDRequirement(
+                  bundleIdentifier: identifier,
+                  teamIdentifier: expectedTeamIdentifier
+              ) else {
+            throw CandidateVerificationError.untrustedCandidate
+        }
+
+        var requirementText: CFString?
+        guard SecRequirementCopyString(requirement, [], &requirementText) == errSecSuccess,
+              let requirementString = requirementText as String? else {
+            throw CandidateVerificationError.untrustedCandidate
+        }
+        let candidatePath = candidate.path
+        let codesign = try runner.run(
+            executable: URL(fileURLWithPath: "/usr/bin/codesign"),
+            arguments: ["--verify", "--strict", "-R=\(requirementString)", candidatePath],
+            timeout: 30
+        )
+        let allArchitectureCodesign = try runner.run(
+            executable: URL(fileURLWithPath: "/usr/bin/codesign"),
+            arguments: [
+                "--verify", "--strict", "--all-architectures",
+                "-R=\(requirementString)", candidatePath,
+            ],
+            timeout: 30
+        )
+        let notarization = try runner.run(
+            executable: URL(fileURLWithPath: "/usr/bin/codesign"),
+            arguments: [
+                "--verify", "--strict", "--check-notarization", "-R=notarized", candidatePath,
+            ],
+            timeout: 30
+        )
+        let gatekeeper = try runner.run(
+            executable: URL(fileURLWithPath: "/usr/sbin/spctl"),
+            arguments: ["--assess", "--type", "execute", "--verbose=4", candidatePath],
+            timeout: 30
+        )
+        return CandidateSignatureFacts(
+            bundleIdentifier: identifier,
+            teamIdentifier: teamIdentifier,
+            signatureValid: teamIdentifier == expectedTeamIdentifier &&
+                SecStaticCodeCheckValidity(candidateCode, Self.validationFlags, requirement) == errSecSuccess &&
+                codesign.exitStatus == .exited(0),
+            allArchitecturesValid: teamIdentifier == expectedTeamIdentifier &&
+                SecStaticCodeCheckValidity(
+                    candidateCode,
+                    Self.allArchitectureValidationFlags,
+                    requirement
+                ) == errSecSuccess && allArchitectureCodesign.exitStatus == .exited(0),
+            hardenedRuntime: flags.uint32Value & Self.hardenedRuntimeSigningFlag != 0,
+            secureTimestampPresent: information[kSecCodeInfoTimestamp as String] is Date,
+            gatekeeperNotarized: notarization.exitStatus == .exited(0) &&
+                gatekeeper.exitStatus == .exited(0)
+        )
+    }
+
     private static let validationFlags = SecCSFlags(rawValue:
         UInt32(kSecCSStrictValidate) |
             UInt32(kSecCSCheckNestedCode) |
