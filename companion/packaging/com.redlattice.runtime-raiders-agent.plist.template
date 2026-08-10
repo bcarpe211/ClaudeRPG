@@ -6,7 +6,7 @@
   <string>com.redlattice.runtime-raiders-agent</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__RUNTIME_RAIDERS_EXECUTABLE__</string>
+    <string>__RUNTIME_RAIDERS_LAUNCHER_EXECUTABLE__</string>
     <string>daemon</string>
   </array>
   <key>RunAtLoad</key>

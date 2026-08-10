@@ -18,7 +18,10 @@ case "$RUNTIME_RAIDERS_TEAM_ID" in *[!A-Z0-9]*|'') echo "RUNTIME_RAIDERS_TEAM_ID
   echo "RUNTIME_RAIDERS_TEAM_ID is invalid" >&2
   exit 64
 }
-REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RUNTIME_RAIDERS_TEAM_ID"'"'
+AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RUNTIME_RAIDERS_TEAM_ID"'"'
+LAUNCHER_REQUIREMENT='identifier "com.redlattice.runtime-raiders-launcher" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RUNTIME_RAIDERS_TEAM_ID"'"'
+PACKAGED_UPDATE_PROTOCOL_VERSION=2
+LAUNCHER_PROTOCOL_VERSION=1
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)"
 OUTPUT="$ROOT/dist"
 SCRATCH=''
@@ -168,10 +171,14 @@ STAGED_OUTPUT="$(mktemp -d "$WORK/output.XXXXXX")"
 for arch in arm64 x86_64; do
   if [ -n "$SCRATCH" ]; then
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product raiders)
+    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product runtime-raiders-launcher)
     cp "$SCRATCH/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
+    cp "$SCRATCH/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
   else
     (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product raiders)
+    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product runtime-raiders-launcher)
     cp "$ROOT/companion/.build/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
+    cp "$ROOT/companion/.build/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
   fi
 done
 VALIDATOR_ARCH="$(/usr/bin/uname -m)"
@@ -188,10 +195,14 @@ fi
   exit 1
 }
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
-APP="$WORK/Runtime Raiders Agent.app"
-mkdir -p "$APP/Contents/MacOS"
-mv "$WORK/runtime-raiders-agent" "$APP/Contents/MacOS/runtime-raiders-agent"
-cat > "$APP/Contents/Info.plist" <<EOF
+lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"
+RELEASE_CONTAINER="$WORK/Runtime Raiders Release"
+AGENT_APP="$RELEASE_CONTAINER/Runtime Raiders Agent.app"
+LAUNCHER_APP="$RELEASE_CONTAINER/Runtime Raiders Launcher.app"
+mkdir -p "$AGENT_APP/Contents/MacOS" "$LAUNCHER_APP/Contents/MacOS"
+mv "$WORK/runtime-raiders-agent" "$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
+mv "$WORK/runtime-raiders-launcher" "$LAUNCHER_APP/Contents/MacOS/runtime-raiders-launcher"
+cat > "$AGENT_APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -202,41 +213,83 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <key>CFBundleShortVersionString</key><string>$COMPANION_VERSION</string>
 <key>RuntimeRaidersReleaseSequence</key><integer>$RELEASE_SEQUENCE</integer>
 <key>RuntimeRaidersReleaseSHA</key><string>$RELEASE_SHA</string>
-<key>RuntimeRaidersUpdateProtocolVersion</key><integer>1</integer>
+<key>RuntimeRaidersUpdateProtocolVersion</key><integer>$PACKAGED_UPDATE_PROTOCOL_VERSION</integer>
 </dict></plist>
 EOF
-INFO_PLIST="$APP/Contents/Info.plist"
-/usr/bin/plutil -lint "$INFO_PLIST" >/dev/null || {
+cat > "$LAUNCHER_APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>runtime-raiders-launcher</string>
+<key>CFBundleIdentifier</key><string>com.redlattice.runtime-raiders-launcher</string>
+<key>CFBundleName</key><string>Runtime Raiders Launcher</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>$COMPANION_VERSION</string>
+<key>RuntimeRaidersLauncherProtocolVersion</key><integer>$LAUNCHER_PROTOCOL_VERSION</integer>
+</dict></plist>
+EOF
+AGENT_INFO_PLIST="$AGENT_APP/Contents/Info.plist"
+LAUNCHER_INFO_PLIST="$LAUNCHER_APP/Contents/Info.plist"
+/usr/bin/plutil -lint "$AGENT_INFO_PLIST" >/dev/null &&
+  /usr/bin/plutil -lint "$LAUNCHER_INFO_PLIST" >/dev/null || {
   echo "release identity plist rendering failed" >&2
   exit 1
 }
-[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$INFO_PLIST")" = 'com.redlattice.runtime-raiders-agent' ] &&
-  [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$INFO_PLIST")" = "$COMPANION_VERSION" ] &&
-  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSequence raw -o - "$INFO_PLIST")" = "$RELEASE_SEQUENCE" ] &&
-  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSHA raw -o - "$INFO_PLIST")" = "$RELEASE_SHA" ] &&
-  [ "$(/usr/bin/plutil -extract RuntimeRaidersUpdateProtocolVersion raw -o - "$INFO_PLIST")" = '1' ] || {
+[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$AGENT_INFO_PLIST")" = 'com.redlattice.runtime-raiders-agent' ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$AGENT_INFO_PLIST")" = 'runtime-raiders-agent' ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$AGENT_INFO_PLIST")" = "$COMPANION_VERSION" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSequence raw -o - "$AGENT_INFO_PLIST")" = "$RELEASE_SEQUENCE" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSHA raw -o - "$AGENT_INFO_PLIST")" = "$RELEASE_SHA" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersUpdateProtocolVersion raw -o - "$AGENT_INFO_PLIST")" = "$PACKAGED_UPDATE_PROTOCOL_VERSION" ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$LAUNCHER_INFO_PLIST")" = 'com.redlattice.runtime-raiders-launcher' ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$LAUNCHER_INFO_PLIST")" = 'runtime-raiders-launcher' ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersLauncherProtocolVersion raw -o - "$LAUNCHER_INFO_PLIST")" = "$LAUNCHER_PROTOCOL_VERSION" ] &&
+  ! /usr/bin/plutil -extract RuntimeRaidersReleaseSequence raw -o - "$LAUNCHER_INFO_PLIST" >/dev/null 2>&1 || {
   echo "release identity plist validation failed" >&2
   exit 1
 }
-codesign --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$APP"
-codesign --verify --strict --verbose=2 --all-architectures -R="$REQUIREMENT" "$APP"
+codesign --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$AGENT_APP"
+codesign --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$LAUNCHER_APP"
+codesign --verify --strict --verbose=2 --all-architectures -R="$AGENT_REQUIREMENT" "$AGENT_APP"
+codesign --verify --strict --verbose=2 --all-architectures -R="$LAUNCHER_REQUIREMENT" "$LAUNCHER_APP"
 NOTARY_ZIP="$WORK/notary.zip"
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$RELEASE_CONTAINER" "$NOTARY_ZIP"
 xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$RUNTIME_RAIDERS_NOTARY_PROFILE" --wait
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
-codesign --verify --strict --verbose=2 --all-architectures -R="$REQUIREMENT" "$APP"
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$STAGED_OUTPUT/runtime-raiders-agent.zip"
+xcrun stapler staple "$AGENT_APP"
+xcrun stapler staple "$LAUNCHER_APP"
+xcrun stapler validate "$AGENT_APP"
+xcrun stapler validate "$LAUNCHER_APP"
+codesign --verify --strict --verbose=2 --all-architectures -R="$AGENT_REQUIREMENT" "$AGENT_APP"
+codesign --verify --strict --verbose=2 --all-architectures -R="$LAUNCHER_REQUIREMENT" "$LAUNCHER_APP"
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$RELEASE_CONTAINER" "$STAGED_OUTPUT/runtime-raiders-agent.zip"
 ARCHIVE_VALIDATION="$(mktemp -d "$WORK/archive-validation.XXXXXX")"
 /usr/bin/ditto -x -k "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$ARCHIVE_VALIDATION"
-PACKAGED_APP="$ARCHIVE_VALIDATION/Runtime Raiders Agent.app"
-[ -d "$PACKAGED_APP" ] && [ ! -L "$PACKAGED_APP" ] || {
+PACKAGED_RELEASE="$ARCHIVE_VALIDATION/Runtime Raiders Release"
+PACKAGED_AGENT_APP="$PACKAGED_RELEASE/Runtime Raiders Agent.app"
+PACKAGED_LAUNCHER_APP="$PACKAGED_RELEASE/Runtime Raiders Launcher.app"
+[ -d "$PACKAGED_RELEASE" ] && [ ! -L "$PACKAGED_RELEASE" ] &&
+  [ -d "$PACKAGED_AGENT_APP" ] && [ ! -L "$PACKAGED_AGENT_APP" ] &&
+  [ -d "$PACKAGED_LAUNCHER_APP" ] && [ ! -L "$PACKAGED_LAUNCHER_APP" ] || {
   echo "release archive extraction validation failed" >&2
   exit 1
 }
-codesign --verify --strict --verbose=2 --all-architectures -R="$REQUIREMENT" "$PACKAGED_APP"
-xcrun stapler validate "$PACKAGED_APP"
-"$RELEASE_VALIDATOR" "$STAGED_OUTPUT/runtime-raiders-agent.zip" || {
+codesign --verify --strict --verbose=2 --all-architectures -R="$AGENT_REQUIREMENT" "$PACKAGED_AGENT_APP"
+codesign --verify --strict --verbose=2 --all-architectures -R="$LAUNCHER_REQUIREMENT" "$PACKAGED_LAUNCHER_APP"
+xcrun stapler validate "$PACKAGED_AGENT_APP"
+xcrun stapler validate "$PACKAGED_LAUNCHER_APP"
+[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$PACKAGED_AGENT_APP/Contents/Info.plist")" = 'com.redlattice.runtime-raiders-agent' ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$PACKAGED_AGENT_APP/Contents/Info.plist")" = 'runtime-raiders-agent' ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$PACKAGED_AGENT_APP/Contents/Info.plist")" = "$COMPANION_VERSION" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSequence raw -o - "$PACKAGED_AGENT_APP/Contents/Info.plist")" = "$RELEASE_SEQUENCE" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSHA raw -o - "$PACKAGED_AGENT_APP/Contents/Info.plist")" = "$RELEASE_SHA" ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersUpdateProtocolVersion raw -o - "$PACKAGED_AGENT_APP/Contents/Info.plist")" = "$PACKAGED_UPDATE_PROTOCOL_VERSION" ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$PACKAGED_LAUNCHER_APP/Contents/Info.plist")" = 'com.redlattice.runtime-raiders-launcher' ] &&
+  [ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$PACKAGED_LAUNCHER_APP/Contents/Info.plist")" = 'runtime-raiders-launcher' ] &&
+  [ "$(/usr/bin/plutil -extract RuntimeRaidersLauncherProtocolVersion raw -o - "$PACKAGED_LAUNCHER_APP/Contents/Info.plist")" = "$LAUNCHER_PROTOCOL_VERSION" ] || {
+  echo "release archive identity validation failed" >&2
+  exit 1
+}
+"$RELEASE_VALIDATOR" "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$ARCHIVE_VALIDATION" || {
   echo "release archive shape validation failed" >&2
   exit 1
 }
@@ -251,7 +304,7 @@ printf '%s  runtime-raiders-agent.zip\n' "$ZIP_SHA256" > "$STAGED_OUTPUT/runtime
   echo "release archive checksum staging failed" >&2
   exit 1
 }
-MANIFEST_JSON='{"companion_version":"'"$COMPANION_VERSION"'","manifest_version":1,"release_sequence":'"$RELEASE_SEQUENCE"',"release_sha":"'"$RELEASE_SHA"'","update_protocol_version":1,"zip_sha256":"'"$ZIP_SHA256"'","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}'
+MANIFEST_JSON='{"companion_version":"'"$COMPANION_VERSION"'","manifest_version":1,"release_sequence":'"$RELEASE_SEQUENCE"',"release_sha":"'"$RELEASE_SHA"'","update_protocol_version":'"$PACKAGED_UPDATE_PROTOCOL_VERSION"',"zip_sha256":"'"$ZIP_SHA256"'","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}'
 printf '%s\n' "$MANIFEST_JSON" > "$STAGED_OUTPUT/runtime-raiders-agent.update.json"
 /usr/bin/plutil -convert json -o - "$STAGED_OUTPUT/runtime-raiders-agent.update.json" >/dev/null || {
   echo "release update manifest validation failed" >&2
@@ -268,7 +321,7 @@ sed \
   -e "s/__RUNTIME_RAIDERS_COMPANION_VERSION__/$COMPANION_VERSION/g" \
   -e "s/__RUNTIME_RAIDERS_RELEASE_SEQUENCE__/$RELEASE_SEQUENCE/g" \
   -e "s/__RUNTIME_RAIDERS_RELEASE_SHA__/$RELEASE_SHA/g" \
-  -e 's/__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__/1/g' \
+  -e "s/__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__/$PACKAGED_UPDATE_PROTOCOL_VERSION/g" \
   "$ROOT/companion/packaging/install.sh" > "$STAGED_OUTPUT/install.sh"
 chmod 755 "$STAGED_OUTPUT/install.sh"
 grep -F '__RUNTIME_RAIDERS_' "$STAGED_OUTPUT/install.sh" >/dev/null && {
