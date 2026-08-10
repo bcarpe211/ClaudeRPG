@@ -132,36 +132,32 @@ GIT_HEAD="$(/usr/bin/git -C "$ROOT" rev-parse --verify HEAD)" || {
   exit 64
 }
 
+case "$OUTPUT" in
+  /*) ;;
+  *) OUTPUT="$(pwd -P)/$OUTPUT" ;;
+esac
+OUTPUT_PARENT="$(dirname "$OUTPUT")"
+OUTPUT_NAME="$(basename "$OUTPUT")"
+case "$OUTPUT_NAME" in ''|.|..|/) echo "release output is invalid" >&2; exit 64 ;; esac
+[ -d "$OUTPUT_PARENT" ] && [ ! -L "$OUTPUT_PARENT" ] || {
+  echo "release output parent must be an existing nonsymlink directory" >&2
+  exit 64
+}
+OUTPUT_PARENT="$(CDPATH= cd -- "$OUTPUT_PARENT" && pwd -P)"
+OUTPUT="$OUTPUT_PARENT/$OUTPUT_NAME"
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+  echo "release output must be absent; publish immutable generations with scripts/pi/runtime-raiders-artifacts.sh" >&2
+  exit 1
+}
+
 TEMP_ROOT=/tmp
 [ -n "$TMPDIR" ] && TEMP_ROOT="$TMPDIR"
 WORK="$(mktemp -d "$TEMP_ROOT/runtime-raiders-release.XXXXXX")"
-TRANSACTION=''
-release_transaction_active=0
-release_transaction_committed=0
-old_zip=0
-old_checksum=0
-old_install=0
-old_manifest=0
-placed_zip=0
-placed_checksum=0
-placed_install=0
-placed_manifest=0
-rollback_release() {
-  [ "$release_transaction_active" -eq 1 ] && [ "$release_transaction_committed" -eq 0 ] || return 0
-  release_transaction_active=0
-  [ "$placed_zip" -eq 0 ] || rm -f "$OUTPUT/runtime-raiders-agent.zip"
-  [ "$placed_checksum" -eq 0 ] || rm -f "$OUTPUT/runtime-raiders-agent.zip.sha256"
-  [ "$placed_install" -eq 0 ] || rm -f "$OUTPUT/install.sh"
-  [ "$placed_manifest" -eq 0 ] || rm -f "$OUTPUT/runtime-raiders-agent.update.json"
-  [ "$old_zip" -eq 0 ] || [ ! -f "$TRANSACTION/old-runtime-raiders-agent.zip" ] || /bin/mv "$TRANSACTION/old-runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
-  [ "$old_checksum" -eq 0 ] || [ ! -f "$TRANSACTION/old-runtime-raiders-agent.zip.sha256" ] || /bin/mv "$TRANSACTION/old-runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
-  [ "$old_install" -eq 0 ] || [ ! -f "$TRANSACTION/old-install.sh" ] || /bin/mv "$TRANSACTION/old-install.sh" "$OUTPUT/install.sh"
-  [ "$old_manifest" -eq 0 ] || [ ! -f "$TRANSACTION/old-runtime-raiders-agent.update.json" ] || /bin/mv "$TRANSACTION/old-runtime-raiders-agent.update.json" "$OUTPUT/runtime-raiders-agent.update.json"
-}
+UNPUBLISHED_STAGE=''
 cleanup() {
   status=$?
-  rollback_release
-  rm -rf "$WORK" "$TRANSACTION"
+  rm -rf "$WORK"
+  [ -z "$UNPUBLISHED_STAGE" ] || rm -rf "$UNPUBLISHED_STAGE"
   trap - EXIT HUP INT TERM
   exit "$status"
 }
@@ -196,6 +192,8 @@ fi
 }
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
 lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"
+lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-agent"
+lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-launcher"
 RELEASE_CONTAINER="$WORK/Runtime Raiders Release"
 AGENT_APP="$RELEASE_CONTAINER/Runtime Raiders Agent.app"
 LAUNCHER_APP="$RELEASE_CONTAINER/Runtime Raiders Launcher.app"
@@ -328,55 +326,23 @@ grep -F '__RUNTIME_RAIDERS_' "$STAGED_OUTPUT/install.sh" >/dev/null && {
   echo "release installer contract rendering failed" >&2
   exit 1
 }
-[ ! -L "$OUTPUT" ] || {
-  echo "refusing unsafe release output directory: $OUTPUT" >&2
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+  echo "release output must be absent; publish immutable generations with scripts/pi/runtime-raiders-artifacts.sh" >&2
   exit 1
 }
-if [ -e "$OUTPUT" ]; then
-  [ -d "$OUTPUT" ] || {
-    echo "refusing unsafe release output directory: $OUTPUT" >&2
-    exit 1
-  }
-else
-  mkdir -p "$OUTPUT"
-fi
-existing_targets=0
-for target in "$OUTPUT/install.sh" "$OUTPUT/runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.update.json"; do
-  if [ -e "$target" ] || [ -L "$target" ]; then
-    [ -f "$target" ] && [ ! -L "$target" ] || {
-      echo "refusing unsafe existing release target: $target" >&2
-      exit 1
-    }
-    existing_targets=$((existing_targets + 1))
-  fi
-done
-[ "$existing_targets" -eq 0 ] || [ "$existing_targets" -eq 4 ] || {
-  echo "refusing to replace an incomplete existing release quartet" >&2
+UNPUBLISHED_STAGE="$(mktemp -d "$OUTPUT_PARENT/.runtime-raiders-unpublished.XXXXXX")"
+cp "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$UNPUBLISHED_STAGE/runtime-raiders-agent.zip"
+cp "$STAGED_OUTPUT/runtime-raiders-agent.zip.sha256" "$UNPUBLISHED_STAGE/runtime-raiders-agent.zip.sha256"
+cp "$STAGED_OUTPUT/install.sh" "$UNPUBLISHED_STAGE/install.sh"
+cp "$STAGED_OUTPUT/runtime-raiders-agent.update.json" "$UNPUBLISHED_STAGE/runtime-raiders-agent.update.json"
+[ "$(find "$UNPUBLISHED_STAGE" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 4 ] || {
+  echo "unpublished release staging is incomplete" >&2
   exit 1
 }
-TRANSACTION="$(mktemp -d "$OUTPUT/.runtime-raiders-transaction.XXXXXX")"
-cp "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$TRANSACTION/new-runtime-raiders-agent.zip"
-cp "$STAGED_OUTPUT/runtime-raiders-agent.zip.sha256" "$TRANSACTION/new-runtime-raiders-agent.zip.sha256"
-cp "$STAGED_OUTPUT/install.sh" "$TRANSACTION/new-install.sh"
-cp "$STAGED_OUTPUT/runtime-raiders-agent.update.json" "$TRANSACTION/new-runtime-raiders-agent.update.json"
-release_transaction_active=1
-if [ "$existing_targets" -eq 4 ]; then
-  old_zip=1
-  mv "$OUTPUT/runtime-raiders-agent.zip" "$TRANSACTION/old-runtime-raiders-agent.zip"
-  old_checksum=1
-  mv "$OUTPUT/runtime-raiders-agent.zip.sha256" "$TRANSACTION/old-runtime-raiders-agent.zip.sha256"
-  old_install=1
-  mv "$OUTPUT/install.sh" "$TRANSACTION/old-install.sh"
-  old_manifest=1
-  mv "$OUTPUT/runtime-raiders-agent.update.json" "$TRANSACTION/old-runtime-raiders-agent.update.json"
-fi
-placed_zip=1
-mv "$TRANSACTION/new-runtime-raiders-agent.zip" "$OUTPUT/runtime-raiders-agent.zip"
-placed_checksum=1
-mv "$TRANSACTION/new-runtime-raiders-agent.zip.sha256" "$OUTPUT/runtime-raiders-agent.zip.sha256"
-placed_install=1
-mv "$TRANSACTION/new-install.sh" "$OUTPUT/install.sh"
-placed_manifest=1
-mv "$TRANSACTION/new-runtime-raiders-agent.update.json" "$OUTPUT/runtime-raiders-agent.update.json"
-release_transaction_committed=1
-echo "Built notarized artifact at $OUTPUT/runtime-raiders-agent.zip (publication is manual)."
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+  echo "release output must be absent; publish immutable generations with scripts/pi/runtime-raiders-artifacts.sh" >&2
+  exit 1
+}
+/bin/mv "$UNPUBLISHED_STAGE" "$OUTPUT"
+UNPUBLISHED_STAGE=''
+echo "Built unpublished signed quartet at $OUTPUT (publication requires scripts/pi/runtime-raiders-artifacts.sh)."
