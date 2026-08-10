@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 const installer = join(process.cwd(), 'companion/packaging/install.sh');
 const build = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
+const installerRenderer = join(process.cwd(), 'scripts/release/render-runtime-raiders-installer.sh');
 const lifecycleGate = join(process.cwd(), 'scripts/test/runtime-raiders-lifecycle.sh');
 const signedReleaseGate = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
 const label = 'com.redlattice.runtime-raiders-agent';
@@ -419,6 +420,7 @@ type ReleaseBuilderFixture = { build: string; repository: string; releaseSHA: st
 type ReleaseBuilderFixtureOptions = {
   interceptAbsoluteDitto?: boolean;
   crossWireArm64Slice?: 'agent' | 'launcher';
+  rendererFailure?: boolean;
 };
 
 function disposableReleaseBuilder(
@@ -427,6 +429,7 @@ function disposableReleaseBuilder(
 ): ReleaseBuilderFixture {
   const repository = join(root, 'repository');
   const fixtureBuild = join(repository, 'scripts/release/build-runtime-raiders-agent.sh');
+  const fixtureRenderer = join(repository, 'scripts/release/render-runtime-raiders-installer.sh');
   const fixtureInstaller = join(repository, 'companion/packaging/install.sh');
   mkdirSync(join(repository, 'scripts/release'), { recursive: true });
   mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
@@ -450,12 +453,17 @@ function disposableReleaseBuilder(
     );
   }
   writeFileSync(fixtureBuild, fixtureBuildContents);
+  writeFileSync(
+    fixtureRenderer,
+    options.rendererFailure ? '#!/bin/sh\nexit 89\n' : readFileSync(installerRenderer),
+    { mode: 0o700 },
+  );
   writeFileSync(fixtureInstaller, readFileSync(installer));
   writeFileSync(join(repository, 'companion/RELEASE'), readFileSync(join(process.cwd(), 'companion/RELEASE')));
   execFileSync('/usr/bin/git', ['init', '-q'], { cwd: repository });
   execFileSync('/usr/bin/git', ['config', 'user.email', 'release-test@example.invalid'], { cwd: repository });
   execFileSync('/usr/bin/git', ['config', 'user.name', 'Release Test'], { cwd: repository });
-  execFileSync('/usr/bin/git', ['add', 'scripts/release/build-runtime-raiders-agent.sh', 'companion/packaging/install.sh', 'companion/RELEASE'], { cwd: repository });
+  execFileSync('/usr/bin/git', ['add', 'scripts/release/build-runtime-raiders-agent.sh', 'scripts/release/render-runtime-raiders-installer.sh', 'companion/packaging/install.sh', 'companion/RELEASE'], { cwd: repository });
   execFileSync('/usr/bin/git', ['commit', '-qm', 'release fixture'], { cwd: repository });
   const fixtureSHA = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
   return { build: fixtureBuild, repository, releaseSHA: fixtureSHA };
@@ -1083,6 +1091,37 @@ describe('Runtime Raiders protocol-two installer', () => {
 });
 
 describe('Runtime Raiders release build', () => {
+  it('uses the reviewed deterministic renderer for the emitted installer', () => {
+    // Catches the release builder returning to an independent ad-hoc rendering path.
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-shared-renderer-'));
+    try {
+      const fake = join(root, 'fakes');
+      mkdirSync(fake, { recursive: true });
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      executable(join(fake, 'codesign'), ['exit 0']);
+      executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
+      executable(join(fake, 'xcrun'), ['exit 0']);
+      executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+      const fixture = disposableReleaseBuilder(root, { rendererFailure: true });
+      const result = invoke(
+        fixture.build,
+        releaseBuildArgs(fixture.releaseSHA, '--output', join(root, 'output'), '--scratch-path', join(root, 'scratch')),
+        {
+          ...process.env,
+          PATH: fake + ':/usr/bin:/bin',
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+      );
+      expect(result.status, result.stderr).toBe(89);
+      expect(existsSync(join(root, 'output'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('points the launchd template only at the stable launcher and literal daemon command', () => {
     const template = readFileSync(join(
       process.cwd(),
@@ -1891,7 +1930,7 @@ describe('Runtime Raiders release gates', () => {
       'sh -n companion/packaging/install.sh',
       'bash -n scripts/release/build-runtime-raiders-agent.sh',
       'swift test --disable-sandbox --package-path companion',
-      'npx vitest run tests/companion-installer.test.ts',
+      'npx --no-install vitest run',
     ];
     let prior = -1;
     for (const command of orderedCommands) {
@@ -1908,9 +1947,14 @@ describe('Runtime Raiders release gates', () => {
     expect(source).toContain('RUNTIME_RAIDERS_TEST_FAKE_LAUNCHD');
     expect(source).toContain('CLANG_MODULE_CACHE_PATH');
     expect(source).toContain('SWIFTPM_MODULECACHE_OVERRIDE');
-    expect(source).not.toMatch(/export (?:HOME|CFFIXED_USER_HOME)=/);
+    expect(source).toContain('export HOME="$gate_root/home"');
+    expect(source).toContain('export CFFIXED_USER_HOME="$gate_root/home"');
+    expect(source).toContain('--scratch-path "$gate_root/swift-scratch"');
+    expect(source).toContain('--disable-automatic-resolution');
+    expect(source).toContain('--skip-update');
+    expect(source).toContain('npm_config_offline=true');
     expect(source).not.toMatch(/Library\/Application Support\/Runtime Raiders/);
-    expect(source).not.toMatch(/\b(?:curl|ssh|scp)\b|\bCaddy\b|\bPi\b|\bpublish(?:ed|ing|ation)?\b|\braiders[ \t]+on\b/i);
+    expect(source).not.toMatch(/\bCaddy\b|\bPi\b|\bpublish(?:ed|ing|ation)?\b|\braiders[ \t]+on\b/i);
   });
 
   it('keeps Gate 2 local, unpublished, owner-only, and complete before any real boundary is authorized', () => {
@@ -1935,6 +1979,11 @@ describe('Runtime Raiders release gates', () => {
       'Runtime Raiders Launcher.app',
       'RUNTIME_RAIDERS_CODESIGN_IDENTITY',
       '--timestamp=none',
+      'gate_verify_installer_binding',
+      'gate_process_capture',
+      'gate_process_stop_all',
+      'gate_fingerprint_migration_surface',
+      '__runtime-raiders-installer-status legacy-running false',
       'RUNTIME_RAIDERS_GATE2_FAKE_NETWORK',
       'RUNTIME_RAIDERS_GATE2_FAKE_LAUNCHD',
       'launcher-active',
@@ -1955,10 +2004,11 @@ describe('Runtime Raiders release gates', () => {
     expect(source).toMatch(/https?:\/\//);
     expect(source).toMatch(/-f .*install\.sh/);
     expect(source).toMatch(/-L .*install\.sh/);
-    expect(source).toMatch(/gate_env\(\) \{\s+local home="\$1"\s+shift\s+env HOME="\$home"/s);
-    expect(source).toMatch(
-      /cleanup\(\) \{.*case "\$gate_root" in.*for child in \$children.*find "\$gate_root" -type f -name '\.runtime-raiders-gate2-job\.pid'/s,
-    );
+    expect(source).toMatch(/gate_env\(\) \{\s+local home="\$1"\s+shift\s+gate_run_without_release_credentials env HOME="\$home"/s);
+    expect(source.indexOf('exec 9<>"$lease_fifo"')).toBeGreaterThan(0);
+    expect(source.indexOf('exec 9<>"$lease_fifo"')).toBeLessThan(source.indexOf('"$current_agent" __runtime-raiders-installer-lease'));
+    expect(source).not.toMatch(/kill[ \t]+-0|\bwait[ \t]+"?\$/);
+    expect(source).not.toMatch(/grep -F "(?:RELEASE_SEQUENCE|RELEASE_SHA|VERSION|UPDATE_PROTOCOL_VERSION|TEAM_ID)=/);
     expect(source).not.toMatch(/raiders[ \t]+on|office activation|artifact publication/i);
   });
 });

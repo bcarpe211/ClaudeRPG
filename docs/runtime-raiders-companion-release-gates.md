@@ -10,7 +10,7 @@ Run from the repository root:
 npm run canary:lifecycle-test
 ```
 
-This is the routine development gate. It checks installer and release-builder shell syntax, then runs the complete Swift companion package and the disposable installer integration suite in that exact fail-fast order. The gate owns a private temporary workspace, while the suites use disposable homes, synthetic content-free state, fake network and launchd boundaries, and injected trust facts. It does not read provider records or use the installed companion. It does not sign, notarize, contact the Pi or Caddy, publish files, enable collection, or activate players.
+This is the routine development gate. It checks installer and release-builder shell syntax, then runs the complete Swift companion package and disposable release-gate suites in that exact fail-fast order. The gate owns a private temporary home, support/config/cache directories, Swift scratch tree, npm cache, and temporary directory. Swift automatic dependency resolution is disabled, npm is offline, and `npx --no-install` may use only the already installed local Vitest. Live network, SSH, and launchd command names resolve to deny-only boundaries. The suites retain local Unix-socket and FSEvents coverage while using synthetic content-free state and injected trust facts. The gate does not read provider records or use the installed companion. It does not sign, notarize, contact the Pi or Caddy, publish files, enable collection, or activate players.
 
 Run it twice before advancing. The second clean pass proves that a previous workspace, journal, or old release is not required.
 
@@ -23,16 +23,16 @@ RUNTIME_RAIDERS_CODESIGN_IDENTITY='Developer ID Application: …' \
   bash scripts/test/verify-runtime-raiders-signed-release.sh /absolute/path/to/quartet
 ```
 
-The harness refuses URLs, symlinks, unsafe files, extra files, checksum or manifest mismatches, and anything other than the four expected local artifacts. It validates the archive and both application bundles with the production validator, `codesign`, Gatekeeper, required universal slices, and stapled notarization tickets.
+The harness refuses URLs, symlinks, unsafe files, extra files, checksum or manifest mismatches, and anything other than the four expected local artifacts. It validates the archive and both application bundles with the production validator, `codesign`, Gatekeeper, required universal slices, and stapled notarization tickets. It independently rebuilds the universal validator from the reviewed local source, derives release facts from the signed bundle, uses the same deterministic renderer as the release builder, and requires `install.sh` to match that rendering byte-for-byte before any installer execution. Appended comments, dead code, command substitutions, or embedded-validator changes therefore fail closed.
 
 Inside one owner-only temporary home it then:
 
-- signs disposable older/current/newer agent fixtures with the separately approved identity;
+- signs disposable older/current/newer agent fixtures with the separately approved identity while removing signing and notarization credentials from every installer, launcher, and daemon environment;
 - runs the real signed launcher against active, fallback-bearing, held-trial, missing, malformed, unsafe-mode, symlink, and identity-mismatch states;
 - runs the exact rendered installer with only network and launchd replaced by local fakes; and
-- copies only the installed-off sequence-8 application bundle as read-only migration input, injects every migration failure checkpoint into a temporary installer copy, and compares pre/post flat-layout fingerprints.
+- copies only the installed-off sequence-8 application bundle as read-only migration input, injects every migration failure checkpoint into a temporary installer copy, and compares no-follow pre/post fingerprints of the complete persistent support, legacy, rollback, diagnostic, failed-candidate, update-workspace, plist, profile, command, inode, and extended-attribute surfaces. Protocol-2 launcher, release, and installation residue must remain absent, and the restored daemon must pass the existing peer-attested exact-legacy-executable status route.
 
-The harness never reads the canary's enrollment or state and never changes its installed bundle, job, shim, or collection setting. Its temporary tree is verified as owned before cleanup. A Gate 2 pass does not authorize publication or installation.
+Every temporary daemon record binds a decimal PID greater than one to its expected temporary-root executable/command and captured process-start identity. Cleanup rejects corrupt or reused records before signaling, polls TERM for a fixed bound, then polls KILL for a fixed bound, and never uses PID zero, a process group, `kill -0`, or an unbounded wait. Open lease descriptors, FIFOs, children, and the verified owner-only temporary tree are cleaned on normal exit and signals. The harness never reads the canary's enrollment or state and never changes its installed bundle, job, shim, or collection setting. A Gate 2 pass does not authorize publication or installation.
 
 ## Gate 3: installed-off migration canary
 

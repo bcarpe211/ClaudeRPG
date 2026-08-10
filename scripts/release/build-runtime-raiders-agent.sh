@@ -313,31 +313,15 @@ printf '%s\n' "$MANIFEST_JSON" > "$STAGED_OUTPUT/runtime-raiders-agent.update.js
   echo "release update manifest validation failed" >&2
   exit 1
 }
-INSTALLER_TEMPLATE="$STAGED_OUTPUT/install.template"
-sed \
-  -e "s/__RUNTIME_RAIDERS_TEAM_ID__/$RUNTIME_RAIDERS_TEAM_ID/g" \
-  -e "s/__RUNTIME_RAIDERS_COMPANION_VERSION__/$COMPANION_VERSION/g" \
-  -e "s/__RUNTIME_RAIDERS_RELEASE_SEQUENCE__/$RELEASE_SEQUENCE/g" \
-  -e "s/__RUNTIME_RAIDERS_RELEASE_SHA__/$RELEASE_SHA/g" \
-  -e "s/__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__/$PACKAGED_UPDATE_PROTOCOL_VERSION/g" \
-  -e "s/__RUNTIME_RAIDERS_RELEASE_VALIDATOR_SHA256__/$RELEASE_VALIDATOR_SHA256/g" \
-  "$ROOT/companion/packaging/install.sh" > "$INSTALLER_TEMPLATE"
-: > "$STAGED_OUTPUT/install.sh"
-while IFS= read -r line || [ -n "$line" ]; do
-  if [ "$line" = "RELEASE_VALIDATOR_BASE64='__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__'" ]; then
-    printf "RELEASE_VALIDATOR_BASE64='" >> "$STAGED_OUTPUT/install.sh"
-    /usr/bin/base64 < "$RELEASE_VALIDATOR" | /usr/bin/tr -d '\n' >> "$STAGED_OUTPUT/install.sh"
-    printf "'\n" >> "$STAGED_OUTPUT/install.sh"
-  else
-    printf '%s\n' "$line" >> "$STAGED_OUTPUT/install.sh"
-  fi
-done < "$INSTALLER_TEMPLATE"
-rm -f "$INSTALLER_TEMPLATE"
-chmod 755 "$STAGED_OUTPUT/install.sh"
-grep -F '__RUNTIME_RAIDERS_' "$STAGED_OUTPUT/install.sh" >/dev/null && {
-  echo "release installer contract rendering failed" >&2
-  exit 1
-}
+"$ROOT/scripts/release/render-runtime-raiders-installer.sh" \
+  "$ROOT/companion/packaging/install.sh" \
+  "$RELEASE_VALIDATOR" \
+  "$RUNTIME_RAIDERS_TEAM_ID" \
+  "$COMPANION_VERSION" \
+  "$RELEASE_SEQUENCE" \
+  "$RELEASE_SHA" \
+  "$PACKAGED_UPDATE_PROTOCOL_VERSION" \
+  "$STAGED_OUTPUT/install.sh"
 [ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
   echo "release output must be absent; publish immutable generations with scripts/pi/runtime-raiders-artifacts.sh" >&2
   exit 1
