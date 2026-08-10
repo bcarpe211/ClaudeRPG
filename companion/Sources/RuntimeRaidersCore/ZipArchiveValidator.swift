@@ -18,7 +18,9 @@ public enum ZipArchiveValidationError: Error {
 public enum ZipArchiveValidator {
     public static let maximumEntryCount = 4_096
     public static let maximumUncompressedSize: Int64 = 256 * 1_024 * 1_024
-    public static let applicationRoot = "Runtime Raiders Agent.app/"
+    public static let releaseRoot = "Runtime Raiders Release/"
+    public static let agentApplicationRoot = "Runtime Raiders Release/Runtime Raiders Agent.app/"
+    public static let launcherApplicationRoot = "Runtime Raiders Release/Runtime Raiders Launcher.app/"
 
     public static func validate(_ archive: URL) throws -> ZipArchiveSummary {
         let attributes = try FileManager.default.attributesOfItem(atPath: archive.path)
@@ -40,11 +42,29 @@ public enum ZipArchiveValidator {
             options: []
         )
         guard children.count == 1,
-              children[0].lastPathComponent == String(applicationRoot.dropLast()),
-              try fileType(at: children[0]) == S_IFDIR else {
+              children[0].lastPathComponent == String(releaseRoot.dropLast()),
+              try safeDirectory(children[0]) else {
             throw ZipArchiveValidationError.invalidArchive
         }
-        try auditDirectory(children[0])
+        let releaseChildren = try FileManager.default.contentsOfDirectory(
+            at: children[0],
+            includingPropertiesForKeys: nil,
+            options: []
+        )
+        guard releaseChildren.count == 2 else {
+            throw ZipArchiveValidationError.invalidArchive
+        }
+        let expected = [
+            "Runtime Raiders Agent.app",
+            "Runtime Raiders Launcher.app",
+        ]
+        for name in expected {
+            guard let application = releaseChildren.first(where: { $0.lastPathComponent == name }),
+                  try safeDirectory(application) else {
+                throw ZipArchiveValidationError.invalidArchive
+            }
+            try auditDirectory(application)
+        }
     }
 
     private static func auditDirectory(_ directory: URL) throws {
@@ -55,11 +75,27 @@ public enum ZipArchiveValidator {
         ) {
             let type = try fileType(at: child)
             if type == S_IFDIR {
+                guard try safeMode(at: child) else {
+                    throw ZipArchiveValidationError.invalidArchive
+                }
                 try auditDirectory(child)
-            } else if type != S_IFREG {
-                throw ZipArchiveValidationError.invalidArchive
+            } else {
+                guard type == S_IFREG, try safeMode(at: child) else {
+                    throw ZipArchiveValidationError.invalidArchive
+                }
             }
         }
+    }
+
+    private static func safeDirectory(_ url: URL) throws -> Bool {
+        try fileType(at: url) == S_IFDIR && safeMode(at: url)
+    }
+
+    private static func safeMode(at url: URL) throws -> Bool {
+        var info = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &info) }
+        guard result == 0 else { throw ZipArchiveValidationError.invalidArchive }
+        return info.st_mode & 0o022 == 0
     }
 
     private static func fileType(at url: URL) throws -> mode_t {
@@ -106,7 +142,9 @@ private struct Parser {
         var foldedPaths = Set<String>()
         var ranges: [Range<Int>] = []
         var totalSize: Int64 = 0
-        var rootCount = 0
+        var releaseRootCount = 0
+        var agentRootCount = 0
+        var launcherRootCount = 0
 
         for _ in 0..<Int(totalCount) {
             guard try u32(cursor) == 0x02014b50 else { throw invalid }
@@ -155,9 +193,14 @@ private struct Parser {
                 throw invalid
             }
             if method == 0, compressed != uncompressed { throw invalid }
-            if path == ZipArchiveValidator.applicationRoot {
-                rootCount += 1
-            } else if !path.hasPrefix(ZipArchiveValidator.applicationRoot) {
+            if path == ZipArchiveValidator.releaseRoot {
+                releaseRootCount += 1
+            } else if path == ZipArchiveValidator.agentApplicationRoot {
+                agentRootCount += 1
+            } else if path == ZipArchiveValidator.launcherApplicationRoot {
+                launcherRootCount += 1
+            } else if !path.hasPrefix(ZipArchiveValidator.agentApplicationRoot) &&
+                        !path.hasPrefix(ZipArchiveValidator.launcherApplicationRoot) {
                 throw invalid
             }
 
@@ -180,7 +223,9 @@ private struct Parser {
         }
 
         guard cursor == eocd,
-              rootCount == 1,
+              releaseRootCount == 1,
+              agentRootCount == 1,
+              launcherRootCount == 1,
               totalSize <= ZipArchiveValidator.maximumUncompressedSize else {
             throw invalid
         }

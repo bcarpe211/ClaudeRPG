@@ -4,6 +4,7 @@ import Security
 public struct CandidateSignatureFacts: Equatable, Sendable {
     public let bundleIdentifier: String
     public let teamIdentifier: String
+    public let signatureValid: Bool
     public let allArchitecturesValid: Bool
     public let hardenedRuntime: Bool
     public let secureTimestampPresent: Bool
@@ -12,6 +13,7 @@ public struct CandidateSignatureFacts: Equatable, Sendable {
     public init(
         bundleIdentifier: String,
         teamIdentifier: String,
+        signatureValid: Bool,
         allArchitecturesValid: Bool,
         hardenedRuntime: Bool,
         secureTimestampPresent: Bool,
@@ -19,6 +21,7 @@ public struct CandidateSignatureFacts: Equatable, Sendable {
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.teamIdentifier = teamIdentifier
+        self.signatureValid = signatureValid
         self.allArchitecturesValid = allArchitecturesValid
         self.hardenedRuntime = hardenedRuntime
         self.secureTimestampPresent = secureTimestampPresent
@@ -35,7 +38,7 @@ public struct CandidateVerifier {
     private let identityLoader: (URL) throws -> CompanionReleaseIdentity
 
     public init() {
-        signatureInspector = { try CandidateTrustInspector().inspect(candidate: $0) }
+        signatureInspector = { try SignedBundleTrustInspector().inspect(candidate: $0) }
         identityLoader = { candidate in
             guard let bundle = Bundle(url: candidate) else {
                 throw CandidateVerificationError.untrustedCandidate
@@ -62,6 +65,7 @@ public struct CandidateVerifier {
             let facts = try signatureInspector(candidate)
             guard facts.bundleIdentifier == "com.redlattice.runtime-raiders-agent",
                   facts.teamIdentifier == installedTeamIdentifier,
+                  facts.signatureValid,
                   facts.allArchitecturesValid,
                   facts.hardenedRuntime,
                   facts.secureTimestampPresent,
@@ -84,62 +88,86 @@ public struct CandidateVerifier {
     }
 }
 
-private struct CandidateTrustInspector {
+struct SignedBundleTrustInspector {
     private static let hardenedRuntimeSigningFlag: UInt32 = 0x0001_0000
     private let runner = SystemCommandRunner()
 
     func inspect(candidate: URL) throws -> CandidateSignatureFacts {
         let candidateCode = try staticCode(at: candidate)
         let installedCode = try staticCode(at: Bundle.main.bundleURL)
-        var requirement: SecRequirement?
-        guard SecCodeCopyDesignatedRequirement(installedCode, [], &requirement) == errSecSuccess,
-              let requirement else {
+        var installedRequirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(installedCode, [], &installedRequirement) == errSecSuccess,
+              let installedRequirement,
+              let installedInformation = try signingInformation(for: installedCode),
+              let installedIdentifier = installedInformation[kSecCodeInfoIdentifier as String] as? String,
+              let installedTeamIdentifier = installedInformation[kSecCodeInfoTeamIdentifier as String] as? String,
+              Self.validTeamIdentifier(installedTeamIdentifier) else {
             throw CandidateVerificationError.untrustedCandidate
         }
 
-        let validationFlags = SecCSFlags(rawValue:
-            UInt32(kSecCSCheckAllArchitectures) |
-                UInt32(kSecCSStrictValidate) |
-                UInt32(kSecCSCheckNestedCode) |
-                UInt32(kSecCSRestrictSymlinks)
-        )
-        let installedSelfValid = SecStaticCodeCheckValidity(installedCode, validationFlags, requirement) == errSecSuccess
-        let frameworkValid = SecStaticCodeCheckValidity(candidateCode, validationFlags, requirement) == errSecSuccess
+        guard let information = try signingInformation(for: candidateCode),
+              let identifier = information[kSecCodeInfoIdentifier as String] as? String,
+              let teamIdentifier = information[kSecCodeInfoTeamIdentifier as String] as? String,
+              let flags = information[kSecCodeInfoFlags as String] as? NSNumber,
+              let candidateDeveloperIDRequirement = try makeDeveloperIDRequirement(
+                  bundleIdentifier: identifier,
+                  teamIdentifier: installedTeamIdentifier
+              ),
+              let installedDeveloperIDRequirement = try makeDeveloperIDRequirement(
+                  bundleIdentifier: installedIdentifier,
+                  teamIdentifier: installedTeamIdentifier
+              ) else {
+            throw CandidateVerificationError.untrustedCandidate
+        }
+
+        let candidateRequirement = identifier == "com.redlattice.runtime-raiders-agent"
+            ? installedRequirement
+            : candidateDeveloperIDRequirement
+        let installedSignatureValid = SecStaticCodeCheckValidity(
+            installedCode,
+            Self.validationFlags,
+            installedRequirement
+        ) == errSecSuccess && SecStaticCodeCheckValidity(
+            installedCode,
+            Self.validationFlags,
+            installedDeveloperIDRequirement
+        ) == errSecSuccess
+        let candidateSignatureValid = SecStaticCodeCheckValidity(
+            candidateCode,
+            Self.validationFlags,
+            candidateRequirement
+        ) == errSecSuccess
+        let installedArchitecturesValid = SecStaticCodeCheckValidity(
+            installedCode,
+            Self.allArchitectureValidationFlags,
+            installedRequirement
+        ) == errSecSuccess && SecStaticCodeCheckValidity(
+            installedCode,
+            Self.allArchitectureValidationFlags,
+            installedDeveloperIDRequirement
+        ) == errSecSuccess
+        let candidateArchitecturesValid = SecStaticCodeCheckValidity(
+            candidateCode,
+            Self.allArchitectureValidationFlags,
+            candidateRequirement
+        ) == errSecSuccess
 
         var requirementText: CFString?
-        guard SecRequirementCopyString(requirement, [], &requirementText) == errSecSuccess,
+        guard SecRequirementCopyString(candidateRequirement, [], &requirementText) == errSecSuccess,
               let requirementString = requirementText as String? else {
             throw CandidateVerificationError.untrustedCandidate
         }
         let candidatePath = candidate.path
         let codesign = try runner.run(
             executable: URL(fileURLWithPath: "/usr/bin/codesign"),
+            arguments: ["--verify", "--strict", "-R=\(requirementString)", candidatePath],
+            timeout: 30
+        )
+        let allArchitectureCodesign = try runner.run(
+            executable: URL(fileURLWithPath: "/usr/bin/codesign"),
             arguments: ["--verify", "--strict", "--all-architectures", "-R=\(requirementString)", candidatePath],
             timeout: 30
         )
-
-        var signingInformation: CFDictionary?
-        guard SecCodeCopySigningInformation(
-            candidateCode,
-            SecCSFlags(rawValue: UInt32(kSecCSSigningInformation)),
-            &signingInformation
-        ) == errSecSuccess,
-            let information = signingInformation as? [String: Any],
-            let identifier = information[kSecCodeInfoIdentifier as String] as? String,
-            let teamIdentifier = information[kSecCodeInfoTeamIdentifier as String] as? String,
-            let flags = information[kSecCodeInfoFlags as String] as? NSNumber else {
-            throw CandidateVerificationError.untrustedCandidate
-        }
-        var installedSigningInformation: CFDictionary?
-        guard SecCodeCopySigningInformation(
-            installedCode,
-            SecCSFlags(rawValue: UInt32(kSecCSSigningInformation)),
-            &installedSigningInformation
-        ) == errSecSuccess,
-            let installedInformation = installedSigningInformation as? [String: Any],
-            let installedTeamIdentifier = installedInformation[kSecCodeInfoTeamIdentifier as String] as? String else {
-            throw CandidateVerificationError.untrustedCandidate
-        }
 
         let notarization = try runner.run(
             executable: URL(fileURLWithPath: "/usr/bin/codesign"),
@@ -155,14 +183,68 @@ private struct CandidateTrustInspector {
         return CandidateSignatureFacts(
             bundleIdentifier: identifier,
             teamIdentifier: teamIdentifier,
-            allArchitecturesValid: installedSelfValid &&
-                frameworkValid &&
+            signatureValid: installedSignatureValid &&
+                candidateSignatureValid &&
                 teamIdentifier == installedTeamIdentifier &&
                 codesign.exitStatus == .exited(0),
+            allArchitecturesValid: installedArchitecturesValid &&
+                candidateArchitecturesValid &&
+                teamIdentifier == installedTeamIdentifier &&
+                allArchitectureCodesign.exitStatus == .exited(0),
             hardenedRuntime: flags.uint32Value & Self.hardenedRuntimeSigningFlag != 0,
             secureTimestampPresent: information[kSecCodeInfoTimestamp as String] is Date,
             gatekeeperNotarized: notarization.exitStatus == .exited(0) && gatekeeper.exitStatus == .exited(0)
         )
+    }
+
+    private static let validationFlags = SecCSFlags(rawValue:
+        UInt32(kSecCSStrictValidate) |
+            UInt32(kSecCSCheckNestedCode) |
+            UInt32(kSecCSRestrictSymlinks)
+    )
+
+    private static let allArchitectureValidationFlags = SecCSFlags(rawValue:
+        validationFlags.rawValue | UInt32(kSecCSCheckAllArchitectures)
+    )
+
+    private func signingInformation(for code: SecStaticCode) throws -> [String: Any]? {
+        var signingInformation: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code,
+            SecCSFlags(rawValue: UInt32(kSecCSSigningInformation)),
+            &signingInformation
+        ) == errSecSuccess else {
+            throw CandidateVerificationError.untrustedCandidate
+        }
+        return signingInformation as? [String: Any]
+    }
+
+    private func makeDeveloperIDRequirement(
+        bundleIdentifier: String,
+        teamIdentifier: String
+    ) throws -> SecRequirement? {
+        guard [
+            "com.redlattice.runtime-raiders-agent",
+            "com.redlattice.runtime-raiders-launcher",
+        ].contains(bundleIdentifier),
+            Self.validTeamIdentifier(teamIdentifier) else {
+            return nil
+        }
+        let text = "anchor apple generic and " +
+            "certificate leaf[field.1.2.840.113635.100.6.1.13] exists and " +
+            "certificate leaf[subject.OU] = \"\(teamIdentifier)\" and " +
+            "identifier \"\(bundleIdentifier)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess else {
+            throw CandidateVerificationError.untrustedCandidate
+        }
+        return requirement
+    }
+
+    private static func validTeamIdentifier(_ value: String) -> Bool {
+        value.utf8.count == 10 && value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte)
+        }
     }
 
     private func staticCode(at url: URL) throws -> SecStaticCode {

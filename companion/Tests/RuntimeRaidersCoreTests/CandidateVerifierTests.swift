@@ -3,6 +3,10 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class CandidateVerifierTests: XCTestCase {
+    func testRejectsInvalidSignature() throws {
+        try assertRejected(facts: replacingValidFacts(signatureValid: false))
+    }
+
     func testRejectsWrongBundleIdentifier() throws {
         try assertRejected(facts: replacingValidFacts(bundleIdentifier: "com.example.agent"))
     }
@@ -51,7 +55,7 @@ final class CandidateVerifierTests: XCTestCase {
                 releaseSequence: manifest.releaseSequence,
                 releaseSHA: manifest.releaseSHA,
                 companionVersion: manifest.companionVersion,
-                updateProtocolVersion: 2
+                updateProtocolVersion: 1
             ),
         ]
 
@@ -85,7 +89,7 @@ final class CandidateVerifierTests: XCTestCase {
     }
 
     private var manifest: ReleaseManifestV1 {
-        try! ReleaseManifestV1.decode(Data(#"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":1,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#.utf8))
+        try! ReleaseManifestV1.decode(Data(#"{"manifest_version":1,"companion_version":"0.2.1","release_sequence":2,"release_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","update_protocol_version":2,"zip_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","zip_url":"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip"}"#.utf8))
     }
 
     private var installedIdentity: CompanionReleaseIdentity {
@@ -93,7 +97,7 @@ final class CandidateVerifierTests: XCTestCase {
             releaseSequence: 1,
             releaseSHA: String(repeating: "c", count: 40),
             companionVersion: "0.2.0",
-            updateProtocolVersion: 1
+            updateProtocolVersion: 2
         )
     }
 
@@ -110,6 +114,7 @@ final class CandidateVerifierTests: XCTestCase {
         CandidateSignatureFacts(
             bundleIdentifier: "com.redlattice.runtime-raiders-agent",
             teamIdentifier: "REDLATTICE",
+            signatureValid: true,
             allArchitecturesValid: true,
             hardenedRuntime: true,
             secureTimestampPresent: true,
@@ -120,6 +125,7 @@ final class CandidateVerifierTests: XCTestCase {
     private func replacingValidFacts(
         bundleIdentifier: String = "com.redlattice.runtime-raiders-agent",
         teamIdentifier: String = "REDLATTICE",
+        signatureValid: Bool = true,
         allArchitecturesValid: Bool = true,
         hardenedRuntime: Bool = true,
         secureTimestampPresent: Bool = true,
@@ -128,6 +134,7 @@ final class CandidateVerifierTests: XCTestCase {
         CandidateSignatureFacts(
             bundleIdentifier: bundleIdentifier,
             teamIdentifier: teamIdentifier,
+            signatureValid: signatureValid,
             allArchitecturesValid: allArchitecturesValid,
             hardenedRuntime: hardenedRuntime,
             secureTimestampPresent: secureTimestampPresent,
