@@ -313,25 +313,102 @@ final class ControlProtocolTests: XCTestCase {
         let paths = AgentPaths(
             applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-internal-routing")
         )
-        let installedExecutable = paths.legacyProtocolOne.installedApplication
-            .appendingPathComponent("Contents/MacOS/runtime-raiders-agent")
-        let rollbackExecutable = paths.legacyProtocolOne.rollbackApplication
-            .appendingPathComponent("Contents/MacOS/runtime-raiders-agent")
+        let active = ReleaseReference(
+            releaseSequence: 9,
+            releaseSHA: String(repeating: "a", count: 40),
+            companionVersion: "0.3.9",
+            updateProtocolVersion: 2
+        )
+        let trial = ReleaseReference(
+            releaseSequence: 10,
+            releaseSHA: String(repeating: "b", count: 40),
+            companionVersion: "0.3.10",
+            updateProtocolVersion: 2
+        )
+        let state = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 7,
+            active: active,
+            fallback: nil,
+            trial: trial
+        )
+        let activeExecutable = try! paths.executable(for: active)
+        let trialExecutable = try! paths.executable(for: trial)
         let otherExecutable = URL(fileURLWithPath: "/private/tmp/runtime-raiders-agent")
 
         XCTAssertEqual(
             CompanionCommandRouter.route(
                 arguments: ["daemon"],
-                executableURL: installedExecutable,
-                paths: paths
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: false,
+                releaseIdentity: try! active.companionReleaseIdentity()
             ),
-            .daemon
+            .daemon(trialGeneration: nil)
         )
         XCTAssertNil(
             CompanionCommandRouter.route(
                 arguments: ["daemon"],
                 executableURL: otherExecutable,
-                paths: paths
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: false,
+                releaseIdentity: try! active.companionReleaseIdentity()
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: trialExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: true,
+                releaseIdentity: try! trial.companionReleaseIdentity()
+            ),
+            .daemon(trialGeneration: 7)
+        )
+        for malformed in ["", "0", "-1", "+7", "7.0", " 7", "9007199254740992"] {
+            XCTAssertNil(
+                CompanionCommandRouter.route(
+                    arguments: ["daemon", "__runtime-raiders-trial-generation", malformed],
+                    executableURL: trialExecutable,
+                    paths: paths,
+                    releaseState: state,
+                    preparedStartupLeaseHeld: true,
+                    releaseIdentity: try! trial.companionReleaseIdentity()
+                ),
+                "accepted malformed generation \(malformed)"
+            )
+        }
+        XCTAssertNil(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: true,
+                releaseIdentity: try! trial.companionReleaseIdentity()
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: trialExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: false,
+                releaseIdentity: try! trial.companionReleaseIdentity()
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: trialExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: true,
+                releaseIdentity: try! active.companionReleaseIdentity()
             )
         )
         XCTAssertEqual(
@@ -349,25 +426,17 @@ final class ControlProtocolTests: XCTestCase {
                 paths: paths
             )
         )
-        XCTAssertEqual(
-            CompanionCommandRouter.route(
-                arguments: ["__recover-update"],
-                executableURL: rollbackExecutable,
-                paths: paths
-            ),
-            .recoverUpdate
-        )
         XCTAssertNil(
             CompanionCommandRouter.route(
                 arguments: ["__recover-update"],
-                executableURL: installedExecutable,
+                executableURL: activeExecutable,
                 paths: paths
             )
         )
         XCTAssertNil(
             CompanionCommandRouter.route(
                 arguments: ["__recover-update", "status"],
-                executableURL: rollbackExecutable,
+                executableURL: activeExecutable,
                 paths: paths
             )
         )

@@ -750,9 +750,6 @@ private func run() throws {
             try CompanionSelfCheck.encode(CompanionReleaseIdentity.load(from: .main))
         )
         return
-    case .recoverUpdate:
-        try runStableRecovery(paths: paths)
-        return
     case let .control(command):
         try runUserControlCommand(command, paths: paths)
     }

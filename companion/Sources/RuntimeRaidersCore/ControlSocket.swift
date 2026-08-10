@@ -16,11 +16,10 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
 }
 
 public enum CompanionCommandRoute: Equatable, Sendable {
-    case daemon
+    case daemon(trialGeneration: Int64?)
     case control(ControlCommand)
     case foregroundUpdate
     case selfCheck
-    case recoverUpdate
 }
 
 public enum CompanionCommandRouter {
@@ -29,38 +28,83 @@ public enum CompanionCommandRouter {
         executableURL: URL,
         paths: AgentPaths
     ) -> CompanionCommandRoute? {
-        guard arguments.count == 1, let argument = arguments.first else { return nil }
-        switch argument {
-        case "on", "off", "status", "doctor", "uninstall":
-            guard let command = ControlCommand(rawValue: argument) else { return nil }
+        switch arguments {
+        case ["on"], ["off"], ["status"], ["doctor"], ["uninstall"]:
+            guard let argument = arguments.first,
+                  let command = ControlCommand(rawValue: argument) else { return nil }
             return .control(command)
-        case "update":
+        case ["update"]:
             return .foregroundUpdate
-        case "daemon":
-            return exactExecutable(executableURL, equals: installedExecutable(paths))
-                ? .daemon : nil
-        case "__self-check":
+        case ["__self-check"]:
             return .selfCheck
-        case "__recover-update":
-            return exactExecutable(executableURL, equals: rollbackExecutable(paths))
-                ? .recoverUpdate : nil
+        case ["daemon"]:
+            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
+                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
+            return route(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: leaseHeld,
+                releaseIdentity: identity
+            )
+        case let values where values.count == 3 &&
+            values[0] == "daemon" &&
+            values[1] == "__runtime-raiders-trial-generation":
+            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
+                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
+            return route(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: leaseHeld,
+                releaseIdentity: identity
+            )
         default:
             return nil
         }
     }
 
-    private static func installedExecutable(_ paths: AgentPaths) -> URL {
-        paths.legacyProtocolOne.installedApplication.appendingPathComponent(
-            "Contents/MacOS/runtime-raiders-agent",
-            isDirectory: false
-        )
-    }
-
-    private static func rollbackExecutable(_ paths: AgentPaths) -> URL {
-        paths.legacyProtocolOne.rollbackApplication.appendingPathComponent(
-            "Contents/MacOS/runtime-raiders-agent",
-            isDirectory: false
-        )
+    static func route(
+        arguments: [String],
+        executableURL: URL,
+        paths: AgentPaths,
+        releaseState: ReleaseStateV1,
+        preparedStartupLeaseHeld: Bool,
+        releaseIdentity: CompanionReleaseIdentity
+    ) -> CompanionCommandRoute? {
+        guard ReleaseStateV1.isValid(releaseState) else { return nil }
+        switch arguments {
+        case ["daemon"]:
+            guard let activeExecutable = try? paths.executable(for: releaseState.active),
+                  releaseIdentity == (try? releaseState.active.companionReleaseIdentity()),
+                  exactExecutable(executableURL, equals: activeExecutable) else {
+                return nil
+            }
+            return .daemon(trialGeneration: nil)
+        case let values where values.count == 3 &&
+            values[0] == "daemon" &&
+            values[1] == "__runtime-raiders-trial-generation":
+            let rawGeneration = values[2]
+            guard rawGeneration.first != "+",
+                  let generation = Int64(rawGeneration),
+                  String(generation) == rawGeneration,
+                  (1...ReleaseContractValidation.maximumSafeInteger).contains(generation),
+                  generation == releaseState.generation,
+                  let trial = releaseState.trial,
+                  releaseIdentity == (try? trial.companionReleaseIdentity()),
+                  preparedStartupLeaseHeld,
+                  let trialExecutable = try? paths.executable(for: trial),
+                  exactExecutable(executableURL, equals: trialExecutable) else {
+                return nil
+            }
+            return .daemon(trialGeneration: generation)
+        default:
+            return nil
+        }
     }
 
     private static func exactExecutable(_ first: URL, equals second: URL) -> Bool {
