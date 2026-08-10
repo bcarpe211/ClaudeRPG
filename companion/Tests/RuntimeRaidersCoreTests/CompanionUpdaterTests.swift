@@ -394,7 +394,7 @@ final class CompanionUpdaterTests: XCTestCase {
         try withTransaction { transaction, paths in
             XCTAssertEqual(try permissions(transaction.workspaceDirectory), 0o700)
             XCTAssertEqual(try permissions(transaction.stagingDirectory), 0o700)
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
+            try makeFakeExtractedRelease(transaction, marker: "candidate")
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],
                 ofItemAtPath: transaction.candidateApplication.path
@@ -402,11 +402,14 @@ final class CompanionUpdaterTests: XCTestCase {
             try transaction.sealValidatedCandidate()
             let installedInode = try inode(paths.legacyProtocolOne.installedApplication)
             let candidateInode = try inode(transaction.candidateApplication)
+            let packagedLauncherInode = try inode(transaction.candidateLauncherApplication)
 
             try transaction.swap()
 
             XCTAssertEqual(try inode(paths.legacyProtocolOne.installedApplication), candidateInode)
             XCTAssertEqual(try inode(paths.legacyProtocolOne.rollbackApplication), installedInode)
+            XCTAssertEqual(try inode(transaction.candidateLauncherApplication), packagedLauncherInode)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.launcherApplication.path))
             XCTAssertEqual(try permissions(paths.legacyProtocolOne.installedApplication), 0o700)
             XCTAssertEqual(try permissions(paths.legacyProtocolOne.rollbackApplication), 0o700)
             XCTAssertFalse(FileManager.default.fileExists(atPath: transaction.promotedCandidateApplication.path))
@@ -431,7 +434,7 @@ final class CompanionUpdaterTests: XCTestCase {
 
     func testRollbackMovesFailedCandidateAsideBeforeRestoringOldApp() throws {
         try withTransaction { transaction, paths in
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
+            try makeFakeExtractedRelease(transaction, marker: "candidate")
             try transaction.sealValidatedCandidate()
             let oldInode = try inode(paths.legacyProtocolOne.installedApplication)
             let candidateInode = try inode(transaction.candidateApplication)
@@ -1048,7 +1051,7 @@ final class CompanionUpdaterTests: XCTestCase {
 
     func testCandidateAuditRejectsHardlinkedRegularFile() throws {
         try withTransaction { transaction, _ in
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
+            try makeFakeExtractedRelease(transaction, marker: "candidate")
             let marker = transaction.candidateApplication.appendingPathComponent("marker")
             let alias = transaction.candidateApplication.appendingPathComponent("marker-alias")
             guard Darwin.link(marker.path, alias.path) == 0 else { throw POSIXError(.EIO) }
@@ -1061,7 +1064,7 @@ final class CompanionUpdaterTests: XCTestCase {
 
     func testNoSwapCleanupPreservesUnknownFailedBlockerWithPromotedCandidate() throws {
         try withTransaction { transaction, paths in
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
+            try makeFakeExtractedRelease(transaction, marker: "candidate")
             try transaction.sealValidatedCandidate()
             let blockerBytes = Data("unrelated-promoted-blocker".utf8)
             try writeOwnerFile(blockerBytes, to: paths.legacyProtocolOne.failedApplication)
@@ -1336,9 +1339,19 @@ private final class UpdaterHarness: @unchecked Sendable {
                         XCTAssertEqual(arguments.prefix(2), ["-x", "-k"])
                         try self.extractionSideEffect(URL(fileURLWithPath: arguments[2]))
                         let staging = URL(fileURLWithPath: arguments[3], isDirectory: true)
+                        let release = staging.appendingPathComponent(
+                            "Runtime Raiders Release",
+                            isDirectory: true
+                        )
                         try makeFakeApp(
-                            staging.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true),
+                            release.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true),
                             marker: "new"
+                        )
+                        try makeFakeLauncher(
+                            release.appendingPathComponent(
+                                "Runtime Raiders Launcher.app",
+                                isDirectory: true
+                            )
                         )
                         return .init(exitStatus: .exited(0), stdout: Data(), stderr: Data())
                     }
@@ -1352,8 +1365,10 @@ private final class UpdaterHarness: @unchecked Sendable {
                         stderr: Data()
                     )
                 },
-                verifyCandidate: { candidate, manifest, installed in
+                verifyCandidate: { candidate, launcher, manifest, installed in
                     XCTAssertEqual(candidate.lastPathComponent, "Runtime Raiders Agent.app")
+                    XCTAssertEqual(launcher.lastPathComponent, "Runtime Raiders Launcher.app")
+                    XCTAssertEqual(candidate.deletingLastPathComponent(), launcher.deletingLastPathComponent())
                     XCTAssertEqual(installed.identity, self.oldIdentity)
                     XCTAssertEqual(installed.teamIdentifier, "REDLATTICE")
                     XCTAssertEqual(manifest, self.manifest)
@@ -1584,6 +1599,27 @@ private func makeFakeApp(_ app: URL, marker value: String) throws {
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
 }
 
+private func makeFakeLauncher(_ launcher: URL) throws {
+    let contents = launcher.appendingPathComponent("Contents", isDirectory: true)
+    try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+    for directory in [launcher, contents] {
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    }
+    try writeOwnerFile(Data("launcher".utf8), to: contents.appendingPathComponent("Info.plist"))
+}
+
+private func makeFakeExtractedRelease(
+    _ transaction: UpdateFileTransaction,
+    marker: String
+) throws {
+    try makeFakeApp(transaction.candidateApplication, marker: marker)
+    try makeFakeLauncher(transaction.candidateLauncherApplication)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: transaction.candidateReleaseDirectory.path
+    )
+}
+
 private func marker(_ app: URL) throws -> String {
     String(decoding: try Data(contentsOf: app.appendingPathComponent("marker")), as: UTF8.self)
 }
@@ -1605,8 +1641,11 @@ private func selfCheckData(_ identity: CompanionReleaseIdentity) -> Data {
 
 private func testArchiveData() -> Data {
     let entries: [(name: String, data: Data, mode: UInt32)] = [
-        ("Runtime Raiders Agent.app/", Data(), UInt32(S_IFDIR | 0o755)),
-        ("Runtime Raiders Agent.app/Contents/Info.plist", Data("abc".utf8), UInt32(S_IFREG | 0o644)),
+        ("Runtime Raiders Release/", Data(), UInt32(S_IFDIR | 0o755)),
+        ("Runtime Raiders Release/Runtime Raiders Agent.app/", Data(), UInt32(S_IFDIR | 0o755)),
+        ("Runtime Raiders Release/Runtime Raiders Agent.app/Contents/Info.plist", Data("abc".utf8), UInt32(S_IFREG | 0o644)),
+        ("Runtime Raiders Release/Runtime Raiders Launcher.app/", Data(), UInt32(S_IFDIR | 0o755)),
+        ("Runtime Raiders Release/Runtime Raiders Launcher.app/Contents/Info.plist", Data("abc".utf8), UInt32(S_IFREG | 0o644)),
     ]
     var archive = Data()
     var offsets: [UInt32] = []

@@ -99,6 +99,7 @@ public struct CompanionUpdaterOperations {
     public typealias Command = (URL, [String], TimeInterval) throws -> SystemCommandResult
     public typealias CandidateVerification = (
         URL,
+        URL,
         ReleaseManifestV1,
         VerifiedCompanionApplication
     ) throws -> CompanionReleaseIdentity
@@ -286,6 +287,7 @@ public final class CompanionUpdater {
             }) {
                 try operations.verifyCandidate(
                     transaction.candidateApplication,
+                    transaction.candidateLauncherApplication,
                     manifest,
                     initial.verifiedApplication
                 )
@@ -828,7 +830,9 @@ public final class UpdateFileTransaction {
     public let workspaceDirectory: URL
     public let stagingDirectory: URL
     public let archive: URL
+    public let candidateReleaseDirectory: URL
     public let candidateApplication: URL
+    public let candidateLauncherApplication: URL
     public let candidateExecutable: URL
     public let promotedCandidateApplication: URL
 
@@ -842,6 +846,7 @@ public final class UpdateFileTransaction {
     private var stagingDescriptor: Int32
     private var priorSeal: TreeSeal?
     private var archiveSeal: SealedEntry?
+    private var stagedReleaseSeal: TreeSeal?
     private var candidateSeal: TreeSeal?
     private var verifiedCandidateIdentity: CompanionReleaseIdentity?
     private var candidateHealthPassed = false
@@ -857,8 +862,16 @@ public final class UpdateFileTransaction {
         )
         stagingDirectory = workspaceDirectory.appendingPathComponent("staging", isDirectory: true)
         archive = workspaceDirectory.appendingPathComponent("candidate.zip", isDirectory: false)
-        candidateApplication = stagingDirectory.appendingPathComponent(
+        candidateReleaseDirectory = stagingDirectory.appendingPathComponent(
+            "Runtime Raiders Release",
+            isDirectory: true
+        )
+        candidateApplication = candidateReleaseDirectory.appendingPathComponent(
             "Runtime Raiders Agent.app",
+            isDirectory: true
+        )
+        candidateLauncherApplication = candidateReleaseDirectory.appendingPathComponent(
+            "Runtime Raiders Launcher.app",
             isDirectory: true
         )
         candidateExecutable = candidateApplication.appendingPathComponent(
@@ -1003,15 +1016,24 @@ public final class UpdateFileTransaction {
 
     public func sealValidatedCandidate() throws {
         try ZipArchiveValidator.validateExtractedTree(stagingDirectory)
-        candidateSeal = try Self.sealTree(parentDescriptor: stagingDescriptor, name: candidateApplication.lastPathComponent)
+        stagedReleaseSeal = try Self.sealTree(
+            parentDescriptor: stagingDescriptor,
+            name: candidateReleaseDirectory.lastPathComponent
+        )
+        let releaseDescriptor = try openCandidateReleaseDirectory()
+        defer { Darwin.close(releaseDescriptor) }
+        candidateSeal = try Self.sealTree(
+            parentDescriptor: releaseDescriptor,
+            name: candidateApplication.lastPathComponent
+        )
     }
 
     public func assertCandidateUnchanged() throws {
-        guard let candidateSeal,
+        guard let stagedReleaseSeal,
               try Self.sealTree(
                   parentDescriptor: stagingDescriptor,
-                  name: candidateApplication.lastPathComponent
-              ) == candidateSeal else {
+                  name: candidateReleaseDirectory.lastPathComponent
+              ) == stagedReleaseSeal else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
     }
@@ -1061,8 +1083,10 @@ public final class UpdateFileTransaction {
         try assertPriorInstalledUnchanged()
         try Self.requireMissing(descriptor: supportDescriptor, name: paths.legacyProtocolOne.rollbackApplication.lastPathComponent)
         try Self.requireMissing(descriptor: supportDescriptor, name: promotedName)
+        let releaseDescriptor = try openCandidateReleaseDirectory()
+        defer { Darwin.close(releaseDescriptor) }
         guard Darwin.renameat(
-            stagingDescriptor,
+            releaseDescriptor,
             candidateApplication.lastPathComponent,
             supportDescriptor,
             promotedName
@@ -1162,10 +1186,13 @@ public final class UpdateFileTransaction {
         guard !hasSwapped else { throw CompanionUpdaterError.unsafeFilesystem }
         try assertPriorInstalledUnchanged()
 
-        let candidateIsStaged = Self.exists(
-            descriptor: stagingDescriptor,
-            name: candidateApplication.lastPathComponent
-        )
+        let releaseDescriptor = try? openCandidateReleaseDirectory()
+        defer {
+            if let releaseDescriptor { Darwin.close(releaseDescriptor) }
+        }
+        let candidateIsStaged = releaseDescriptor.map {
+            Self.exists(descriptor: $0, name: candidateApplication.lastPathComponent)
+        } ?? false
         let candidateIsPromoted = Self.exists(
             descriptor: supportDescriptor,
             name: promotedName
@@ -1186,6 +1213,16 @@ public final class UpdateFileTransaction {
             try Self.removeTree(parentDescriptor: supportDescriptor, name: promotedName)
         }
         try removeWorkspace()
+    }
+
+    private func openCandidateReleaseDirectory() throws -> Int32 {
+        let descriptor = Darwin.openat(
+            stagingDescriptor,
+            candidateReleaseDirectory.lastPathComponent,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else { throw CompanionUpdaterError.unsafeFilesystem }
+        return descriptor
     }
 
     public func cleanupBeforeSwap() throws {

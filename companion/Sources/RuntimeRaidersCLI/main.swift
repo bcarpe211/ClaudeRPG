@@ -629,6 +629,7 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
     let downloader = ArtifactDownloader()
     let commandRunner = SystemCommandRunner()
     let candidateVerifier = CandidateVerifier()
+    let releaseArchiveVerifier = ReleaseArchiveVerifier()
     let launchd = LaunchdJobController(
         plistURL: launchAgentURL(),
         runCommand: commandRunner.run
@@ -648,8 +649,12 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
                 )
             },
             runCommand: commandRunner.run,
-            verifyCandidate: { candidate, manifest, installed in
-                try candidateVerifier.verify(
+            verifyCandidate: { candidate, launcher, manifest, installed in
+                try releaseArchiveVerifier.verifyPackagedLauncher(
+                    launcher,
+                    installedTeamIdentifier: installed.teamIdentifier
+                )
+                return try candidateVerifier.verify(
                     candidate: candidate,
                     manifest: manifest,
                     installed: installed.identity,

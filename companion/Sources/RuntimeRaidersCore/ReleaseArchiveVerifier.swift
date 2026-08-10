@@ -117,6 +117,24 @@ public struct ReleaseArchiveVerifier {
         }
     }
 
+    public func verifyPackagedLauncher(
+        _ launcher: URL,
+        installedTeamIdentifier: String
+    ) throws {
+        do {
+            let facts = try signatureInspector(launcher)
+            guard trusted(
+                facts,
+                bundleIdentifier: "com.redlattice.runtime-raiders-launcher",
+                teamIdentifier: installedTeamIdentifier
+            ), try launcherProtocolLoader(launcher) == 1 else {
+                throw ReleaseArchiveVerificationError.untrustedArchive
+            }
+        } catch {
+            throw ReleaseArchiveVerificationError.untrustedArchive
+        }
+    }
+
     private func trusted(
         _ facts: CandidateSignatureFacts,
         bundleIdentifier: String,
