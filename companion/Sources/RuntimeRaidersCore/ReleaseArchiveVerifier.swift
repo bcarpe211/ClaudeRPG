@@ -242,6 +242,7 @@ public struct ReleaseArchiveVerifier {
             facts.teamIdentifier == teamIdentifier &&
             facts.signatureValid &&
             facts.allArchitecturesValid &&
+            facts.requiredArchitecturesPresent &&
             facts.hardenedRuntime &&
             facts.secureTimestampPresent &&
             facts.gatekeeperNotarized

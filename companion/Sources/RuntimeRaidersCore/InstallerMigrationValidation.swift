@@ -129,23 +129,51 @@ public enum InstallerStatusValidator {
         _ text: String,
         keys: Set<String>
     ) -> Bool {
+        let bytes = Array(text.utf8)
         var quoted = false
         var escaped = false
-        for byte in text.utf8 {
+        var objectDepth = 0
+        var arrayDepth = 0
+        var stringStart: Int?
+        var topLevelFields: [String] = []
+        for (index, byte) in bytes.enumerated() {
             if quoted {
                 if escaped { escaped = false }
                 else if byte == 0x5C { escaped = true }
-                else if byte == 0x22 { quoted = false }
+                else if byte == 0x22 {
+                    quoted = false
+                    if objectDepth == 1,
+                       arrayDepth == 0,
+                       index + 1 < bytes.count,
+                       bytes[index + 1] == 0x3A,
+                       let start = stringStart,
+                       let field = try? JSONDecoder().decode(
+                           String.self,
+                           from: Data(bytes[start...index])
+                       ) {
+                        topLevelFields.append(field)
+                    }
+                    stringStart = nil
+                }
             } else if byte == 0x22 {
                 quoted = true
+                stringStart = index
             } else if [0x09, 0x0A, 0x0D, 0x20].contains(byte) {
                 return false
+            } else if byte == 0x7B {
+                objectDepth += 1
+            } else if byte == 0x7D {
+                objectDepth -= 1
+                if objectDepth < 0 { return false }
+            } else if byte == 0x5B {
+                arrayDepth += 1
+            } else if byte == 0x5D {
+                arrayDepth -= 1
+                if arrayDepth < 0 { return false }
             }
         }
-        guard !quoted, !escaped else { return false }
-        return keys.allSatisfy { key in
-            text.components(separatedBy: "\"\(key)\":").count == 2
-        }
+        guard !quoted, !escaped, objectDepth == 0, arrayDepth == 0 else { return false }
+        return topLevelFields.count == keys.count && Set(topLevelFields) == keys
     }
 
     private static func validCommon(
@@ -181,8 +209,76 @@ public enum InstallerStatusValidator {
     }
 }
 
+public struct InstallerDaemonStatusAttestor {
+    typealias Exchange = (
+        _ request: ControlRequest,
+        _ socketURL: URL,
+        _ maximumFrameBytes: Int
+    ) throws -> (ControlResponse, URL)
+
+    private let exchange: Exchange
+
+    public init() {
+        exchange = { request, socketURL, maximumFrameBytes in
+            try ControlSocketClient.sendAttested(
+                request: request,
+                to: socketURL,
+                maximumFrameBytes: maximumFrameBytes
+            )
+        }
+    }
+
+    init(exchange: @escaping Exchange) {
+        self.exchange = exchange
+    }
+
+    public func status(paths: AgentPaths, expectedExecutable: URL) throws -> Data {
+        do {
+            let (response, peerExecutable) = try exchange(
+                ControlRequest(command: .status),
+                paths.controlSocket,
+                InstallerStatusValidator.maximumStatusBytes
+            )
+            guard response.ok,
+                  exactExecutable(peerExecutable, expectedExecutable) else {
+                throw InstallerMigrationValidationError.invalidStatus
+            }
+            var data = Data(response.message.utf8)
+            data.append(0x0A)
+            guard data.count <= InstallerStatusValidator.maximumStatusBytes else {
+                throw InstallerMigrationValidationError.invalidStatus
+            }
+            return data
+        } catch {
+            throw InstallerMigrationValidationError.invalidStatus
+        }
+    }
+
+    private func exactExecutable(_ observed: URL, _ expected: URL) -> Bool {
+        guard observed.isFileURL,
+              expected.isFileURL,
+              observed.standardizedFileURL.path == expected.standardizedFileURL.path else {
+            return false
+        }
+        var observedMetadata = stat()
+        var expectedMetadata = stat()
+        return observed.path.withCString({ Darwin.lstat($0, &observedMetadata) }) == 0 &&
+            expected.path.withCString({ Darwin.lstat($0, &expectedMetadata) }) == 0 &&
+            observedMetadata.st_mode & S_IFMT == S_IFREG &&
+            expectedMetadata.st_mode & S_IFMT == S_IFREG &&
+            observedMetadata.st_dev == expectedMetadata.st_dev &&
+            observedMetadata.st_ino == expectedMetadata.st_ino &&
+            observedMetadata.st_uid == Darwin.geteuid() &&
+            expectedMetadata.st_uid == Darwin.geteuid() &&
+            observedMetadata.st_nlink == 1 &&
+            expectedMetadata.st_nlink == 1 &&
+            observedMetadata.st_mode & 0o111 != 0 &&
+            expectedMetadata.st_mode & 0o111 != 0
+    }
+}
+
 public enum InstallerProtectedStateSnapshot {
-    private static let header = Data("runtime-raiders-protected-state-v1\n".utf8)
+    private static let header = Data("runtime-raiders-protected-state-v2\n".utf8)
     private static let exclusions: Set<String> = [
         "command-link", "path-marker-owned",
     ]
@@ -294,6 +390,7 @@ public struct LegacySequenceEightInstallationValidator {
                   facts.teamIdentifier == expectedTeamIdentifier,
                   facts.signatureValid,
                   facts.allArchitecturesValid,
+                  facts.requiredArchitecturesPresent,
                   facts.hardenedRuntime,
                   facts.secureTimestampPresent,
                   facts.gatekeeperNotarized else {
@@ -333,14 +430,15 @@ public struct LegacySequenceEightInstallationValidator {
                 mode: 0o600,
                 maximumBytes: 4_096
             )
-            guard record.last == 0x0A,
-                  !Data(record.dropLast()).contains(0x0A),
-                  let commandPath = String(data: Data(record.dropLast()), encoding: .utf8),
-                  commandPath.hasPrefix("/"), !commandPath.isEmpty else {
+            let localDirectory = home.appendingPathComponent(".local", isDirectory: true)
+            let commandDirectory = localDirectory.appendingPathComponent("bin", isDirectory: true)
+            let command = commandDirectory.appendingPathComponent("raiders", isDirectory: false)
+            guard command.lastPathComponent == "raiders",
+                  record == Data((command.path + "\n").utf8) else {
                 throw InstallerMigrationValidationError.invalidLegacyInstallation
             }
-            let command = URL(fileURLWithPath: commandPath, isDirectory: false)
-            try requireDirectory(command.deletingLastPathComponent(), mode: nil)
+            try requireDirectory(localDirectory, mode: nil)
+            try requireDirectory(commandDirectory, mode: nil)
             try requireSymlink(command, target: shim.path)
         } catch {
             throw InstallerMigrationValidationError.invalidLegacyInstallation

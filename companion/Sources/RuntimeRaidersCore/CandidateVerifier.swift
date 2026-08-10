@@ -6,6 +6,7 @@ public struct CandidateSignatureFacts: Equatable, Sendable {
     public let teamIdentifier: String
     public let signatureValid: Bool
     public let allArchitecturesValid: Bool
+    public let requiredArchitecturesPresent: Bool
     public let hardenedRuntime: Bool
     public let secureTimestampPresent: Bool
     public let gatekeeperNotarized: Bool
@@ -15,6 +16,7 @@ public struct CandidateSignatureFacts: Equatable, Sendable {
         teamIdentifier: String,
         signatureValid: Bool,
         allArchitecturesValid: Bool,
+        requiredArchitecturesPresent: Bool = true,
         hardenedRuntime: Bool,
         secureTimestampPresent: Bool,
         gatekeeperNotarized: Bool
@@ -23,6 +25,7 @@ public struct CandidateSignatureFacts: Equatable, Sendable {
         self.teamIdentifier = teamIdentifier
         self.signatureValid = signatureValid
         self.allArchitecturesValid = allArchitecturesValid
+        self.requiredArchitecturesPresent = requiredArchitecturesPresent
         self.hardenedRuntime = hardenedRuntime
         self.secureTimestampPresent = secureTimestampPresent
         self.gatekeeperNotarized = gatekeeperNotarized
@@ -67,6 +70,7 @@ public struct CandidateVerifier {
                   facts.teamIdentifier == installedTeamIdentifier,
                   facts.signatureValid,
                   facts.allArchitecturesValid,
+                  facts.requiredArchitecturesPresent,
                   facts.hardenedRuntime,
                   facts.secureTimestampPresent,
                   facts.gatekeeperNotarized,
@@ -179,6 +183,7 @@ struct SignedBundleTrustInspector {
             arguments: ["--assess", "--type", "execute", "--verbose=4", candidatePath],
             timeout: 30
         )
+        let requiredArchitecturesPresent = try containsRequiredArchitectures(candidate)
 
         return CandidateSignatureFacts(
             bundleIdentifier: identifier,
@@ -191,6 +196,7 @@ struct SignedBundleTrustInspector {
                 candidateArchitecturesValid &&
                 teamIdentifier == installedTeamIdentifier &&
                 allArchitectureCodesign.exitStatus == .exited(0),
+            requiredArchitecturesPresent: requiredArchitecturesPresent,
             hardenedRuntime: flags.uint32Value & Self.hardenedRuntimeSigningFlag != 0,
             secureTimestampPresent: information[kSecCodeInfoTimestamp as String] is Date,
             gatekeeperNotarized: notarization.exitStatus == .exited(0) && gatekeeper.exitStatus == .exited(0)
@@ -247,6 +253,7 @@ struct SignedBundleTrustInspector {
             arguments: ["--assess", "--type", "execute", "--verbose=4", candidatePath],
             timeout: 30
         )
+        let requiredArchitecturesPresent = try containsRequiredArchitectures(candidate)
         return CandidateSignatureFacts(
             bundleIdentifier: identifier,
             teamIdentifier: teamIdentifier,
@@ -259,6 +266,7 @@ struct SignedBundleTrustInspector {
                     Self.allArchitectureValidationFlags,
                     requirement
                 ) == errSecSuccess && allArchitectureCodesign.exitStatus == .exited(0),
+            requiredArchitecturesPresent: requiredArchitecturesPresent,
             hardenedRuntime: flags.uint32Value & Self.hardenedRuntimeSigningFlag != 0,
             secureTimestampPresent: information[kSecCodeInfoTimestamp as String] is Date,
             gatekeeperNotarized: notarization.exitStatus == .exited(0) &&
@@ -271,6 +279,19 @@ struct SignedBundleTrustInspector {
             UInt32(kSecCSCheckNestedCode) |
             UInt32(kSecCSRestrictSymlinks)
     )
+
+    private func containsRequiredArchitectures(_ application: URL) throws -> Bool {
+        guard let executable = Bundle(url: application)?.executableURL,
+              executable.path.hasPrefix(application.path + "/") else {
+            throw CandidateVerificationError.untrustedCandidate
+        }
+        let result = try runner.run(
+            executable: URL(fileURLWithPath: "/usr/bin/lipo"),
+            arguments: ["-verify_arch", "arm64", "x86_64", executable.path],
+            timeout: 30
+        )
+        return result.exitStatus == .exited(0)
+    }
 
     private static let allArchitectureValidationFlags = SecCSFlags(rawValue:
         validationFlags.rawValue | UInt32(kSecCSCheckAllArchitectures)

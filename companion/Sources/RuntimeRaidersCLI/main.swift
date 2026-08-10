@@ -751,15 +751,27 @@ private func run() throws {
         return
     case let .installerLegacyStatus(prepared, expectedEnabled):
         let enabled = try InstallerStatusValidator.validateLegacy(
-            readInstallerStatus(),
+            InstallerDaemonStatusAttestor().status(
+                paths: paths,
+                expectedExecutable: paths.legacyFlatApplication.appendingPathComponent(
+                    "Contents/MacOS/runtime-raiders-agent",
+                    isDirectory: false
+                )
+            ),
             prepared: prepared,
             expectedEnabled: expectedEnabled
         )
         print(enabled ? "enabled" : "disabled")
         return
     case let .installerCandidateStatus(generation, prepared, expectedEnabled):
+        guard let executableURL = Bundle.main.executableURL else {
+            throw CLIError.invalidUpdateState
+        }
         try InstallerStatusValidator.validateCandidate(
-            readInstallerStatus(),
+            InstallerDaemonStatusAttestor().status(
+                paths: paths,
+                expectedExecutable: executableURL
+            ),
             identity: CompanionReleaseIdentity.load(from: .main),
             generation: generation,
             prepared: prepared,
@@ -788,18 +800,6 @@ private func run() throws {
     case let .control(command):
         try runUserControlCommand(command, paths: paths)
     }
-}
-
-private func readInstallerStatus() throws -> Data {
-    let maximum = InstallerStatusValidator.maximumStatusBytes
-    var output = Data()
-    while output.count <= maximum {
-        guard let chunk = try FileHandle.standardInput.read(upToCount: maximum + 1 - output.count),
-              !chunk.isEmpty else { break }
-        output.append(chunk)
-    }
-    guard output.count <= maximum else { throw CLIError.invalidUpdateState }
-    return output
 }
 
 private func runUserControlCommand(_ command: ControlCommand, paths: AgentPaths) throws {

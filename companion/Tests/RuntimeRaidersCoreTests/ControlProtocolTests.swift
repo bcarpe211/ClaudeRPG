@@ -776,9 +776,9 @@ final class ControlProtocolTests: XCTestCase {
                 arguments: [
                     "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled",
                 ],
-                executableURL: staged,
+                executableURL: activeExecutable,
                 paths: paths,
-                releaseState: nil,
+                releaseState: state,
                 releaseIdentity: identity
             ),
             .installerCandidateStatus(generation: 1, prepared: true, expectedEnabled: false)
@@ -788,13 +788,43 @@ final class ControlProtocolTests: XCTestCase {
                 arguments: [
                     "__runtime-raiders-installer-status", "candidate-resumed", "1", "enabled",
                 ],
-                executableURL: staged,
+                executableURL: activeExecutable,
                 paths: paths,
-                releaseState: nil,
+                releaseState: state,
                 releaseIdentity: identity
             ),
             .installerCandidateStatus(generation: 1, prepared: false, expectedEnabled: true)
         )
+        XCTAssertNil(CompanionCommandRouter.installerRoute(
+            arguments: [
+                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled",
+            ],
+            executableURL: staged,
+            paths: paths,
+            releaseState: nil,
+            releaseIdentity: identity
+        ))
+        let wrongActive = ReleaseReference(
+            releaseSequence: active.releaseSequence,
+            releaseSHA: String(repeating: "c", count: 40),
+            companionVersion: active.companionVersion,
+            updateProtocolVersion: active.updateProtocolVersion
+        )
+        XCTAssertNil(CompanionCommandRouter.installerRoute(
+            arguments: [
+                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled",
+            ],
+            executableURL: activeExecutable,
+            paths: paths,
+            releaseState: ReleaseStateV1(
+                schemaVersion: 1,
+                generation: 1,
+                active: wrongActive,
+                fallback: nil,
+                trial: nil
+            ),
+            releaseIdentity: identity
+        ))
         for command in [
             "__runtime-raiders-installer-protected-state",
             "__runtime-raiders-legacy-resume",
@@ -1282,6 +1312,28 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(response, ControlResponse(ok: true, message: "present"))
+    }
+
+    func testAttestedSocketResponseReportsTheActualServingExecutable() throws {
+        let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-attested-control-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let socketURL = parent.appendingPathComponent("agent.sock")
+        let server = ControlSocketServer(socketURL: socketURL)
+        try server.startRequests { _ in ControlResponse(ok: true, message: "status") }
+        defer { server.stop() }
+
+        let (response, peerExecutable) = try ControlSocketClient.sendAttested(
+            request: ControlRequest(command: .status),
+            to: socketURL
+        )
+
+        XCTAssertEqual(response, ControlResponse(ok: true, message: "status"))
+        XCTAssertEqual(
+            peerExecutable.resolvingSymlinksInPath().standardizedFileURL.path,
+            try XCTUnwrap(Bundle.main.executableURL)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+        )
     }
 
     func testOnWaitsForSafeInitializationBeyondFastControlTimeout() throws {

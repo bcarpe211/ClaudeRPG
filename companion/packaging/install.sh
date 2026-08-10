@@ -299,6 +299,7 @@ had_profile=0
 had_marker=0
 prior_enabled=0
 legacy_prepare_attempted=0
+protected_state_mutated=0
 
 close_lease() {
   [ "$lease_started" -eq 1 ] || return 0
@@ -330,8 +331,7 @@ installer_agent_executable() {
 
 legacy_status_intent() {
   helper="$(installer_agent_executable)" || return 1
-  "$LEGACY_EXECUTABLE" status > "$WORK/legacy-status.json" || return 1
-  "$helper" __runtime-raiders-installer-status legacy-running < "$WORK/legacy-status.json"
+  "$helper" __runtime-raiders-installer-status legacy-running
 }
 
 wait_for_legacy_status() {
@@ -339,9 +339,8 @@ wait_for_legacy_status() {
   attempt=0
   while [ "$attempt" -lt 40 ]; do
     helper="$(installer_agent_executable)" || return 1
-    if "$LEGACY_EXECUTABLE" status > "$WORK/legacy-status.json" &&
-       "$helper" __runtime-raiders-installer-status \
-         "$expected_prepared" "$expected_intent" < "$WORK/legacy-status.json"; then
+    if "$helper" __runtime-raiders-installer-status \
+         "$expected_prepared" "$expected_intent"; then
       return 0
     fi
     attempt=$((attempt + 1))
@@ -354,9 +353,8 @@ wait_for_candidate_status() {
   phase="$1"; expected_intent="$2"
   attempt=0
   while [ "$attempt" -lt 40 ]; do
-    if "$RELEASE_EXECUTABLE" status > "$WORK/candidate-status.json" &&
-       "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
-         "$phase" 1 "$expected_intent" < "$WORK/candidate-status.json"; then
+    if "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
+         "$phase" 1 "$expected_intent"; then
       return 0
     fi
     attempt=$((attempt + 1))
@@ -377,8 +375,8 @@ capture_protected_state() {
 
 assert_protected_state() {
   executable="$1"; expected="$2"
-  capture_protected_state "$executable" "$WORK/protected-current" &&
-    cmp -s "$expected" "$WORK/protected-current"
+  capture_protected_state "$executable" "$WORK/protected-current" || return 1
+  cmp -s "$expected" "$WORK/protected-current"
 }
 
 safe_remove_created() {
@@ -400,7 +398,14 @@ rollback_transaction() {
   [ "$transaction_active" -eq 1 ] && [ "$transaction_committed" -eq 0 ] || return 0
   transaction_active=0
   rollback_ok=1
-  if [ "$new_job_bootstrap_attempted" -eq 1 ] || [ "$old_job_stop_attempted" -eq 1 ]; then
+  helper="$(installer_agent_executable)" || helper=''
+  if [ "$migration" -eq 1 ] &&
+     { [ -z "$helper" ] || ! assert_protected_state "$helper" "$WORK/protected-before"; }; then
+    protected_state_mutated=1
+  fi
+  if [ "$new_job_bootstrap_attempted" -eq 1 ] ||
+     [ "$old_job_stop_attempted" -eq 1 ] ||
+     [ "$protected_state_mutated" -eq 1 ]; then
     launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
     job_absent || rollback_ok=0
   fi
@@ -430,17 +435,39 @@ rollback_transaction() {
     fi
   fi
   if [ "$migration" -eq 1 ]; then
-    if [ "$old_job_stop_attempted" -eq 1 ] || [ "$new_job_bootstrap_attempted" -eq 1 ]; then
+    helper="$(installer_agent_executable)" || helper=''
+    if [ -z "$helper" ] || ! assert_protected_state "$helper" "$WORK/protected-before"; then
+      protected_state_mutated=1
+    fi
+    if [ "$protected_state_mutated" -eq 1 ]; then
+      launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+      job_absent || rollback_ok=0
+    elif [ "$old_job_stop_attempted" -eq 1 ] || [ "$new_job_bootstrap_attempted" -eq 1 ]; then
       launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || rollback_ok=0
     fi
-    if [ "$legacy_prepare_attempted" -eq 1 ]; then
+    helper="$(installer_agent_executable)" || helper=''
+    if [ "$protected_state_mutated" -eq 0 ] &&
+       { [ -z "$helper" ] || ! assert_protected_state "$helper" "$WORK/protected-before"; }; then
+      protected_state_mutated=1
+      launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+      job_absent || rollback_ok=0
+    fi
+    if [ "$legacy_prepare_attempted" -eq 1 ] && [ "$protected_state_mutated" -eq 0 ]; then
       wait_for_legacy_status "$prior_intent" legacy-prepared >/dev/null 2>&1 || rollback_ok=0
-      helper="$(installer_agent_executable)" || rollback_ok=0
       if [ -n "${helper:-}" ]; then
         "$helper" __runtime-raiders-legacy-resume >/dev/null 2>&1 || rollback_ok=0
       fi
     fi
-    wait_for_legacy_status "$prior_intent" legacy-running >/dev/null 2>&1 || rollback_ok=0
+    if [ "$protected_state_mutated" -eq 0 ]; then
+      wait_for_legacy_status "$prior_intent" legacy-running >/dev/null 2>&1 || rollback_ok=0
+      helper="$(installer_agent_executable)" || helper=''
+      if [ -z "$helper" ] || ! assert_protected_state "$helper" "$WORK/protected-before"; then
+        protected_state_mutated=1
+        launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+        job_absent || rollback_ok=0
+      fi
+    fi
+    [ "$protected_state_mutated" -eq 0 ] || rollback_ok=0
   fi
   [ "$release_placed" -eq 0 ] || safe_remove_created "$RELEASE_DIRECTORY" || rollback_ok=0
   [ "$launcher_placed" -eq 0 ] || safe_remove_created "$LAUNCHER_APP" || rollback_ok=0

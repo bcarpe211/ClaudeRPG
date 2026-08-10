@@ -226,6 +226,11 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
         }
     }
 
+    func testInstallerVerificationRequiresArm64AndX8664InBothApplications() throws {
+        try assertInstallerRejected(agentFacts: agentFacts(requiredArchitecturesPresent: false))
+        try assertInstallerRejected(launcherFacts: launcherFacts(requiredArchitecturesPresent: false))
+    }
+
     func testInstallerVerificationRejectsWrongIdentityProtocolAndSubstitution() throws {
         for identity in [
             CompanionReleaseIdentity(
@@ -310,6 +315,7 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
         teamIdentifier: String = "REDLATTICE",
         signatureValid: Bool = true,
         allArchitecturesValid: Bool = true,
+        requiredArchitecturesPresent: Bool = true,
         hardenedRuntime: Bool = true,
         secureTimestampPresent: Bool = true,
         gatekeeperNotarized: Bool = true
@@ -319,6 +325,7 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
             teamIdentifier: teamIdentifier,
             signatureValid: signatureValid,
             allArchitecturesValid: allArchitecturesValid,
+            requiredArchitecturesPresent: requiredArchitecturesPresent,
             hardenedRuntime: hardenedRuntime,
             secureTimestampPresent: secureTimestampPresent,
             gatekeeperNotarized: gatekeeperNotarized
@@ -330,6 +337,7 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
         teamIdentifier: String = "REDLATTICE",
         signatureValid: Bool = true,
         allArchitecturesValid: Bool = true,
+        requiredArchitecturesPresent: Bool = true,
         hardenedRuntime: Bool = true,
         secureTimestampPresent: Bool = true,
         gatekeeperNotarized: Bool = true
@@ -339,6 +347,7 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
             teamIdentifier: teamIdentifier,
             signatureValid: signatureValid,
             allArchitecturesValid: allArchitecturesValid,
+            requiredArchitecturesPresent: requiredArchitecturesPresent,
             hardenedRuntime: hardenedRuntime,
             secureTimestampPresent: secureTimestampPresent,
             gatekeeperNotarized: gatekeeperNotarized

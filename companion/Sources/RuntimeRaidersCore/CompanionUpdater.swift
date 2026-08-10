@@ -794,6 +794,8 @@ struct ProtectedStateSnapshot: Equatable {
                 excludedNames: exclusions,
                 entries: &entries
             )
+        } else {
+            entries["state"] = Data("absent\n".utf8)
         }
         if let outbox = try OwnerOnlyDirectory.openExisting(paths.outboxDirectory) {
             defer { Darwin.close(outbox) }
@@ -803,6 +805,8 @@ struct ProtectedStateSnapshot: Equatable {
                 excludedNames: [],
                 entries: &entries
             )
+        } else {
+            entries["outbox"] = Data("absent\n".utf8)
         }
         return Self(entries: entries)
     }
@@ -841,7 +845,9 @@ struct ProtectedStateSnapshot: Equatable {
             case S_IFREG where metadata.st_nlink == 1 &&
                 metadata.st_mode & 0o777 == 0o600 &&
                 metadata.st_size >= 0 && metadata.st_size <= 64 * 1_024 * 1_024:
-                entries[path] = try readFile(descriptor, name: name, expected: metadata)
+                var value = metadataRecord("file", metadata, includeSize: true)
+                value.append(try readFile(descriptor, name: name, expected: metadata))
+                entries[path] = value
             default:
                 throw CompanionUpdaterError.unsafeFilesystem
             }
@@ -851,6 +857,7 @@ struct ProtectedStateSnapshot: Equatable {
               sameMetadata(finalDirectory, initialDirectory) else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
+        entries[prefix] = metadataRecord("directory", initialDirectory, includeSize: false)
     }
 
     private static func directoryNames(_ descriptor: Int32) throws -> [String] {
@@ -916,5 +923,19 @@ struct ProtectedStateSnapshot: Equatable {
             first.st_mtimespec.tv_nsec == second.st_mtimespec.tv_nsec &&
             first.st_ctimespec.tv_sec == second.st_ctimespec.tv_sec &&
             first.st_ctimespec.tv_nsec == second.st_ctimespec.tv_nsec
+    }
+
+    private static func metadataRecord(
+        _ kind: String,
+        _ metadata: stat,
+        includeSize: Bool
+    ) -> Data {
+        let common =
+            "\(kind):\(metadata.st_dev):\(metadata.st_ino):\(metadata.st_mode):" +
+            "\(metadata.st_uid):\(metadata.st_gid)"
+        let detail = includeSize
+            ? ":\(metadata.st_nlink):\(metadata.st_size)\n"
+            : "\n"
+        return Data((common + detail).utf8)
     }
 }

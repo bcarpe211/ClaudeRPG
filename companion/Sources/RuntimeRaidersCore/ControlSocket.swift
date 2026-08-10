@@ -51,7 +51,7 @@ public enum CompanionCommandRouter {
                 arguments: arguments,
                 executableURL: executableURL,
                 paths: paths,
-                releaseState: nil,
+                releaseState: try? ReleaseStateStore.loadExisting(paths: paths),
                 releaseIdentity: identity
             )
         case let values where values.count == 2 &&
@@ -162,7 +162,15 @@ public enum CompanionCommandRouter {
             values[0] == "__runtime-raiders-installer-status" &&
             ["candidate-prepared", "candidate-resumed"].contains(values[1]):
             guard let generation = canonicalGeneration(values[2]),
-                  let enabled = canonicalEnabled(values[3]) else { return nil }
+                  let enabled = canonicalEnabled(values[3]),
+                  let state = releaseState,
+                  ReleaseStateV1.isValid(state),
+                  state.generation == generation,
+                  state.trial == nil,
+                  state.fallback == nil,
+                  state.active == (try? releaseIdentity.releaseReference()),
+                  let activeExecutable = try? paths.executable(for: state.active),
+                  exactExecutable(executableURL, equals: activeExecutable) else { return nil }
             return .installerCandidateStatus(
                 generation: generation,
                 prepared: values[1] == "candidate-prepared",
@@ -865,6 +873,37 @@ public enum ControlSocketClient {
         to socketURL: URL,
         maximumFrameBytes: Int = 4_096
     ) throws -> ControlResponse {
+        try exchange(
+            request: request,
+            to: socketURL,
+            maximumFrameBytes: maximumFrameBytes,
+            attestPeer: false
+        ).response
+    }
+
+    static func sendAttested(
+        request: ControlRequest,
+        to socketURL: URL,
+        maximumFrameBytes: Int = 4_096
+    ) throws -> (ControlResponse, URL) {
+        let result = try exchange(
+            request: request,
+            to: socketURL,
+            maximumFrameBytes: maximumFrameBytes,
+            attestPeer: true
+        )
+        guard let peerExecutable = result.peerExecutable else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        return (result.response, peerExecutable)
+    }
+
+    private static func exchange(
+        request: ControlRequest,
+        to socketURL: URL,
+        maximumFrameBytes: Int,
+        attestPeer: Bool
+    ) throws -> (response: ControlResponse, peerExecutable: URL?) {
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ControlSocketServer.currentPOSIXError() }
         try ControlSocketServer.disableSIGPIPE(descriptor)
@@ -878,6 +917,7 @@ public enum ControlSocketClient {
                 throw ControlSocketServer.currentPOSIXError()
             }
         }
+        let peerExecutable = attestPeer ? try peerExecutable(descriptor) : nil
         try ControlSocketServer.writeAll(
             ControlSocketProtocol.encode(request, maximumFrameBytes: maximumFrameBytes),
             to: descriptor
@@ -886,6 +926,40 @@ public enum ControlSocketClient {
             descriptor,
             maximumFrameBytes: maximumFrameBytes
         )
-        return try JSONDecoder().decode(ControlResponse.self, from: data.dropLast())
+        return (
+            try JSONDecoder().decode(ControlResponse.self, from: data.dropLast()),
+            peerExecutable
+        )
+    }
+
+    private static func peerExecutable(_ descriptor: Int32) throws -> URL {
+        var peerPID: pid_t = 0
+        var peerPIDSize = socklen_t(MemoryLayout<pid_t>.size)
+        guard Darwin.getsockopt(
+            descriptor,
+            SOL_LOCAL,
+            LOCAL_PEERPID,
+            &peerPID,
+            &peerPIDSize
+        ) == 0,
+        peerPIDSize == MemoryLayout<pid_t>.size,
+        peerPID > 0 else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        var path = [CChar](repeating: 0, count: Int(PATH_MAX) * 4)
+        let count = proc_pidpath(peerPID, &path, UInt32(path.count))
+        guard count > 0,
+              Int(count) < path.count,
+              path[Int(count)] == 0 else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        let value = String(
+            decoding: path.prefix(Int(count)).map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        guard value.hasPrefix("/"), !value.contains("\n") else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        return URL(fileURLWithPath: value, isDirectory: false)
     }
 }

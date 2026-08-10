@@ -33,6 +33,9 @@ final class InstallerMigrationValidationTests: XCTestCase {
                       #""enabled":true"#,
                       with: #""enabled":false,"enabled":true"#),
             replacing(legacyStatus(enabled: true, prepared: false),
+                      #""enabled":true"#,
+                      with: #""enabled":true,"\u0065nabled":false"#),
+            replacing(legacyStatus(enabled: true, prepared: false),
                       #""preparedForUpdate":false"#,
                       with: #""preparedForUpdate":true"#),
             insertingExtraKey(into: legacyStatus(enabled: true, prepared: false)),
@@ -92,6 +95,9 @@ final class InstallerMigrationValidationTests: XCTestCase {
             replacing(candidateStatus(enabled: false, preparedGeneration: 1),
                       #""installedCompanionVersion":"0.3.0""#,
                       with: #""installedCompanionVersion":"stale""#),
+            replacing(candidateStatus(enabled: false, preparedGeneration: 1),
+                      #""enabled":false"#,
+                      with: #""enabled":false,"\u0065nabled":true"#),
             insertingExtraKey(into: candidateStatus(enabled: false, preparedGeneration: 1)),
         ] {
             XCTAssertThrowsError(try InstallerStatusValidator.validateCandidate(
@@ -101,6 +107,43 @@ final class InstallerMigrationValidationTests: XCTestCase {
                 prepared: true,
                 expectedEnabled: false
             ))
+        }
+    }
+
+    func testAttestedStatusRequiresTheExactPeerExecutableAndSuccessfulDaemonResponse() throws {
+        try withTemporaryHome { _, paths in
+            let expected = paths.supportDirectory.appendingPathComponent("expected-agent")
+            let other = paths.supportDirectory.appendingPathComponent("other-agent")
+            for executable in [expected, other] {
+                try Data("executable".utf8).write(to: executable)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: executable.path
+                )
+            }
+            let wire = legacyStatus(enabled: false, prepared: false)
+            let message = String(decoding: wire.dropLast(), as: UTF8.self)
+            let exact = InstallerDaemonStatusAttestor(exchange: { request, socket, maximum in
+                XCTAssertEqual(request, ControlRequest(command: .status))
+                XCTAssertEqual(socket, paths.controlSocket)
+                XCTAssertEqual(maximum, InstallerStatusValidator.maximumStatusBytes)
+                return (ControlResponse(ok: true, message: message), expected)
+            })
+            XCTAssertEqual(
+                try exact.status(paths: paths, expectedExecutable: expected),
+                wire
+            )
+
+            for response in [
+                (ControlResponse(ok: true, message: message), other),
+                (ControlResponse(ok: false, message: message), expected),
+            ] {
+                let rejected = InstallerDaemonStatusAttestor(exchange: { _, _, _ in response })
+                XCTAssertThrowsError(try rejected.status(
+                    paths: paths,
+                    expectedExecutable: expected
+                ))
+            }
         }
     }
 
@@ -138,7 +181,7 @@ final class InstallerMigrationValidationTests: XCTestCase {
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             }
             let baseline = try InstallerProtectedStateSnapshot.capture(paths: paths)
-            XCTAssertTrue(baseline.starts(with: Data("runtime-raiders-protected-state-v1\n".utf8)))
+            XCTAssertTrue(baseline.starts(with: Data("runtime-raiders-protected-state-v2\n".utf8)))
 
             for (url, original) in protected {
                 try Data(original + Data("mutated".utf8)).write(to: url)
@@ -173,6 +216,48 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testProtectedSnapshotSerializesMissingEmptyAndReplacedDirectoryTopology() throws {
+        try withTemporaryHome { _, paths in
+            let empty = try InstallerProtectedStateSnapshot.capture(paths: paths)
+
+            try FileManager.default.removeItem(at: paths.outboxDirectory)
+            let missingOutbox = try InstallerProtectedStateSnapshot.capture(paths: paths)
+            XCTAssertNotEqual(missingOutbox, empty)
+
+            try FileManager.default.createDirectory(
+                at: paths.outboxDirectory,
+                withIntermediateDirectories: false
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: paths.outboxDirectory.path
+            )
+            let replacedOutbox = try InstallerProtectedStateSnapshot.capture(paths: paths)
+            XCTAssertNotEqual(replacedOutbox, empty)
+            XCTAssertNotEqual(replacedOutbox, missingOutbox)
+
+            let nested = paths.stateDirectory.appendingPathComponent("providers/empty", isDirectory: true)
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            for directory in [nested.deletingLastPathComponent(), nested] {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: directory.path
+                )
+            }
+            let nestedTopology = try InstallerProtectedStateSnapshot.capture(paths: paths)
+            XCTAssertNotEqual(nestedTopology, replacedOutbox)
+
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o500],
+                ofItemAtPath: nested.path
+            )
+            XCTAssertNotEqual(
+                try InstallerProtectedStateSnapshot.capture(paths: paths),
+                nestedTopology
+            )
+        }
+    }
+
     func testExactSequenceEightValidatorAcceptsCanonicalDiscoveredHomeSurfaces() throws {
         try withLegacyInstallation { fixture in
             let validator = makeLegacyValidator(fixture: fixture)
@@ -188,6 +273,7 @@ final class InstallerMigrationValidationTests: XCTestCase {
         enum Mutation: CaseIterable {
             case extraPlist, extraShim, symlinkPlist, hardlinkShim, unsafePlistMode
             case unsafeDirectoryMode, wrongCommandTarget, extraCommandRecordLine
+            case alternateCommandParent, alternateCommandBasename, nonNormalizedCommandPath
         }
         for mutation in Mutation.allCases {
             try withLegacyInstallation { fixture in
@@ -218,6 +304,33 @@ final class InstallerMigrationValidationTests: XCTestCase {
                     )
                 case .extraCommandRecordLine:
                     try append(Data("/tmp/other\n".utf8), to: fixture.commandRecord)
+                case .alternateCommandParent:
+                    let alternate = fixture.home.appendingPathComponent("bin/raiders")
+                    try FileManager.default.createDirectory(
+                        at: alternate.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: 0o700],
+                        ofItemAtPath: alternate.deletingLastPathComponent().path
+                    )
+                    try FileManager.default.createSymbolicLink(
+                        atPath: alternate.path,
+                        withDestinationPath: fixture.shim.path
+                    )
+                    try Data((alternate.path + "\n").utf8).write(to: fixture.commandRecord)
+                case .alternateCommandBasename:
+                    let alternate = fixture.command.deletingLastPathComponent()
+                        .appendingPathComponent("runtime-raiders")
+                    try FileManager.default.createSymbolicLink(
+                        atPath: alternate.path,
+                        withDestinationPath: fixture.shim.path
+                    )
+                    try Data((alternate.path + "\n").utf8).write(to: fixture.commandRecord)
+                case .nonNormalizedCommandPath:
+                    let nonNormalized = fixture.command.deletingLastPathComponent()
+                        .appendingPathComponent("../bin/raiders").path
+                    try Data((nonNormalized + "\n").utf8).write(to: fixture.commandRecord)
                 }
                 XCTAssertThrowsError(try makeLegacyValidator(fixture: fixture).validate(
                     homeDirectory: fixture.home,
@@ -300,10 +413,13 @@ final class InstallerMigrationValidationTests: XCTestCase {
     private func withLegacyInstallation(_ body: (LegacyFixture) throws -> Void) throws {
         try withTemporaryHome { home, paths in
             let launchAgents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-            let bin = home.appendingPathComponent("bin", isDirectory: true)
+            let local = home.appendingPathComponent(".local", isDirectory: true)
+            let bin = local.appendingPathComponent("bin", isDirectory: true)
             try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: bin.path)
+            for directory in [local, bin] {
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            }
             let app = paths.legacyFlatApplication
             let contents = app.appendingPathComponent("Contents", isDirectory: true)
             let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
