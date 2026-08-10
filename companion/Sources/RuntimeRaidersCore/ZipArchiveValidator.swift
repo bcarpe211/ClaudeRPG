@@ -140,6 +140,7 @@ private struct Parser {
         var cursor = Int(centralOffset)
         var paths = Set<String>()
         var foldedPaths = Set<String>()
+        var foldedRegularFilePaths = Set<String>()
         var ranges: [Range<Int>] = []
         var totalSize: Int64 = 0
         var releaseRootCount = 0
@@ -179,8 +180,10 @@ private struct Parser {
             try rejectZip64Extra(range: extraStart..<next)
             let nameBytes = data[nameStart..<extraStart]
             let path = try validatePath(nameBytes)
-            guard paths.insert(path).inserted,
-                  foldedPaths.insert(path.lowercased()).inserted else {
+            let canonicalPath = path.hasSuffix("/") ? String(path.dropLast()) : path
+            let foldedPath = canonicalPath.lowercased()
+            guard paths.insert(canonicalPath).inserted,
+                  foldedPaths.insert(foldedPath).inserted else {
                 throw invalid
             }
 
@@ -191,6 +194,9 @@ private struct Parser {
                   mode & 0o022 == 0,
                   (path.hasSuffix("/") ? fileType == S_IFDIR : fileType == S_IFREG) else {
                 throw invalid
+            }
+            if fileType == S_IFREG {
+                foldedRegularFilePaths.insert(foldedPath)
             }
             if method == 0, compressed != uncompressed { throw invalid }
             if path == ZipArchiveValidator.releaseRoot {
@@ -228,6 +234,14 @@ private struct Parser {
               launcherRootCount == 1,
               totalSize <= ZipArchiveValidator.maximumUncompressedSize else {
             throw invalid
+        }
+        for path in foldedPaths {
+            let components = path.split(separator: "/")
+            guard components.count > 1 else { continue }
+            for end in 1..<components.count {
+                let ancestor = components[..<end].joined(separator: "/")
+                guard !foldedRegularFilePaths.contains(ancestor) else { throw invalid }
+            }
         }
         let sorted = ranges.sorted { $0.lowerBound < $1.lowerBound }
         guard sorted.first?.lowerBound == 0,

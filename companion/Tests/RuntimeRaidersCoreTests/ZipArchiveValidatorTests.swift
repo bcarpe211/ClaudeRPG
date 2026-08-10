@@ -192,6 +192,39 @@ final class ZipArchiveValidatorTests: XCTestCase {
         try assertInvalid(entries: validEntries() + [validEntries()[1]])
     }
 
+    func testRejectsFileDirectoryAliasesInEitherOrderAndAcrossCaseFolding() throws {
+        let file = ZipEntry(name: "\(agentRoot)Contents/item", data: Data("file".utf8))
+        let directory = ZipEntry(name: "\(agentRoot)Contents/item/", directory: true)
+        let foldedDirectory = ZipEntry(name: "\(agentRoot)Contents/ITEM/", directory: true)
+
+        for aliases in [
+            [file, directory],
+            [directory, file],
+            [file, foldedDirectory],
+            [foldedDirectory, file],
+        ] {
+            try assertInvalid(entries: validEntries() + aliases)
+        }
+    }
+
+    func testRejectsRegularFileAncestorsInEitherOrderAndAcrossCaseFolding() throws {
+        let ancestor = ZipEntry(name: "\(agentRoot)Contents/item", data: Data("file".utf8))
+        let descendant = ZipEntry(name: "\(agentRoot)Contents/item/child", data: Data("child".utf8))
+        let foldedDescendant = ZipEntry(
+            name: "\(agentRoot)Contents/ITEM/child",
+            data: Data("child".utf8)
+        )
+
+        for collision in [
+            [ancestor, descendant],
+            [descendant, ancestor],
+            [ancestor, foldedDescendant],
+            [foldedDescendant, ancestor],
+        ] {
+            try assertInvalid(entries: validEntries() + collision)
+        }
+    }
+
     func testRejectsCaseInsensitiveCollidingPaths() throws {
         try assertInvalid(entries: validEntries() + [
             ZipEntry(name: "runtime raiders release/RUNTIME RAIDERS AGENT.APP/", directory: true),

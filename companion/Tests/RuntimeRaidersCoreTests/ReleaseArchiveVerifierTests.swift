@@ -170,6 +170,22 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
         }
     }
 
+    func testRejectsAgentRegularFileSubstitutionDuringLauncherTrustInspection() throws {
+        try assertSubstitutionRejected(.agentPayloadDuringLauncherTrust)
+    }
+
+    func testRejectsLauncherRegularFileSubstitutionAfterTrustInspection() throws {
+        try assertSubstitutionRejected(.launcherPayloadDuringAgentIdentity)
+    }
+
+    func testRejectsAgentInfoPlistSubstitutionDuringIdentityInspection() throws {
+        try assertSubstitutionRejected(.agentInfoDuringAgentIdentity)
+    }
+
+    func testRejectsLauncherInfoPlistSubstitutionDuringProtocolInspection() throws {
+        try assertSubstitutionRejected(.launcherInfoDuringProtocolLoad)
+    }
+
     private let teamIdentifier = "REDLATTICE"
 
     private var manifest: ReleaseManifestV1 { manifestWithProtocol(2) }
@@ -300,6 +316,48 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
         }
     }
 
+    private func assertSubstitutionRejected(_ boundary: SubstitutionBoundary) throws {
+        try withExtractedRelease { paths in
+            let replaceRegularFile: (URL) throws -> Void = { url in
+                try FileManager.default.removeItem(at: url)
+                let replacement = url.lastPathComponent == "Info.plist" ? "other" : "changed"
+                try Data(replacement.utf8).write(to: url)
+            }
+            let verifier = ReleaseArchiveVerifier(
+                signatureInspector: { application in
+                    if application == paths.agent { return self.agentFacts() }
+                    if boundary == .agentPayloadDuringLauncherTrust {
+                        try replaceRegularFile(paths.agentPayload)
+                    }
+                    return self.launcherFacts()
+                },
+                agentIdentityLoader: { _ in
+                    if boundary == .launcherPayloadDuringAgentIdentity {
+                        try replaceRegularFile(paths.launcherPayload)
+                    } else if boundary == .agentInfoDuringAgentIdentity {
+                        try replaceRegularFile(paths.agentInfoPlist)
+                    }
+                    return self.manifestIdentity
+                },
+                launcherProtocolLoader: { _ in
+                    if boundary == .launcherInfoDuringProtocolLoad {
+                        try replaceRegularFile(paths.launcherInfoPlist)
+                    }
+                    return 1
+                }
+            )
+
+            XCTAssertThrowsError(try verifier.verify(
+                extractedRoot: paths.staging,
+                manifest: manifest,
+                installed: installedIdentity,
+                installedTeamIdentifier: teamIdentifier
+            )) { error in
+                XCTAssertEqual(error as? ReleaseArchiveVerificationError, .untrustedArchive)
+            }
+        }
+    }
+
     private func withExtractedRelease<T>(_ body: (ExtractedReleasePaths) throws -> T) throws -> T {
         let staging = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-release-verifier-\(UUID().uuidString)", isDirectory: true)
@@ -311,6 +369,7 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
             let contents = application.appendingPathComponent("Contents", isDirectory: true)
             try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
             try Data("plist".utf8).write(to: contents.appendingPathComponent("Info.plist"))
+            try Data("payload".utf8).write(to: contents.appendingPathComponent("payload"))
         }
         return try body(ExtractedReleasePaths(
             staging: staging,
@@ -324,4 +383,16 @@ private struct ExtractedReleasePaths {
     let staging: URL
     let agent: URL
     let launcher: URL
+
+    var agentInfoPlist: URL { agent.appendingPathComponent("Contents/Info.plist") }
+    var launcherInfoPlist: URL { launcher.appendingPathComponent("Contents/Info.plist") }
+    var agentPayload: URL { agent.appendingPathComponent("Contents/payload") }
+    var launcherPayload: URL { launcher.appendingPathComponent("Contents/payload") }
+}
+
+private enum SubstitutionBoundary {
+    case agentPayloadDuringLauncherTrust
+    case launcherPayloadDuringAgentIdentity
+    case agentInfoDuringAgentIdentity
+    case launcherInfoDuringProtocolLoad
 }
