@@ -9,8 +9,10 @@ const installer = join(process.cwd(), 'companion/packaging/install.sh');
 const build = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
 const installerRenderer = join(process.cwd(), 'scripts/release/render-runtime-raiders-installer.sh');
 const releaseValidatorBuilder = join(process.cwd(), 'scripts/release/build-runtime-raiders-release-validator.sh');
+const machoUUIDSource = join(process.cwd(), 'scripts/release/runtime-raiders-macho-uuid.c');
 const lifecycleGate = join(process.cwd(), 'scripts/test/runtime-raiders-lifecycle.sh');
 const signedReleaseGate = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
+const signedReleasePaths = join(process.cwd(), 'scripts/test/runtime-raiders-gate2-paths.sh');
 const label = 'com.redlattice.runtime-raiders-agent';
 const token = 'A'.repeat(43);
 const secret = 'b'.repeat(64);
@@ -37,6 +39,14 @@ function executable(path: string, lines: string[]): void {
 
 function fakeReleaseSwift(fake: string, log = false): void {
   executable(join(fake, 'strip'), ['exit 0']);
+  executable(join(fake, 'validator-codesign'), ['exit 0']);
+  executable(join(fake, 'clang'), [
+    'output=""',
+    'while [ "$#" -gt 0 ]; do if [ "$1" = -o ]; then output="$2"; shift 2; else shift; fi; done',
+    '[ -n "$output" ] || exit 64',
+    'printf "#!/bin/sh\\nexit 0\\n" > "$output"',
+    'chmod 755 "$output"',
+  ]);
   executable(join(fake, 'swift'), [
     'arch=""; scratch=""; product=""',
     'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; --product) product="$2"; shift 2;; *) shift;; esac; done',
@@ -437,6 +447,7 @@ function disposableReleaseBuilder(
   const fixtureBuild = join(repository, 'scripts/release/build-runtime-raiders-agent.sh');
   const fixtureRenderer = join(repository, 'scripts/release/render-runtime-raiders-installer.sh');
   const fixtureValidatorBuilder = join(repository, 'scripts/release/build-runtime-raiders-release-validator.sh');
+  const fixtureMachoUUIDSource = join(repository, 'scripts/release/runtime-raiders-macho-uuid.c');
   const fixtureInstaller = join(repository, 'companion/packaging/install.sh');
   mkdirSync(join(repository, 'scripts/release'), { recursive: true });
   mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
@@ -469,17 +480,19 @@ function disposableReleaseBuilder(
     fixtureValidatorBuilder,
     readFileSync(releaseValidatorBuilder, 'utf8')
       .replaceAll('/usr/bin/swift', 'swift')
-      .replaceAll('/usr/bin/codesign', 'codesign')
+      .replaceAll('/usr/bin/clang', 'clang')
+      .replaceAll('/usr/bin/codesign', 'validator-codesign')
       .replaceAll('/usr/bin/strip', 'strip')
       .replaceAll('/usr/bin/lipo', 'lipo'),
     { mode: 0o700 },
   );
+  writeFileSync(fixtureMachoUUIDSource, readFileSync(machoUUIDSource));
   writeFileSync(fixtureInstaller, readFileSync(installer));
   writeFileSync(join(repository, 'companion/RELEASE'), readFileSync(join(process.cwd(), 'companion/RELEASE')));
   execFileSync('/usr/bin/git', ['init', '-q'], { cwd: repository });
   execFileSync('/usr/bin/git', ['config', 'user.email', 'release-test@example.invalid'], { cwd: repository });
   execFileSync('/usr/bin/git', ['config', 'user.name', 'Release Test'], { cwd: repository });
-  execFileSync('/usr/bin/git', ['add', 'scripts/release/build-runtime-raiders-agent.sh', 'scripts/release/build-runtime-raiders-release-validator.sh', 'scripts/release/render-runtime-raiders-installer.sh', 'companion/packaging/install.sh', 'companion/RELEASE'], { cwd: repository });
+  execFileSync('/usr/bin/git', ['add', 'scripts/release/build-runtime-raiders-agent.sh', 'scripts/release/build-runtime-raiders-release-validator.sh', 'scripts/release/runtime-raiders-macho-uuid.c', 'scripts/release/render-runtime-raiders-installer.sh', 'companion/packaging/install.sh', 'companion/RELEASE'], { cwd: repository });
   execFileSync('/usr/bin/git', ['commit', '-qm', 'release fixture'], { cwd: repository });
   const fixtureSHA = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
   return { build: fixtureBuild, repository, releaseSHA: fixtureSHA };
@@ -1979,8 +1992,11 @@ describe('Runtime Raiders release gates', () => {
   it('keeps Gate 2 local, unpublished, owner-only, and complete before any real boundary is authorized', () => {
     const syntax = spawnSync('/bin/bash', ['-n', signedReleaseGate], { encoding: 'utf8' });
     expect(syntax.status, `${syntax.stdout}${syntax.stderr}`).toBe(0);
+    const pathSyntax = spawnSync('/bin/bash', ['-n', signedReleasePaths], { encoding: 'utf8' });
+    expect(pathSyntax.status, `${pathSyntax.stdout}${pathSyntax.stderr}`).toBe(0);
 
     const source = readFileSync(signedReleaseGate, 'utf8');
+    const pathSource = readFileSync(signedReleasePaths, 'utf8');
     for (const filename of [
       'install.sh',
       'runtime-raiders-agent.zip',
@@ -2014,11 +2030,12 @@ describe('Runtime Raiders release gates', () => {
       'launcher-symlink-state',
       'launcher-identity-mismatch',
       'migration-failure-fingerprint',
+      'gate2_create_owned_root',
     ]) {
       expect(source).toContain(required);
     }
-    expect(source).toMatch(/mktemp -d/);
-    expect(source).toMatch(/chmod 700/);
+    expect(pathSource).toMatch(/mktemp -d/);
+    expect(pathSource).toMatch(/chmod 700/);
     expect(source).toMatch(/trap .*EXIT/);
     expect(source).toMatch(/https?:\/\//);
     expect(source).toMatch(/-f .*install\.sh/);

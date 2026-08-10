@@ -21,26 +21,19 @@ SIGNING_IDENTITY="$RUNTIME_RAIDERS_CODESIGN_IDENTITY"
 unset RUNTIME_RAIDERS_CODESIGN_IDENTITY RUNTIME_RAIDERS_NOTARY_PROFILE
 unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID AC_PASSWORD
 . "$ROOT/scripts/test/runtime-raiders-gate-safety.sh"
+. "$ROOT/scripts/test/runtime-raiders-gate2-paths.sh"
 
-gate_root="$(mktemp -d "${TMPDIR:-/tmp}/runtime-raiders-gate2.XXXXXX")"
-gate_root="$(cd "$gate_root" && pwd -P)"
-gate_parent="$(cd "${gate_root%/*}" && pwd -P)"
-chmod 700 "$gate_root"
-mkdir -m 700 "$gate_root/processes"
+gate_root="$(gate2_create_owned_root)"
 export GATE_PROCESS_ROOT="$gate_root/processes"
 lease_fd_open=0
 
 cleanup() {
   status=$?
-  case "$gate_root" in
-    "$gate_parent"/runtime-raiders-gate2.*) ;;
-    *) exit 1 ;;
-  esac
-  if [ -d "$gate_root" ] && [ ! -L "$gate_root" ] &&
+  if gate2_root_matches "$gate_root" && [ -d "$gate_root" ] && [ ! -L "$gate_root" ] &&
      [ "$(/usr/bin/stat -f '%u' "$gate_root")" = "$OWNER" ]; then
     if [ "$lease_fd_open" -eq 1 ]; then exec 9>&- || status=1; lease_fd_open=0; fi
     gate_process_stop_all || status=1
-    /bin/rm -rf -- "$gate_root"
+    gate2_remove_owned_root "$gate_root" || status=1
   else
     status=1
   fi
@@ -51,6 +44,8 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+mkdir -m 700 "$GATE_PROCESS_ROOT"
 
 validate_local_regular() {
   local file="$1"
@@ -118,7 +113,9 @@ IFS=$'\t' read -r RELEASE_SEQUENCE RELEASE_SHA COMPANION_VERSION UPDATE_PROTOCOL
 gate_verify_reviewed_source "$ROOT" "$RELEASE_SHA" \
   companion/packaging/install.sh \
   scripts/release/build-runtime-raiders-release-validator.sh \
+  scripts/release/runtime-raiders-macho-uuid.c \
   scripts/release/render-runtime-raiders-installer.sh \
+  scripts/test/runtime-raiders-gate2-paths.sh \
   scripts/test/runtime-raiders-process-identity.c \
   scripts/test/runtime-raiders-gate-safety.sh || {
   echo "Gate 2 requires the clean reviewed release source at the signed SHA" >&2
@@ -201,8 +198,10 @@ write_enrollment() {
   chmod 600 "$state/enrollment.json" "$state/collector-state.json"
 }
 
-fixture_home="$gate_root/launcher-fixtures/home"
+fixture_home="$gate_root/l"
+launcher_work="$gate_root/w"
 support="$fixture_home/Library/Application Support/Runtime Raiders"
+mkdir -m 700 "$launcher_work"
 mkdir -p "$support/launcher" "$support/releases" "$support/installation" "$support/state" "$support/outbox"
 chmod 700 "$fixture_home" "$fixture_home/Library" "$fixture_home/Library/Application Support" "$support" "$support/launcher" "$support/releases" "$support/installation" "$support/state" "$support/outbox"
 write_enrollment "$fixture_home"
@@ -309,8 +308,8 @@ expect_launcher_failure launcher-identity-mismatch status
 
 echo launcher-held-trial
 write_state 3 "$active_ref" "$older_ref" "$newer_ref"
-lease_fifo="$gate_root/launcher-fixtures/lease.fifo"
-lease_ready="$gate_root/launcher-fixtures/lease.ready"
+lease_fifo="$launcher_work/lease.fifo"
+lease_ready="$launcher_work/lease.ready"
 mkfifo "$lease_fifo"
 exec 9<>"$lease_fifo"
 lease_fd_open=1
@@ -322,7 +321,7 @@ lease_record="$(gate_process_capture held-lease "$lease_pid" "$current_agent" __
 for _ in $(seq 1 40); do grep -F -x 'runtime-raiders-installer-lease-ready' "$lease_ready" >/dev/null 2>&1 && break; sleep 0.1; done
 grep -F -x 'runtime-raiders-installer-lease-ready' "$lease_ready" >/dev/null
 gate_run_without_release_credentials env HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" \
-  "$installed_launcher" daemon >"$gate_root/launcher-fixtures/trial.log" 2>&1 &
+  "$installed_launcher" daemon >"$launcher_work/trial.log" 2>&1 &
 trial_pid=$!
 trial_record="$(gate_process_capture held-trial "$trial_pid" "$installed_launcher" daemon \
   "$support/releases/sequence-$NEWER_SEQUENCE-$NEWER_SHA/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent" daemon)" || exit 1
@@ -423,9 +422,9 @@ gate_env() {
     "$@"
 }
 
-fresh_home="$gate_root/installer-fresh/home"
+fresh_home="$gate_root/f"
 mkdir -p "$fresh_home/Library/Application Support/Runtime Raiders"
-chmod 700 "$gate_root/installer-fresh" "$fresh_home" "$fresh_home/Library" "$fresh_home/Library/Application Support" "$fresh_home/Library/Application Support/Runtime Raiders"
+chmod 700 "$fresh_home" "$fresh_home/Library" "$fresh_home/Library/Application Support" "$fresh_home/Library/Application Support/Runtime Raiders"
 write_enrollment "$fresh_home"
 gate_env "$fresh_home" /bin/sh "$INSTALLER"
 [ -f "$fresh_home/Library/Application Support/Runtime Raiders/installation/release-state.json" ] || exit 1
@@ -569,10 +568,12 @@ injected_installer="$gate_root/install-with-failure-checkpoints.sh"
 awk 'BEGIN { found=0 } $0 == "failure_checkpoint() { :; }" { print "failure_checkpoint() { [ \"${RUNTIME_RAIDERS_GATE2_FAIL_AFTER:-}\" != \"$1\" ] || return 91; }"; found=1; next } { print } END { if (!found) exit 1 }' "$INSTALLER" > "$injected_installer"
 chmod 700 "$injected_installer"
 
+migration_index=0
 for boundary in archive-verification enrollment-decision prepare old-job-stop launcher-directory releases-directory installation-directory launcher-placement release-placement state-write plist-replacement shim-replacement command-link-replacement bootstrap prepared-health resume; do
   echo "migration-failure-fingerprint $boundary"
-  case_root="$gate_root/migration-$boundary"
-  case_home="$case_root/home"
+  migration_index=$((migration_index + 1))
+  case_home="$(gate2_migration_home "$gate_root" "$migration_index")"
+  case_root="$case_home"
   mkdir -p "$case_home"
   write_legacy_fixture "$case_home"
   gate_env "$case_home" "$fake_bin/launchctl" bootstrap "gui/$OWNER" "$case_home/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist"

@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const gate1 = join(root, 'scripts/test/runtime-raiders-lifecycle.sh');
 const gate1Sandbox = join(root, 'scripts/test/runtime-raiders-gate1.sb');
+const gate2Paths = join(root, 'scripts/test/runtime-raiders-gate2-paths.sh');
 const safety = join(root, 'scripts/test/runtime-raiders-gate-safety.sh');
 const renderer = join(root, 'scripts/release/render-runtime-raiders-installer.sh');
 const installerTemplate = join(root, 'companion/packaging/install.sh');
@@ -120,11 +121,14 @@ describe('Runtime Raiders Gate 1 isolation', () => {
       copyFileSync(gate1, join(repository, 'scripts/test/runtime-raiders-lifecycle.sh'));
       chmodSync(join(repository, 'scripts/test/runtime-raiders-lifecycle.sh'), 0o700);
       copyFileSync(gate1Sandbox, join(repository, 'scripts/test/runtime-raiders-gate1.sb'));
-      copyFileSync(
-        join(root, 'scripts/test/runtime-raiders-validator-reproducibility.sh'),
-        join(repository, 'scripts/test/runtime-raiders-validator-reproducibility.sh'),
-      );
-      chmodSync(join(repository, 'scripts/test/runtime-raiders-validator-reproducibility.sh'), 0o700);
+      executable(join(repository, 'scripts/test/runtime-raiders-validator-reproducibility.sh'), [
+        'probe="$(mktemp -d "$TMPDIR/gate1-wrapper-repro.XXXXXX")"',
+        'trap \'rm -rf -- "$probe"\' EXIT HUP INT TERM',
+        'mkdir -m 700 "$probe/one" "$probe/two"',
+        'scripts/release/build-runtime-raiders-release-validator.sh companion "$probe/one-scratch" "$probe/one/validator"',
+        'scripts/release/build-runtime-raiders-release-validator.sh companion "$probe/two-scratch" "$probe/two/validator"',
+        'cmp -s "$probe/one/validator" "$probe/two/validator"',
+      ]);
       executable(join(repository, 'scripts/release/build-runtime-raiders-release-validator.sh'), [
         'mkdir -p "$2"',
         'printf "reproducible-validator\\n" > "$3"',
@@ -175,6 +179,50 @@ describe('Runtime Raiders Gate 1 isolation', () => {
       const homes = lines.map((line) => line.split('|')[1]);
       expect(new Set(homes).size).toBe(2);
       expect(homes.every((home) => home !== originalHome)).toBe(true);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Runtime Raiders Gate 2 Unix paths', () => {
+  it('creates the exact short production homes and rejects an overlong temp-root candidate', () => {
+    // Catches reintroduction of ambient TMPDIR roots that alias Darwin Unix endpoints.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-gate2-paths-'));
+    try {
+      const resultFile = join(fixture, 'paths');
+      const overlong = `/private/tmp/${'overlong-'.repeat(12)}`;
+      const result = bash([
+        'set -euo pipefail',
+        'source "$GATE2_PATHS"',
+        'gate_root="$(gate2_create_owned_root)"',
+        'printf "ROOT %s\\nMODE %s\\n" "$gate_root" "$(/usr/bin/stat -f \'%Lp\' "$gate_root")" > "$RESULT_FILE"',
+        'gate2_emit_unix_paths "$gate_root" >> "$RESULT_FILE"',
+        'gate2_verify_all_unix_paths "$gate_root"',
+        'if gate2_verify_all_unix_paths "$OVERLONG_ROOT"; then exit 81; fi',
+        'gate2_remove_owned_root "$gate_root"',
+        '[ ! -e "$gate_root" ] && [ ! -L "$gate_root" ]',
+      ].join('; '), {
+        ...process.env,
+        GATE2_PATHS: gate2Paths,
+        OVERLONG_ROOT: overlong,
+        RESULT_FILE: resultFile,
+        TMPDIR: overlong,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const lines = readFileSync(resultFile, 'utf8').trim().split('\n');
+      const gateRoot = lines[0].slice('ROOT '.length);
+      expect(gateRoot).toMatch(/^\/private\/tmp\/r2\.[A-Za-z0-9]{6}$/);
+      expect(lines[1]).toBe('MODE 700');
+      const paths = lines.slice(2);
+      const homes = ['l', 'f', ...'ABCDEFGHIJKLMNOP'];
+      const expected = homes.flatMap((home) => [
+        `${gateRoot}/${home}/Library/Application Support/Runtime Raiders/agent.sock`,
+        `${gateRoot}/${home}/Library/Application Support/Runtime Raiders/.agent.sock.runtime-raiders.lock`,
+      ]);
+      expect(paths).toEqual(expected);
+      expect(new Set(paths).size).toBe(36);
+      expect(paths.every((path) => Buffer.byteLength(path) <= 103)).toBe(true);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
