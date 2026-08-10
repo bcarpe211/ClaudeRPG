@@ -685,6 +685,7 @@ final class ControlProtocolTests: XCTestCase {
             "__runtime-raiders-installer-lease",
             "__runtime-raiders-legacy-prepare",
             "__runtime-raiders-installer-resume",
+            "__runtime-raiders-installer-sync-migration",
         ] {
             XCTAssertNil(
                 LauncherInvocation(arguments: [privateCommand]),
@@ -751,6 +752,36 @@ final class ControlProtocolTests: XCTestCase {
             ),
             .installerValidateLegacy
         )
+        for target in [
+            InstallerMigrationSyncTarget.stagingTree,
+            .stagingTombstoneTree,
+            .activeJournal,
+            .supportDirectory,
+        ] {
+            XCTAssertEqual(
+                CompanionCommandRouter.installerRoute(
+                    arguments: ["__runtime-raiders-installer-sync-migration", target.rawValue],
+                    executableURL: staged,
+                    paths: paths,
+                    releaseState: nil,
+                    releaseIdentity: identity
+                ),
+                .installerSyncMigration(target: target)
+            )
+        }
+        for invalid in [
+            ["__runtime-raiders-installer-sync-migration"],
+            ["__runtime-raiders-installer-sync-migration", "arbitrary-path"],
+            ["__runtime-raiders-installer-sync-migration", "staging-tree", "/tmp/other"],
+        ] {
+            XCTAssertNil(CompanionCommandRouter.installerRoute(
+                arguments: invalid,
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ))
+        }
         XCTAssertEqual(
             CompanionCommandRouter.installerRoute(
                 arguments: ["__runtime-raiders-installer-status", "legacy-running"],

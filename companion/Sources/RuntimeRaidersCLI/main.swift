@@ -791,6 +791,9 @@ private func run() throws {
     case .installerProtectedState:
         FileHandle.standardOutput.write(try InstallerProtectedStateSnapshot.capture(paths: paths))
         return
+    case let .installerSyncMigration(target):
+        try InstallerMigrationDurability.synchronize(paths: paths, target: target)
+        return
     case .legacyResume:
         let response = try LegacyMigrationControl().resume(paths: paths)
         print(response.message)

@@ -777,9 +777,12 @@ struct ProtectedStateSnapshot: Equatable {
     static func capture(
         paths: AgentPaths,
         includeUpdateState: Bool,
-        additionalStateExclusions: Set<String> = []
+        additionalStateExclusions: Set<String> = [],
+        maximumCapturedBytes: Int? = nil,
+        maximumEntryCount: Int? = nil
     ) throws -> Self {
         var entries: [String: Data] = [:]
+        var capturedBytes = 0
         if let state = try OwnerOnlyDirectory.openExisting(paths.stateDirectory) {
             defer { Darwin.close(state) }
             var exclusions: Set<String> = [
@@ -792,10 +795,20 @@ struct ProtectedStateSnapshot: Equatable {
                 state,
                 prefix: "state",
                 excludedNames: exclusions,
-                entries: &entries
+                entries: &entries,
+                capturedBytes: &capturedBytes,
+                maximumCapturedBytes: maximumCapturedBytes,
+                maximumEntryCount: maximumEntryCount
             )
         } else {
-            entries["state"] = Data("absent\n".utf8)
+            try insert(
+                path: "state",
+                value: Data("absent\n".utf8),
+                entries: &entries,
+                capturedBytes: &capturedBytes,
+                maximumCapturedBytes: maximumCapturedBytes,
+                maximumEntryCount: maximumEntryCount
+            )
         }
         if let outbox = try OwnerOnlyDirectory.openExisting(paths.outboxDirectory) {
             defer { Darwin.close(outbox) }
@@ -803,10 +816,20 @@ struct ProtectedStateSnapshot: Equatable {
                 outbox,
                 prefix: "outbox",
                 excludedNames: [],
-                entries: &entries
+                entries: &entries,
+                capturedBytes: &capturedBytes,
+                maximumCapturedBytes: maximumCapturedBytes,
+                maximumEntryCount: maximumEntryCount
             )
         } else {
-            entries["outbox"] = Data("absent\n".utf8)
+            try insert(
+                path: "outbox",
+                value: Data("absent\n".utf8),
+                entries: &entries,
+                capturedBytes: &capturedBytes,
+                maximumCapturedBytes: maximumCapturedBytes,
+                maximumEntryCount: maximumEntryCount
+            )
         }
         return Self(entries: entries)
     }
@@ -815,7 +838,10 @@ struct ProtectedStateSnapshot: Equatable {
         _ descriptor: Int32,
         prefix: String,
         excludedNames: Set<String>,
-        entries: inout [String: Data]
+        entries: inout [String: Data],
+        capturedBytes: inout Int,
+        maximumCapturedBytes: Int?,
+        maximumEntryCount: Int?
     ) throws {
         var initialDirectory = stat()
         guard Darwin.fstat(descriptor, &initialDirectory) == 0,
@@ -841,13 +867,36 @@ struct ProtectedStateSnapshot: Equatable {
                 )
                 guard child >= 0 else { throw CompanionUpdaterError.unsafeFilesystem }
                 defer { Darwin.close(child) }
-                try captureDirectory(child, prefix: path, excludedNames: [], entries: &entries)
+                try captureDirectory(
+                    child,
+                    prefix: path,
+                    excludedNames: [],
+                    entries: &entries,
+                    capturedBytes: &capturedBytes,
+                    maximumCapturedBytes: maximumCapturedBytes,
+                    maximumEntryCount: maximumEntryCount
+                )
             case S_IFREG where metadata.st_nlink == 1 &&
                 metadata.st_mode & 0o777 == 0o600 &&
                 metadata.st_size >= 0 && metadata.st_size <= 64 * 1_024 * 1_024:
                 var value = metadataRecord("file", metadata, includeSize: true)
+                try requireCapacity(
+                    path: path,
+                    valueBytes: value.count + Int(metadata.st_size),
+                    entries: entries,
+                    capturedBytes: capturedBytes,
+                    maximumCapturedBytes: maximumCapturedBytes,
+                    maximumEntryCount: maximumEntryCount
+                )
                 value.append(try readFile(descriptor, name: name, expected: metadata))
-                entries[path] = value
+                try insert(
+                    path: path,
+                    value: value,
+                    entries: &entries,
+                    capturedBytes: &capturedBytes,
+                    maximumCapturedBytes: maximumCapturedBytes,
+                    maximumEntryCount: maximumEntryCount
+                )
             default:
                 throw CompanionUpdaterError.unsafeFilesystem
             }
@@ -857,7 +906,56 @@ struct ProtectedStateSnapshot: Equatable {
               sameMetadata(finalDirectory, initialDirectory) else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
-        entries[prefix] = metadataRecord("directory", initialDirectory, includeSize: false)
+        try insert(
+            path: prefix,
+            value: metadataRecord("directory", initialDirectory, includeSize: false),
+            entries: &entries,
+            capturedBytes: &capturedBytes,
+            maximumCapturedBytes: maximumCapturedBytes,
+            maximumEntryCount: maximumEntryCount
+        )
+    }
+
+    private static func insert(
+        path: String,
+        value: Data,
+        entries: inout [String: Data],
+        capturedBytes: inout Int,
+        maximumCapturedBytes: Int?,
+        maximumEntryCount: Int?
+    ) throws {
+        try requireCapacity(
+            path: path,
+            valueBytes: value.count,
+            entries: entries,
+            capturedBytes: capturedBytes,
+            maximumCapturedBytes: maximumCapturedBytes,
+            maximumEntryCount: maximumEntryCount
+        )
+        guard entries.updateValue(value, forKey: path) == nil else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        capturedBytes += path.utf8.count + value.count
+    }
+
+    private static func requireCapacity(
+        path: String,
+        valueBytes: Int,
+        entries: [String: Data],
+        capturedBytes: Int,
+        maximumCapturedBytes: Int?,
+        maximumEntryCount: Int?
+    ) throws {
+        guard valueBytes >= 0,
+              maximumEntryCount.map({ entries.count < $0 }) ?? true else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
+        let (entryBytes, entryOverflow) = path.utf8.count.addingReportingOverflow(valueBytes)
+        let (totalBytes, totalOverflow) = capturedBytes.addingReportingOverflow(entryBytes)
+        guard !entryOverflow, !totalOverflow,
+              maximumCapturedBytes.map({ totalBytes <= $0 }) ?? true else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
     }
 
     private static func directoryNames(_ descriptor: Int32) throws -> [String] {

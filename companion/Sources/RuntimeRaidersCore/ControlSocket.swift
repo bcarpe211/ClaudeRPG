@@ -36,6 +36,7 @@ public enum CompanionCommandRoute: Equatable, Sendable {
         expectedQueuedEventCount: Int
     )
     case installerProtectedState
+    case installerSyncMigration(target: InstallerMigrationSyncTarget)
     case legacyResume
 }
 
@@ -198,6 +199,10 @@ public enum CompanionCommandRouter {
             )
         case ["__runtime-raiders-installer-protected-state"]:
             return .installerProtectedState
+        case let values where values.count == 2 &&
+            values[0] == "__runtime-raiders-installer-sync-migration":
+            guard let target = InstallerMigrationSyncTarget(rawValue: values[1]) else { return nil }
+            return .installerSyncMigration(target: target)
         case ["__runtime-raiders-legacy-resume"]:
             return .legacyResume
         case let values where values.count == 2 &&
@@ -256,6 +261,7 @@ public enum CompanionCommandRouter {
             "__runtime-raiders-installer-validate-legacy",
             "__runtime-raiders-installer-status",
             "__runtime-raiders-installer-protected-state",
+            "__runtime-raiders-installer-sync-migration",
             "__runtime-raiders-legacy-resume",
         ].contains(command)
     }

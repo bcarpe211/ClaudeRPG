@@ -439,23 +439,177 @@ public enum InstallerProtectedStateSnapshot {
     private static let exclusions: Set<String> = [
         "command-link", "path-marker-owned",
     ]
+    // Covers the 50 MiB production outbox plus protected state and exact framing overhead.
+    public static let maximumSerializedBytes = 128 * 1_024 * 1_024
+    private static let maximumEntryCount = 16_384
 
-    public static func capture(paths: AgentPaths) throws -> Data {
+    public static func capture(
+        paths: AgentPaths,
+        maximumSerializedBytes requestedMaximum: Int = maximumSerializedBytes
+    ) throws -> Data {
         do {
+            guard requestedMaximum >= header.count,
+                  requestedMaximum <= maximumSerializedBytes else {
+                throw InstallerMigrationValidationError.protectedStateUnsafe
+            }
             let snapshot = try ProtectedStateSnapshot.capture(
                 paths: paths,
                 includeUpdateState: true,
-                additionalStateExclusions: exclusions
+                additionalStateExclusions: exclusions,
+                maximumCapturedBytes: requestedMaximum - header.count,
+                maximumEntryCount: maximumEntryCount
             )
             var output = header
             for (path, data) in snapshot.entries.sorted(by: { $0.key < $1.key }) {
                 let pathBytes = Data(path.utf8)
-                output.append(Data("\(pathBytes.count):\(data.count)\n".utf8))
+                let entryHeader = Data("\(pathBytes.count):\(data.count)\n".utf8)
+                let (entryBytes, entryOverflow) = entryHeader.count.addingReportingOverflow(
+                    pathBytes.count
+                )
+                let (entryAndData, dataOverflow) = entryBytes.addingReportingOverflow(data.count)
+                let (serializedBytes, totalOverflow) = output.count.addingReportingOverflow(
+                    entryAndData
+                )
+                guard !entryOverflow, !dataOverflow, !totalOverflow,
+                      serializedBytes <= requestedMaximum else {
+                    throw InstallerMigrationValidationError.protectedStateUnsafe
+                }
+                output.append(entryHeader)
                 output.append(pathBytes)
                 output.append(data)
             }
             return output
         } catch {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+    }
+}
+
+public enum InstallerMigrationSyncTarget: String, Sendable {
+    case stagingTree = "staging-tree"
+    case stagingTombstoneTree = "staging-tombstone-tree"
+    case activeJournal = "active-journal"
+    case supportDirectory = "support-directory"
+}
+
+public enum InstallerMigrationDurability {
+    private static let maximumEntries = 16_384
+    private static let maximumTreeBytes: Int64 = 512 * 1_024 * 1_024
+
+    public static func synchronize(
+        paths: AgentPaths,
+        target: InstallerMigrationSyncTarget
+    ) throws {
+        let support = paths.supportDirectory
+        switch target {
+        case .stagingTree:
+            var entries = 0
+            var bytes: Int64 = 0
+            try synchronizeTree(
+                support.appendingPathComponent(".migration-v1.staging", isDirectory: true),
+                entries: &entries,
+                bytes: &bytes
+            )
+        case .stagingTombstoneTree:
+            var entries = 0
+            var bytes: Int64 = 0
+            try synchronizeTree(
+                support.appendingPathComponent(
+                    ".migration-v1.staging-tombstone",
+                    isDirectory: true
+                ),
+                entries: &entries,
+                bytes: &bytes
+            )
+        case .activeJournal:
+            let active = support.appendingPathComponent(".migration-v1", isDirectory: true)
+            try synchronizeRegularFile(active.appendingPathComponent("journal.json"), maximumBytes: 16_384)
+            try synchronizeDirectory(active)
+        case .supportDirectory:
+            try synchronizeDirectory(support)
+        }
+    }
+
+    private static func synchronizeTree(
+        _ url: URL,
+        entries: inout Int,
+        bytes: inout Int64
+    ) throws {
+        var metadata = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o022 == 0 else {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+        entries += 1
+        guard entries <= maximumEntries else {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+        switch metadata.st_mode & S_IFMT {
+        case S_IFREG:
+            guard metadata.st_nlink == 1, metadata.st_size >= 0 else {
+                throw InstallerMigrationValidationError.protectedStateUnsafe
+            }
+            let (newBytes, overflow) = bytes.addingReportingOverflow(metadata.st_size)
+            guard !overflow, newBytes <= maximumTreeBytes else {
+                throw InstallerMigrationValidationError.protectedStateUnsafe
+            }
+            bytes = newBytes
+            try synchronizeRegularFile(url, maximumBytes: Int(maximumTreeBytes))
+        case S_IFDIR:
+            let children = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: nil,
+                options: []
+            ).sorted { $0.lastPathComponent < $1.lastPathComponent }
+            for child in children {
+                try synchronizeTree(child, entries: &entries, bytes: &bytes)
+            }
+            try synchronizeDirectory(url)
+        default:
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+    }
+
+    private static func synchronizeRegularFile(_ url: URL, maximumBytes: Int) throws {
+        var metadata = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o022 == 0,
+              metadata.st_nlink == 1,
+              metadata.st_size >= 0,
+              metadata.st_size <= maximumBytes else {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+    }
+
+    private static func synchronizeDirectory(_ url: URL) throws {
+        var metadata = stat()
+        guard url.path.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o022 == 0 else {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw InstallerMigrationValidationError.protectedStateUnsafe
+        }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else {
             throw InstallerMigrationValidationError.protectedStateUnsafe
         }
     }
@@ -494,7 +648,8 @@ public struct LegacySequenceEightInstallationValidator {
     public func validate(
         homeDirectory: URL,
         paths: AgentPaths,
-        expectedTeamIdentifier: String
+        expectedTeamIdentifier: String,
+        pathEnvironment: String? = ProcessInfo.processInfo.environment["PATH"]
     ) throws {
         do {
             let home = homeDirectory
@@ -602,7 +757,13 @@ public struct LegacySequenceEightInstallationValidator {
                   command.lastPathComponent == "raiders" else {
                 throw InstallerMigrationValidationError.invalidLegacyInstallation
             }
-            try requireCommandParentChain(command.deletingLastPathComponent())
+            let commandDirectory = command.deletingLastPathComponent()
+            try requireCommandParentChain(commandDirectory)
+            try requireCommandDirectoryInCurrentPATH(
+                commandDirectory,
+                home: home,
+                pathEnvironment: pathEnvironment
+            )
             try requireSymlink(command, target: shim.path)
         } catch {
             throw InstallerMigrationValidationError.invalidLegacyInstallation
@@ -742,6 +903,80 @@ public struct LegacySequenceEightInstallationValidator {
                       metadata.st_mode & 0o300 == 0o300 else {
                     throw InstallerMigrationValidationError.invalidLegacyInstallation
                 }
+            }
+            let descriptor = current.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            }
+            guard descriptor >= 0 else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            Darwin.close(descriptor)
+        }
+    }
+
+    private func requireCommandDirectoryInCurrentPATH(
+        _ commandDirectory: URL,
+        home: URL,
+        pathEnvironment: String?
+    ) throws {
+        let homePath = home.path
+        let commandPath = commandDirectory.path
+        guard commandPath.hasPrefix(homePath + "/"),
+              let pathEnvironment,
+              !pathEnvironment.isEmpty,
+              pathEnvironment.utf8.count <= 16_384 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        let rawComponents = pathEnvironment.split(separator: ":", omittingEmptySubsequences: false)
+        guard !rawComponents.isEmpty, rawComponents.count <= 256 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        var seen: Set<String> = []
+        var commandMatches = 0
+        for rawComponent in rawComponents {
+            let component = String(rawComponent)
+            guard !component.isEmpty,
+                  component.hasPrefix("/"),
+                  !component.hasSuffix("/"),
+                  !component.contains("//"),
+                  component.utf8.allSatisfy({ $0 >= 0x20 && $0 != 0x7F }),
+                  component.split(separator: "/").allSatisfy({ $0 != "." && $0 != ".." }),
+                  seen.insert(component).inserted else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            let directory = URL(fileURLWithPath: component, isDirectory: true)
+            guard directory.path == component else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            try requireStrictPATHDirectory(directory)
+            if component == commandPath { commandMatches += 1 }
+        }
+        guard commandMatches == 1 else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+    }
+
+    private func requireStrictPATHDirectory(_ directory: URL) throws {
+        var current = URL(fileURLWithPath: "/", isDirectory: true)
+        let components = directory.pathComponents.dropFirst()
+        guard !components.isEmpty else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        for component in components {
+            current.appendPathComponent(component, isDirectory: true)
+            var metadata = stat()
+            guard current.path.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+                  metadata.st_mode & S_IFMT == S_IFDIR,
+                  metadata.st_nlink >= 1,
+                  metadata.st_mode & 0o111 != 0,
+                  metadata.st_uid == 0 || metadata.st_uid == Darwin.geteuid() else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            let writableByOthers = metadata.st_mode & 0o022 != 0
+            guard !writableByOthers ||
+                    (metadata.st_uid == 0 && metadata.st_mode & S_ISVTX != 0),
+                  metadata.st_uid != Darwin.geteuid() || !writableByOthers else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
             }
             let descriptor = current.path.withCString {
                 Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)

@@ -9,6 +9,7 @@ VERSION='__RUNTIME_RAIDERS_COMPANION_VERSION__'
 RELEASE_SEQUENCE='__RUNTIME_RAIDERS_RELEASE_SEQUENCE__'
 RELEASE_SHA='__RUNTIME_RAIDERS_RELEASE_SHA__'
 UPDATE_PROTOCOL_VERSION='__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__'
+MAX_PROTECTED_SNAPSHOT_BYTES=134217728
 TEAM_ID='__RUNTIME_RAIDERS_TEAM_ID__'
 RELEASE_VALIDATOR_SHA256='__RUNTIME_RAIDERS_RELEASE_VALIDATOR_SHA256__'
 RELEASE_VALIDATOR_BASE64='__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__'
@@ -81,9 +82,43 @@ MARKER_FLAG="$STATE/path-marker-owned"
 COLLECTOR_STATE="$STATE/collector-state.json"
 ENROLLMENT="$STATE/enrollment.json"
 MIGRATION_DIRECTORY="$SUPPORT/.migration-v1"
+MIGRATION_STAGING_DIRECTORY="$SUPPORT/.migration-v1.staging"
+MIGRATION_STAGING_TOMBSTONE="$SUPPORT/.migration-v1.staging-tombstone"
+MIGRATION_TOMBSTONE_DIRECTORY="$SUPPORT/.migration-v1.tombstone"
 MIGRATION_JOURNAL="$MIGRATION_DIRECTORY/journal.json"
 MIGRATION_HELPER_APP="$MIGRATION_DIRECTORY/Runtime Raiders Agent.app"
 MIGRATION_HELPER_EXECUTABLE="$MIGRATION_HELPER_APP/Contents/MacOS/runtime-raiders-agent"
+MIGRATION_STAGING_HELPER_APP="$MIGRATION_STAGING_DIRECTORY/Runtime Raiders Agent.app"
+MIGRATION_STAGING_HELPER_EXECUTABLE="$MIGRATION_STAGING_HELPER_APP/Contents/MacOS/runtime-raiders-agent"
+
+strict_current_path_contains() {
+  target_directory="$1"
+  case "$target_directory" in "$HOME"/*) ;; *) return 1 ;; esac
+  path_value="${PATH-}"
+  [ -n "$path_value" ] && [ "${#path_value}" -le 16384 ] || return 1
+  case "$path_value" in :*|*:|*::* ) return 1 ;; esac
+  old_ifs="$IFS"
+  IFS=:
+  set -- $path_value
+  IFS="$old_ifs"
+  [ "$#" -le 256 ] || return 1
+  seen=:
+  found=0
+  for component do
+    case "$component" in /*) ;; *) return 1 ;; esac
+    case "$component" in /|*//*|*/../*|*/./*|*/..|*/.) return 1 ;; esac
+    [ -d "$component" ] && [ ! -L "$component" ] || return 1
+    component_owner="$(stat -f %u "$component")" || return 1
+    [ "$component_owner" = 0 ] || [ "$component_owner" = "$(id -u)" ] || return 1
+    component_mode="$(stat -f %Lp "$component")" || return 1
+    case "$component_mode" in [0-7][0-7][0-7]) ;; *) return 1 ;; esac
+    case "$component_mode" in ?[2367]?|??[2367]) return 1 ;; esac
+    case "$seen" in *:"$component":*) return 1 ;; esac
+    seen="$seen$component:"
+    [ "$component" != "$target_directory" ] || found=$((found + 1))
+  done
+  [ "$found" -eq 1 ]
+}
 
 for path in \
   "$HOME/Library" "$HOME/Library/Application Support" "$HOME/Library/LaunchAgents" \
@@ -94,6 +129,23 @@ for path in \
 done
 
 recovery_pending=0
+staging_pending=0
+if { [ -e "$MIGRATION_DIRECTORY" ] || [ -L "$MIGRATION_DIRECTORY" ]; } &&
+   { [ -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] || [ -L "$MIGRATION_TOMBSTONE_DIRECTORY" ]; }; then
+  echo "Runtime Raiders refuses conflicting migration journals" >&2
+  exit 1
+fi
+if [ -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] || [ -L "$MIGRATION_TOMBSTONE_DIRECTORY" ]; then
+  [ ! -e "$MIGRATION_DIRECTORY" ] && [ ! -L "$MIGRATION_DIRECTORY" ] &&
+    [ -d "$MIGRATION_TOMBSTONE_DIRECTORY" ] && [ ! -L "$MIGRATION_TOMBSTONE_DIRECTORY" ] &&
+    [ "$(stat -f %u "$MIGRATION_TOMBSTONE_DIRECTORY")" = "$(id -u)" ] &&
+    [ "$(stat -f %Lp "$MIGRATION_TOMBSTONE_DIRECTORY")" = 700 ] || {
+      echo "Runtime Raiders refuses an unsafe migration tombstone" >&2
+      exit 1
+    }
+  mv "$MIGRATION_TOMBSTONE_DIRECTORY" "$MIGRATION_DIRECTORY"
+  /bin/sync
+fi
 if [ -e "$MIGRATION_DIRECTORY" ] || [ -L "$MIGRATION_DIRECTORY" ]; then
   [ -d "$MIGRATION_DIRECTORY" ] && [ ! -L "$MIGRATION_DIRECTORY" ] &&
     [ "$(stat -f %u "$MIGRATION_DIRECTORY")" = "$(id -u)" ] &&
@@ -103,6 +155,17 @@ if [ -e "$MIGRATION_DIRECTORY" ] || [ -L "$MIGRATION_DIRECTORY" ]; then
     }
   recovery_pending=1
 fi
+for staging_path in "$MIGRATION_STAGING_DIRECTORY" "$MIGRATION_STAGING_TOMBSTONE"; do
+  if [ -e "$staging_path" ] || [ -L "$staging_path" ]; then
+    [ -d "$staging_path" ] && [ ! -L "$staging_path" ] &&
+      [ "$(stat -f %u "$staging_path")" = "$(id -u)" ] &&
+      [ "$(stat -f %Lp "$staging_path")" = 700 ] || {
+        echo "Runtime Raiders refuses unsafe migration staging" >&2
+        exit 1
+      }
+    staging_pending=1
+  fi
+done
 
 if [ "$recovery_pending" -eq 0 ] && { [ -e "$RELEASE_STATE" ] || [ -e "$LAUNCHER_DIRECTORY" ] ||
    [ -e "$RELEASES_DIRECTORY" ] || [ -e "$INSTALLATION_DIRECTORY" ]; }; then
@@ -183,7 +246,8 @@ elif [ -e "$LEGACY_APP" ]; then
   legacy_command_path="$(cat "$COMMAND_LINK_FILE")"
   case "$legacy_command_path" in /*) ;; *) legacy_command_path='' ;; esac
   [ -n "$legacy_command_path" ] && [ -L "$legacy_command_path" ] &&
-    [ "$(readlink "$legacy_command_path")" = "$SHIM" ] || {
+    [ "$(readlink "$legacy_command_path")" = "$SHIM" ] &&
+    strict_current_path_contains "${legacy_command_path%/*}" || {
       echo "Runtime Raiders can migrate only the complete sequence-8 installation" >&2
       exit 1
     }
@@ -331,6 +395,27 @@ close_lease() {
   lease_started=0
 }
 
+start_lease() {
+  lease_executable="$1"
+  [ "$lease_started" -eq 0 ] || return 0
+  rm -f "$WORK/lease.fifo" "$WORK/lease.ready" "$WORK/lease.pid"
+  mkfifo "$WORK/lease.fifo"
+  "$lease_executable" __runtime-raiders-installer-lease <"$WORK/lease.fifo" >"$WORK/lease.ready" &
+  lease_pid=$!
+  printf '%s\n' "$lease_pid" > "$WORK/lease.pid"
+  chmod 600 "$WORK/lease.pid"
+  exec 9>"$WORK/lease.fifo"
+  lease_started=1
+  attempt=0
+  while [ "$attempt" -lt 40 ] && [ ! -s "$WORK/lease.ready" ]; do
+    kill -0 "$lease_pid" >/dev/null 2>&1 || return 1
+    attempt=$((attempt + 1))
+    sleep 0.05
+  done
+  [ -s "$WORK/lease.ready" ] &&
+    [ "$(cat "$WORK/lease.ready")" = runtime-raiders-installer-lease-ready ]
+}
+
 job_absent() {
   output="$(mktemp "$WORK/launchctl.XXXXXX")"
   if launchctl print "gui/$(id -u)/$LABEL" >"$output" 2>&1; then
@@ -391,6 +476,10 @@ capture_protected_state() {
   executable="$1"; destination="$2"
   temporary="$(mktemp "$WORK/protected-state.XXXXXX")"
   "$executable" __runtime-raiders-installer-protected-state > "$temporary" || {
+    rm -f "$temporary"
+    return 1
+  }
+  private_regular_file "$temporary" 600 "$MAX_PROTECTED_SNAPSHOT_BYTES" || {
     rm -f "$temporary"
     return 1
   }
@@ -464,7 +553,7 @@ load_migration_journal() {
   case "$journal_prior_intent" in enabled|disabled) ;; *) return 1 ;; esac
   case "$journal_queue" in *[!0-9]*|'') return 1 ;; esac
   case "$journal_phase" in
-    journal-ready|prepare|old-job-stop|launcher-directory|releases-directory|installation-directory|launcher-placement|release-placement|state-write|plist-replacement|shim-replacement|command-link-replacement|bootstrap|prepared-health|resume|accepted) ;;
+    journal-ready|prepare|old-job-stop|launcher-directory|releases-directory|installation-directory|launcher-placement|release-placement|state-write|plist-replacement|shim-replacement|command-link-replacement|bootstrap|prepared-health|committed-pending-resume|accepted) ;;
     *) return 1 ;;
   esac
   for digest in "$journal_plist_sha" "$journal_shim_sha" "$journal_command_sha" \
@@ -480,7 +569,8 @@ load_migration_journal() {
   private_regular_file "$MIGRATION_DIRECTORY/old.plist" 600 1048576 || return 1
   private_regular_file "$MIGRATION_DIRECTORY/old.shim" 700 1048576 || return 1
   private_regular_file "$MIGRATION_DIRECTORY/old-command-link" 600 4096 || return 1
-  private_regular_file "$MIGRATION_DIRECTORY/protected-before" 600 16777216 || return 1
+  private_regular_file "$MIGRATION_DIRECTORY/protected-before" 600 \
+    "$MAX_PROTECTED_SNAPSHOT_BYTES" || return 1
   [ "$(file_sha256 "$MIGRATION_DIRECTORY/old.plist")" = "$journal_plist_sha" ] || return 1
   [ "$(file_sha256 "$MIGRATION_DIRECTORY/old.shim")" = "$journal_shim_sha" ] || return 1
   [ "$(file_sha256 "$MIGRATION_DIRECTORY/old-command-link")" = "$journal_command_sha" ] || return 1
@@ -502,12 +592,59 @@ write_migration_journal() {
     "$migration_command_sha" "$migration_protected_sha" "$migration_helper_sha" > "$temporary"
   chmod 600 "$temporary"
   mv "$temporary" "$MIGRATION_JOURNAL"
-  /bin/sync
+  helper="$(installer_agent_executable)" || return 1
+  "$helper" __runtime-raiders-installer-sync-migration active-journal || return 1
 }
 
 remove_migration_directory() {
-  safe_remove_created "$MIGRATION_DIRECTORY" || return 1
+  cleanup_context="$1"
+  case "$cleanup_context" in accepted|rollback) ;; *) return 1 ;; esac
+  [ ! -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] && [ ! -L "$MIGRATION_TOMBSTONE_DIRECTORY" ] || return 1
+  helper="$(installer_agent_executable)" || return 1
+  durable_checkpoint "$cleanup_context-cleanup-before-rename"
+  mv "$MIGRATION_DIRECTORY" "$MIGRATION_TOMBSTONE_DIRECTORY" || return 1
+  if [ "$helper" = "$MIGRATION_HELPER_EXECUTABLE" ]; then
+    helper="$MIGRATION_TOMBSTONE_DIRECTORY/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
+  fi
+  "$helper" __runtime-raiders-installer-sync-migration support-directory || return 1
+  durable_checkpoint "$cleanup_context-cleanup-after-rename"
+  durable_checkpoint "$cleanup_context-cleanup-before-delete"
+  safe_remove_created "$MIGRATION_TOMBSTONE_DIRECTORY" || return 1
   /bin/sync
+}
+
+bounded_staging_directory() {
+  staging_root="$1"
+  [ -d "$staging_root" ] && [ ! -L "$staging_root" ] || return 1
+  [ "$(find "$staging_root" -xdev -print | wc -l | tr -d ' ')" -le 16384 ] || return 1
+  [ -z "$(find "$staging_root" -xdev ! -type d ! -type f -print -quit)" ] || return 1
+  staging_bytes="$(find "$staging_root" -xdev -type f -exec stat -f %z {} \; | awk \
+    'BEGIN { total = 0 } { total += $1; if (total > 536870912) exit 1 } END { if (total <= 536870912) print total }')" || return 1
+  [ -n "$staging_bytes" ]
+}
+
+remove_stale_migration_staging() {
+  [ "$staging_pending" -eq 1 ] || return 0
+  if [ -e "$MIGRATION_STAGING_TOMBSTONE" ]; then
+    bounded_staging_directory "$MIGRATION_STAGING_TOMBSTONE" || return 1
+    "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-sync-migration \
+      staging-tombstone-tree || return 1
+    durable_checkpoint staging-cleanup-before-delete
+    safe_remove_created "$MIGRATION_STAGING_TOMBSTONE" || return 1
+  fi
+  if [ -e "$MIGRATION_STAGING_DIRECTORY" ]; then
+    bounded_staging_directory "$MIGRATION_STAGING_DIRECTORY" || return 1
+    "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-sync-migration \
+      staging-tree || return 1
+    durable_checkpoint staging-cleanup-before-rename
+    mv "$MIGRATION_STAGING_DIRECTORY" "$MIGRATION_STAGING_TOMBSTONE" || return 1
+    "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-sync-migration support-directory || return 1
+    durable_checkpoint staging-cleanup-after-rename
+    durable_checkpoint staging-cleanup-before-delete
+    safe_remove_created "$MIGRATION_STAGING_TOMBSTONE" || return 1
+  fi
+  /bin/sync
+  staging_pending=0
 }
 
 recover_interrupted_migration() {
@@ -515,16 +652,43 @@ recover_interrupted_migration() {
     echo "Runtime Raiders refuses an invalid migration journal" >&2
     return 1
   }
+  prior_intent="$journal_prior_intent"
+  prior_queued_event_count="$journal_queue"
+  migration_plist_sha="$journal_plist_sha"
+  migration_shim_sha="$journal_shim_sha"
+  migration_command_sha="$journal_command_sha"
+  migration_protected_sha="$journal_protected_sha"
+  migration_helper_sha="$journal_helper_sha"
   if [ "$journal_phase" = accepted ]; then
     "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
       candidate-resumed 1 "$journal_prior_intent" "$journal_queue" >/dev/null || return 1
     capture_protected_state "$RELEASE_EXECUTABLE" "$WORK/recovered-protected" || return 1
     cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
-    remove_migration_directory || return 1
+    remove_migration_directory accepted || return 1
+    echo "Runtime Raiders installed. Run 'raiders status' to check it."
+    return 2
+  fi
+  if [ "$journal_phase" = committed-pending-resume ]; then
+    if "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
+         candidate-prepared 1 "$journal_prior_intent" "$journal_queue" >/dev/null 2>&1; then
+      :
+    else
+      "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
+        candidate-resumed 1 "$journal_prior_intent" "$journal_queue" >/dev/null || return 1
+    fi
+    capture_protected_state "$RELEASE_EXECUTABLE" "$WORK/recovered-protected" || return 1
+    cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
+    "$RELEASE_EXECUTABLE" __runtime-raiders-installer-resume 1 >/dev/null || return 1
+    wait_for_candidate_status candidate-resumed "$journal_prior_intent" "$journal_queue" || return 1
+    capture_protected_state "$RELEASE_EXECUTABLE" "$WORK/recovered-protected" || return 1
+    cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
+    write_migration_journal accepted || return 1
+    remove_migration_directory accepted || return 1
     echo "Runtime Raiders installed. Run 'raiders status' to check it."
     return 2
   fi
 
+  start_lease "$MIGRATION_HELPER_EXECUTABLE" || return 1
   launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
   job_absent || return 1
   restore_copy "$MIGRATION_DIRECTORY/old.plist" "$PLIST" 600
@@ -535,7 +699,8 @@ recover_interrupted_migration() {
   case "$recovered_command_path" in *//*|*/../*|*/./*) return 1 ;; esac
   recovered_command_directory="${recovered_command_path%/*}"
   [ -d "$recovered_command_directory" ] && [ ! -L "$recovered_command_directory" ] &&
-    [ "$(stat -f %u "$recovered_command_directory")" = "$(id -u)" ] || return 1
+    [ "$(stat -f %u "$recovered_command_directory")" = "$(id -u)" ] &&
+    strict_current_path_contains "$recovered_command_directory" || return 1
   if [ -e "$recovered_command_path" ] || [ -L "$recovered_command_path" ]; then
     [ -L "$recovered_command_path" ] && [ "$(readlink "$recovered_command_path")" = "$SHIM" ] || return 1
     rm -f "$recovered_command_path"
@@ -548,19 +713,31 @@ recover_interrupted_migration() {
   safe_remove_created "$LAUNCHER_APP" || return 1
   safe_remove_created "$LAUNCHER_DIRECTORY" || return 1
   "$MIGRATION_HELPER_EXECUTABLE" __runtime-raiders-installer-validate-legacy || return 1
+  capture_protected_state "$MIGRATION_HELPER_EXECUTABLE" "$WORK/recovered-protected" || return 1
+  cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
   launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || return 1
-  "$MIGRATION_HELPER_EXECUTABLE" __runtime-raiders-legacy-prepare >/dev/null 2>&1 || return 1
   wait_for_legacy_status "$journal_prior_intent" legacy-prepared "$journal_queue" >/dev/null 2>&1 || return 1
+  capture_protected_state "$MIGRATION_HELPER_EXECUTABLE" "$WORK/recovered-protected" || return 1
+  cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
   "$MIGRATION_HELPER_EXECUTABLE" __runtime-raiders-legacy-resume >/dev/null 2>&1 || return 1
   wait_for_legacy_status "$journal_prior_intent" legacy-running "$journal_queue" >/dev/null 2>&1 || return 1
   capture_protected_state "$MIGRATION_HELPER_EXECUTABLE" "$WORK/recovered-protected" || return 1
   cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
-  remove_migration_directory || return 1
+  close_lease
+  remove_migration_directory rollback || return 1
   recovery_pending=0
 }
 
 rollback_transaction() {
   [ "$transaction_active" -eq 1 ] && [ "$transaction_committed" -eq 0 ] || return 0
+  if [ "$migration" -eq 1 ] && load_migration_journal; then
+    case "$journal_phase" in
+      committed-pending-resume|accepted)
+        transaction_committed=1
+        return 0
+        ;;
+    esac
+  fi
   transaction_active=0
   rollback_ok=1
   helper="$(installer_agent_executable)" || helper=''
@@ -640,7 +817,7 @@ rollback_transaction() {
   [ "$releases_created" -eq 0 ] || safe_remove_created "$RELEASES_DIRECTORY" || rollback_ok=0
   [ "$launcher_created" -eq 0 ] || safe_remove_created "$LAUNCHER_DIRECTORY" || rollback_ok=0
   if [ "$migration" -eq 1 ] && [ "$rollback_ok" -eq 1 ]; then
-    remove_migration_directory || rollback_ok=0
+    remove_migration_directory rollback || rollback_ok=0
   fi
   close_lease
   [ "$rollback_ok" -eq 1 ]
@@ -742,6 +919,10 @@ self_check="$("$CANDIDATE_AGENT_EXECUTABLE" __self-check)" || exit 1
 printf '%s' "$self_check" | grep -F "\"release_sequence\":$RELEASE_SEQUENCE" >/dev/null 2>&1 || exit 1
 printf '%s' "$self_check" | grep -F "\"release_sha\":\"$RELEASE_SHA\"" >/dev/null 2>&1 || exit 1
 printf '%s' "$self_check" | grep -F '"update_protocol_version":2' >/dev/null 2>&1 || exit 1
+remove_stale_migration_staging || {
+  echo "Runtime Raiders could not safely retire stale migration staging" >&2
+  exit 1
+}
 failure_checkpoint archive-verification
 
 if [ "$migration" -eq 1 ]; then
@@ -811,38 +992,39 @@ if [ "$migration" -eq 1 ]; then
   cp -p "$PLIST" "$WORK/old.plist"
   cp -p "$SHIM" "$WORK/old.shim"
   cp -p "$COMMAND_LINK_FILE" "$WORK/old-command-link"
-  mkdir "$MIGRATION_DIRECTORY"
-  chmod 700 "$MIGRATION_DIRECTORY"
-  ditto "$CANDIDATE_AGENT" "$MIGRATION_HELPER_APP"
-  cp -p "$WORK/old.plist" "$MIGRATION_DIRECTORY/old.plist"
-  cp -p "$WORK/old.shim" "$MIGRATION_DIRECTORY/old.shim"
-  cp -p "$WORK/old-command-link" "$MIGRATION_DIRECTORY/old-command-link"
-  cp -p "$WORK/protected-before" "$MIGRATION_DIRECTORY/protected-before"
-  chmod 600 "$MIGRATION_DIRECTORY/old.plist" \
-    "$MIGRATION_DIRECTORY/old-command-link" "$MIGRATION_DIRECTORY/protected-before"
-  chmod 700 "$MIGRATION_DIRECTORY/old.shim"
-  migration_plist_sha="$(file_sha256 "$MIGRATION_DIRECTORY/old.plist")"
-  migration_shim_sha="$(file_sha256 "$MIGRATION_DIRECTORY/old.shim")"
-  migration_command_sha="$(file_sha256 "$MIGRATION_DIRECTORY/old-command-link")"
-  migration_protected_sha="$(file_sha256 "$MIGRATION_DIRECTORY/protected-before")"
-  migration_helper_sha="$(file_sha256 "$MIGRATION_HELPER_EXECUTABLE")"
-  write_migration_journal journal-ready
+  mkdir "$MIGRATION_STAGING_DIRECTORY"
+  chmod 700 "$MIGRATION_STAGING_DIRECTORY"
+  durable_checkpoint journal-staging-directory
+  ditto "$CANDIDATE_AGENT" "$MIGRATION_STAGING_HELPER_APP"
+  cp -p "$WORK/old.plist" "$MIGRATION_STAGING_DIRECTORY/old.plist"
+  cp -p "$WORK/old.shim" "$MIGRATION_STAGING_DIRECTORY/old.shim"
+  cp -p "$WORK/old-command-link" "$MIGRATION_STAGING_DIRECTORY/old-command-link"
+  cp -p "$WORK/protected-before" "$MIGRATION_STAGING_DIRECTORY/protected-before"
+  chmod 600 "$MIGRATION_STAGING_DIRECTORY/old.plist" \
+    "$MIGRATION_STAGING_DIRECTORY/old-command-link" "$MIGRATION_STAGING_DIRECTORY/protected-before"
+  chmod 700 "$MIGRATION_STAGING_DIRECTORY/old.shim"
+  migration_plist_sha="$(file_sha256 "$MIGRATION_STAGING_DIRECTORY/old.plist")"
+  migration_shim_sha="$(file_sha256 "$MIGRATION_STAGING_DIRECTORY/old.shim")"
+  migration_command_sha="$(file_sha256 "$MIGRATION_STAGING_DIRECTORY/old-command-link")"
+  migration_protected_sha="$(file_sha256 "$MIGRATION_STAGING_DIRECTORY/protected-before")"
+  migration_helper_sha="$(file_sha256 "$MIGRATION_STAGING_HELPER_EXECUTABLE")"
+  emit_migration_journal \
+    journal-ready "$prior_intent" "$prior_queued_event_count" "$RELEASE_SEQUENCE" \
+    "$RELEASE_SHA" "$VERSION" "$migration_plist_sha" "$migration_shim_sha" \
+    "$migration_command_sha" "$migration_protected_sha" "$migration_helper_sha" \
+    > "$MIGRATION_STAGING_DIRECTORY/journal.json"
+  chmod 600 "$MIGRATION_STAGING_DIRECTORY/journal.json"
+  "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-sync-migration staging-tree
+  durable_checkpoint journal-staging-populated
+  durable_checkpoint before-journal-activation
+  mv "$MIGRATION_STAGING_DIRECTORY" "$MIGRATION_DIRECTORY"
+  "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-sync-migration support-directory
+  durable_checkpoint after-journal-activation
 fi
 transaction_active=1
 if [ "$migration" -eq 1 ]; then durable_checkpoint journal-ready; fi
 
-mkfifo "$WORK/lease.fifo"
-"$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-lease <"$WORK/lease.fifo" >"$WORK/lease.ready" &
-lease_pid=$!
-printf '%s\n' "$lease_pid" > "$WORK/lease.pid"
-chmod 600 "$WORK/lease.pid"
-exec 9>"$WORK/lease.fifo"
-lease_started=1
-attempt=0
-while [ "$attempt" -lt 40 ] && ! grep -F -x 'runtime-raiders-installer-lease-ready' "$WORK/lease.ready" >/dev/null 2>&1; do
-  attempt=$((attempt + 1)); sleep 0.05
-done
-grep -F -x 'runtime-raiders-installer-lease-ready' "$WORK/lease.ready" >/dev/null 2>&1 || {
+start_lease "$CANDIDATE_AGENT_EXECUTABLE" || {
   echo "Runtime Raiders installer lease did not become ready" >&2
   exit 1
 }
@@ -995,7 +1177,14 @@ assert_protected_state "$RELEASE_EXECUTABLE" "$WORK/protected-before" || {
 }
 if [ "$migration" -eq 1 ]; then write_migration_journal prepared-health; durable_checkpoint prepared-health; fi
 failure_checkpoint prepared-health
+if [ "$migration" -eq 1 ]; then
+  durable_checkpoint before-commit-marker
+  write_migration_journal committed-pending-resume
+  transaction_committed=1
+  durable_checkpoint after-commit-marker
+fi
 "$RELEASE_EXECUTABLE" __runtime-raiders-installer-resume 1 >/dev/null
+if [ "$migration" -eq 1 ]; then durable_checkpoint after-candidate-resume; fi
 wait_for_candidate_status candidate-resumed "$prior_intent" "$prior_queued_event_count" || {
   echo "Runtime Raiders candidate did not restore collection intent" >&2
   exit 1
@@ -1004,13 +1193,11 @@ assert_protected_state "$RELEASE_EXECUTABLE" "$WORK/protected-before" || {
   echo "Runtime Raiders protected local state changed after resume" >&2
   exit 1
 }
-if [ "$migration" -eq 1 ]; then write_migration_journal resume; durable_checkpoint resume; fi
-failure_checkpoint resume
 if [ "$migration" -eq 1 ]; then
   write_migration_journal accepted
   durable_checkpoint acceptance-mark
 fi
 close_lease
 transaction_committed=1
-if [ "$migration" -eq 1 ]; then remove_migration_directory; fi
+if [ "$migration" -eq 1 ]; then remove_migration_directory accepted; fi
 echo "Runtime Raiders installed. Run 'raiders status' to check it."

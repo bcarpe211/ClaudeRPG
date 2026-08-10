@@ -447,13 +447,127 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testProtectedSnapshotSupportsNearProductionOutboxAndBoundsTotalSerialization() throws {
+        try withTemporaryHome { _, paths in
+            let large = paths.outboxDirectory.appendingPathComponent("large-event.json")
+            FileManager.default.createFile(atPath: large.path, contents: Data([0x41]))
+            let handle = try FileHandle(forWritingTo: large)
+            try handle.truncate(atOffset: 49 * 1_024 * 1_024)
+            try handle.seek(toOffset: 49 * 1_024 * 1_024 - 1)
+            try handle.write(contentsOf: Data([0x5A]))
+            try handle.close()
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: large.path
+            )
+
+            let snapshot = try InstallerProtectedStateSnapshot.capture(paths: paths)
+            XCTAssertGreaterThan(snapshot.count, 49 * 1_024 * 1_024)
+            XCTAssertLessThanOrEqual(
+                snapshot.count,
+                InstallerProtectedStateSnapshot.maximumSerializedBytes
+            )
+            XCTAssertThrowsError(try InstallerProtectedStateSnapshot.capture(
+                paths: paths,
+                maximumSerializedBytes: 1_024
+            ))
+        }
+    }
+
+    func testMigrationDurabilitySynchronizesOnlyFixedValidatedTargets() throws {
+        try withTemporaryHome { _, paths in
+            let staging = paths.supportDirectory.appendingPathComponent(".migration-v1.staging")
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: staging.path)
+            let stagedFile = staging.appendingPathComponent("protected-before")
+            try Data("snapshot".utf8).write(to: stagedFile)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stagedFile.path)
+            XCTAssertNoThrow(try InstallerMigrationDurability.synchronize(
+                paths: paths,
+                target: .stagingTree
+            ))
+            let stagingTombstone = paths.supportDirectory.appendingPathComponent(
+                ".migration-v1.staging-tombstone"
+            )
+            try FileManager.default.moveItem(at: staging, to: stagingTombstone)
+            XCTAssertNoThrow(try InstallerMigrationDurability.synchronize(
+                paths: paths,
+                target: .stagingTombstoneTree
+            ))
+            try FileManager.default.moveItem(at: stagingTombstone, to: staging)
+
+            let active = paths.supportDirectory.appendingPathComponent(".migration-v1")
+            try FileManager.default.createDirectory(at: active, withIntermediateDirectories: false)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: active.path)
+            let journal = active.appendingPathComponent("journal.json")
+            try Data("{}\n".utf8).write(to: journal)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: journal.path)
+            XCTAssertNoThrow(try InstallerMigrationDurability.synchronize(
+                paths: paths,
+                target: .activeJournal
+            ))
+            XCTAssertNoThrow(try InstallerMigrationDurability.synchronize(
+                paths: paths,
+                target: .supportDirectory
+            ))
+
+            let unsafe = staging.appendingPathComponent("unsafe")
+            try FileManager.default.createSymbolicLink(at: unsafe, withDestinationURL: journal)
+            XCTAssertThrowsError(try InstallerMigrationDurability.synchronize(
+                paths: paths,
+                target: .stagingTree
+            ))
+        }
+    }
+
     func testExactSequenceEightValidatorAcceptsCanonicalDiscoveredHomeSurfaces() throws {
         try withLegacyInstallation { fixture in
             let validator = makeLegacyValidator(fixture: fixture)
             XCTAssertNoThrow(try validator.validate(
                 homeDirectory: fixture.home,
                 paths: fixture.paths,
-                expectedTeamIdentifier: "ABCDE12345"
+                expectedTeamIdentifier: "ABCDE12345",
+                pathEnvironment: fixture.command.deletingLastPathComponent().path + ":/usr/bin:/bin"
+            ))
+        }
+    }
+
+    func testExactSequenceEightValidatorBindsRecordedCommandToStrictCurrentPATH() throws {
+        try withLegacyInstallation { fixture in
+            let validator = makeLegacyValidator(fixture: fixture)
+            let commandDirectory = fixture.command.deletingLastPathComponent().path
+            let valid = commandDirectory + ":/usr/bin:/bin"
+            XCTAssertNoThrow(try validator.validate(
+                homeDirectory: fixture.home,
+                paths: fixture.paths,
+                expectedTeamIdentifier: "ABCDE12345",
+                pathEnvironment: valid
+            ))
+
+            let linked = fixture.home.appendingPathComponent("linked-bin")
+            try FileManager.default.createSymbolicLink(
+                at: linked,
+                withDestinationURL: fixture.command.deletingLastPathComponent()
+            )
+            for malformed in [
+                "/usr/bin:/bin",
+                commandDirectory + "::/usr/bin:/bin",
+                "relative:" + valid,
+                commandDirectory + ":" + valid,
+                linked.path + ":" + valid,
+            ] {
+                XCTAssertThrowsError(try validator.validate(
+                    homeDirectory: fixture.home,
+                    paths: fixture.paths,
+                    expectedTeamIdentifier: "ABCDE12345",
+                    pathEnvironment: malformed
+                ), malformed)
+            }
+            XCTAssertThrowsError(try validator.validate(
+                homeDirectory: fixture.home,
+                paths: fixture.paths,
+                expectedTeamIdentifier: "ABCDE12345",
+                pathEnvironment: nil
             ))
         }
     }
@@ -478,7 +592,8 @@ final class InstallerMigrationValidationTests: XCTestCase {
             XCTAssertNoThrow(try makeLegacyValidator(fixture: fixture).validate(
                 homeDirectory: fixture.home,
                 paths: fixture.paths,
-                expectedTeamIdentifier: "ABCDE12345"
+                expectedTeamIdentifier: "ABCDE12345",
+                pathEnvironment: alternate.deletingLastPathComponent().path + ":/usr/bin:/bin"
             ))
         }
     }
@@ -534,7 +649,8 @@ final class InstallerMigrationValidationTests: XCTestCase {
                 XCTAssertThrowsError(try makeLegacyValidator(fixture: fixture).validate(
                     homeDirectory: fixture.home,
                     paths: fixture.paths,
-                    expectedTeamIdentifier: "ABCDE12345"
+                    expectedTeamIdentifier: "ABCDE12345",
+                    pathEnvironment: fixture.command.deletingLastPathComponent().path + ":/usr/bin:/bin"
                 ), "accepted mutation \(mutation)")
             }
         }

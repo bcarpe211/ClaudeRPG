@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -143,6 +143,10 @@ function renderedProtocolTwoInstaller(root: string): string {
   const validatorBytes = readFileSync(validator);
   const validatorSHA = createHash('sha256').update(validatorBytes).digest('hex');
   writeFileSync(path, readFileSync(installer, 'utf8')
+    .replace(
+      'set -eu\n',
+      () => 'set -eu\nRUNTIME_RAIDERS_TEST_INSTALLER_PID=$$\nexport RUNTIME_RAIDERS_TEST_INSTALLER_PID\n',
+    )
     .replaceAll('__RUNTIME_RAIDERS_TEAM_ID__', teamId)
     .replaceAll('__RUNTIME_RAIDERS_COMPANION_VERSION__', migrationCompanionVersion)
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_SEQUENCE__', migrationReleaseSequence)
@@ -152,11 +156,11 @@ function renderedProtocolTwoInstaller(root: string): string {
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__', validatorBytes.toString('base64'))
     .replace(
       'failure_checkpoint() { :; }',
-      'failure_checkpoint() { [ "${RUNTIME_RAIDERS_TEST_FAIL_AFTER:-}" != "$1" ] || { echo "injected failure after $1" >&2; return 91; }; }',
+      'failure_checkpoint() { if [ "${RUNTIME_RAIDERS_TEST_CHANGE_PATH_AFTER_PREFLIGHT:-}" = "$1" ]; then PATH="$RUNTIME_RAIDERS_TEST_CHANGED_PATH"; export PATH; fi; [ "${RUNTIME_RAIDERS_TEST_FAIL_AFTER:-}" != "$1" ] || { echo "injected failure after $1" >&2; return 91; }; }',
     )
     .replace(
       'durable_checkpoint() { :; }',
-      () => 'durable_checkpoint() { [ "${RUNTIME_RAIDERS_TEST_KILL_AFTER:-}" != "$1" ] || kill -KILL $$; }',
+      () => 'durable_checkpoint() { printf "checkpoint:%s\\n" "$1" >> "$RUNTIME_RAIDERS_TEST_BINARY_LOG"; [ "${RUNTIME_RAIDERS_TEST_KILL_AFTER:-}" != "$1" ] || kill -KILL $$; }',
     )
     .replaceAll(
       '/bin/ln -s "$SHIM" "$command_path"',
@@ -195,10 +199,13 @@ function protocolTwoArtifact(root: string): { zip: string; checksum: string } {
     '    record="$HOME/Library/Application Support/Runtime Raiders/state/command-link"; command_path="$(cat "$record")"; command_dir="${command_path%/*}"',
     '    case "$command_path" in /*/raiders) ;; *) exit 1;; esac',
     '    case "$command_path" in *//*|*/../*|*/./*) exit 1;; esac',
+    '    case "$PATH" in ":"*|*":"|*"::"*) exit 1;; esac; found=0; seen=:',
+    '    old_ifs="$IFS"; IFS=:; for component in $PATH; do IFS="$old_ifs"; case "$component" in /*) ;; *) exit 1;; esac; case "$component" in *//*|*/../*|*/./*) exit 1;; esac; [ -d "$component" ] && [ ! -L "$component" ] || exit 1; case "$seen" in *":"$component":"*) exit 1;; esac; seen="$seen$component:"; [ "$component" != "$command_dir" ] || found=1; IFS=:; done; IFS="$old_ifs"; [ "$found" -eq 1 ] || exit 1',
     '    [ -d "$command_dir" ] && [ ! -L "$command_dir" ] && [ "$(/usr/bin/stat -f %u "$command_dir")" = "$(/usr/bin/id -u)" ] && [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$HOME/Library/Application Support/Runtime Raiders/raiders" ]; status=$?; exit "$status";;',
     '  __runtime-raiders-installer-protected-state)',
     '    support="$HOME/Library/Application Support/Runtime Raiders"',
-    '    (cd "$support" && for root in state outbox; do if [ -d "$root" ]; then printf "D %s " "$root"; /usr/bin/stat -f "%d:%i:%Lp:%u:%g\\n" "$root"; find "$root" -mindepth 1 \\( -name command-link -o -name path-marker-owned -o -name update.lock -o -name prepared-startup.lock \\) -prune -o -print | sort | while IFS= read -r entry; do if [ -d "$entry" ]; then printf "D %s " "$entry"; /usr/bin/stat -f "%d:%i:%Lp:%u:%g\\n" "$entry"; else printf "F %s " "$entry"; /usr/bin/stat -f "%Lp:%u:%g:%l" "$entry"; /usr/bin/shasum -a 256 "$entry"; fi; done; else printf "M %s\\n" "$root"; fi; done); exit 0;;',
+    '    (cd "$support" && for root in state outbox; do if [ -d "$root" ]; then printf "D %s " "$root"; /usr/bin/stat -f "%d:%i:%Lp:%u:%g\\n" "$root"; find "$root" -mindepth 1 \\( -name command-link -o -name path-marker-owned -o -name update.lock -o -name prepared-startup.lock \\) -prune -o -print | sort | while IFS= read -r entry; do if [ -d "$entry" ]; then printf "D %s " "$entry"; /usr/bin/stat -f "%d:%i:%Lp:%u:%g\\n" "$entry"; else printf "F %s " "$entry"; /usr/bin/stat -f "%Lp:%u:%g:%l" "$entry"; /usr/bin/shasum -a 256 "$entry"; fi; done; else printf "M %s\\n" "$root"; fi; done; [ ! -f outbox/large-event.json ] || cat outbox/large-event.json); exit 0;;',
+    '  __runtime-raiders-installer-sync-migration) case "${2:-}" in staging-tree|staging-tombstone-tree|active-journal|support-directory) exit 0;; *) exit 64;; esac;;',
     '  __runtime-raiders-installer-status)',
     '    phase="${2:-}"; generation="${3:-}"; intent="${4:-}"; expected_queue="${5:-}"; case "$phase" in legacy-*) expected_queue="$intent";; esac; cat >/dev/null',
     '    [ "${FAKE_STATUS_PEER_MISMATCH:-}" != "$phase" ] || exit 83',
@@ -215,7 +222,7 @@ function protocolTwoArtifact(root: string): { zip: string; checksum: string } {
     '      *) exit 64;;',
     '    esac; exit 0;;',
     '  __runtime-raiders-installer-resume)',
-    '    [ "${2:-}" = 1 ] || exit 64; [ -f "$job" ] || exit 69; rm -f "$prepared"; : > "$resumed"; : > "$running"; printf \'resumed\\n\'; exit 0;;',
+    '    [ "${2:-}" = 1 ] || exit 64; [ -f "$job" ] || exit 69; rm -f "$prepared"; : > "$resumed"; : > "$running"; [ "${FAKE_KILL_DURING_RESUME:-0}" != 1 ] || kill -KILL "$RUNTIME_RAIDERS_TEST_INSTALLER_PID"; printf \'resumed\\n\'; exit 0;;',
     '  uninstall) rm -f "$running"; exit 0;;',
     'esac',
     'state_kind=missing; enabled=false',
@@ -325,6 +332,8 @@ function fakes(root: string): string {
   executable(join(bin, 'launchctl'), [
       'running="$HOME/.runtime-raiders-test-running"',
     'job="$HOME/.runtime-raiders-test-job"',
+    'lease="$HOME/.runtime-raiders-test-lease"',
+    'prepared="$HOME/.runtime-raiders-test-prepared"',
     'polls="$HOME/.runtime-raiders-test-polls"',
     'if [ "$1" = print ]; then',
     '  [ "$FAKE_LAUNCH_PRINT_PRESENT" = 1 ] && exit 0',
@@ -346,7 +355,7 @@ function fakes(root: string): string {
     '  collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
     '  bootstrap_count_file="$HOME/.runtime-raiders-test-bootstrap-count"; bootstrap_count=0; [ ! -f "$bootstrap_count_file" ] || bootstrap_count="$(cat "$bootstrap_count_file")"; bootstrap_count=$((bootstrap_count + 1)); printf "%s\\n" "$bootstrap_count" > "$bootstrap_count_file"',
     '  if [ "$FAKE_MUTATE_PROTECTED_DURING_ROLLBACK" = 1 ] && [ "$bootstrap_count" -gt 1 ]; then mkdir -p "$HOME/Library/Application Support/Runtime Raiders/outbox/rollback-mutation"; chmod 700 "$HOME/Library/Application Support/Runtime Raiders/outbox/rollback-mutation"; fi',
-    '  if ! grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1; then',
+    '  if [ -f "$lease" ]; then : > "$prepared"; elif ! grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1; then',
     '    printf "endpoint /api/runs/events\\nendpoint /api/raiders/heartbeat\\n" >> "$RUNTIME_RAIDERS_TEST_LOG"',
     '  fi',
     '  : > "$job"; : > "$running"; rm -f "$polls"',
@@ -815,6 +824,51 @@ describe('Runtime Raiders protocol-two installer', () => {
     },
   );
 
+  it('recovers a real near-50 MiB protected outbox after SIGKILL', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-large-outbox-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, true, 1);
+      const large = join(fixture.support, 'outbox/large-event.json');
+      writeFileSync(large, Buffer.alloc(49 * 1024 * 1024, 0x41), { mode: 0o600 });
+      const before = createHash('sha256').update(readFileSync(large)).digest('hex');
+      const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        RUNTIME_RAIDERS_TEST_KILL_AFTER: 'after-journal-activation',
+      });
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status, retry.stderr + retry.stdout).toBe(0);
+      expect(createHash('sha256').update(readFileSync(large)).digest('hex')).toBe(before);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it('fails closed on a matching-digest protected snapshot above the finite migration cap', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-oversize-snapshot-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, false, 1);
+      const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        RUNTIME_RAIDERS_TEST_KILL_AFTER: 'after-journal-activation',
+      });
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const migration = join(fixture.support, '.migration-v1');
+      const snapshot = join(migration, 'protected-before');
+      truncateSync(snapshot, 128 * 1024 * 1024 + 1);
+      chmodSync(snapshot, 0o600);
+      const digest = execFileSync('/usr/bin/shasum', ['-a', '256', snapshot], { encoding: 'utf8' })
+        .split(/\s+/, 1)[0];
+      const journalPath = join(migration, 'journal.json');
+      const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+      journal.protected_sha256 = digest;
+      writeFileSync(journalPath, JSON.stringify(journal) + '\n', { mode: 0o600 });
+
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status).not.toBe(0);
+      expect(existsSync(migration)).toBe(true);
+      expect(existsSync(join(fixture.home, '.runtime-raiders-test-running'))).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 120_000);
+
   it.each(['legacy-prepared', 'candidate-prepared', 'candidate-resumed'] as const)(
     'rejects a conflicting %s queued-event status without changing the outbox',
     (phase) => {
@@ -839,7 +893,7 @@ describe('Runtime Raiders protocol-two installer', () => {
       'archive-verification', 'enrollment-decision', 'prepare', 'old-job-stop',
       'launcher-directory', 'releases-directory', 'installation-directory',
       'launcher-placement', 'release-placement', 'state-write', 'plist-replacement',
-      'shim-replacement', 'command-link-replacement', 'bootstrap', 'prepared-health', 'resume',
+      'shim-replacement', 'command-link-replacement', 'bootstrap', 'prepared-health',
     ];
     for (const checkpoint of checkpoints) {
       const root = mkdtempSync(join(tmpdir(), `runtime-raiders-rollback-${checkpoint}-`));
@@ -878,7 +932,7 @@ describe('Runtime Raiders protocol-two installer', () => {
       'journal-ready', 'prepare', 'old-job-stop', 'launcher-directory',
       'releases-directory', 'installation-directory', 'launcher-placement',
       'release-placement', 'state-write', 'plist-replacement', 'shim-replacement',
-      'command-link-replacement', 'bootstrap', 'prepared-health', 'resume',
+      'command-link-replacement', 'bootstrap', 'prepared-health',
       'acceptance-mark',
     ];
     for (const boundary of boundaries) {
@@ -906,6 +960,148 @@ describe('Runtime Raiders protocol-two installer', () => {
       } finally { rmSync(root, { recursive: true, force: true }); }
     }
   }, 180_000);
+
+  it('uses an atomic journal lifecycle and commits before candidate resume', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-atomic-journal-order-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, true, 3);
+      const result = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      const log = readFileSync(join(fixture.home, 'binary.log'), 'utf8');
+      expect(log.indexOf('checkpoint:after-journal-activation')).toBeGreaterThanOrEqual(0);
+      expect(log.indexOf('checkpoint:after-commit-marker')).toBeGreaterThan(
+        log.indexOf('checkpoint:before-commit-marker'),
+      );
+      expect(log.indexOf('candidate:__runtime-raiders-installer-resume 1')).toBeGreaterThan(
+        log.indexOf('checkpoint:after-commit-marker'),
+      );
+      expect(log.indexOf('checkpoint:accepted-cleanup-after-rename')).toBeGreaterThan(
+        log.indexOf('candidate:__runtime-raiders-installer-resume 1'),
+      );
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    'journal-staging-directory',
+    'journal-staging-populated',
+    'before-journal-activation',
+    'after-journal-activation',
+    'before-commit-marker',
+    'after-commit-marker',
+    'after-candidate-resume',
+    'accepted-cleanup-before-rename',
+    'accepted-cleanup-after-rename',
+    'accepted-cleanup-before-delete',
+  ] as const)('re-enters safely after SIGKILL at the %s boundary', (boundary) => {
+    const root = mkdtempSync(join(tmpdir(), `runtime-raiders-second-wave-${boundary}-`));
+    try {
+      const fixture = legacySequenceEightFixture(root, true, 3);
+      const protectedBefore = buildCacheIdentity(join(fixture.support, 'outbox'));
+      const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        RUNTIME_RAIDERS_TEST_KILL_AFTER: boundary,
+      });
+      expect(killed.signal, `${boundary}: ${killed.stderr}`).toBe('SIGKILL');
+
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status, `${boundary} retry: ${retry.stderr}`).toBe(0);
+      expect(buildCacheIdentity(join(fixture.support, 'outbox'))).toEqual(protectedBefore);
+      expect(existsSync(join(fixture.support, '.migration-v1'))).toBe(false);
+      expect(existsSync(join(fixture.support, '.migration-v1.staging'))).toBe(false);
+      expect(existsSync(join(fixture.support, '.migration-v1.tombstone'))).toBe(false);
+      expect(readFileSync(join(fixture.home, 'commands.log'), 'utf8')).not.toContain('endpoint /api/');
+      if (['after-commit-marker', 'after-candidate-resume',
+        'accepted-cleanup-before-rename', 'accepted-cleanup-after-rename',
+        'accepted-cleanup-before-delete'].includes(boundary)) {
+        expect(readFileSync(join(fixture.home, 'binary.log'), 'utf8'))
+          .not.toContain('__runtime-raiders-legacy-resume');
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it.each(['staging-cleanup-after-rename', 'staging-cleanup-before-delete'] as const)(
+    'retires a stale partial journal after SIGKILL at %s',
+    (boundary) => {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-stale-staging-${boundary}-`));
+      try {
+        const fixture = legacySequenceEightFixture(root, false, 1);
+        const first = invoke(renderedProtocolTwoInstaller(root), [], {
+          ...fixture.environment,
+          RUNTIME_RAIDERS_TEST_KILL_AFTER: 'journal-staging-directory',
+        });
+        expect(first.signal).toBe('SIGKILL');
+        const second = invoke(renderedProtocolTwoInstaller(root), [], {
+          ...fixture.environment,
+          RUNTIME_RAIDERS_TEST_KILL_AFTER: boundary,
+        });
+        expect(second.signal, second.stderr).toBe('SIGKILL');
+        const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+        expect(retry.status, retry.stderr + retry.stdout).toBe(0);
+        expect(existsSync(join(fixture.support, '.migration-v1.staging'))).toBe(false);
+        expect(existsSync(join(fixture.support, '.migration-v1.staging-tombstone'))).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it('fails closed without deleting an unsafe stale staging tree', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-unsafe-stale-staging-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, false, 1);
+      const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        RUNTIME_RAIDERS_TEST_KILL_AFTER: 'journal-staging-directory',
+      });
+      expect(killed.signal).toBe('SIGKILL');
+      const staging = join(fixture.support, '.migration-v1.staging');
+      const outside = join(root, 'outside-evidence');
+      writeFileSync(outside, 'preserve\n');
+      symlinkSync(outside, join(staging, 'unsafe-link'));
+
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status).not.toBe(0);
+      expect(existsSync(staging)).toBe(true);
+      expect(readFileSync(outside, 'utf8')).toBe('preserve\n');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('completes the committed candidate after SIGKILL from inside resume', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-kill-during-resume-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, true, 3);
+      const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        FAKE_KILL_DURING_RESUME: '1',
+      });
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status, retry.stderr + retry.stdout).toBe(0);
+      const log = readFileSync(join(fixture.home, 'binary.log'), 'utf8');
+      expect(log).not.toContain('__runtime-raiders-legacy-resume');
+      expect(log).toContain('candidate:__runtime-raiders-installer-resume 1');
+      expect(existsSync(join(fixture.support, '.migration-v1'))).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it.each([
+    'rollback-cleanup-before-rename',
+    'rollback-cleanup-after-rename',
+    'rollback-cleanup-before-delete',
+  ] as const)('retries after SIGKILL during %s', (boundary) => {
+    const root = mkdtempSync(join(tmpdir(), `runtime-raiders-rollback-cleanup-${boundary}-`));
+    try {
+      const fixture = legacySequenceEightFixture(root, true, 3);
+      const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        RUNTIME_RAIDERS_TEST_FAIL_AFTER: 'bootstrap',
+        RUNTIME_RAIDERS_TEST_KILL_AFTER: boundary,
+      });
+      expect(killed.signal, `${boundary}: ${killed.stderr}`).toBe('SIGKILL');
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status, `${boundary} retry: ${retry.stderr}`).toBe(0);
+      expect(existsSync(join(fixture.support, '.migration-v1'))).toBe(false);
+      expect(existsSync(join(fixture.support, '.migration-v1.tombstone'))).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 120_000);
 
   it.each(['malformed', 'duplicate-key', 'unsafe-mode', 'tampered-backup', 'symlink'] as const)(
     'fails closed on a %s migration journal without deleting or starting anything',
@@ -1073,7 +1269,7 @@ describe('Runtime Raiders protocol-two installer', () => {
   });
 
   it.each(['candidate-prepared', 'candidate-resumed'] as const)(
-    'rejects protected state mutation at %s and restores the legacy layout',
+    'rejects protected state mutation at %s without crossing the commit boundary backward',
     (phase) => {
       const root = mkdtempSync(join(tmpdir(), `runtime-raiders-protected-${phase}-`));
       try {
@@ -1083,10 +1279,18 @@ describe('Runtime Raiders protocol-two installer', () => {
           FAKE_MUTATE_PROTECTED_AT: phase,
         });
         expect(failed.status).not.toBe(0);
-        expect(existsSync(join(fixture.home, '.runtime-raiders-test-running'))).toBe(false);
-        expect(existsSync(join(fixture.home, '.runtime-raiders-test-job'))).toBe(false);
+        expect(existsSync(join(fixture.home, '.runtime-raiders-test-running')))
+          .toBe(phase === 'candidate-resumed');
+        expect(existsSync(join(fixture.home, '.runtime-raiders-test-job')))
+          .toBe(phase === 'candidate-resumed');
         expect(existsSync(join(fixture.home, '.runtime-raiders-test-prepared')))
           .toBe(phase === 'candidate-prepared');
+        if (phase === 'candidate-resumed') {
+          expect(existsSync(join(fixture.support, '.migration-v1'))).toBe(true);
+          expect(existsSync(releaseStatePath(fixture.support))).toBe(true);
+          expect(readFileSync(join(fixture.home, 'binary.log'), 'utf8'))
+            .not.toContain('__runtime-raiders-legacy-resume');
+        }
       } finally { rmSync(root, { recursive: true, force: true }); }
     },
   );
@@ -1211,6 +1415,67 @@ describe('Runtime Raiders protocol-two installer', () => {
       expect(readFileSync(join(fixture.support, 'state/command-link'), 'utf8')).toBe(alternate + '\n');
       expect(readlinkSync(alternate)).toBe(fixture.shim);
       expect(existsSync(fixture.commandPath)).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('rejects a recorded command path outside HOME even when it is in PATH before download', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-unbound-command-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, false);
+      const outsideDirectory = join(root, 'outside-command');
+      const outsideCommand = join(outsideDirectory, 'raiders');
+      mkdirSync(outsideDirectory, { mode: 0o700 });
+      unlinkSync(fixture.commandPath);
+      symlinkSync(fixture.shim, outsideCommand);
+      writeFileSync(join(fixture.support, 'state/command-link'), outsideCommand + '\n', { mode: 0o600 });
+
+      const result = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        PATH: outsideDirectory + ':' + fixture.environment.PATH,
+      });
+      expect(result.status).not.toBe(0);
+      const commands = readFileSync(join(fixture.home, 'commands.log'), 'utf8');
+      expect(commands).not.toContain('curl ');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['empty', 'relative', 'duplicate', 'symlink'] as const)(
+    'rejects a %s PATH component before download',
+    (mutation) => {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-path-${mutation}-`));
+      try {
+        const fixture = legacySequenceEightFixture(root, false);
+        const current = String(fixture.environment.PATH);
+        let mutated = current;
+        if (mutation === 'empty') mutated = current.replace(':', '::');
+        if (mutation === 'relative') mutated = `relative:${current}`;
+        if (mutation === 'duplicate') mutated = `${fixture.commandPath.slice(0, -'/raiders'.length)}:${current}`;
+        if (mutation === 'symlink') {
+          const linked = join(fixture.home, 'linked-bin');
+          symlinkSync(fixture.commandPath.slice(0, -'/raiders'.length), linked);
+          mutated = `${linked}:${current}`;
+        }
+        const result = invoke(renderedProtocolTwoInstaller(root), [], {
+          ...fixture.environment,
+          PATH: mutated,
+        });
+        expect(result.status).not.toBe(0);
+        expect(readFileSync(join(fixture.home, 'commands.log'), 'utf8')).not.toContain('curl ');
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it('rechecks the current PATH in the signed helper after shell preflight', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-path-change-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, false);
+      const result = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        RUNTIME_RAIDERS_TEST_CHANGE_PATH_AFTER_PREFLIGHT: 'archive-verification',
+        RUNTIME_RAIDERS_TEST_CHANGED_PATH: '/usr/bin:/bin',
+      });
+      expect(result.status).not.toBe(0);
+      expect(existsSync(join(fixture.support, '.migration-v1'))).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

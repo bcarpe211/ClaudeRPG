@@ -453,28 +453,14 @@ final class LauncherSelectionTests: XCTestCase {
     }
 
     private func debugLauncherExecutable() throws -> URL {
-        let packageRoot = URL(fileURLWithPath: #filePath)
+        let activeBuildDirectory = Bundle(for: Self.self).bundleURL
             .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let buildRoot = packageRoot.appendingPathComponent(".build", isDirectory: true)
-        guard let enumerator = FileManager.default.enumerator(
-            at: buildRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        let activeLauncher = activeBuildDirectory
+            .appendingPathComponent("runtime-raiders-launcher", isDirectory: false)
+        guard FileManager.default.isExecutableFile(atPath: activeLauncher.path) else {
             throw FixtureError.launcherMissing
         }
-        for case let url as URL in enumerator where
-            url.lastPathComponent == "runtime-raiders-launcher" &&
-            url.path.contains("/debug/") {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
-            if values.isRegularFile == true,
-               FileManager.default.isExecutableFile(atPath: url.path) {
-                return url
-            }
-        }
-        throw FixtureError.launcherMissing
+        return activeLauncher
     }
 }
 
