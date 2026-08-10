@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 
 const installer = join(process.cwd(), 'companion/packaging/install.sh');
 const build = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
+const lifecycleGate = join(process.cwd(), 'scripts/test/runtime-raiders-lifecycle.sh');
+const signedReleaseGate = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
 const label = 'com.redlattice.runtime-raiders-agent';
 const token = 'A'.repeat(43);
 const secret = 'b'.repeat(64);
@@ -1873,5 +1875,90 @@ describe('Runtime Raiders release build', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Runtime Raiders release gates', () => {
+  it('runs Gate 1 in the exact fail-fast order with disposable fake boundaries only', () => {
+    const packageJSON = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>;
+    };
+    expect(packageJSON.scripts?.['canary:lifecycle-test'])
+      .toBe('bash scripts/test/runtime-raiders-lifecycle.sh');
+
+    const source = readFileSync(lifecycleGate, 'utf8');
+    const orderedCommands = [
+      'sh -n companion/packaging/install.sh',
+      'bash -n scripts/release/build-runtime-raiders-agent.sh',
+      'swift test --disable-sandbox --package-path companion',
+      'npx vitest run tests/companion-installer.test.ts',
+    ];
+    let prior = -1;
+    for (const command of orderedCommands) {
+      const current = source.indexOf(command);
+      expect(current, `${command} must be present after the prior command`).toBeGreaterThan(prior);
+      prior = current;
+    }
+
+    expect(source).toMatch(/mktemp -d/);
+    expect(source).toMatch(/trap .*EXIT/);
+    expect(source).toMatch(/cleanup\(\) \{\s+status=\$\?.*trap - EXIT HUP INT TERM.*exit "\$status"/s);
+    expect(source).toMatch(/trap 'exit 129' HUP.*trap 'exit 130' INT.*trap 'exit 143' TERM/s);
+    expect(source).toContain('RUNTIME_RAIDERS_TEST_FAKE_NETWORK');
+    expect(source).toContain('RUNTIME_RAIDERS_TEST_FAKE_LAUNCHD');
+    expect(source).toContain('CLANG_MODULE_CACHE_PATH');
+    expect(source).toContain('SWIFTPM_MODULECACHE_OVERRIDE');
+    expect(source).not.toMatch(/export (?:HOME|CFFIXED_USER_HOME)=/);
+    expect(source).not.toMatch(/Library\/Application Support\/Runtime Raiders/);
+    expect(source).not.toMatch(/\b(?:curl|ssh|scp)\b|\bCaddy\b|\bPi\b|\bpublish(?:ed|ing|ation)?\b|\braiders[ \t]+on\b/i);
+  });
+
+  it('keeps Gate 2 local, unpublished, owner-only, and complete before any real boundary is authorized', () => {
+    const syntax = spawnSync('/bin/bash', ['-n', signedReleaseGate], { encoding: 'utf8' });
+    expect(syntax.status, `${syntax.stdout}${syntax.stderr}`).toBe(0);
+
+    const source = readFileSync(signedReleaseGate, 'utf8');
+    for (const filename of [
+      'install.sh',
+      'runtime-raiders-agent.zip',
+      'runtime-raiders-agent.zip.sha256',
+      'runtime-raiders-agent.update.json',
+    ]) {
+      expect(source).toContain(filename);
+    }
+    for (const required of [
+      '/usr/bin/codesign',
+      '/usr/sbin/spctl',
+      '/usr/bin/xcrun stapler validate',
+      'runtime-raiders-release-validator',
+      'Runtime Raiders Agent.app',
+      'Runtime Raiders Launcher.app',
+      'RUNTIME_RAIDERS_CODESIGN_IDENTITY',
+      '--timestamp=none',
+      'RUNTIME_RAIDERS_GATE2_FAKE_NETWORK',
+      'RUNTIME_RAIDERS_GATE2_FAKE_LAUNCHD',
+      'launcher-active',
+      'launcher-fallback',
+      'launcher-held-trial',
+      'launcher-missing-state',
+      'launcher-malformed-state',
+      'launcher-unsafe-mode',
+      'launcher-symlink-state',
+      'launcher-identity-mismatch',
+      'migration-failure-fingerprint',
+    ]) {
+      expect(source).toContain(required);
+    }
+    expect(source).toMatch(/mktemp -d/);
+    expect(source).toMatch(/chmod 700/);
+    expect(source).toMatch(/trap .*EXIT/);
+    expect(source).toMatch(/https?:\/\//);
+    expect(source).toMatch(/-f .*install\.sh/);
+    expect(source).toMatch(/-L .*install\.sh/);
+    expect(source).toMatch(/gate_env\(\) \{\s+local home="\$1"\s+shift\s+env HOME="\$home"/s);
+    expect(source).toMatch(
+      /cleanup\(\) \{.*case "\$gate_root" in.*for child in \$children.*find "\$gate_root" -type f -name '\.runtime-raiders-gate2-job\.pid'/s,
+    );
+    expect(source).not.toMatch(/raiders[ \t]+on|office activation|artifact publication/i);
   });
 });
