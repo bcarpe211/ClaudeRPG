@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Security
 
 public enum InstallerMigrationValidationError: Error, Equatable {
     case invalidStatus
@@ -209,14 +210,108 @@ public enum InstallerStatusValidator {
     }
 }
 
+typealias ControlPeerIdentity = ControlSocketClient.PeerIdentity
+
+struct InstallerDynamicCodeIdentityValidator {
+    func matches(peer: ControlPeerIdentity, expectedExecutable: URL) -> Bool {
+        guard peer.auditToken.count == MemoryLayout<audit_token_t>.size,
+              peer.auditToken.contains(where: { $0 != 0 }) else {
+            return false
+        }
+        var guest: SecCode?
+        let attributes = [kSecGuestAttributeAudit as String: peer.auditToken] as CFDictionary
+        guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &guest) == errSecSuccess,
+              let guest else {
+            return false
+        }
+        var expectedStaticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(
+            expectedExecutable.standardizedFileURL as CFURL,
+            [],
+            &expectedStaticCode
+        ) == errSecSuccess,
+        let expectedStaticCode else {
+            return false
+        }
+        var expectedRequirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(
+            expectedStaticCode,
+            [],
+            &expectedRequirement
+        ) == errSecSuccess,
+        let expectedRequirement,
+        SecStaticCodeCheckValidity(
+            expectedStaticCode,
+            Self.staticValidationFlags,
+            expectedRequirement
+        ) == errSecSuccess,
+        SecCodeCheckValidity(
+            guest,
+            Self.dynamicValidationFlags,
+            expectedRequirement
+        ) == errSecSuccess else {
+            return false
+        }
+        var guestStaticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(guest, [], &guestStaticCode) == errSecSuccess,
+              let guestStaticCode,
+              let expectedHashes = signingHashes(for: expectedStaticCode),
+              let guestHash = signingHash(for: guestStaticCode),
+              expectedHashes.contains(guestHash) else {
+            return false
+        }
+        return true
+    }
+
+    private func signingHashes(for code: SecStaticCode) -> Set<Data>? {
+        guard let information = signingInformation(for: code),
+              let unique = information[kSecCodeInfoUnique as String] as? Data else {
+            return nil
+        }
+        var hashes: Set<Data> = [unique]
+        if let allHashes = information[kSecCodeInfoCdHashes as String] as? [Data] {
+            hashes.formUnion(allHashes)
+        }
+        return hashes
+    }
+
+    private func signingHash(for code: SecStaticCode) -> Data? {
+        signingInformation(for: code)?[kSecCodeInfoUnique as String] as? Data
+    }
+
+    private func signingInformation(for code: SecStaticCode) -> [String: Any]? {
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code,
+            SecCSFlags(rawValue: UInt32(kSecCSSigningInformation)),
+            &information
+        ) == errSecSuccess else {
+            return nil
+        }
+        return information as? [String: Any]
+    }
+
+    private static let staticValidationFlags = SecCSFlags(rawValue:
+        UInt32(kSecCSStrictValidate) |
+            UInt32(kSecCSRestrictSymlinks)
+    )
+
+    private static let dynamicValidationFlags = SecCSFlags(rawValue: UInt32(kSecCSStrictValidate))
+}
+
 public struct InstallerDaemonStatusAttestor {
     typealias Exchange = (
         _ request: ControlRequest,
         _ socketURL: URL,
         _ maximumFrameBytes: Int
-    ) throws -> (ControlResponse, URL)
+    ) throws -> (ControlResponse, ControlPeerIdentity)
+    typealias DynamicIdentityValidator = (
+        _ peer: ControlPeerIdentity,
+        _ expectedExecutable: URL
+    ) -> Bool
 
     private let exchange: Exchange
+    private let dynamicIdentityValidator: DynamicIdentityValidator
 
     public init() {
         exchange = { request, socketURL, maximumFrameBytes in
@@ -226,21 +321,40 @@ public struct InstallerDaemonStatusAttestor {
                 maximumFrameBytes: maximumFrameBytes
             )
         }
+        dynamicIdentityValidator = { peer, expectedExecutable in
+            InstallerDynamicCodeIdentityValidator().matches(
+                peer: peer,
+                expectedExecutable: expectedExecutable
+            )
+        }
     }
 
-    init(exchange: @escaping Exchange) {
+    init(
+        exchange: @escaping Exchange,
+        dynamicIdentityValidator: @escaping DynamicIdentityValidator
+    ) {
         self.exchange = exchange
+        self.dynamicIdentityValidator = dynamicIdentityValidator
     }
 
     public func status(paths: AgentPaths, expectedExecutable: URL) throws -> Data {
         do {
-            let (response, peerExecutable) = try exchange(
+            let (response, peer) = try exchange(
                 ControlRequest(command: .status),
                 paths.controlSocket,
                 InstallerStatusValidator.maximumStatusBytes
             )
             guard response.ok,
-                  exactExecutable(peerExecutable, expectedExecutable) else {
+                  peer.auditToken.count == MemoryLayout<audit_token_t>.size,
+                  let admittedIdentity = exactExecutableIdentity(
+                      peer.executableURL,
+                      expectedExecutable
+                  ),
+                  dynamicIdentityValidator(peer, expectedExecutable),
+                  exactExecutableIdentity(
+                      peer.executableURL,
+                      expectedExecutable
+                  ) == admittedIdentity else {
                 throw InstallerMigrationValidationError.invalidStatus
             }
             var data = Data(response.message.utf8)
@@ -254,15 +368,26 @@ public struct InstallerDaemonStatusAttestor {
         }
     }
 
-    private func exactExecutable(_ observed: URL, _ expected: URL) -> Bool {
+    private struct ExecutableIdentity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+        let mode: mode_t
+        let owner: uid_t
+        let linkCount: nlink_t
+    }
+
+    private func exactExecutableIdentity(
+        _ observed: URL,
+        _ expected: URL
+    ) -> ExecutableIdentity? {
         guard observed.isFileURL,
               expected.isFileURL,
               observed.standardizedFileURL.path == expected.standardizedFileURL.path else {
-            return false
+            return nil
         }
         var observedMetadata = stat()
         var expectedMetadata = stat()
-        return observed.path.withCString({ Darwin.lstat($0, &observedMetadata) }) == 0 &&
+        guard observed.path.withCString({ Darwin.lstat($0, &observedMetadata) }) == 0 &&
             expected.path.withCString({ Darwin.lstat($0, &expectedMetadata) }) == 0 &&
             observedMetadata.st_mode & S_IFMT == S_IFREG &&
             expectedMetadata.st_mode & S_IFMT == S_IFREG &&
@@ -273,7 +398,16 @@ public struct InstallerDaemonStatusAttestor {
             observedMetadata.st_nlink == 1 &&
             expectedMetadata.st_nlink == 1 &&
             observedMetadata.st_mode & 0o111 != 0 &&
-            expectedMetadata.st_mode & 0o111 != 0
+            expectedMetadata.st_mode & 0o111 != 0 else {
+            return nil
+        }
+        return ExecutableIdentity(
+            device: observedMetadata.st_dev,
+            inode: observedMetadata.st_ino,
+            mode: observedMetadata.st_mode,
+            owner: observedMetadata.st_uid,
+            linkCount: observedMetadata.st_nlink
+        )
     }
 }
 

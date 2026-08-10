@@ -844,6 +844,11 @@ public final class ControlSocketServer: @unchecked Sendable {
 }
 
 public enum ControlSocketClient {
+    struct PeerIdentity: Equatable, Sendable {
+        let executableURL: URL
+        let auditToken: Data
+    }
+
     static func timeoutSeconds(for command: ControlCommand) -> Int {
         switch command {
         case .on, .off, .uninstall, .prepareUpdate, .resumeUpdate:
@@ -885,17 +890,17 @@ public enum ControlSocketClient {
         request: ControlRequest,
         to socketURL: URL,
         maximumFrameBytes: Int = 4_096
-    ) throws -> (ControlResponse, URL) {
+    ) throws -> (ControlResponse, PeerIdentity) {
         let result = try exchange(
             request: request,
             to: socketURL,
             maximumFrameBytes: maximumFrameBytes,
             attestPeer: true
         )
-        guard let peerExecutable = result.peerExecutable else {
+        guard let peerIdentity = result.peerIdentity else {
             throw ControlSocketError.unsafeSocketPath
         }
-        return (result.response, peerExecutable)
+        return (result.response, peerIdentity)
     }
 
     private static func exchange(
@@ -903,7 +908,7 @@ public enum ControlSocketClient {
         to socketURL: URL,
         maximumFrameBytes: Int,
         attestPeer: Bool
-    ) throws -> (response: ControlResponse, peerExecutable: URL?) {
+    ) throws -> (response: ControlResponse, peerIdentity: PeerIdentity?) {
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ControlSocketServer.currentPOSIXError() }
         try ControlSocketServer.disableSIGPIPE(descriptor)
@@ -917,7 +922,7 @@ public enum ControlSocketClient {
                 throw ControlSocketServer.currentPOSIXError()
             }
         }
-        let peerExecutable = attestPeer ? try peerExecutable(descriptor) : nil
+        let peerIdentity = attestPeer ? try peerIdentity(descriptor) : nil
         try ControlSocketServer.writeAll(
             ControlSocketProtocol.encode(request, maximumFrameBytes: maximumFrameBytes),
             to: descriptor
@@ -928,26 +933,30 @@ public enum ControlSocketClient {
         )
         return (
             try JSONDecoder().decode(ControlResponse.self, from: data.dropLast()),
-            peerExecutable
+            peerIdentity
         )
     }
 
-    private static func peerExecutable(_ descriptor: Int32) throws -> URL {
-        var peerPID: pid_t = 0
-        var peerPIDSize = socklen_t(MemoryLayout<pid_t>.size)
+    private static func peerIdentity(_ descriptor: Int32) throws -> PeerIdentity {
+        var auditToken = audit_token_t()
+        var auditTokenSize = socklen_t(MemoryLayout<audit_token_t>.size)
         guard Darwin.getsockopt(
             descriptor,
             SOL_LOCAL,
-            LOCAL_PEERPID,
-            &peerPID,
-            &peerPIDSize
+            LOCAL_PEERTOKEN,
+            &auditToken,
+            &auditTokenSize
         ) == 0,
-        peerPIDSize == MemoryLayout<pid_t>.size,
-        peerPID > 0 else {
+        auditTokenSize == MemoryLayout<audit_token_t>.size else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        let auditTokenData = withUnsafeBytes(of: &auditToken) { Data($0) }
+        guard auditTokenData.count == MemoryLayout<audit_token_t>.size,
+              auditTokenData.contains(where: { $0 != 0 }) else {
             throw ControlSocketError.unsafeSocketPath
         }
         var path = [CChar](repeating: 0, count: Int(PATH_MAX) * 4)
-        let count = proc_pidpath(peerPID, &path, UInt32(path.count))
+        let count = proc_pidpath_audittoken(&auditToken, &path, UInt32(path.count))
         guard count > 0,
               Int(count) < path.count,
               path[Int(count)] == 0 else {
@@ -960,6 +969,9 @@ public enum ControlSocketClient {
         guard value.hasPrefix("/"), !value.contains("\n") else {
             throw ControlSocketError.unsafeSocketPath
         }
-        return URL(fileURLWithPath: value, isDirectory: false)
+        return PeerIdentity(
+            executableURL: URL(fileURLWithPath: value, isDirectory: false),
+            auditToken: auditTokenData
+        )
     }
 }

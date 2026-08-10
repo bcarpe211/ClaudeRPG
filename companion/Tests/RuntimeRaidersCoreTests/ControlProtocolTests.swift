@@ -1323,17 +1323,33 @@ final class ControlProtocolTests: XCTestCase {
         try server.startRequests { _ in ControlResponse(ok: true, message: "status") }
         defer { server.stop() }
 
-        let (response, peerExecutable) = try ControlSocketClient.sendAttested(
+        let (response, peer) = try ControlSocketClient.sendAttested(
             request: ControlRequest(command: .status),
             to: socketURL
         )
 
         XCTAssertEqual(response, ControlResponse(ok: true, message: "status"))
         XCTAssertEqual(
-            peerExecutable.resolvingSymlinksInPath().standardizedFileURL.path,
+            peer.executableURL.resolvingSymlinksInPath().standardizedFileURL.path,
             try XCTUnwrap(Bundle.main.executableURL)
                 .resolvingSymlinksInPath().standardizedFileURL.path
         )
+        XCTAssertEqual(peer.auditToken.count, MemoryLayout<audit_token_t>.size)
+        XCTAssertTrue(InstallerDynamicCodeIdentityValidator().matches(
+            peer: peer,
+            expectedExecutable: peer.executableURL
+        ))
+        XCTAssertFalse(InstallerDynamicCodeIdentityValidator().matches(
+            peer: peer,
+            expectedExecutable: URL(fileURLWithPath: "/usr/bin/xcrun")
+        ))
+        XCTAssertFalse(InstallerDynamicCodeIdentityValidator().matches(
+            peer: ControlPeerIdentity(
+                executableURL: peer.executableURL,
+                auditToken: Data(repeating: 0, count: MemoryLayout<audit_token_t>.size)
+            ),
+            expectedExecutable: peer.executableURL
+        ))
     }
 
     func testOnWaitsForSafeInitializationBeyondFastControlTimeout() throws {

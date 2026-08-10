@@ -123,11 +123,19 @@ final class InstallerMigrationValidationTests: XCTestCase {
             }
             let wire = legacyStatus(enabled: false, prepared: false)
             let message = String(decoding: wire.dropLast(), as: UTF8.self)
+            let auditToken = Data(repeating: 0x41, count: 32)
             let exact = InstallerDaemonStatusAttestor(exchange: { request, socket, maximum in
                 XCTAssertEqual(request, ControlRequest(command: .status))
                 XCTAssertEqual(socket, paths.controlSocket)
                 XCTAssertEqual(maximum, InstallerStatusValidator.maximumStatusBytes)
-                return (ControlResponse(ok: true, message: message), expected)
+                return (
+                    ControlResponse(ok: true, message: message),
+                    ControlPeerIdentity(executableURL: expected, auditToken: auditToken)
+                )
+            }, dynamicIdentityValidator: { peer, admitted in
+                XCTAssertEqual(peer.auditToken, auditToken)
+                XCTAssertEqual(admitted, expected)
+                return true
             })
             XCTAssertEqual(
                 try exact.status(paths: paths, expectedExecutable: expected),
@@ -135,15 +143,157 @@ final class InstallerMigrationValidationTests: XCTestCase {
             )
 
             for response in [
-                (ControlResponse(ok: true, message: message), other),
-                (ControlResponse(ok: false, message: message), expected),
+                (
+                    ControlResponse(ok: true, message: message),
+                    ControlPeerIdentity(executableURL: other, auditToken: auditToken)
+                ),
+                (
+                    ControlResponse(ok: false, message: message),
+                    ControlPeerIdentity(executableURL: expected, auditToken: auditToken)
+                ),
             ] {
-                let rejected = InstallerDaemonStatusAttestor(exchange: { _, _, _ in response })
+                let rejected = InstallerDaemonStatusAttestor(
+                    exchange: { _, _, _ in response },
+                    dynamicIdentityValidator: { _, _ in true }
+                )
                 XCTAssertThrowsError(try rejected.status(
                     paths: paths,
                     expectedExecutable: expected
                 ))
             }
+        }
+    }
+
+    func testAttestedStatusRejectsAStaleServingImageAfterItsExecutablePathIsReplaced() throws {
+        try withTemporaryHome { _, paths in
+            let expected = paths.supportDirectory.appendingPathComponent("expected-agent")
+            let stale = paths.supportDirectory.appendingPathComponent("stale-agent")
+            try Data("stale-serving-image".utf8).write(to: expected)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: expected.path
+            )
+            let wire = legacyStatus(enabled: false, prepared: false)
+            let message = String(decoding: wire.dropLast(), as: UTF8.self)
+            let staleBytes = try Data(contentsOf: expected)
+            let attestor = InstallerDaemonStatusAttestor(exchange: { _, _, _ in
+                try FileManager.default.moveItem(at: expected, to: stale)
+                try Data("replacement-image".utf8).write(to: expected)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: expected.path
+                )
+                return (
+                    ControlResponse(ok: true, message: message),
+                    ControlPeerIdentity(
+                        executableURL: expected,
+                        auditToken: Data(repeating: 0x52, count: 32)
+                    )
+                )
+            }, dynamicIdentityValidator: { _, admitted in
+                (try? Data(contentsOf: admitted)) == staleBytes
+            })
+
+            XCTAssertThrowsError(try attestor.status(
+                paths: paths,
+                expectedExecutable: expected
+            ))
+        }
+    }
+
+    func testAttestedStatusRejectsExecutableReplacementDuringDynamicIdentityValidation() throws {
+        try withTemporaryHome { _, paths in
+            let expected = paths.supportDirectory.appendingPathComponent("expected-agent")
+            let replaced = paths.supportDirectory.appendingPathComponent("replaced-agent")
+            try Data("admitted-image".utf8).write(to: expected)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: expected.path
+            )
+            let wire = legacyStatus(enabled: false, prepared: false)
+            let response = ControlResponse(
+                ok: true,
+                message: String(decoding: wire.dropLast(), as: UTF8.self)
+            )
+            let attestor = InstallerDaemonStatusAttestor(
+                exchange: { _, _, _ in
+                    (
+                        response,
+                        ControlPeerIdentity(
+                            executableURL: expected,
+                            auditToken: Data(repeating: 0x53, count: 32)
+                        )
+                    )
+                },
+                dynamicIdentityValidator: { _, _ in
+                    try? FileManager.default.moveItem(at: expected, to: replaced)
+                    try? Data("replacement-image".utf8).write(to: expected)
+                    try? FileManager.default.setAttributes(
+                        [.posixPermissions: 0o700],
+                        ofItemAtPath: expected.path
+                    )
+                    return true
+                }
+            )
+
+            XCTAssertThrowsError(try attestor.status(
+                paths: paths,
+                expectedExecutable: expected
+            ))
+        }
+    }
+
+    func testAttestedStatusRejectsMissingAuditTokenAndInvalidDynamicCode() throws {
+        try withTemporaryHome { _, paths in
+            let expected = paths.supportDirectory.appendingPathComponent("expected-agent")
+            try Data("executable".utf8).write(to: expected)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: expected.path
+            )
+            let wire = legacyStatus(enabled: false, prepared: false)
+            let response = ControlResponse(
+                ok: true,
+                message: String(decoding: wire.dropLast(), as: UTF8.self)
+            )
+            for auditToken in [Data(), Data(repeating: 0x41, count: 31)] {
+                let missing = InstallerDaemonStatusAttestor(
+                    exchange: { _, _, _ in
+                        (
+                            response,
+                            ControlPeerIdentity(
+                                executableURL: expected,
+                                auditToken: auditToken
+                            )
+                        )
+                    },
+                    dynamicIdentityValidator: { _, _ in
+                        XCTFail("invalid audit token must fail before dynamic lookup")
+                        return true
+                    }
+                )
+                XCTAssertThrowsError(try missing.status(
+                    paths: paths,
+                    expectedExecutable: expected
+                ))
+            }
+
+            let invalidDynamicCode = InstallerDaemonStatusAttestor(
+                exchange: { _, _, _ in
+                    (
+                        response,
+                        ControlPeerIdentity(
+                            executableURL: expected,
+                            auditToken: Data(repeating: 0x41, count: 32)
+                        )
+                    )
+                },
+                dynamicIdentityValidator: { _, _ in false }
+            )
+            XCTAssertThrowsError(try invalidDynamicCode.status(
+                paths: paths,
+                expectedExecutable: expected
+            ))
         }
     }
 
