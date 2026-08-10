@@ -23,7 +23,7 @@ public enum CompanionUpdaterError: Error, Equatable {
     case protectedStateChanged
     case healthCheckFailed
     case updateRolledBack
-    case rollbackFailed(recoveryCommand: String)
+    case rollbackFailed
     case terminalSafetyFailure
 }
 
@@ -117,7 +117,6 @@ public struct CompanionUpdaterOperations {
     let resumePreparedDaemon: () throws -> Void
     let restartDaemon: () throws -> Void
     let healthStatus: Status
-    let emitRecoveryCommand: (String) -> Void
     let observe: (CompanionUpdaterStage) -> Void
     let monotonicNow: () -> TimeInterval
     let sleep: (TimeInterval) -> Void
@@ -136,7 +135,6 @@ public struct CompanionUpdaterOperations {
         resumePreparedDaemon: @escaping () throws -> Void,
         restartDaemon: @escaping () throws -> Void,
         healthStatus: @escaping Status,
-        emitRecoveryCommand: @escaping (String) -> Void,
         observe: @escaping (CompanionUpdaterStage) -> Void = { _ in },
         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         sleep: @escaping (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
@@ -154,7 +152,6 @@ public struct CompanionUpdaterOperations {
         self.resumePreparedDaemon = resumePreparedDaemon
         self.restartDaemon = restartDaemon
         self.healthStatus = healthStatus
-        self.emitRecoveryCommand = emitRecoveryCommand
         self.observe = observe
         self.monotonicNow = monotonicNow
         self.sleep = sleep
@@ -162,8 +159,6 @@ public struct CompanionUpdaterOperations {
 }
 
 public final class CompanionUpdater {
-    public static let recoveryCommand = #""$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.rollback.app/Contents/MacOS/runtime-raiders-agent" __recover-update"#
-
     private static let capacitySafetyMargin: Int64 = 64 * 1_024 * 1_024
     private static let selfCheckTimeout: TimeInterval = 5
     private static let extractionTimeout: TimeInterval = 120
@@ -596,8 +591,7 @@ public final class CompanionUpdater {
         guard (try? transaction.prepareStableRecovery()) != nil else {
             throw CompanionUpdaterError.terminalSafetyFailure
         }
-        operations.emitRecoveryCommand(Self.recoveryCommand)
-        throw CompanionUpdaterError.rollbackFailed(recoveryCommand: Self.recoveryCommand)
+        throw CompanionUpdaterError.rollbackFailed
     }
 
     private func positivelyRunning(

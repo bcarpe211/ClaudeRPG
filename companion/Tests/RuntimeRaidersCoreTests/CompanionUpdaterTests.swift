@@ -196,7 +196,6 @@ final class CompanionUpdaterTests: XCTestCase {
 
             XCTAssertEqual(try harness.installedMarker(), "old")
             XCTAssertEqual(harness.bootstrapCallCount, 1)
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertEqual(
                 try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
                 true
@@ -234,7 +233,6 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertEqual(harness.bootstrapCallCount, 1)
             XCTAssertEqual(harness.stoppedProofCallCount, 0)
             XCTAssertTrue(harness.daemonRunning)
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.hasUpdateWorkspace)
             XCTAssertFalse(
                 FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path)
@@ -264,7 +262,6 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertTrue(
                 FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path)
             )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.hasUpdateWorkspace)
             XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
         }
@@ -300,7 +297,6 @@ final class CompanionUpdaterTests: XCTestCase {
                 try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
                 false
             )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.daemonRunning)
         }
     }
@@ -582,7 +578,6 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                 XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
             }
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.rollbackApplication.path))
         }
     }
@@ -738,7 +733,7 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
-    func testTerminalRecoveryRestoresStableVerifiedRollbackBeforeEmittingCommand() throws {
+    func testTerminalRecoveryRestoresStableVerifiedRollbackWithoutPublishingDeadCommand() throws {
         for failure in RecoveryFailure.allCases {
             try withHarness { harness in
                 harness.healthStatuses = [
@@ -770,7 +765,7 @@ final class CompanionUpdaterTests: XCTestCase {
                 XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                     XCTAssertEqual(
                         error as? CompanionUpdaterError,
-                        .rollbackFailed(recoveryCommand: CompanionUpdater.recoveryCommand),
+                        .rollbackFailed,
                         "failure: \(failure)"
                     )
                 }
@@ -788,7 +783,6 @@ final class CompanionUpdaterTests: XCTestCase {
                             .appendingPathComponent("Contents/MacOS/runtime-raiders-agent").path
                     )
                 )
-                XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
                 XCTAssertEqual(harness.bootoutCallCount, 3, "failure: \(failure)")
                 XCTAssertEqual(harness.stoppedProofCallCount, 1, "failure: \(failure)")
                 XCTAssertFalse(harness.daemonRunning, "failure: \(failure)")
@@ -818,7 +812,6 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                 XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
             }
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertEqual(harness.stoppedProofCallCount, 1)
             XCTAssertFalse(harness.daemonRunning)
             XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.installedApplication), installedInode)
@@ -852,7 +845,6 @@ final class CompanionUpdaterTests: XCTestCase {
                 XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
             }
 
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertEqual(harness.stoppedProofCallCount, 1)
             XCTAssertFalse(harness.daemonRunning)
             XCTAssertEqual(try inode(harness.paths.legacyProtocolOne.installedApplication), try XCTUnwrap(candidateInode))
@@ -893,7 +885,6 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertTrue(harness.daemonRunning)
             XCTAssertEqual(harness.stoppedProofCallCount, 1)
             XCTAssertEqual(harness.resumePreparedCallCount, 1)
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
         }
     }
 
@@ -915,7 +906,6 @@ final class CompanionUpdaterTests: XCTestCase {
                 try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
                 true
             )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
         }
     }
 
@@ -944,7 +934,7 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
-    func testPreSwapTerminalRecoveryNormalizesRealistic0755RollbackAndEmitsUsableCommand() throws {
+    func testPreSwapTerminalRecoveryNormalizesRealistic0755RollbackWithoutPublishingDeadCommand() throws {
         try withHarness { harness in
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],
@@ -958,7 +948,7 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                 XCTAssertEqual(
                     error as? CompanionUpdaterError,
-                    .rollbackFailed(recoveryCommand: CompanionUpdater.recoveryCommand)
+                    .rollbackFailed
                 )
             }
 
@@ -966,7 +956,6 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertEqual(try marker(harness.paths.legacyProtocolOne.rollbackApplication), "old")
             XCTAssertEqual(try permissions(harness.paths.legacyProtocolOne.rollbackApplication), 0o700)
             XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.legacyProtocolOne.failedApplication.path))
-            XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
         }
     }
 
@@ -1007,7 +996,6 @@ final class CompanionUpdaterTests: XCTestCase {
                 try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
                 false
             )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
             XCTAssertFalse(harness.daemonRunning)
         }
     }
@@ -1024,13 +1012,12 @@ final class CompanionUpdaterTests: XCTestCase {
             XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
                 XCTAssertEqual(
                     error as? CompanionUpdaterError,
-                    .rollbackFailed(recoveryCommand: CompanionUpdater.recoveryCommand)
+                    .rollbackFailed
                 )
             }
 
             XCTAssertFalse(harness.daemonRunning)
             XCTAssertEqual(harness.stoppedProofCallCount, 1)
-            XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
         }
     }
 
@@ -1056,7 +1043,6 @@ final class CompanionUpdaterTests: XCTestCase {
                 try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
                 true
             )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
         }
     }
 
@@ -1139,7 +1125,6 @@ private final class UpdaterHarness: @unchecked Sendable {
         updateProtocolVersion: 1
     )
     let log = LockedValues<String>([])
-    let recoveryCommands = LockedValues<String>([])
     let enrollment: URL
     let outboxRecords: [URL]
     var outboxRecord: URL { outboxRecords[0] }
@@ -1431,7 +1416,6 @@ private final class UpdaterHarness: @unchecked Sendable {
                     try self.assertFrozenState()
                     return self.healthStatuses[min(index, self.healthStatuses.count - 1)]
                 },
-                emitRecoveryCommand: { self.recoveryCommands.append($0) },
                 observe: {
                     if $0 == .swap { try? self.beforeSwap() }
                     if $0 == .cleanup { self.beforeCleanup() }

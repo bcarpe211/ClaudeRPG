@@ -624,10 +624,7 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
                 guard response.ok else { throw CLIError.updateOperationFailed }
             },
             restartDaemon: launchd.restart,
-            healthStatus: { try statusProvider.status(command: .status) },
-            emitRecoveryCommand: { command in
-                FileHandle.standardError.write(Data("\(command)\n".utf8))
-            }
+            healthStatus: { try statusProvider.status(command: .status) }
         )
     )
 
