@@ -24,8 +24,17 @@ public enum CompanionCommandRoute: Equatable, Sendable {
     case legacyPrepare
     case installerResume(generation: Int64)
     case installerValidateLegacy
-    case installerLegacyStatus(prepared: Bool, expectedEnabled: Bool?)
-    case installerCandidateStatus(generation: Int64, prepared: Bool, expectedEnabled: Bool)
+    case installerLegacyStatus(
+        prepared: Bool,
+        expectedEnabled: Bool?,
+        expectedQueuedEventCount: Int?
+    )
+    case installerCandidateStatus(
+        generation: Int64,
+        prepared: Bool,
+        expectedEnabled: Bool,
+        expectedQueuedEventCount: Int
+    )
     case installerProtectedState
     case legacyResume
 }
@@ -152,17 +161,27 @@ public enum CompanionCommandRouter {
         case ["__runtime-raiders-installer-validate-legacy"]:
             return .installerValidateLegacy
         case ["__runtime-raiders-installer-status", "legacy-running"]:
-            return .installerLegacyStatus(prepared: false, expectedEnabled: nil)
-        case let values where values.count == 3 &&
-            values[0] == "__runtime-raiders-installer-status" &&
-            values[1] == "legacy-prepared":
-            guard let enabled = canonicalEnabled(values[2]) else { return nil }
-            return .installerLegacyStatus(prepared: true, expectedEnabled: enabled)
+            return .installerLegacyStatus(
+                prepared: false,
+                expectedEnabled: nil,
+                expectedQueuedEventCount: nil
+            )
         case let values where values.count == 4 &&
+            values[0] == "__runtime-raiders-installer-status" &&
+            ["legacy-running", "legacy-prepared"].contains(values[1]):
+            guard let enabled = canonicalEnabled(values[2]),
+                  let queuedEventCount = canonicalCount(values[3]) else { return nil }
+            return .installerLegacyStatus(
+                prepared: values[1] == "legacy-prepared",
+                expectedEnabled: enabled,
+                expectedQueuedEventCount: queuedEventCount
+            )
+        case let values where values.count == 5 &&
             values[0] == "__runtime-raiders-installer-status" &&
             ["candidate-prepared", "candidate-resumed"].contains(values[1]):
             guard let generation = canonicalGeneration(values[2]),
                   let enabled = canonicalEnabled(values[3]),
+                  let queuedEventCount = canonicalCount(values[4]),
                   let state = releaseState,
                   ReleaseStateV1.isValid(state),
                   state.generation == generation,
@@ -174,7 +193,8 @@ public enum CompanionCommandRouter {
             return .installerCandidateStatus(
                 generation: generation,
                 prepared: values[1] == "candidate-prepared",
-                expectedEnabled: enabled
+                expectedEnabled: enabled,
+                expectedQueuedEventCount: queuedEventCount
             )
         case ["__runtime-raiders-installer-protected-state"]:
             return .installerProtectedState
@@ -215,6 +235,17 @@ public enum CompanionCommandRouter {
         case "disabled": false
         default: nil
         }
+    }
+
+    private static func canonicalCount(_ raw: String) -> Int? {
+        guard raw.first != "+",
+              let count = Int(raw),
+              String(count) == raw,
+              count >= 0,
+              Int64(count) <= ReleaseContractValidation.maximumSafeInteger else {
+            return nil
+        }
+        return count
     }
 
     private static func installerStandaloneCommand(_ arguments: [String]) -> Bool {

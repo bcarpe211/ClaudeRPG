@@ -49,6 +49,45 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testMigrationStatusCapturesAndBindsANonemptyOutboxCount() throws {
+        let legacy = legacyStatus(enabled: true, prepared: false, queuedEventCount: 3)
+        let snapshot = try InstallerStatusValidator.inspectLegacy(
+            legacy,
+            prepared: false,
+            expectedEnabled: true
+        )
+        XCTAssertEqual(snapshot.enabled, true)
+        XCTAssertEqual(snapshot.queuedEventCount, 3)
+
+        let identity = CompanionReleaseIdentity(
+            releaseSequence: 9,
+            releaseSHA: String(repeating: "d", count: 40),
+            companionVersion: "0.3.0",
+            updateProtocolVersion: 2
+        )
+        XCTAssertNoThrow(try InstallerStatusValidator.validateCandidate(
+            candidateStatus(enabled: true, preparedGeneration: 1, queuedEventCount: 3),
+            identity: identity,
+            generation: 1,
+            prepared: true,
+            expectedEnabled: true,
+            expectedQueuedEventCount: 3
+        ))
+        XCTAssertThrowsError(try InstallerStatusValidator.validateCandidate(
+            candidateStatus(enabled: true, preparedGeneration: 1, queuedEventCount: 2),
+            identity: identity,
+            generation: 1,
+            prepared: true,
+            expectedEnabled: true,
+            expectedQueuedEventCount: 3
+        ))
+        XCTAssertThrowsError(try InstallerStatusValidator.inspectLegacy(
+            replacing(legacy, #""queuedEventCount":3"#, with: #""queuedEventCount":-1"#),
+            prepared: false,
+            expectedEnabled: true
+        ))
+    }
+
     func testStrictCandidateStatusBindsIdentityGenerationPreparedStateAndIntent() throws {
         let identity = CompanionReleaseIdentity(
             releaseSequence: 9,
@@ -419,11 +458,36 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testExactSequenceEightValidatorAcceptsRecordedOwnerControlledAlternateCommandPath() throws {
+        try withLegacyInstallation { fixture in
+            let alternate = fixture.home.appendingPathComponent("bin/raiders")
+            try FileManager.default.createDirectory(
+                at: alternate.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: alternate.deletingLastPathComponent().path
+            )
+            try FileManager.default.createSymbolicLink(
+                atPath: alternate.path,
+                withDestinationPath: fixture.shim.path
+            )
+            try Data((alternate.path + "\n").utf8).write(to: fixture.commandRecord)
+
+            XCTAssertNoThrow(try makeLegacyValidator(fixture: fixture).validate(
+                homeDirectory: fixture.home,
+                paths: fixture.paths,
+                expectedTeamIdentifier: "ABCDE12345"
+            ))
+        }
+    }
+
     func testExactSequenceEightValidatorRejectsExtraBytesLinksModesAndWrongTarget() throws {
         enum Mutation: CaseIterable {
             case extraPlist, extraShim, symlinkPlist, hardlinkShim, unsafePlistMode
             case unsafeDirectoryMode, wrongCommandTarget, extraCommandRecordLine
-            case alternateCommandParent, alternateCommandBasename, nonNormalizedCommandPath
+            case alternateCommandBasename, nonNormalizedCommandPath
         }
         for mutation in Mutation.allCases {
             try withLegacyInstallation { fixture in
@@ -454,21 +518,6 @@ final class InstallerMigrationValidationTests: XCTestCase {
                     )
                 case .extraCommandRecordLine:
                     try append(Data("/tmp/other\n".utf8), to: fixture.commandRecord)
-                case .alternateCommandParent:
-                    let alternate = fixture.home.appendingPathComponent("bin/raiders")
-                    try FileManager.default.createDirectory(
-                        at: alternate.deletingLastPathComponent(),
-                        withIntermediateDirectories: true
-                    )
-                    try FileManager.default.setAttributes(
-                        [.posixPermissions: 0o700],
-                        ofItemAtPath: alternate.deletingLastPathComponent().path
-                    )
-                    try FileManager.default.createSymbolicLink(
-                        atPath: alternate.path,
-                        withDestinationPath: fixture.shim.path
-                    )
-                    try Data((alternate.path + "\n").utf8).write(to: fixture.commandRecord)
                 case .alternateCommandBasename:
                     let alternate = fixture.command.deletingLastPathComponent()
                         .appendingPathComponent("runtime-raiders")
@@ -491,7 +540,11 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
-    private func legacyStatus(enabled: Bool, prepared: Bool) -> Data {
+    private func legacyStatus(
+        enabled: Bool,
+        prepared: Bool,
+        queuedEventCount: Int = 0
+    ) -> Data {
         let enabledValue = enabled ? "true" : "false"
         let persisted = enabled ? "enabled" : "disabled"
         let preparedValue = prepared ? "true" : "false"
@@ -501,12 +554,17 @@ final class InstallerMigrationValidationTests: XCTestCase {
             #", "installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"lastSuccessfulUploadMS":null,"persistedState":""# +
             persisted +
             #"","preparedForUpdate":"# + preparedValue +
-            #", "queuedEventCount":0,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}"# +
+            #", "queuedEventCount":"# + String(queuedEventCount) +
+            #", "serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}"# +
             "\n"
         ).replacingOccurrences(of: ", ", with: ",").utf8)
     }
 
-    private func candidateStatus(enabled: Bool, preparedGeneration: Int64?) -> Data {
+    private func candidateStatus(
+        enabled: Bool,
+        preparedGeneration: Int64?,
+        queuedEventCount: Int = 0
+    ) -> Data {
         let generation = preparedGeneration.map(String.init) ?? "null"
         let enabledValue = enabled ? "true" : "false"
         let persisted = enabled ? "enabled" : "disabled"
@@ -518,7 +576,8 @@ final class InstallerMigrationValidationTests: XCTestCase {
             persisted +
             #"","preparedForUpdate":"# + preparedValue +
             #", "preparedReleaseStateGeneration":"# + generation +
-            #", "queuedEventCount":0,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}"# +
+            #", "queuedEventCount":"# + String(queuedEventCount) +
+            #", "serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}"# +
             "\n"
         ).replacingOccurrences(of: ", ", with: ",").utf8)
     }

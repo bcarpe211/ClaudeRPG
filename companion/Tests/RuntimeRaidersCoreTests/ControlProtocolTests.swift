@@ -759,45 +759,77 @@ final class ControlProtocolTests: XCTestCase {
                 releaseState: nil,
                 releaseIdentity: identity
             ),
-            .installerLegacyStatus(prepared: false, expectedEnabled: nil)
+            .installerLegacyStatus(
+                prepared: false,
+                expectedEnabled: nil,
+                expectedQueuedEventCount: nil
+            )
         )
         XCTAssertEqual(
             CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-status", "legacy-prepared", "enabled"],
+                arguments: ["__runtime-raiders-installer-status", "legacy-prepared", "enabled", "3"],
                 executableURL: staged,
                 paths: paths,
                 releaseState: nil,
                 releaseIdentity: identity
             ),
-            .installerLegacyStatus(prepared: true, expectedEnabled: true)
+            .installerLegacyStatus(
+                prepared: true,
+                expectedEnabled: true,
+                expectedQueuedEventCount: 3
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-status", "legacy-running", "disabled", "3"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerLegacyStatus(
+                prepared: false,
+                expectedEnabled: false,
+                expectedQueuedEventCount: 3
+            )
         )
         XCTAssertEqual(
             CompanionCommandRouter.installerRoute(
                 arguments: [
-                    "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled",
+                    "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
                 ],
                 executableURL: activeExecutable,
                 paths: paths,
                 releaseState: state,
                 releaseIdentity: identity
             ),
-            .installerCandidateStatus(generation: 1, prepared: true, expectedEnabled: false)
+            .installerCandidateStatus(
+                generation: 1,
+                prepared: true,
+                expectedEnabled: false,
+                expectedQueuedEventCount: 3
+            )
         )
         XCTAssertEqual(
             CompanionCommandRouter.installerRoute(
                 arguments: [
-                    "__runtime-raiders-installer-status", "candidate-resumed", "1", "enabled",
+                    "__runtime-raiders-installer-status", "candidate-resumed", "1", "enabled", "3",
                 ],
                 executableURL: activeExecutable,
                 paths: paths,
                 releaseState: state,
                 releaseIdentity: identity
             ),
-            .installerCandidateStatus(generation: 1, prepared: false, expectedEnabled: true)
+            .installerCandidateStatus(
+                generation: 1,
+                prepared: false,
+                expectedEnabled: true,
+                expectedQueuedEventCount: 3
+            )
         )
         XCTAssertNil(CompanionCommandRouter.installerRoute(
             arguments: [
-                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled",
+                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
             ],
             executableURL: staged,
             paths: paths,
@@ -812,7 +844,7 @@ final class ControlProtocolTests: XCTestCase {
         )
         XCTAssertNil(CompanionCommandRouter.installerRoute(
             arguments: [
-                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled",
+                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
             ],
             executableURL: activeExecutable,
             paths: paths,
@@ -848,10 +880,12 @@ final class ControlProtocolTests: XCTestCase {
             ["__runtime-raiders-installer-status"],
             ["__runtime-raiders-installer-status", "legacy-prepared"],
             ["__runtime-raiders-installer-status", "legacy-running", "enabled"],
-            ["__runtime-raiders-installer-status", "candidate-prepared", "0", "disabled"],
-            ["__runtime-raiders-installer-status", "candidate-prepared", "+1", "disabled"],
-            ["__runtime-raiders-installer-status", "candidate-prepared", "1", "unknown"],
-            ["__runtime-raiders-installer-status", "candidate-running", "1", "disabled"],
+            ["__runtime-raiders-installer-status", "legacy-prepared", "enabled", "-1"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "0", "disabled", "3"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "+1", "disabled", "3"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "1", "unknown", "3"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "-1"],
+            ["__runtime-raiders-installer-status", "candidate-running", "1", "disabled", "3"],
         ] {
             XCTAssertNil(CompanionCommandRouter.installerRoute(
                 arguments: arguments,

@@ -19,6 +19,7 @@ MARKER='export PATH="$HOME/.local/bin:$PATH" # runtime-raiders-path'
 # The local lifecycle fixture replaces only this exact no-op definition. A
 # published installer has no environment-controlled failure injection.
 failure_checkpoint() { :; }
+durable_checkpoint() { :; }
 
 usage() {
   echo "usage: install.sh [--code-file <owner-only-file>]" >&2
@@ -79,6 +80,10 @@ COMMAND_LINK_FILE="$STATE/command-link"
 MARKER_FLAG="$STATE/path-marker-owned"
 COLLECTOR_STATE="$STATE/collector-state.json"
 ENROLLMENT="$STATE/enrollment.json"
+MIGRATION_DIRECTORY="$SUPPORT/.migration-v1"
+MIGRATION_JOURNAL="$MIGRATION_DIRECTORY/journal.json"
+MIGRATION_HELPER_APP="$MIGRATION_DIRECTORY/Runtime Raiders Agent.app"
+MIGRATION_HELPER_EXECUTABLE="$MIGRATION_HELPER_APP/Contents/MacOS/runtime-raiders-agent"
 
 for path in \
   "$HOME/Library" "$HOME/Library/Application Support" "$HOME/Library/LaunchAgents" \
@@ -88,8 +93,19 @@ for path in \
   [ ! -L "$path" ] || { echo "Runtime Raiders refuses symlinked path: $path" >&2; exit 1; }
 done
 
-if [ -e "$RELEASE_STATE" ] || [ -e "$LAUNCHER_DIRECTORY" ] ||
-   [ -e "$RELEASES_DIRECTORY" ] || [ -e "$INSTALLATION_DIRECTORY" ]; then
+recovery_pending=0
+if [ -e "$MIGRATION_DIRECTORY" ] || [ -L "$MIGRATION_DIRECTORY" ]; then
+  [ -d "$MIGRATION_DIRECTORY" ] && [ ! -L "$MIGRATION_DIRECTORY" ] &&
+    [ "$(stat -f %u "$MIGRATION_DIRECTORY")" = "$(id -u)" ] &&
+    [ "$(stat -f %Lp "$MIGRATION_DIRECTORY")" = 700 ] || {
+      echo "Runtime Raiders refuses an unsafe migration journal" >&2
+      exit 1
+    }
+  recovery_pending=1
+fi
+
+if [ "$recovery_pending" -eq 0 ] && { [ -e "$RELEASE_STATE" ] || [ -e "$LAUNCHER_DIRECTORY" ] ||
+   [ -e "$RELEASES_DIRECTORY" ] || [ -e "$INSTALLATION_DIRECTORY" ]; }; then
   echo "Runtime Raiders is already using versioned releases; run 'raiders update'." >&2
   exit 1
 fi
@@ -115,7 +131,13 @@ for path in "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG" "$COLLECTOR_STA
 done
 
 migration=0
-if [ -e "$LEGACY_APP" ]; then
+if [ "$recovery_pending" -eq 1 ]; then
+  [ -d "$LEGACY_APP" ] && [ ! -L "$LEGACY_APP" ] || {
+    echo "Runtime Raiders cannot recover without its flat sequence-8 application" >&2
+    exit 1
+  }
+  migration=1
+elif [ -e "$LEGACY_APP" ]; then
   [ -d "$LEGACY_APP" ] && [ "$(stat -f %u "$LEGACY_APP")" = "$(id -u)" ] || {
     echo "Runtime Raiders refuses unsafe legacy application" >&2
     exit 1
@@ -300,6 +322,7 @@ had_marker=0
 prior_enabled=0
 legacy_prepare_attempted=0
 protected_state_mutated=0
+prior_queued_event_count=0
 
 close_lease() {
   [ "$lease_started" -eq 1 ] || return 0
@@ -323,24 +346,25 @@ job_absent() {
 }
 
 installer_agent_executable() {
-  if [ -x "$CANDIDATE_AGENT_EXECUTABLE" ]; then printf '%s\n' "$CANDIDATE_AGENT_EXECUTABLE"
+  if [ -n "${CANDIDATE_AGENT_EXECUTABLE:-}" ] && [ -x "$CANDIDATE_AGENT_EXECUTABLE" ]; then printf '%s\n' "$CANDIDATE_AGENT_EXECUTABLE"
   elif [ -x "$RELEASE_EXECUTABLE" ]; then printf '%s\n' "$RELEASE_EXECUTABLE"
+  elif [ -x "$MIGRATION_HELPER_EXECUTABLE" ]; then printf '%s\n' "$MIGRATION_HELPER_EXECUTABLE"
   else return 1
   fi
 }
 
-legacy_status_intent() {
+legacy_status_snapshot() {
   helper="$(installer_agent_executable)" || return 1
   "$helper" __runtime-raiders-installer-status legacy-running
 }
 
 wait_for_legacy_status() {
-  expected_intent="$1"; expected_prepared="$2"
+  expected_intent="$1"; expected_prepared="$2"; expected_queue="$3"
   attempt=0
   while [ "$attempt" -lt 40 ]; do
     helper="$(installer_agent_executable)" || return 1
     if "$helper" __runtime-raiders-installer-status \
-         "$expected_prepared" "$expected_intent"; then
+         "$expected_prepared" "$expected_intent" "$expected_queue"; then
       return 0
     fi
     attempt=$((attempt + 1))
@@ -350,11 +374,11 @@ wait_for_legacy_status() {
 }
 
 wait_for_candidate_status() {
-  phase="$1"; expected_intent="$2"
+  phase="$1"; expected_intent="$2"; expected_queue="$3"
   attempt=0
   while [ "$attempt" -lt 40 ]; do
     if "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
-         "$phase" 1 "$expected_intent"; then
+         "$phase" 1 "$expected_intent" "$expected_queue"; then
       return 0
     fi
     attempt=$((attempt + 1))
@@ -392,6 +416,147 @@ restore_copy() {
   cp -p "$source" "$temporary"
   chmod "$mode" "$temporary"
   mv "$temporary" "$destination"
+}
+
+private_regular_file() {
+  file="$1"; expected_mode="$2"; maximum_size="$3"
+  [ -f "$file" ] && [ ! -L "$file" ] &&
+    [ "$(stat -f %u "$file")" = "$(id -u)" ] &&
+    [ "$(stat -f %Lp "$file")" = "$expected_mode" ] &&
+    [ "$(stat -f %l "$file")" = 1 ] &&
+    [ "$(stat -f %z "$file")" -le "$maximum_size" ]
+}
+
+file_sha256() {
+  /usr/bin/shasum -a 256 "$1" | awk 'NR == 1 { print $1 }'
+}
+
+valid_sha256() {
+  value="$1"
+  case "$value" in *[!0123456789abcdef]*|'') return 1 ;; esac
+  [ "${#value}" -eq 64 ]
+}
+
+emit_migration_journal() {
+  printf '{"schema_version":1,"phase":"%s","prior_intent":"%s","queued_event_count":%s,"release_sequence":%s,"release_sha":"%s","companion_version":"%s","plist_sha256":"%s","shim_sha256":"%s","command_sha256":"%s","protected_sha256":"%s","helper_executable_sha256":"%s"}\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}"
+}
+
+load_migration_journal() {
+  private_regular_file "$MIGRATION_JOURNAL" 600 16384 || return 1
+  journal_xml="$WORK/journal.xml"
+  /usr/bin/plutil -convert xml1 -o "$journal_xml" "$MIGRATION_JOURNAL" >/dev/null 2>&1 || return 1
+  [ "$(grep -c '<key>' "$journal_xml")" -eq 12 ] || return 1
+  journal_schema="$(/usr/bin/plutil -extract schema_version raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_phase="$(/usr/bin/plutil -extract phase raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_prior_intent="$(/usr/bin/plutil -extract prior_intent raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_queue="$(/usr/bin/plutil -extract queued_event_count raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_sequence="$(/usr/bin/plutil -extract release_sequence raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_sha="$(/usr/bin/plutil -extract release_sha raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_version="$(/usr/bin/plutil -extract companion_version raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_plist_sha="$(/usr/bin/plutil -extract plist_sha256 raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_shim_sha="$(/usr/bin/plutil -extract shim_sha256 raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_command_sha="$(/usr/bin/plutil -extract command_sha256 raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_protected_sha="$(/usr/bin/plutil -extract protected_sha256 raw -o - "$MIGRATION_JOURNAL")" || return 1
+  journal_helper_sha="$(/usr/bin/plutil -extract helper_executable_sha256 raw -o - "$MIGRATION_JOURNAL")" || return 1
+  [ "$journal_schema" = 1 ] && [ "$journal_sequence" = "$RELEASE_SEQUENCE" ] &&
+    [ "$journal_sha" = "$RELEASE_SHA" ] && [ "$journal_version" = "$VERSION" ] || return 1
+  case "$journal_prior_intent" in enabled|disabled) ;; *) return 1 ;; esac
+  case "$journal_queue" in *[!0-9]*|'') return 1 ;; esac
+  case "$journal_phase" in
+    journal-ready|prepare|old-job-stop|launcher-directory|releases-directory|installation-directory|launcher-placement|release-placement|state-write|plist-replacement|shim-replacement|command-link-replacement|bootstrap|prepared-health|resume|accepted) ;;
+    *) return 1 ;;
+  esac
+  for digest in "$journal_plist_sha" "$journal_shim_sha" "$journal_command_sha" \
+    "$journal_protected_sha" "$journal_helper_sha"; do
+    valid_sha256 "$digest" || return 1
+  done
+  expected_journal="$WORK/expected-journal.json"
+  emit_migration_journal \
+    "$journal_phase" "$journal_prior_intent" "$journal_queue" "$journal_sequence" \
+    "$journal_sha" "$journal_version" "$journal_plist_sha" "$journal_shim_sha" \
+    "$journal_command_sha" "$journal_protected_sha" "$journal_helper_sha" > "$expected_journal"
+  cmp -s "$MIGRATION_JOURNAL" "$expected_journal" || return 1
+  private_regular_file "$MIGRATION_DIRECTORY/old.plist" 600 1048576 || return 1
+  private_regular_file "$MIGRATION_DIRECTORY/old.shim" 700 1048576 || return 1
+  private_regular_file "$MIGRATION_DIRECTORY/old-command-link" 600 4096 || return 1
+  private_regular_file "$MIGRATION_DIRECTORY/protected-before" 600 16777216 || return 1
+  [ "$(file_sha256 "$MIGRATION_DIRECTORY/old.plist")" = "$journal_plist_sha" ] || return 1
+  [ "$(file_sha256 "$MIGRATION_DIRECTORY/old.shim")" = "$journal_shim_sha" ] || return 1
+  [ "$(file_sha256 "$MIGRATION_DIRECTORY/old-command-link")" = "$journal_command_sha" ] || return 1
+  [ "$(file_sha256 "$MIGRATION_DIRECTORY/protected-before")" = "$journal_protected_sha" ] || return 1
+  [ -x "$MIGRATION_HELPER_EXECUTABLE" ] && [ ! -L "$MIGRATION_HELPER_EXECUTABLE" ] || return 1
+  [ "$(file_sha256 "$MIGRATION_HELPER_EXECUTABLE")" = "$journal_helper_sha" ] || return 1
+  codesign --verify --strict -R="$AGENT_REQUIREMENT" "$MIGRATION_HELPER_APP" >/dev/null 2>&1 || return 1
+  helper_identity="$("$MIGRATION_HELPER_EXECUTABLE" __self-check)" || return 1
+  printf '%s' "$helper_identity" | grep -F "\"release_sequence\":$RELEASE_SEQUENCE" >/dev/null 2>&1 || return 1
+  printf '%s' "$helper_identity" | grep -F "\"release_sha\":\"$RELEASE_SHA\"" >/dev/null 2>&1 || return 1
+}
+
+write_migration_journal() {
+  phase="$1"
+  temporary="$(mktemp "$MIGRATION_DIRECTORY/.journal.XXXXXX")"
+  emit_migration_journal \
+    "$phase" "$prior_intent" "$prior_queued_event_count" "$RELEASE_SEQUENCE" \
+    "$RELEASE_SHA" "$VERSION" "$migration_plist_sha" "$migration_shim_sha" \
+    "$migration_command_sha" "$migration_protected_sha" "$migration_helper_sha" > "$temporary"
+  chmod 600 "$temporary"
+  mv "$temporary" "$MIGRATION_JOURNAL"
+  /bin/sync
+}
+
+remove_migration_directory() {
+  safe_remove_created "$MIGRATION_DIRECTORY" || return 1
+  /bin/sync
+}
+
+recover_interrupted_migration() {
+  load_migration_journal || {
+    echo "Runtime Raiders refuses an invalid migration journal" >&2
+    return 1
+  }
+  if [ "$journal_phase" = accepted ]; then
+    "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
+      candidate-resumed 1 "$journal_prior_intent" "$journal_queue" >/dev/null || return 1
+    capture_protected_state "$RELEASE_EXECUTABLE" "$WORK/recovered-protected" || return 1
+    cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
+    remove_migration_directory || return 1
+    echo "Runtime Raiders installed. Run 'raiders status' to check it."
+    return 2
+  fi
+
+  launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+  job_absent || return 1
+  restore_copy "$MIGRATION_DIRECTORY/old.plist" "$PLIST" 600
+  restore_copy "$MIGRATION_DIRECTORY/old.shim" "$SHIM" 700
+  restore_copy "$MIGRATION_DIRECTORY/old-command-link" "$COMMAND_LINK_FILE" 600
+  recovered_command_path="$(cat "$COMMAND_LINK_FILE")"
+  case "$recovered_command_path" in /*/raiders) ;; *) return 1 ;; esac
+  case "$recovered_command_path" in *//*|*/../*|*/./*) return 1 ;; esac
+  recovered_command_directory="${recovered_command_path%/*}"
+  [ -d "$recovered_command_directory" ] && [ ! -L "$recovered_command_directory" ] &&
+    [ "$(stat -f %u "$recovered_command_directory")" = "$(id -u)" ] || return 1
+  if [ -e "$recovered_command_path" ] || [ -L "$recovered_command_path" ]; then
+    [ -L "$recovered_command_path" ] && [ "$(readlink "$recovered_command_path")" = "$SHIM" ] || return 1
+    rm -f "$recovered_command_path"
+  fi
+  /bin/ln -s "$SHIM" "$recovered_command_path"
+
+  safe_remove_created "$INSTALLATION_DIRECTORY" || return 1
+  safe_remove_created "$RELEASE_DIRECTORY" || return 1
+  safe_remove_created "$RELEASES_DIRECTORY" || return 1
+  safe_remove_created "$LAUNCHER_APP" || return 1
+  safe_remove_created "$LAUNCHER_DIRECTORY" || return 1
+  "$MIGRATION_HELPER_EXECUTABLE" __runtime-raiders-installer-validate-legacy || return 1
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || return 1
+  "$MIGRATION_HELPER_EXECUTABLE" __runtime-raiders-legacy-prepare >/dev/null 2>&1 || return 1
+  wait_for_legacy_status "$journal_prior_intent" legacy-prepared "$journal_queue" >/dev/null 2>&1 || return 1
+  "$MIGRATION_HELPER_EXECUTABLE" __runtime-raiders-legacy-resume >/dev/null 2>&1 || return 1
+  wait_for_legacy_status "$journal_prior_intent" legacy-running "$journal_queue" >/dev/null 2>&1 || return 1
+  capture_protected_state "$MIGRATION_HELPER_EXECUTABLE" "$WORK/recovered-protected" || return 1
+  cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
+  remove_migration_directory || return 1
+  recovery_pending=0
 }
 
 rollback_transaction() {
@@ -453,13 +618,13 @@ rollback_transaction() {
       job_absent || rollback_ok=0
     fi
     if [ "$legacy_prepare_attempted" -eq 1 ] && [ "$protected_state_mutated" -eq 0 ]; then
-      wait_for_legacy_status "$prior_intent" legacy-prepared >/dev/null 2>&1 || rollback_ok=0
+      wait_for_legacy_status "$prior_intent" legacy-prepared "$prior_queued_event_count" >/dev/null 2>&1 || rollback_ok=0
       if [ -n "${helper:-}" ]; then
         "$helper" __runtime-raiders-legacy-resume >/dev/null 2>&1 || rollback_ok=0
       fi
     fi
     if [ "$protected_state_mutated" -eq 0 ]; then
-      wait_for_legacy_status "$prior_intent" legacy-running >/dev/null 2>&1 || rollback_ok=0
+      wait_for_legacy_status "$prior_intent" legacy-running "$prior_queued_event_count" >/dev/null 2>&1 || rollback_ok=0
       helper="$(installer_agent_executable)" || helper=''
       if [ -z "$helper" ] || ! assert_protected_state "$helper" "$WORK/protected-before"; then
         protected_state_mutated=1
@@ -474,6 +639,9 @@ rollback_transaction() {
   [ "$installation_created" -eq 0 ] || safe_remove_created "$INSTALLATION_DIRECTORY" || rollback_ok=0
   [ "$releases_created" -eq 0 ] || safe_remove_created "$RELEASES_DIRECTORY" || rollback_ok=0
   [ "$launcher_created" -eq 0 ] || safe_remove_created "$LAUNCHER_DIRECTORY" || rollback_ok=0
+  if [ "$migration" -eq 1 ] && [ "$rollback_ok" -eq 1 ]; then
+    remove_migration_directory || rollback_ok=0
+  fi
   close_lease
   [ "$rollback_ok" -eq 1 ]
 }
@@ -488,6 +656,17 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
+
+if [ "$recovery_pending" -eq 1 ]; then
+  if recover_interrupted_migration; then recovery_result=0
+  else recovery_result=$?
+  fi
+  case "$recovery_result" in
+    0) ;;
+    2) trap - EXIT HUP INT TERM; rm -rf "$WORK"; exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
 
 RELEASE_VALIDATOR="$WORK/runtime-raiders-release-validator"
 case "$RELEASE_VALIDATOR_SHA256" in *[!0123456789abcdef]*|'') exit 1 ;; esac
@@ -600,11 +779,14 @@ fi
 failure_checkpoint enrollment-decision
 
 if [ "$migration" -eq 1 ]; then
-  prior_intent="$(legacy_status_intent)" || {
+  legacy_snapshot="$(legacy_status_snapshot)" || {
       echo "Runtime Raiders cannot safely prepare the sequence-8 daemon" >&2
       exit 1
     }
+  prior_intent="${legacy_snapshot% *}"
+  prior_queued_event_count="${legacy_snapshot#* }"
   case "$prior_intent" in enabled|disabled) ;; *) echo "Runtime Raiders cannot preserve collection intent" >&2; exit 1 ;; esac
+  case "$prior_queued_event_count" in *[!0-9]*|'') echo "Runtime Raiders cannot preserve queued events" >&2; exit 1 ;; esac
 else
   prior_intent=disabled
   if [ ! -e "$COLLECTOR_STATE" ]; then
@@ -629,8 +811,25 @@ if [ "$migration" -eq 1 ]; then
   cp -p "$PLIST" "$WORK/old.plist"
   cp -p "$SHIM" "$WORK/old.shim"
   cp -p "$COMMAND_LINK_FILE" "$WORK/old-command-link"
+  mkdir "$MIGRATION_DIRECTORY"
+  chmod 700 "$MIGRATION_DIRECTORY"
+  ditto "$CANDIDATE_AGENT" "$MIGRATION_HELPER_APP"
+  cp -p "$WORK/old.plist" "$MIGRATION_DIRECTORY/old.plist"
+  cp -p "$WORK/old.shim" "$MIGRATION_DIRECTORY/old.shim"
+  cp -p "$WORK/old-command-link" "$MIGRATION_DIRECTORY/old-command-link"
+  cp -p "$WORK/protected-before" "$MIGRATION_DIRECTORY/protected-before"
+  chmod 600 "$MIGRATION_DIRECTORY/old.plist" \
+    "$MIGRATION_DIRECTORY/old-command-link" "$MIGRATION_DIRECTORY/protected-before"
+  chmod 700 "$MIGRATION_DIRECTORY/old.shim"
+  migration_plist_sha="$(file_sha256 "$MIGRATION_DIRECTORY/old.plist")"
+  migration_shim_sha="$(file_sha256 "$MIGRATION_DIRECTORY/old.shim")"
+  migration_command_sha="$(file_sha256 "$MIGRATION_DIRECTORY/old-command-link")"
+  migration_protected_sha="$(file_sha256 "$MIGRATION_DIRECTORY/protected-before")"
+  migration_helper_sha="$(file_sha256 "$MIGRATION_HELPER_EXECUTABLE")"
+  write_migration_journal journal-ready
 fi
 transaction_active=1
+if [ "$migration" -eq 1 ]; then durable_checkpoint journal-ready; fi
 
 mkfifo "$WORK/lease.fifo"
 "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-installer-lease <"$WORK/lease.fifo" >"$WORK/lease.ready" &
@@ -651,7 +850,7 @@ grep -F -x 'runtime-raiders-installer-lease-ready' "$WORK/lease.ready" >/dev/nul
 if [ "$migration" -eq 1 ]; then
   legacy_prepare_attempted=1
   "$CANDIDATE_AGENT_EXECUTABLE" __runtime-raiders-legacy-prepare >/dev/null
-  wait_for_legacy_status "$prior_intent" legacy-prepared || {
+  wait_for_legacy_status "$prior_intent" legacy-prepared "$prior_queued_event_count" || {
       echo "Runtime Raiders legacy daemon did not prepare" >&2
       exit 1
     }
@@ -659,27 +858,36 @@ if [ "$migration" -eq 1 ]; then
     echo "Runtime Raiders protected local state changed during preparation" >&2
     exit 1
   }
+  write_migration_journal prepare
+  durable_checkpoint prepare
   failure_checkpoint prepare
   old_job_stop_attempted=1
   launchctl bootout "gui/$(id -u)/$LABEL"
   old_job_stopped=1
   job_absent || { echo "Runtime Raiders could not prove the old job stopped" >&2; exit 1; }
+  write_migration_journal old-job-stop
+  durable_checkpoint old-job-stop
   failure_checkpoint old-job-stop
 else
   job_absent || { echo "Runtime Raiders refuses an unexpected launchd job" >&2; exit 1; }
 fi
 
 mkdir "$LAUNCHER_DIRECTORY"; chmod 700 "$LAUNCHER_DIRECTORY"; launcher_created=1
+if [ "$migration" -eq 1 ]; then write_migration_journal launcher-directory; durable_checkpoint launcher-directory; fi
 failure_checkpoint launcher-directory
 mkdir "$RELEASES_DIRECTORY"; chmod 700 "$RELEASES_DIRECTORY"; releases_created=1
+if [ "$migration" -eq 1 ]; then write_migration_journal releases-directory; durable_checkpoint releases-directory; fi
 failure_checkpoint releases-directory
 mkdir "$INSTALLATION_DIRECTORY"; chmod 700 "$INSTALLATION_DIRECTORY"; installation_created=1
+if [ "$migration" -eq 1 ]; then write_migration_journal installation-directory; durable_checkpoint installation-directory; fi
 failure_checkpoint installation-directory
 
 mv "$CANDIDATE_LAUNCHER" "$LAUNCHER_APP"; launcher_placed=1
+if [ "$migration" -eq 1 ]; then write_migration_journal launcher-placement; durable_checkpoint launcher-placement; fi
 failure_checkpoint launcher-placement
 mkdir "$RELEASE_DIRECTORY"; chmod 700 "$RELEASE_DIRECTORY"
 mv "$CANDIDATE_AGENT" "$RELEASE_APP"; release_placed=1
+if [ "$migration" -eq 1 ]; then write_migration_journal release-placement; durable_checkpoint release-placement; fi
 failure_checkpoint release-placement
 
 staged_release_state="$(mktemp "$INSTALLATION_DIRECTORY/.release-state.XXXXXX")"
@@ -687,6 +895,7 @@ printf '{"schema_version":1,"generation":1,"active":{"release_sequence":%s,"rele
   "$RELEASE_SEQUENCE" "$RELEASE_SHA" "$VERSION" > "$staged_release_state"
 chmod 600 "$staged_release_state"
 mv "$staged_release_state" "$RELEASE_STATE"; state_written=1
+if [ "$migration" -eq 1 ]; then write_migration_journal state-write; durable_checkpoint state-write; fi
 failure_checkpoint state-write
 
 staged_plist="$(mktemp "$WORK/plist.XXXXXX")"
@@ -701,6 +910,7 @@ cat > "$staged_plist" <<EOF
 EOF
 chmod 600 "$staged_plist"
 mv "$staged_plist" "$PLIST"; plist_replaced=1
+if [ "$migration" -eq 1 ]; then write_migration_journal plist-replacement; durable_checkpoint plist-replacement; fi
 failure_checkpoint plist-replacement
 
 staged_shim="$(mktemp "$WORK/shim.XXXXXX")"
@@ -742,6 +952,7 @@ rm -f "\$PLIST"; rm -rf "\$SUPPORT"
 EOF
 chmod 700 "$staged_shim"
 mv "$staged_shim" "$SHIM"; shim_replaced=1
+if [ "$migration" -eq 1 ]; then write_migration_journal shim-replacement; durable_checkpoint shim-replacement; fi
 failure_checkpoint shim-replacement
 
 if [ "$fallback_path" -eq 1 ]; then
@@ -767,12 +978,14 @@ mv "$staged_command_record" "$COMMAND_LINK_FILE"
 rm -f "$command_path"
 /bin/ln -s "$SHIM" "$command_path"
 command_replaced=1
+if [ "$migration" -eq 1 ]; then write_migration_journal command-link-replacement; durable_checkpoint command-link-replacement; fi
 failure_checkpoint command-link-replacement
 
 new_job_bootstrap_attempted=1
 launchctl bootstrap "gui/$(id -u)" "$PLIST"; new_job_bootstrapped=1
+if [ "$migration" -eq 1 ]; then write_migration_journal bootstrap; durable_checkpoint bootstrap; fi
 failure_checkpoint bootstrap
-wait_for_candidate_status candidate-prepared "$prior_intent" || {
+wait_for_candidate_status candidate-prepared "$prior_intent" "$prior_queued_event_count" || {
   echo "Runtime Raiders candidate did not reach prepared health" >&2
   exit 1
 }
@@ -780,9 +993,10 @@ assert_protected_state "$RELEASE_EXECUTABLE" "$WORK/protected-before" || {
   echo "Runtime Raiders protected local state changed at prepared health" >&2
   exit 1
 }
+if [ "$migration" -eq 1 ]; then write_migration_journal prepared-health; durable_checkpoint prepared-health; fi
 failure_checkpoint prepared-health
 "$RELEASE_EXECUTABLE" __runtime-raiders-installer-resume 1 >/dev/null
-wait_for_candidate_status candidate-resumed "$prior_intent" || {
+wait_for_candidate_status candidate-resumed "$prior_intent" "$prior_queued_event_count" || {
   echo "Runtime Raiders candidate did not restore collection intent" >&2
   exit 1
 }
@@ -790,7 +1004,13 @@ assert_protected_state "$RELEASE_EXECUTABLE" "$WORK/protected-before" || {
   echo "Runtime Raiders protected local state changed after resume" >&2
   exit 1
 }
+if [ "$migration" -eq 1 ]; then write_migration_journal resume; durable_checkpoint resume; fi
 failure_checkpoint resume
+if [ "$migration" -eq 1 ]; then
+  write_migration_journal accepted
+  durable_checkpoint acceptance-mark
+fi
 close_lease
 transaction_committed=1
+if [ "$migration" -eq 1 ]; then remove_migration_directory; fi
 echo "Runtime Raiders installed. Run 'raiders status' to check it."

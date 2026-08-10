@@ -8,6 +8,11 @@ public enum InstallerMigrationValidationError: Error, Equatable {
     case invalidLegacyInstallation
 }
 
+public struct InstallerLegacyStatusSnapshot: Equatable, Sendable {
+    public let enabled: Bool
+    public let queuedEventCount: Int
+}
+
 public enum InstallerStatusValidator {
     public static let maximumStatusBytes = 16 * 1_024
 
@@ -46,6 +51,18 @@ public enum InstallerStatusValidator {
         prepared: Bool,
         expectedEnabled: Bool?
     ) throws -> Bool {
+        try inspectLegacy(
+            data,
+            prepared: prepared,
+            expectedEnabled: expectedEnabled
+        ).enabled
+    }
+
+    public static func inspectLegacy(
+        _ data: Data,
+        prepared: Bool,
+        expectedEnabled: Bool?
+    ) throws -> InstallerLegacyStatusSnapshot {
         let body = try strictBody(data, keys: legacyKeys)
         guard let status = try? JSONDecoder().decode(LegacyStatus.self, from: body),
               validCommon(
@@ -68,7 +85,10 @@ public enum InstallerStatusValidator {
               expectedEnabled == nil || status.enabled == expectedEnabled else {
             throw InstallerMigrationValidationError.invalidStatus
         }
-        return status.enabled
+        return InstallerLegacyStatusSnapshot(
+            enabled: status.enabled,
+            queuedEventCount: status.queuedEventCount
+        )
     }
 
     public static func validateCandidate(
@@ -76,12 +96,14 @@ public enum InstallerStatusValidator {
         identity: CompanionReleaseIdentity,
         generation: Int64,
         prepared: Bool,
-        expectedEnabled: Bool
+        expectedEnabled: Bool,
+        expectedQueuedEventCount: Int = 0
     ) throws {
         let body = try strictBody(data, keys: candidateKeys)
         guard (try? identity.releaseReference()) != nil,
               identity.updateProtocolVersion == 2,
               (1...ReleaseContractValidation.maximumSafeInteger).contains(generation),
+              expectedQueuedEventCount >= 0,
               let status = try? JSONDecoder().decode(AgentStatus.self, from: body),
               validCommon(
                 enabled: status.enabled,
@@ -100,6 +122,7 @@ public enum InstallerStatusValidator {
               status.installedCompanionVersion == identity.companionVersion,
               status.installedReleaseSequence == identity.releaseSequence,
               status.enabled == expectedEnabled,
+              status.queuedEventCount == expectedQueuedEventCount,
               status.preparedForUpdate == prepared,
               status.preparedForUpdate == (status.preparedReleaseStateGeneration != nil),
               status.preparedReleaseStateGeneration == (prepared ? generation : nil) else {
@@ -193,7 +216,7 @@ public enum InstallerStatusValidator {
     ) -> Bool {
         guard daemonRunning,
               activeRunCount == 0,
-              queuedCount == 0,
+              queuedCount >= 0,
               persistedState == (enabled ? .enabled : .disabled),
               surfaces == expectedSurfaces,
               Set(adapters.keys) == expectedAdapters,
@@ -564,15 +587,22 @@ public struct LegacySequenceEightInstallationValidator {
                 mode: 0o600,
                 maximumBytes: 4_096
             )
-            let localDirectory = home.appendingPathComponent(".local", isDirectory: true)
-            let commandDirectory = localDirectory.appendingPathComponent("bin", isDirectory: true)
-            let command = commandDirectory.appendingPathComponent("raiders", isDirectory: false)
-            guard command.lastPathComponent == "raiders",
-                  record == Data((command.path + "\n").utf8) else {
+            guard record.count >= 2,
+                  record.last == 0x0A,
+                  !record.dropLast().contains(where: { $0 < 0x20 || $0 == 0x7F }),
+                  let commandPath = String(data: record.dropLast(), encoding: .utf8),
+                  commandPath.hasPrefix("/"),
+                  !commandPath.hasSuffix("/"),
+                  !commandPath.contains("//"),
+                  commandPath.split(separator: "/").allSatisfy({ $0 != "." && $0 != ".." }) else {
                 throw InstallerMigrationValidationError.invalidLegacyInstallation
             }
-            try requireDirectory(localDirectory, mode: nil)
-            try requireDirectory(commandDirectory, mode: nil)
+            let command = URL(fileURLWithPath: commandPath, isDirectory: false)
+            guard command.path == commandPath,
+                  command.lastPathComponent == "raiders" else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            try requireCommandParentChain(command.deletingLastPathComponent())
             try requireSymlink(command, target: shim.path)
         } catch {
             throw InstallerMigrationValidationError.invalidLegacyInstallation
@@ -676,6 +706,51 @@ public struct LegacySequenceEightInstallationValidator {
             throw InstallerMigrationValidationError.invalidLegacyInstallation
         }
         Darwin.close(descriptor)
+    }
+
+    private func requireCommandParentChain(_ directory: URL) throws {
+        guard directory.isFileURL,
+              directory.path.hasPrefix("/"),
+              !directory.path.contains("//"),
+              directory.path.split(separator: "/").allSatisfy({
+                  $0 != "." && $0 != ".."
+              }) else {
+            throw InstallerMigrationValidationError.invalidLegacyInstallation
+        }
+        var current = URL(fileURLWithPath: "/", isDirectory: true)
+        let components = directory.pathComponents.dropFirst()
+        for (index, component) in components.enumerated() {
+            current.appendPathComponent(component, isDirectory: true)
+            var metadata = stat()
+            guard current.path.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+                  metadata.st_mode & S_IFMT == S_IFDIR,
+                  metadata.st_nlink >= 1 else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            let writableByOthers = metadata.st_mode & 0o022 != 0
+            guard !writableByOthers || metadata.st_mode & S_ISVTX != 0 else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            if metadata.st_uid == Darwin.geteuid() {
+                guard metadata.st_mode & 0o022 == 0,
+                      metadata.st_mode & 0o100 != 0 else {
+                    throw InstallerMigrationValidationError.invalidLegacyInstallation
+                }
+            }
+            if index == components.count - 1 {
+                guard metadata.st_uid == Darwin.geteuid(),
+                      metadata.st_mode & 0o300 == 0o300 else {
+                    throw InstallerMigrationValidationError.invalidLegacyInstallation
+                }
+            }
+            let descriptor = current.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            }
+            guard descriptor >= 0 else {
+                throw InstallerMigrationValidationError.invalidLegacyInstallation
+            }
+            Darwin.close(descriptor)
+        }
     }
 
     private func requireSymlink(_ url: URL, target: String) throws {

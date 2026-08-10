@@ -749,8 +749,8 @@ private func run() throws {
             expectedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
         )
         return
-    case let .installerLegacyStatus(prepared, expectedEnabled):
-        let enabled = try InstallerStatusValidator.validateLegacy(
+    case let .installerLegacyStatus(prepared, expectedEnabled, expectedQueuedEventCount):
+        let snapshot = try InstallerStatusValidator.inspectLegacy(
             InstallerDaemonStatusAttestor().status(
                 paths: paths,
                 expectedExecutable: paths.legacyFlatApplication.appendingPathComponent(
@@ -761,9 +761,18 @@ private func run() throws {
             prepared: prepared,
             expectedEnabled: expectedEnabled
         )
-        print(enabled ? "enabled" : "disabled")
+        guard expectedQueuedEventCount == nil ||
+                snapshot.queuedEventCount == expectedQueuedEventCount else {
+            throw CLIError.invalidUpdateState
+        }
+        print("\(snapshot.enabled ? "enabled" : "disabled") \(snapshot.queuedEventCount)")
         return
-    case let .installerCandidateStatus(generation, prepared, expectedEnabled):
+    case let .installerCandidateStatus(
+        generation,
+        prepared,
+        expectedEnabled,
+        expectedQueuedEventCount
+    ):
         guard let executableURL = Bundle.main.executableURL else {
             throw CLIError.invalidUpdateState
         }
@@ -775,7 +784,8 @@ private func run() throws {
             identity: CompanionReleaseIdentity.load(from: .main),
             generation: generation,
             prepared: prepared,
-            expectedEnabled: expectedEnabled
+            expectedEnabled: expectedEnabled,
+            expectedQueuedEventCount: expectedQueuedEventCount
         )
         return
     case .installerProtectedState:

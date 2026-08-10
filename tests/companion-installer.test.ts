@@ -154,6 +154,10 @@ function renderedProtocolTwoInstaller(root: string): string {
       'failure_checkpoint() { :; }',
       'failure_checkpoint() { [ "${RUNTIME_RAIDERS_TEST_FAIL_AFTER:-}" != "$1" ] || { echo "injected failure after $1" >&2; return 91; }; }',
     )
+    .replace(
+      'durable_checkpoint() { :; }',
+      () => 'durable_checkpoint() { [ "${RUNTIME_RAIDERS_TEST_KILL_AFTER:-}" != "$1" ] || kill -KILL $$; }',
+    )
     .replaceAll(
       '/bin/ln -s "$SHIM" "$command_path"',
       '"$RUNTIME_RAIDERS_TEST_LN" -s "$SHIM" "$command_path"',
@@ -188,19 +192,24 @@ function protocolTwoArtifact(root: string): { zip: string; checksum: string } {
     '  __runtime-raiders-legacy-resume)',
     '    rm -f "$prepared"; : > "$running"; printf \'resumed legacy\\n\'; exit 0;;',
     '  __runtime-raiders-installer-validate-legacy)',
-    '    expected="$HOME/.local/bin/raiders"; record="$HOME/Library/Application Support/Runtime Raiders/state/command-link"; [ "$(cat "$record")" = "$expected" ] && [ -L "$expected" ] && [ "$(readlink "$expected")" = "$HOME/Library/Application Support/Runtime Raiders/raiders" ]; status=$?; exit "$status";;',
+    '    record="$HOME/Library/Application Support/Runtime Raiders/state/command-link"; command_path="$(cat "$record")"; command_dir="${command_path%/*}"',
+    '    case "$command_path" in /*/raiders) ;; *) exit 1;; esac',
+    '    case "$command_path" in *//*|*/../*|*/./*) exit 1;; esac',
+    '    [ -d "$command_dir" ] && [ ! -L "$command_dir" ] && [ "$(/usr/bin/stat -f %u "$command_dir")" = "$(/usr/bin/id -u)" ] && [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$HOME/Library/Application Support/Runtime Raiders/raiders" ]; status=$?; exit "$status";;',
     '  __runtime-raiders-installer-protected-state)',
     '    support="$HOME/Library/Application Support/Runtime Raiders"',
     '    (cd "$support" && for root in state outbox; do if [ -d "$root" ]; then printf "D %s " "$root"; /usr/bin/stat -f "%d:%i:%Lp:%u:%g\\n" "$root"; find "$root" -mindepth 1 \\( -name command-link -o -name path-marker-owned -o -name update.lock -o -name prepared-startup.lock \\) -prune -o -print | sort | while IFS= read -r entry; do if [ -d "$entry" ]; then printf "D %s " "$entry"; /usr/bin/stat -f "%d:%i:%Lp:%u:%g\\n" "$entry"; else printf "F %s " "$entry"; /usr/bin/stat -f "%Lp:%u:%g:%l" "$entry"; /usr/bin/shasum -a 256 "$entry"; fi; done; else printf "M %s\\n" "$root"; fi; done); exit 0;;',
     '  __runtime-raiders-installer-status)',
-    '    phase="${2:-}"; generation="${3:-}"; intent="${4:-}"; cat >/dev/null',
+    '    phase="${2:-}"; generation="${3:-}"; intent="${4:-}"; expected_queue="${5:-}"; case "$phase" in legacy-*) expected_queue="$intent";; esac; cat >/dev/null',
     '    [ "${FAKE_STATUS_PEER_MISMATCH:-}" != "$phase" ] || exit 83',
-    '    case "$phase" in legacy-*) payload="$("$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent" status)";; *) payload="$("$0" status)";; esac',
+    '    case "$phase" in legacy-*) payload="$(FAKE_STATUS_PHASE="$phase" "$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent" status)";; *) payload="$(FAKE_STATUS_PHASE="$phase" "$0" status)";; esac',
     '    [ "${FAKE_STATUS_CORRUPTION:-}" != "$phase" ] || exit 82',
     '    printf "%s" "$payload" | grep -F \'"activeRunCount":0\' >/dev/null',
-    '    printf "%s" "$payload" | grep -F \'"queuedEventCount":0\' >/dev/null',
+    '    actual_queue="$(printf "%s" "$payload" | /usr/bin/sed -n \'s/.*"queuedEventCount":\\([0-9][0-9]*\\).*/\\1/p\')"',
+    '    case "$actual_queue" in *[!0-9]*|\'\') exit 1;; esac',
+    '    [ -z "$expected_queue" ] || [ "$actual_queue" = "$expected_queue" ]',
     '    case "$phase" in',
-    '      legacy-running) printf "%s" "$payload" | grep -F \'"installedReleaseSequence":8\' >/dev/null; printf "%s" "$payload" | grep -F \'"preparedForUpdate":false\' >/dev/null; case "$payload" in *\'"enabled":true\'*) printf \'enabled\\n\';; *) printf \'disabled\\n\';; esac;;',
+    '      legacy-running) [ -z "$generation" ] || { [ "$generation" = enabled ] || [ "$generation" = disabled ]; }; printf "%s" "$payload" | grep -F \'"installedReleaseSequence":8\' >/dev/null; printf "%s" "$payload" | grep -F \'"preparedForUpdate":false\' >/dev/null; case "$payload" in *\'"enabled":true\'*) actual_intent=enabled;; *) actual_intent=disabled;; esac; [ -z "$generation" ] || [ "$actual_intent" = "$generation" ]; printf \'%s %s\\n\' "$actual_intent" "$actual_queue";;',
     '      legacy-prepared) [ "$generation" = enabled ] || [ "$generation" = disabled ]; printf "%s" "$payload" | grep -F \'"installedReleaseSequence":8\' >/dev/null; printf "%s" "$payload" | grep -F \'"preparedForUpdate":true\' >/dev/null;;',
     '      candidate-prepared|candidate-resumed) [ "$generation" = 1 ]; [ "$intent" = enabled ] || [ "$intent" = disabled ]; printf "%s" "$payload" | grep -F \'"installedReleaseSequence":9\' >/dev/null; expected=true; [ "$phase" = candidate-resumed ] && expected=false; printf "%s" "$payload" | grep -F "\\\"preparedForUpdate\\\":$expected" >/dev/null; [ "${FAKE_MUTATE_PROTECTED_AT:-}" != "$phase" ] || printf \'mutated\\n\' >> "$collector_state";;',
     '      *) exit 64;;',
@@ -215,8 +224,9 @@ function protocolTwoArtifact(root: string): { zip: string; checksum: string } {
     'fi',
     'daemon=false; [ -f "$running" ] && daemon=true',
     'prepared_value=false; prepared_generation=null; { [ -f "$prepared" ] || [ -f "$lease" ]; } && [ ! -f "$resumed" ] && { prepared_value=true; prepared_generation=1; }',
+    'queued_event_count="${FAKE_QUEUED_EVENT_COUNT:-0}"; [ "${FAKE_STATUS_QUEUE_CONFLICT_AT:-}" != "${FAKE_STATUS_PHASE:-}" ] || queued_event_count=$((queued_event_count + 1))',
     'if [ "${1:-}" = status ]; then',
-    '  printf \'{"activeRunCount":%s,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.3.0","installedReleaseSequence":9,"lastSuccessfulUploadMS":null,"persistedState":"%s","preparedForUpdate":%s,"preparedReleaseStateGeneration":%s,"queuedEventCount":0,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state_kind" "$prepared_value" "$prepared_generation"; exit 0',
+    '  printf \'{"activeRunCount":%s,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.3.0","installedReleaseSequence":9,"lastSuccessfulUploadMS":null,"persistedState":"%s","preparedForUpdate":%s,"preparedReleaseStateGeneration":%s,"queuedEventCount":%s,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state_kind" "$prepared_value" "$prepared_generation" "$queued_event_count"; exit 0',
     'fi',
     'exit 64',
   ]);
@@ -627,7 +637,11 @@ function canonicalLegacyShim(
   ].join('\n');
 }
 
-function legacySequenceEightFixture(root: string, enabled: boolean): LegacyFixture {
+function legacySequenceEightFixture(
+  root: string,
+  enabled: boolean,
+  queuedEventCount = 0,
+): LegacyFixture {
   const home = join(root, 'home');
   const support = join(home, 'Library/Application Support/Runtime Raiders');
   const state = join(support, 'state');
@@ -651,7 +665,8 @@ function legacySequenceEightFixture(root: string, enabled: boolean): LegacyFixtu
     '  enabled=false; state=disabled; grep -F \'"enabled":true\' "$collector_state" >/dev/null 2>&1 && { enabled=true; state=enabled; }',
     '  daemon=false; [ -f "$running" ] && daemon=true',
     '  prepared_value=false; [ -f "$prepared" ] && prepared_value=true',
-    '  printf \'{"activeRunCount":%s,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"lastSuccessfulUploadMS":null,"persistedState":"%s","preparedForUpdate":%s,"queuedEventCount":0,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state" "$prepared_value"; exit 0',
+    '  queued_event_count="${FAKE_QUEUED_EVENT_COUNT:-0}"; [ "${FAKE_STATUS_QUEUE_CONFLICT_AT:-}" != "${FAKE_STATUS_PHASE:-}" ] || queued_event_count=$((queued_event_count + 1))',
+    '  printf \'{"activeRunCount":%s,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":%s,"enabled":%s,"installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"lastSuccessfulUploadMS":null,"persistedState":"%s","preparedForUpdate":%s,"queuedEventCount":%s,"serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}\\n\' "${FAKE_ACTIVE_RUN_COUNT:-0}" "$daemon" "$enabled" "$state" "$prepared_value" "$queued_event_count"; exit 0',
     'fi',
     'exit 64',
   ]);
@@ -677,6 +692,11 @@ function legacySequenceEightFixture(root: string, enabled: boolean): LegacyFixtu
   const collectorState = join(state, 'collector-state.json');
   writeFileSync(collectorState, `{"enabled":${enabled},"files":{"cursor":"preserve"},"version":1}\n`);
   chmodSync(collectorState, 0o600);
+  for (let index = 0; index < queuedEventCount; index += 1) {
+    const queued = join(support, 'outbox', `event-${index}.json`);
+    writeFileSync(queued, `{"event":"opaque-${index}"}\n`);
+    chmodSync(queued, 0o600);
+  }
   for (const evidence of [
     'Runtime Raiders Agent.rollback.app/evidence',
     'Runtime Raiders Agent.failed.app/evidence',
@@ -693,7 +713,10 @@ function legacySequenceEightFixture(root: string, enabled: boolean): LegacyFixtu
   const files = protocolTwoArtifact(root);
   return {
     home, support, app, executable: executablePath, plist, shim, commandPath, enrollment, collectorState,
-    environment: env(home, fake, files, commandDir),
+    environment: {
+      ...env(home, fake, files, commandDir),
+      FAKE_QUEUED_EVENT_COUNT: String(queuedEventCount),
+    },
   };
 }
 
@@ -775,6 +798,42 @@ describe('Runtime Raiders protocol-two installer', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it.each([false, true])(
+    'sequence eight migration preserves a nonempty outbox and intent enabled=%s',
+    (enabled) => {
+      const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-sequence-eight-queued-'));
+      try {
+        const fixture = legacySequenceEightFixture(root, enabled, 3);
+        const outbox = join(fixture.support, 'outbox');
+        const outboxBefore = buildCacheIdentity(outbox);
+        const stateBefore = readFileSync(fixture.collectorState);
+        const result = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+        expect(result.status, result.stderr + result.stdout).toBe(0);
+        expect(buildCacheIdentity(outbox)).toEqual(outboxBefore);
+        expect(readFileSync(fixture.collectorState)).toEqual(stateBefore);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it.each(['legacy-prepared', 'candidate-prepared', 'candidate-resumed'] as const)(
+    'rejects a conflicting %s queued-event status without changing the outbox',
+    (phase) => {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-queued-conflict-${phase}-`));
+      try {
+        const fixture = legacySequenceEightFixture(root, false, 3);
+        const outbox = join(fixture.support, 'outbox');
+        const outboxBefore = buildCacheIdentity(outbox);
+        const failed = invoke(renderedProtocolTwoInstaller(root), [], {
+          ...fixture.environment,
+          FAKE_STATUS_QUEUE_CONFLICT_AT: phase,
+        });
+        expect(failed.status).not.toBe(0);
+        expect(buildCacheIdentity(outbox)).toEqual(outboxBefore);
+        expect(readlinkSync(fixture.commandPath)).toBe(fixture.shim);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
   it('migration rollback restores the flat arrangement at every replacement boundary and permits retry', () => {
     const checkpoints = [
       'archive-verification', 'enrollment-decision', 'prepare', 'old-job-stop',
@@ -785,13 +844,14 @@ describe('Runtime Raiders protocol-two installer', () => {
     for (const checkpoint of checkpoints) {
       const root = mkdtempSync(join(tmpdir(), `runtime-raiders-rollback-${checkpoint}-`));
       try {
-        const fixture = legacySequenceEightFixture(root, true);
+        const fixture = legacySequenceEightFixture(root, true, 3);
         const appBefore = buildCacheIdentity(fixture.app);
         const inodeBefore = statSync(fixture.app).ino;
         const plistBefore = readFileSync(fixture.plist);
         const shimBefore = readFileSync(fixture.shim);
         const enrollmentBefore = readFileSync(fixture.enrollment);
         const stateBefore = readFileSync(fixture.collectorState);
+        const outboxBefore = buildCacheIdentity(join(fixture.support, 'outbox'));
         const failed = invoke(renderedProtocolTwoInstaller(root), [], {
           ...fixture.environment,
           RUNTIME_RAIDERS_TEST_FAIL_AFTER: checkpoint,
@@ -804,6 +864,7 @@ describe('Runtime Raiders protocol-two installer', () => {
         expect(readlinkSync(fixture.commandPath), checkpoint).toBe(fixture.shim);
         expect(readFileSync(fixture.enrollment), checkpoint).toEqual(enrollmentBefore);
         expect(readFileSync(fixture.collectorState), checkpoint).toEqual(stateBefore);
+        expect(buildCacheIdentity(join(fixture.support, 'outbox')), checkpoint).toEqual(outboxBefore);
         expect(existsSync(join(fixture.home, '.runtime-raiders-test-job')), checkpoint).toBe(true);
         expect(existsSync(join(fixture.home, '.runtime-raiders-test-running')), checkpoint).toBe(true);
         const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
@@ -811,6 +872,84 @@ describe('Runtime Raiders protocol-two installer', () => {
       } finally { rmSync(root, { recursive: true, force: true }); }
     }
   }, 120_000);
+
+  it('recovers and retries after actual SIGKILL at every durable migration boundary', () => {
+    const boundaries = [
+      'journal-ready', 'prepare', 'old-job-stop', 'launcher-directory',
+      'releases-directory', 'installation-directory', 'launcher-placement',
+      'release-placement', 'state-write', 'plist-replacement', 'shim-replacement',
+      'command-link-replacement', 'bootstrap', 'prepared-health', 'resume',
+      'acceptance-mark',
+    ];
+    for (const boundary of boundaries) {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-sigkill-${boundary}-`));
+      try {
+        const fixture = legacySequenceEightFixture(root, true, 3);
+        const appBefore = buildCacheIdentity(fixture.app);
+        const enrollmentBefore = readFileSync(fixture.enrollment);
+        const stateBefore = readFileSync(fixture.collectorState);
+        const outboxBefore = buildCacheIdentity(join(fixture.support, 'outbox'));
+        const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+          ...fixture.environment,
+          RUNTIME_RAIDERS_TEST_KILL_AFTER: boundary,
+        });
+        expect(killed.signal, `${boundary}: ${killed.stderr}`).toBe('SIGKILL');
+
+        const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+        expect(retry.status, `${boundary} retry: ${retry.stderr}`).toBe(0);
+        expect(buildCacheIdentity(fixture.app), boundary).toEqual(appBefore);
+        expect(readFileSync(fixture.enrollment), boundary).toEqual(enrollmentBefore);
+        expect(readFileSync(fixture.collectorState), boundary).toEqual(stateBefore);
+        expect(buildCacheIdentity(join(fixture.support, 'outbox')), boundary).toEqual(outboxBefore);
+        expect(existsSync(join(fixture.support, '.migration-v1')), boundary).toBe(false);
+        expect(existsSync(releaseStatePath(fixture.support)), boundary).toBe(true);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }
+  }, 180_000);
+
+  it.each(['malformed', 'duplicate-key', 'unsafe-mode', 'tampered-backup', 'symlink'] as const)(
+    'fails closed on a %s migration journal without deleting or starting anything',
+    (mutation) => {
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-journal-${mutation}-`));
+      try {
+        const fixture = legacySequenceEightFixture(root, true, 3);
+        const killed = invoke(renderedProtocolTwoInstaller(root), [], {
+          ...fixture.environment,
+          RUNTIME_RAIDERS_TEST_KILL_AFTER: 'old-job-stop',
+        });
+        expect(killed.signal).toBe('SIGKILL');
+        const migrationDirectory = join(fixture.support, '.migration-v1');
+        const journal = join(migrationDirectory, 'journal.json');
+        if (mutation === 'malformed') writeFileSync(journal, '{');
+        if (mutation === 'duplicate-key') {
+          writeFileSync(
+            journal,
+            readFileSync(journal, 'utf8').replace(
+              '"schema_version":1',
+              '"schema_version":1,"schema_version":1',
+            ),
+          );
+        }
+        if (mutation === 'unsafe-mode') chmodSync(journal, 0o644);
+        if (mutation === 'tampered-backup') {
+          writeFileSync(join(migrationDirectory, 'old.plist'), 'tampered\n');
+        }
+        if (mutation === 'symlink') {
+          const target = join(root, 'unrelated-journal');
+          writeFileSync(target, '{}\n');
+          unlinkSync(journal);
+          symlinkSync(target, journal);
+        }
+        writeFileSync(join(fixture.home, 'commands.log'), '');
+        const before = buildCacheIdentity(migrationDirectory);
+        const refused = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+        expect(refused.status).not.toBe(0);
+        expect(buildCacheIdentity(migrationDirectory)).toEqual(before);
+        expect(readFileSync(join(fixture.home, 'commands.log'), 'utf8')).not.toContain('launchctl ');
+        expect(existsSync(join(fixture.home, '.runtime-raiders-test-job'))).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
 
   it('existing protocol two layout refuses reinstall with raiders update before network or code read', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-existing-v2-'));
@@ -1043,20 +1182,35 @@ describe('Runtime Raiders protocol-two installer', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('rejects a sequence-eight command record outside the canonical local-bin raiders path', () => {
-    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-wrong-legacy-command-'));
+  it('migrates and can roll back a recorded raiders link in an alternate owner-only PATH directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-alternate-legacy-command-'));
     try {
       const fixture = legacySequenceEightFixture(root, false);
       const alternateDirectory = join(fixture.home, 'bin');
       const alternate = join(alternateDirectory, 'raiders');
       mkdirSync(alternateDirectory, { mode: 0o700 });
+      unlinkSync(fixture.commandPath);
       symlinkSync(fixture.shim, alternate);
       writeFileSync(join(fixture.support, 'state/command-link'), alternate + '\n');
       chmodSync(join(fixture.support, 'state/command-link'), 0o600);
-      const result = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain('exact sequence-8 installation');
-      expect(existsSync(join(fixture.home, '.runtime-raiders-test-prepared'))).toBe(false);
+      const environment = {
+        ...fixture.environment,
+        PATH: alternateDirectory + ':' + fixture.environment.PATH,
+      };
+      const failed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...environment,
+        RUNTIME_RAIDERS_TEST_FAIL_AFTER: 'bootstrap',
+      });
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(join(fixture.support, 'state/command-link'), 'utf8')).toBe(alternate + '\n');
+      expect(readlinkSync(alternate)).toBe(fixture.shim);
+      expect(existsSync(fixture.commandPath)).toBe(false);
+
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], environment);
+      expect(retry.status, retry.stderr + retry.stdout).toBe(0);
+      expect(readFileSync(join(fixture.support, 'state/command-link'), 'utf8')).toBe(alternate + '\n');
+      expect(readlinkSync(alternate)).toBe(fixture.shim);
+      expect(existsSync(fixture.commandPath)).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
