@@ -74,6 +74,17 @@ private final class DaemonRuntime: @unchecked Sendable {
         self?.handleChangedFiles(files)
     }
     private lazy var control = ControlSocketServer(socketURL: paths.controlSocket)
+    private lazy var abandonmentOrchestrator = PreparedReleaseAbandonmentOrchestrator(
+        coordinator: startupCoordinator,
+        queue: updateQueue,
+        preparedGeneration: { [weak self] in self?.updatePreparation.preparedGeneration },
+        resumeAfterAbandonment: { [weak self] generation in
+            self?.updatePreparation.resumeAfterAbandonment(generation: generation) ??
+                ControlResponse(ok: false, message: "daemon unavailable")
+        },
+        exitUncommittedTrial: { [weak self] in self?.stopPreparedDaemon() },
+        failClosed: { [weak self] in self?.stopPreparedDaemon() }
+    )
     private lazy var updatePreparation = SerializedUpdatePreparation(
         workQueue: workQueue,
         activeRunCount: { [weak self] in
@@ -336,35 +347,15 @@ private final class DaemonRuntime: @unchecked Sendable {
     }
 
     private func startAbandonmentObserver(generation: Int64) {
-        startupCoordinator.monitorReleaseAbandonment(
-            generation: generation,
-            on: updateQueue
-        ) { [weak self] disposition in
-            self?.handleAbandonment(disposition, generation: generation)
-        }
+        abandonmentOrchestrator.start(generation: generation)
     }
 
-    private func handleAbandonment(
-        _ disposition: PreparedReleaseDisposition,
-        generation: Int64
-    ) {
-        guard updatePreparation.preparedGeneration == generation else { return }
-        switch disposition {
-        case .resumeCommittedActive:
-            let response = updatePreparation.resumeAfterAbandonment(generation: generation)
-            guard !response.ok else { return }
-            controller.pauseCollection()
-            uploader.setEnabled(false)
-            heartbeat.setEnabled(false)
-            watcher.stop()
-            stopLock.withLock { stopping = true }
-        case .exitUncommittedTrial, .failClosed:
-            controller.pauseCollection()
-            uploader.setEnabled(false)
-            heartbeat.setEnabled(false)
-            watcher.stop()
-            stopLock.withLock { stopping = true }
-        }
+    private func stopPreparedDaemon() {
+        controller.pauseCollection()
+        uploader.setEnabled(false)
+        heartbeat.setEnabled(false)
+        watcher.stop()
+        stopLock.withLock { stopping = true }
     }
 
     fileprivate static func serverHealthy() -> Bool {

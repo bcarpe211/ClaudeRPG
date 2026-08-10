@@ -444,6 +444,199 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
+    func testLockDrivenAbandonmentResumesCommittedActive() throws {
+        let fixture = releaseFixture()
+        let started = expectation(description: "committed active resumes")
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.activeIdentity,
+            trialGeneration: nil,
+            deferredStart: { started.fulfill() }
+        )
+        defer { harness.cleanup() }
+        let preparation = harness.preparation()
+        let stopped = LockedFlag()
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            exitUncommittedTrial: { stopped.set() },
+            failClosed: { stopped.set() }
+        )
+
+        orchestrator.start(generation: 7)
+        harness.lease.unlock()
+        wait(for: [started], timeout: 2)
+
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertFalse(stopped.value)
+    }
+
+    func testLockDrivenAbandonmentExitsUncommittedTrialWithoutDeferredStart() throws {
+        let fixture = releaseFixture()
+        let exited = expectation(description: "uncommitted trial exits")
+        let deferredStarts = LockedCounter()
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.trialIdentity,
+            trialGeneration: 7,
+            deferredStart: { deferredStarts.increment() }
+        )
+        defer { harness.cleanup() }
+        let preparation = harness.preparation()
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            exitUncommittedTrial: { exited.fulfill() },
+            failClosed: { XCTFail("unexpected fail-closed") }
+        )
+
+        orchestrator.start(generation: 7)
+        harness.lease.unlock()
+        wait(for: [exited], timeout: 2)
+
+        XCTAssertEqual(deferredStarts.value, 0)
+        XCTAssertTrue(preparation.isPrepared)
+    }
+
+    func testLockDrivenAbandonmentResumesCommittedFormerTrial() throws {
+        let fixture = releaseFixture()
+        let started = expectation(description: "committed former trial resumes")
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.trialIdentity,
+            trialGeneration: 7,
+            deferredStart: { started.fulfill() }
+        )
+        defer { harness.cleanup() }
+        let preparation = harness.preparation()
+        let stopped = LockedFlag()
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            exitUncommittedTrial: { stopped.set() },
+            failClosed: { stopped.set() }
+        )
+        harness.releaseState.value = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 8,
+            active: fixture.trial,
+            fallback: fixture.active,
+            trial: nil
+        )
+
+        orchestrator.start(generation: 7)
+        harness.lease.unlock()
+        wait(for: [started], timeout: 2)
+
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertFalse(stopped.value)
+    }
+
+    func testLockDrivenMalformedAndContradictoryAbandonmentStopFailClosed() throws {
+        let fixture = releaseFixture()
+        let otherTrial = ReleaseReference(
+            releaseSequence: 11,
+            releaseSHA: String(repeating: "c", count: 40),
+            companionVersion: "0.3.11",
+            updateProtocolVersion: 2
+        )
+        let unsafeStates = [
+            ReleaseStateV1(
+                schemaVersion: 2,
+                generation: 7,
+                active: fixture.active,
+                fallback: nil,
+                trial: fixture.trial
+            ),
+            ReleaseStateV1(
+                schemaVersion: 1,
+                generation: 8,
+                active: fixture.active,
+                fallback: nil,
+                trial: otherTrial
+            ),
+        ]
+
+        for (index, unsafeState) in unsafeStates.enumerated() {
+            let stopped = expectation(description: "unsafe state \(index) stops")
+            let deferredStarts = LockedCounter()
+            let harness = try ReleaseAbandonmentHarness(
+                releaseState: fixture.trialState,
+                releaseIdentity: fixture.trialIdentity,
+                trialGeneration: 7,
+                deferredStart: { deferredStarts.increment() }
+            )
+            let preparation = harness.preparation()
+            let orchestrator = harness.orchestrator(
+                preparation: preparation,
+                exitUncommittedTrial: { XCTFail("unsafe state must fail closed") },
+                failClosed: { stopped.fulfill() }
+            )
+            harness.releaseState.value = unsafeState
+
+            orchestrator.start(generation: 7)
+            harness.lease.unlock()
+            wait(for: [stopped], timeout: 2)
+
+            XCTAssertEqual(deferredStarts.value, 0)
+            XCTAssertTrue(preparation.isPrepared)
+            harness.cleanup()
+        }
+    }
+
+    func testExplicitResumeRacingLeaseReleaseStartsOnceWithoutStaleStop() throws {
+        let fixture = releaseFixture()
+        let deferredStartEntered = DispatchSemaphore(value: 0)
+        let allowDeferredStart = DispatchSemaphore(value: 0)
+        let abandonmentAttempted = DispatchSemaphore(value: 0)
+        let explicitResumeFinished = expectation(description: "explicit resume finishes")
+        let deferredStarts = LockedCounter()
+        let stopped = LockedFlag()
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.trialIdentity,
+            trialGeneration: 7,
+            deferredStart: {
+                deferredStarts.increment()
+                deferredStartEntered.signal()
+                _ = allowDeferredStart.wait(timeout: .now() + 2)
+            }
+        )
+        defer { harness.cleanup() }
+        harness.releaseState.value = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 8,
+            active: fixture.trial,
+            fallback: fixture.active,
+            trial: nil
+        )
+        let preparation = harness.preparation(validateResume: { generation in
+            guard generation == 8 else { throw PreparedDaemonStartupError.invalidReleaseState }
+        })
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            resumeAfterAbandonment: { generation in
+                abandonmentAttempted.signal()
+                return preparation.resumeAfterAbandonment(generation: generation)
+            },
+            exitUncommittedTrial: { stopped.set() },
+            failClosed: { stopped.set() }
+        )
+        orchestrator.start(generation: 7)
+
+        DispatchQueue(label: "com.redlattice.runtime-raiders.tests.explicit-resume").async {
+            XCTAssertTrue(preparation.resume(generation: 8).ok)
+            explicitResumeFinished.fulfill()
+        }
+        XCTAssertEqual(deferredStartEntered.wait(timeout: .now() + 2), .success)
+        harness.lease.unlock()
+        XCTAssertEqual(abandonmentAttempted.wait(timeout: .now() + 2), .success)
+        allowDeferredStart.signal()
+        wait(for: [explicitResumeFinished], timeout: 2)
+        harness.queue.sync {}
+
+        XCTAssertEqual(deferredStarts.value, 1)
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertFalse(stopped.value)
+    }
+
     func testCommandRoutingKeepsUpdateLocalAndRejectsInternalControlName() {
         let paths = AgentPaths(
             applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-routing")
@@ -1660,4 +1853,104 @@ private func releaseFixture() -> PreparedReleaseFixture {
             trial: trial
         )
     )
+}
+
+private final class LockedReleaseState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: ReleaseStateV1
+
+    init(_ value: ReleaseStateV1) { storage = value }
+
+    var value: ReleaseStateV1 {
+        get { lock.withLock { storage } }
+        set { lock.withLock { storage = newValue } }
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int { lock.withLock { storage } }
+    func increment() { lock.withLock { storage += 1 } }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = false
+
+    var value: Bool { lock.withLock { storage } }
+    func set() { lock.withLock { storage = true } }
+}
+
+private final class ReleaseAbandonmentHarness {
+    let root: URL
+    let paths: AgentPaths
+    let lease: CompanionPreparedStartupLease
+    let releaseState: LockedReleaseState
+    let coordinator: PreparedDaemonStartupCoordinator
+    let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.release-abandonment")
+
+    init(
+        releaseState: ReleaseStateV1,
+        releaseIdentity: CompanionReleaseIdentity,
+        trialGeneration: Int64?,
+        deferredStart: @escaping () throws -> Void
+    ) throws {
+        root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-release-abandonment-\(UUID().uuidString)", isDirectory: true)
+        paths = AgentPaths(applicationSupportDirectory: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        lease = try CompanionPreparedStartupLease(paths: paths)
+        let state = LockedReleaseState(releaseState)
+        self.releaseState = state
+        coordinator = try PreparedDaemonStartupCoordinator(
+            paths: paths,
+            trialGeneration: trialGeneration,
+            releaseIdentity: releaseIdentity,
+            loadReleaseState: { state.value },
+            deferredStart: deferredStart
+        )
+    }
+
+    func preparation(
+        validateResume: @escaping (Int64) throws -> Void = { _ in }
+    ) -> SerializedUpdatePreparation {
+        SerializedUpdatePreparation(
+            workQueue: DispatchQueue(
+                label: "com.redlattice.runtime-raiders.tests.release-abandonment-work"
+            ),
+            activeRunCount: { 0 },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            initiallyPreparedGeneration: coordinator.initiallyPreparedGeneration,
+            validateResume: validateResume,
+            resume: { _ in try self.coordinator.resume() }
+        )
+    }
+
+    func orchestrator(
+        preparation: SerializedUpdatePreparation,
+        resumeAfterAbandonment: (@Sendable (Int64) -> ControlResponse)? = nil,
+        exitUncommittedTrial: @escaping @Sendable () -> Void,
+        failClosed: @escaping @Sendable () -> Void
+    ) -> PreparedReleaseAbandonmentOrchestrator {
+        PreparedReleaseAbandonmentOrchestrator(
+            coordinator: coordinator,
+            queue: queue,
+            preparedGeneration: { preparation.preparedGeneration },
+            resumeAfterAbandonment: resumeAfterAbandonment ?? {
+                preparation.resumeAfterAbandonment(generation: $0)
+            },
+            exitUncommittedTrial: exitUncommittedTrial,
+            failClosed: failClosed
+        )
+    }
+
+    func cleanup() {
+        lease.unlock()
+        try? FileManager.default.removeItem(at: root)
+    }
 }

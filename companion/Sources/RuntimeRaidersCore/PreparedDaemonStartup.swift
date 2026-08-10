@@ -326,3 +326,50 @@ public final class PreparedDaemonStartupCoordinator: @unchecked Sendable {
         }
     }
 }
+
+public final class PreparedReleaseAbandonmentOrchestrator: @unchecked Sendable {
+    private let coordinator: PreparedDaemonStartupCoordinator
+    private let queue: DispatchQueue
+    private let preparedGeneration: @Sendable () -> Int64?
+    private let resumeAfterAbandonment: @Sendable (Int64) -> ControlResponse
+    private let exitUncommittedTrial: @Sendable () -> Void
+    private let failClosed: @Sendable () -> Void
+
+    public init(
+        coordinator: PreparedDaemonStartupCoordinator,
+        queue: DispatchQueue,
+        preparedGeneration: @escaping @Sendable () -> Int64?,
+        resumeAfterAbandonment: @escaping @Sendable (Int64) -> ControlResponse,
+        exitUncommittedTrial: @escaping @Sendable () -> Void,
+        failClosed: @escaping @Sendable () -> Void
+    ) {
+        self.coordinator = coordinator
+        self.queue = queue
+        self.preparedGeneration = preparedGeneration
+        self.resumeAfterAbandonment = resumeAfterAbandonment
+        self.exitUncommittedTrial = exitUncommittedTrial
+        self.failClosed = failClosed
+    }
+
+    public func start(generation: Int64) {
+        coordinator.monitorReleaseAbandonment(
+            generation: generation,
+            on: queue
+        ) { [preparedGeneration, resumeAfterAbandonment, exitUncommittedTrial, failClosed] disposition in
+            guard preparedGeneration() == generation else { return }
+            switch disposition {
+            case .resumeCommittedActive:
+                let response = resumeAfterAbandonment(generation)
+                guard !response.ok else { return }
+                // Explicit resume may have held the serialized work queue after
+                // the check above and completed before this call acquired it.
+                guard preparedGeneration() == generation else { return }
+                failClosed()
+            case .exitUncommittedTrial:
+                exitUncommittedTrial()
+            case .failClosed:
+                failClosed()
+            }
+        }
+    }
+}
