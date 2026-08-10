@@ -142,6 +142,32 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
+    func testCandidateHealthWithActiveRunRollsBackBeforeCommit() throws {
+        try withHarness { harness in
+            harness.candidateHealthActiveRunCount = 1
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .updateRolledBack)
+            }
+            let final = try harness.state()
+            XCTAssertEqual(final.active, harness.n)
+            XCTAssertNil(final.trial)
+        }
+    }
+
+    func testPriorActiveHealthWithActiveRunFailsRollbackClosed() throws {
+        try withHarness { harness in
+            harness.rejectCandidateHealth = true
+            harness.priorHealthActiveRunCount = 1
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .rollbackFailed)
+            }
+            XCTAssertEqual(try harness.state().active, harness.n)
+            XCTAssertNil(try harness.state().trial)
+        }
+    }
+
     func testResumeFailureAfterCommitRestoresExactPreTrialSelection() throws {
         try withHarness(initialActive: .n1WithFallback) { harness in
             harness.failCandidateResume = true
@@ -275,7 +301,7 @@ final class CompanionUpdaterTests: XCTestCase {
         try withHarness { harness in
             let transaction = try harness.makeTransaction()
             try harness.populateExtractedRelease(transaction, release: harness.n1)
-            let verified = harness.verifiedArchive(transaction, release: harness.n1)
+            let verified = try harness.verifiedArchive(transaction, release: harness.n1)
 
             XCTAssertEqual(try transaction.promoteVerifiedCandidate(verified), harness.n1)
             XCTAssertTrue(FileManager.default.fileExists(atPath: try harness.paths.application(for: harness.n1).path))
@@ -296,16 +322,9 @@ final class CompanionUpdaterTests: XCTestCase {
         try withHarness { harness in
             let transaction = try harness.makeTransaction()
             try harness.populateExtractedRelease(transaction, release: harness.n1)
-            let unsealed = harness.verifiedArchive(transaction, release: harness.n1)
-            let verified = VerifiedReleaseArchive(
-                agent: unsealed.agent,
-                launcher: unsealed.launcher,
-                agentVerificationSeal: try ReleaseApplicationSeal.capture(
-                    unsealed.agent.application
-                )
-            )
+            let verified = try harness.verifiedArchive(transaction, release: harness.n1)
             try Data("xx".utf8).write(
-                to: unsealed.agent.application.appendingPathComponent("marker")
+                to: verified.agent.application.appendingPathComponent("marker")
             )
 
             XCTAssertThrowsError(try transaction.promoteVerifiedCandidate(verified)) {
@@ -378,6 +397,108 @@ final class CompanionUpdaterTests: XCTestCase {
         }
     }
 
+    func testEveryLeaseBoundCrashUsesRealLauncherAndPreparedDaemonRecovery() throws {
+        for boundary in LeaseBoundCrashBoundary.allCases {
+            try withHarness { harness in
+                var transaction: VersionedReleaseTransaction? = try harness.makeTransaction()
+                try harness.populateExtractedRelease(try XCTUnwrap(transaction), release: harness.n1)
+                _ = try XCTUnwrap(transaction).promoteVerifiedCandidate(
+                    try harness.verifiedArchive(try XCTUnwrap(transaction), release: harness.n1)
+                )
+                let trialState = try XCTUnwrap(transaction).recordTrial(harness.n1)
+
+                let activeSelection = try harness.daemonSelection()
+                XCTAssertEqual(activeSelection.release, harness.n, "boundary \(boundary)")
+                let activeRuntime = try harness.preparedRuntime(selection: activeSelection)
+                try activeRuntime.start()
+                XCTAssertEqual(activeRuntime.startCount, 1, "boundary \(boundary)")
+
+                let lease = try CompanionPreparedStartupLease(paths: harness.paths)
+                XCTAssertNotNil(try CompanionPreparedStartupLease.observe(paths: harness.paths))
+                let heldSelection = try harness.daemonSelection()
+                XCTAssertEqual(heldSelection.release, harness.n1, "boundary \(boundary)")
+                XCTAssertEqual(
+                    heldSelection.arguments,
+                    ["daemon", "__runtime-raiders-trial-generation", String(trialState.generation)],
+                    "boundary \(boundary)"
+                )
+
+                if boundary == .afterLease {
+                    transaction = nil
+                    lease.unlock()
+                    XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: harness.paths))
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n)
+                    try harness.reconcileAbandonedTrial()
+                    XCTAssertNil(try harness.state().trial)
+                    return
+                }
+
+                if boundary == .afterPrepare {
+                    XCTAssertTrue(activeRuntime.prepare(generation: trialState.generation).ok)
+                    XCTAssertTrue(activeRuntime.preparation.isPrepared)
+                    transaction = nil
+                    lease.unlock()
+                    activeRuntime.drainAbandonment()
+                    XCTAssertEqual(activeRuntime.events, [.resumed], "boundary \(boundary)")
+                    XCTAssertFalse(activeRuntime.preparation.isPrepared)
+                    XCTAssertEqual(activeRuntime.startCount, 1)
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n)
+                    try harness.reconcileAbandonedTrial()
+                    XCTAssertNil(try harness.state().trial)
+                    return
+                }
+
+                let candidateRuntime = try harness.preparedRuntime(selection: heldSelection)
+                try candidateRuntime.start()
+                XCTAssertTrue(candidateRuntime.preparation.isPrepared)
+                XCTAssertEqual(candidateRuntime.startCount, 0)
+                candidateRuntime.observeAbandonment(generation: trialState.generation)
+
+                var committed: ReleaseStateV1?
+                if boundary == .afterCommit || boundary == .afterResume {
+                    committed = try XCTUnwrap(transaction).commitTrial(
+                        expectedGeneration: trialState.generation
+                    )
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n1)
+                }
+                if boundary == .afterResume {
+                    XCTAssertTrue(candidateRuntime.preparation.resume(
+                        generation: try XCTUnwrap(committed).generation
+                    ).ok)
+                    XCTAssertFalse(candidateRuntime.preparation.isPrepared)
+                    XCTAssertEqual(candidateRuntime.startCount, 1)
+                }
+
+                transaction = nil
+                lease.unlock()
+                candidateRuntime.drainAbandonment()
+                XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: harness.paths))
+
+                switch boundary {
+                case .afterKickstart, .afterHealth:
+                    XCTAssertEqual(candidateRuntime.events, [.exited], "boundary \(boundary)")
+                    XCTAssertEqual(candidateRuntime.startCount, 0)
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n)
+                    try harness.reconcileAbandonedTrial()
+                    XCTAssertNil(try harness.state().trial)
+                case .afterCommit:
+                    XCTAssertEqual(candidateRuntime.events, [.resumed])
+                    XCTAssertEqual(candidateRuntime.startCount, 1)
+                    XCTAssertFalse(candidateRuntime.preparation.isPrepared)
+                    XCTAssertEqual(try harness.state(), try XCTUnwrap(committed))
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n1)
+                case .afterResume:
+                    XCTAssertEqual(candidateRuntime.events, [])
+                    XCTAssertEqual(candidateRuntime.startCount, 1)
+                    XCTAssertEqual(try harness.state(), try XCTUnwrap(committed))
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n1)
+                case .afterLease, .afterPrepare:
+                    XCTFail("handled before candidate launch")
+                }
+            }
+        }
+    }
+
     func testProtectedStateAndOutboxRemainByteExactThroughTrialHealth() throws {
         try withHarness { harness in
             let before = try harness.protectedBytes()
@@ -417,6 +538,8 @@ private final class VersionedUpdaterHarness {
     var activeObservedDuringTrialHealth = false
     var rejectCandidateHealth = false
     var rejectPriorHealth = false
+    var candidateHealthActiveRunCount = 0
+    var priorHealthActiveRunCount = 0
     var failCandidateResume = false
     var onCandidateHealth: () throws -> Void = {}
     var kickstartCount = 0
@@ -552,13 +675,14 @@ private final class VersionedUpdaterHarness {
                           manifest.reference == self.manifest.reference else {
                         throw CompanionUpdaterError.candidateRejected
                     }
-                    let releaseRoot = root.appendingPathComponent("Runtime Raiders Release", isDirectory: true)
-                    return VerifiedReleaseArchive(
-                        agent: VerifiedReleaseAgent(
-                            application: releaseRoot.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true),
-                            identity: manifest.reference
-                        ),
-                        launcher: releaseRoot.appendingPathComponent("Runtime Raiders Launcher.app", isDirectory: true)
+                    return try testReleaseArchiveVerifier(
+                        identity: try manifest.reference.companionReleaseIdentity(),
+                        teamIdentifier: team
+                    ).verify(
+                        extractedRoot: root,
+                        manifest: manifest,
+                        installed: installed.identity,
+                        installedTeamIdentifier: installed.teamIdentifier
                     )
                 },
                 availableCapacity: { _ in Int64.max },
@@ -576,7 +700,7 @@ private final class VersionedUpdaterHarness {
                 },
                 kickstartDaemon: { [unowned self] in
                     kickstartCount += 1
-                    kickstartSelections.append(try selectedReleaseForKickstart())
+                    kickstartSelections.append(try daemonSelection().release)
                 },
                 resumePreparedDaemon: { [unowned self] generation in
                     let current = try state()
@@ -603,7 +727,13 @@ private final class VersionedUpdaterHarness {
                     } else if rejectPriorHealth {
                         return updateStatus(release: manifest.reference, preparedGeneration: generation)
                     }
-                    return updateStatus(release: expected, preparedGeneration: generation)
+                    return updateStatus(
+                        release: expected,
+                        activeRuns: expected == manifest.reference
+                            ? candidateHealthActiveRunCount
+                            : priorHealthActiveRunCount,
+                        preparedGeneration: generation
+                    )
                 },
                 checkpoint: { [unowned self] checkpoint in
                     if checkpoint == failedCheckpoint, !failureConsumed {
@@ -634,14 +764,16 @@ private final class VersionedUpdaterHarness {
     func verifiedArchive(
         _ transaction: VersionedReleaseTransaction,
         release: ReleaseReference
-    ) -> VerifiedReleaseArchive {
-        let root = transaction.stagingDirectory.appendingPathComponent("Runtime Raiders Release", isDirectory: true)
-        return VerifiedReleaseArchive(
-            agent: VerifiedReleaseAgent(
-                application: root.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true),
-                identity: release
-            ),
-            launcher: root.appendingPathComponent("Runtime Raiders Launcher.app", isDirectory: true)
+    ) throws -> VerifiedReleaseArchive {
+        let installed = try state().active.companionReleaseIdentity()
+        return try testReleaseArchiveVerifier(
+            identity: try release.companionReleaseIdentity(),
+            teamIdentifier: team
+        ).verify(
+            extractedRoot: transaction.stagingDirectory,
+            manifest: manifest(for: release),
+            installed: installed,
+            installedTeamIdentifier: team
         )
     }
 
@@ -666,9 +798,65 @@ private final class VersionedUpdaterHarness {
         ]
     }
 
-    private func selectedReleaseForKickstart() throws -> ReleaseReference {
-        let current = try state()
-        return current.trial ?? current.active
+    func daemonSelection() throws -> LauncherSelection {
+        let knownReleases = [n, n1, n2]
+        let launcher = LauncherBundleValidation(
+            bundle: paths.launcherApplication,
+            executable: paths.launcherExecutable,
+            bundleIdentifier: "com.redlattice.runtime-raiders-launcher",
+            teamIdentifier: team,
+            hardenedRuntime: true,
+            allArchitecturesValid: true,
+            launcherProtocolVersion: 1,
+            releaseIdentity: nil
+        )
+        let selector = LauncherSelector(operations: LauncherSelectionOperations(
+            paths: paths,
+            loadReleaseState: { [paths] in try ReleaseStateStore.loadExisting(paths: paths) },
+            preparedStartupLeaseIsHeld: { [paths] in
+                try CompanionPreparedStartupLease.observe(paths: paths) != nil
+            },
+            inspectLauncher: { launcher },
+            inspectAgent: { [paths, team] application in
+                guard let release = try knownReleases.first(where: {
+                    try paths.application(for: $0).standardizedFileURL ==
+                        application.standardizedFileURL
+                }) else {
+                    throw HarnessFailure.injected
+                }
+                return LauncherBundleValidation(
+                    bundle: application,
+                    executable: try paths.executable(for: release),
+                    bundleIdentifier: "com.redlattice.runtime-raiders-agent",
+                    teamIdentifier: team,
+                    hardenedRuntime: true,
+                    allArchitecturesValid: true,
+                    launcherProtocolVersion: nil,
+                    releaseIdentity: try release.companionReleaseIdentity()
+                )
+            }
+        ))
+        return try selector.select(invocation: .daemon)
+    }
+
+    func preparedRuntime(selection: LauncherSelection) throws -> CrashPreparedRuntime {
+        let trialGeneration = selection.arguments.count == 3
+            ? selection.releaseStateGeneration
+            : nil
+        let starts = CrashStartCounter()
+        let coordinator = try PreparedDaemonStartupCoordinator(
+            paths: paths,
+            trialGeneration: trialGeneration,
+            releaseIdentity: try selection.release.companionReleaseIdentity(),
+            loadReleaseState: { [paths] in try ReleaseStateStore.loadExisting(paths: paths) },
+            deferredStart: { starts.increment() }
+        )
+        return CrashPreparedRuntime(coordinator: coordinator, starts: starts)
+    }
+
+    func reconcileAbandonedTrial() throws {
+        manifest = manifest(for: try state().active)
+        XCTAssertEqual(try makeUpdater().run(), .alreadyCurrent)
     }
 
     private func updateStatus(
@@ -696,6 +884,135 @@ private final class VersionedUpdaterHarness {
         let app = try paths.application(for: release)
         try makeFakeApp(app, marker: String(release.releaseSequence))
         try privateDirectory(app.deletingLastPathComponent())
+    }
+}
+
+private enum LeaseBoundCrashBoundary: CaseIterable {
+    case afterLease
+    case afterPrepare
+    case afterKickstart
+    case afterHealth
+    case afterCommit
+    case afterResume
+}
+
+private enum CrashPreparedEvent: Equatable {
+    case resumed
+    case exited
+    case failedClosed
+}
+
+private final class CrashStartCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int { lock.withLock { storage } }
+    func increment() { lock.withLock { storage += 1 } }
+}
+
+private final class CrashPreparedRuntime: @unchecked Sendable {
+    let coordinator: PreparedDaemonStartupCoordinator
+    let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.crash-recovery")
+    private let starts: CrashStartCounter
+    private let bridge: CrashAbandonmentBridge
+    let preparation: SerializedUpdatePreparation
+
+    init(coordinator: PreparedDaemonStartupCoordinator, starts: CrashStartCounter) {
+        self.coordinator = coordinator
+        self.starts = starts
+        let bridge = CrashAbandonmentBridge()
+        self.bridge = bridge
+        let preparation = SerializedUpdatePreparation(
+            workQueue: DispatchQueue(
+                label: "com.redlattice.runtime-raiders.tests.crash-recovery-work"
+            ),
+            activeRunCount: { 0 },
+            validatePreparation: { generation in
+                try coordinator.validatePreparation(generation: generation)
+            },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            startAbandonmentObserver: { generation in bridge.start(generation: generation) },
+            initiallyPreparedGeneration: coordinator.initiallyPreparedGeneration,
+            validateResume: { generation in
+                try coordinator.validateResume(generation: generation)
+            },
+            resume: { _ in try coordinator.resume() }
+        )
+        let orchestrator = PreparedReleaseAbandonmentOrchestrator(
+            coordinator: coordinator,
+            queue: queue,
+            preparedGeneration: { bridge.preparedGeneration },
+            resumeAfterAbandonment: { generation in
+                bridge.resumeAfterAbandonment(generation: generation)
+            },
+            exitUncommittedTrial: { bridge.append(.exited) },
+            failClosed: { bridge.append(.failedClosed) }
+        )
+        bridge.connect(preparation: preparation, orchestrator: orchestrator)
+        self.preparation = preparation
+    }
+
+    var events: [CrashPreparedEvent] { bridge.events }
+    var startCount: Int { starts.value }
+
+    func start() throws {
+        try coordinator.start()
+    }
+
+    func prepare(generation: Int64) -> ControlResponse {
+        preparation.prepare(generation: generation)
+    }
+
+    func observeAbandonment(generation: Int64) {
+        bridge.start(generation: generation)
+    }
+
+    func drainAbandonment() {
+        queue.sync {}
+    }
+
+}
+
+private final class CrashAbandonmentBridge: @unchecked Sendable {
+    private let lock = NSLock()
+    private var preparation: SerializedUpdatePreparation?
+    private var orchestrator: PreparedReleaseAbandonmentOrchestrator?
+    private var eventStorage: [CrashPreparedEvent] = []
+
+    var preparedGeneration: Int64? {
+        lock.withLock { preparation?.preparedGeneration }
+    }
+
+    var events: [CrashPreparedEvent] { lock.withLock { eventStorage } }
+
+    func connect(
+        preparation: SerializedUpdatePreparation,
+        orchestrator: PreparedReleaseAbandonmentOrchestrator
+    ) {
+        lock.withLock {
+            self.preparation = preparation
+            self.orchestrator = orchestrator
+        }
+    }
+
+    func start(generation: Int64) {
+        lock.withLock { orchestrator }?.start(generation: generation)
+    }
+
+    func resumeAfterAbandonment(generation: Int64) -> ControlResponse {
+        guard let preparation = lock.withLock({ preparation }) else {
+            return ControlResponse(ok: false, message: "unconnected preparation")
+        }
+        let response = preparation.resumeAfterAbandonment(generation: generation)
+        if response.ok { append(.resumed) }
+        return response
+    }
+
+    func append(_ event: CrashPreparedEvent) {
+        lock.withLock { eventStorage.append(event) }
     }
 }
 
@@ -775,6 +1092,29 @@ private func createExtractedReleaseFixture(at staging: URL, release: ReleaseRefe
     for directory in [root, agent, launcher] {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
     }
+}
+
+private func testReleaseArchiveVerifier(
+    identity: CompanionReleaseIdentity,
+    teamIdentifier: String
+) -> ReleaseArchiveVerifier {
+    ReleaseArchiveVerifier(
+        signatureInspector: { application in
+            CandidateSignatureFacts(
+                bundleIdentifier: application.lastPathComponent == "Runtime Raiders Agent.app"
+                    ? "com.redlattice.runtime-raiders-agent"
+                    : "com.redlattice.runtime-raiders-launcher",
+                teamIdentifier: teamIdentifier,
+                signatureValid: true,
+                allArchitecturesValid: true,
+                hardenedRuntime: true,
+                secureTimestampPresent: true,
+                gatekeeperNotarized: true
+            )
+        },
+        agentIdentityLoader: { _ in identity },
+        launcherProtocolLoader: { _ in 1 }
+    )
 }
 
 private func selfCheckData(_ identity: CompanionReleaseIdentity) -> Data {

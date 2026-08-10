@@ -540,6 +540,9 @@ public final class CompanionUpdater {
                         generation: generation,
                         initial: initial
                     )
+                    guard status.activeRunCount == 0 else {
+                        throw CompanionUpdaterError.healthCheckFailed
+                    }
                     return status
                 } catch {
                     throw CompanionUpdaterError.healthCheckFailed

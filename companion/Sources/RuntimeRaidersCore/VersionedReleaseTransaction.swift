@@ -94,10 +94,8 @@ public final class VersionedReleaseTransaction {
         defer { Darwin.close(releaseRootDescriptor) }
         try Self.requireOwnedDirectory(releaseRootDescriptor)
         try Self.requireOwnedApplication(verified.agent.application)
-        if let seal = verified.agentVerificationSeal {
-            guard try ReleaseApplicationSeal.capture(verified.agent.application) == seal else {
-                throw CompanionUpdaterError.unsafeFilesystem
-            }
+        guard (try? verified.verifiesAgentPromotion(at: verified.agent.application)) == true else {
+            throw CompanionUpdaterError.unsafeFilesystem
         }
 
         let appName = "Runtime Raiders Agent.app"
@@ -123,10 +121,10 @@ public final class VersionedReleaseTransaction {
               try Self.isOwnedDirectory(try paths.application(for: release)) else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
-        if let seal = verified.agentVerificationSeal {
-            guard try ReleaseApplicationSeal.capture(try paths.application(for: release)) == seal else {
-                throw CompanionUpdaterError.unsafeFilesystem
-            }
+        guard (try? verified.verifiesAgentPromotion(
+            at: try paths.application(for: release)
+        )) == true else {
+            throw CompanionUpdaterError.unsafeFilesystem
         }
         candidate = release
         try fault(.afterPromotion)

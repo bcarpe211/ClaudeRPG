@@ -7,21 +7,19 @@ final class ReleaseArchiveVerifierTests: XCTestCase {
         try withExtractedRelease { paths in
             let verifier = makeVerifier(paths: paths)
 
-            XCTAssertEqual(
-                try verifier.verify(
-                    extractedRoot: paths.staging,
-                    manifest: manifest,
-                    installed: installedIdentity,
-                    installedTeamIdentifier: teamIdentifier
-                ),
-                VerifiedReleaseArchive(
-                    agent: VerifiedReleaseAgent(
-                        application: paths.agent,
-                        identity: try manifestIdentity.releaseReference()
-                    ),
-                    launcher: paths.launcher
-                )
+            let verified = try verifier.verify(
+                extractedRoot: paths.staging,
+                manifest: manifest,
+                installed: installedIdentity,
+                installedTeamIdentifier: teamIdentifier
             )
+
+            XCTAssertEqual(verified.agent, VerifiedReleaseAgent(
+                application: paths.agent,
+                identity: try manifestIdentity.releaseReference()
+            ))
+            XCTAssertEqual(verified.launcher, paths.launcher)
+            XCTAssertTrue(try verified.verifiesAgentPromotion(at: paths.agent))
         }
     }
 

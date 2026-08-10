@@ -15,15 +15,9 @@ public struct VerifiedReleaseAgent: Equatable, Sendable {
 public struct VerifiedReleaseArchive: Equatable, Sendable {
     public let agent: VerifiedReleaseAgent
     public let launcher: URL
-    let agentVerificationSeal: ReleaseApplicationSeal?
+    private let agentVerificationSeal: ReleaseApplicationSeal
 
-    public init(agent: VerifiedReleaseAgent, launcher: URL) {
-        self.agent = agent
-        self.launcher = launcher
-        agentVerificationSeal = nil
-    }
-
-    init(
+    fileprivate init(
         agent: VerifiedReleaseAgent,
         launcher: URL,
         agentVerificationSeal: ReleaseApplicationSeal
@@ -35,6 +29,10 @@ public struct VerifiedReleaseArchive: Equatable, Sendable {
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.agent == rhs.agent && lhs.launcher == rhs.launcher
+    }
+
+    func verifiesAgentPromotion(at application: URL) throws -> Bool {
+        try ReleaseApplicationSeal.capture(application) == agentVerificationSeal
     }
 }
 
