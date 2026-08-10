@@ -16,7 +16,6 @@ final class LauncherSelectionTests: XCTestCase {
         for rejected in [
             [],
             ["__self-check"],
-            ["__recover-update"],
             ["prepare_update"],
             ["resume_update"],
             ["__runtime-raiders-trial-generation"],

@@ -180,33 +180,6 @@ final class ReleaseCheckerTests: XCTestCase {
             )
             XCTAssertEqual(newInstance.availability(), availability)
 
-            var recoveryBoundManifest: ReleaseManifestV1?
-            let recovery = StableUpdateRecovery(
-                paths: paths,
-                operations: StableUpdateRecoveryOperations(
-                    phase: { .rollbackAndFailed },
-                    verifyBundles: { phase in
-                        XCTAssertEqual(phase, .rollbackAndFailed)
-                        let persistedManifest = try UpdateStateStore(paths: paths)
-                            .load().cachedManifest
-                        if let recoveryBoundManifest {
-                            XCTAssertEqual(persistedManifest, recoveryBoundManifest)
-                        } else {
-                            recoveryBoundManifest = persistedManifest
-                        }
-                    },
-                    persistDisabled: {},
-                    bootout: {},
-                    proveStopped: { true },
-                    restore: { _ in },
-                    revertRestored: { _ in },
-                    verifyRestoredBundle: { _ in },
-                    bootstrap: {},
-                    verifyDisabledHealth: { true }
-                )
-            )
-            try recovery.run()
-            XCTAssertEqual(recoveryBoundManifest, manifest)
         }
     }
 

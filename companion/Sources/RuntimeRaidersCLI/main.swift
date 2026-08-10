@@ -476,9 +476,12 @@ private struct LiveUpdateStatusProvider {
     let surfaces: [RunSurface]
     let enrollment: EnrollmentConfiguration
     let trustRoot: InstalledTrustRoot
-    let expectedReleaseStateGeneration: Int64
-
-    func status(command: ControlCommand) throws -> CompanionUpdateStatus {
+    func status(
+        command: ControlCommand,
+        expectedRelease: ReleaseReference,
+        expectedGeneration: Int64,
+        expectedPreparedGeneration: Int64?
+    ) throws -> CompanionUpdateStatus {
         guard command == .status || command == .prepareUpdate || command == .resumeUpdate else {
             throw CLIError.invalidUpdateState
         }
@@ -486,18 +489,26 @@ private struct LiveUpdateStatusProvider {
             request: ControlRequest(
                 command: command,
                 releaseStateGeneration: command == .prepareUpdate || command == .resumeUpdate
-                    ? expectedReleaseStateGeneration : nil
+                    ? expectedGeneration : nil
             ),
             to: paths.controlSocket
         )
-        return try validatedStatus(response)
+        return try validatedStatus(
+            response,
+            expectedRelease: expectedRelease,
+            expectedGeneration: expectedGeneration,
+            expectedPreparedGeneration: expectedPreparedGeneration
+        )
     }
 
-    func prepareForUpdate() throws -> CompanionDaemonPreparationResult {
+    func prepareForUpdate(
+        expectedRelease: ReleaseReference,
+        generation: Int64
+    ) throws -> CompanionDaemonPreparationResult {
         let response = try ControlSocketClient.send(
             request: ControlRequest(
                 command: .prepareUpdate,
-                releaseStateGeneration: expectedReleaseStateGeneration
+                releaseStateGeneration: generation
             ),
             to: paths.controlSocket
         )
@@ -505,16 +516,26 @@ private struct LiveUpdateStatusProvider {
            response.message == SerializedUpdatePreparation.activeRunRefusalMessage {
             return .refusedActiveRun
         }
-        return .prepared(try validatedStatus(response))
+        return .prepared(try validatedStatus(
+            response,
+            expectedRelease: expectedRelease,
+            expectedGeneration: generation,
+            expectedPreparedGeneration: generation
+        ))
     }
 
-    private func validatedStatus(_ response: ControlResponse) throws -> CompanionUpdateStatus {
+    private func validatedStatus(
+        _ response: ControlResponse,
+        expectedRelease: ReleaseReference,
+        expectedGeneration: Int64,
+        expectedPreparedGeneration: Int64?
+    ) throws -> CompanionUpdateStatus {
         guard response.ok,
               let data = response.message.data(using: .utf8),
               let status = try? JSONDecoder().decode(AgentStatus.self, from: data) else {
             throw CLIError.invalidUpdateState
         }
-        let verified = try trustRoot.verifyApplication(at: legacyProtocolOne(paths).installedApplication)
+        let verified = try trustRoot.verifyApplication(at: paths.application(for: expectedRelease))
         let persistedState = try AgentController.persistedCollectorState(
             paths: paths,
             surfaces: surfaces
@@ -523,7 +544,13 @@ private struct LiveUpdateStatusProvider {
             from: paths.stateDirectory.appendingPathComponent("enrollment.json")
         )
         let queuedCount = try Outbox.queuedCount(inExistingDirectory: paths.outboxDirectory)
+        let releaseState = try ReleaseStateStore.loadExisting(paths: paths)
+        let selectionMatches = releaseState.active == expectedRelease ||
+            (expectedPreparedGeneration == expectedGeneration &&
+                releaseState.trial == expectedRelease)
         guard status.daemonRunning,
+              releaseState.generation == expectedGeneration,
+              selectionMatches,
               status.installedReleaseSequence == verified.identity.releaseSequence,
               status.installedCompanionVersion == verified.identity.companionVersion,
               status.serverEnabledSurfaces == surfaces.sorted(by: { $0.rawValue < $1.rawValue }),
@@ -534,9 +561,7 @@ private struct LiveUpdateStatusProvider {
               status.enabled == (persistedState == .enabled),
               status.activeRunCount >= 0,
               status.queuedEventCount >= 0,
-              status.preparedForUpdate == (status.preparedReleaseStateGeneration != nil),
-              !status.preparedForUpdate ||
-                status.preparedReleaseStateGeneration == expectedReleaseStateGeneration else {
+              status.preparedReleaseStateGeneration == expectedPreparedGeneration else {
             throw CLIError.invalidUpdateState
         }
         return CompanionUpdateStatus(
@@ -547,37 +572,9 @@ private struct LiveUpdateStatusProvider {
             collectorStateValid: true,
             activeRunCount: status.activeRunCount,
             queuedEventCount: status.queuedEventCount,
-            preparedForUpdate: status.preparedForUpdate
+            preparedReleaseStateGeneration: status.preparedReleaseStateGeneration
         )
     }
-}
-
-private func launchAgentURL() -> URL {
-    FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-        .appendingPathComponent("com.redlattice.runtime-raiders-agent.plist", isDirectory: false)
-}
-
-private struct LegacyProtocolOneCLIPaths {
-    let installedApplication: URL
-    let rollbackApplication: URL
-    let failedApplication: URL
-
-    init(paths: AgentPaths) {
-        installedApplication = paths.legacyFlatApplication
-        rollbackApplication = paths.supportDirectory.appendingPathComponent(
-            "Runtime Raiders Agent.rollback.app",
-            isDirectory: true
-        )
-        failedApplication = paths.supportDirectory.appendingPathComponent(
-            "Runtime Raiders Agent.failed.app",
-            isDirectory: true
-        )
-    }
-}
-
-private func legacyProtocolOne(_ paths: AgentPaths) -> LegacyProtocolOneCLIPaths {
-    LegacyProtocolOneCLIPaths(paths: paths)
 }
 
 private func downloadSynchronously(
@@ -610,17 +607,16 @@ private func availableCapacity(at directory: URL) throws -> Int64 {
 }
 
 private func runForegroundUpdate(paths: AgentPaths) throws {
-    let expectedReleaseStateGeneration = try ReleaseStateStore.loadExisting(paths: paths).generation
+    let releaseState = try ReleaseStateStore.loadExisting(paths: paths)
     let enrollment = try EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
-    let trustRoot = try InstalledTrustRoot(expectedBundleURL: legacyProtocolOne(paths).installedApplication)
+    let trustRoot = try InstalledTrustRoot(expectedBundleURL: paths.application(for: releaseState.active))
     let statusProvider = LiveUpdateStatusProvider(
         paths: paths,
         surfaces: enrollment.enabledSurfaces,
         enrollment: enrollment,
-        trustRoot: trustRoot,
-        expectedReleaseStateGeneration: expectedReleaseStateGeneration
+        trustRoot: trustRoot
     )
     let releaseChecker = try ReleaseChecker(
         paths: paths,
@@ -628,17 +624,26 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
     )
     let downloader = ArtifactDownloader()
     let commandRunner = SystemCommandRunner()
-    let candidateVerifier = CandidateVerifier()
     let releaseArchiveVerifier = ReleaseArchiveVerifier()
+    try releaseArchiveVerifier.verifyPackagedLauncher(
+        paths.launcherApplication,
+        installedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
+    )
     let launchd = LaunchdJobController(
-        plistURL: launchAgentURL(),
         runCommand: commandRunner.run
     )
     let updater = CompanionUpdater(
         paths: paths,
         surfaces: enrollment.enabledSurfaces,
         operations: CompanionUpdaterOperations(
-            status: { try statusProvider.status(command: .status) },
+            status: { release, generation in
+                try statusProvider.status(
+                    command: .status,
+                    expectedRelease: release,
+                    expectedGeneration: generation,
+                    expectedPreparedGeneration: nil
+                )
+            },
             fetchManifest: { try releaseChecker.fetchNow() },
             downloadArchive: { source, destination, digest in
                 try downloadSynchronously(
@@ -649,35 +654,42 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
                 )
             },
             runCommand: commandRunner.run,
-            verifyCandidate: { candidate, launcher, manifest, installed in
-                try releaseArchiveVerifier.verifyPackagedLauncher(
-                    launcher,
-                    installedTeamIdentifier: installed.teamIdentifier
-                )
-                return try candidateVerifier.verify(
-                    candidate: candidate,
+            verifyArchive: { extractedRoot, manifest, installed in
+                try releaseArchiveVerifier.verify(
+                    extractedRoot: extractedRoot,
                     manifest: manifest,
                     installed: installed.identity,
                     installedTeamIdentifier: installed.teamIdentifier
                 )
             },
             availableCapacity: availableCapacity,
-            prepareDaemon: { try statusProvider.prepareForUpdate() },
-            bootout: launchd.bootout,
-            bootstrap: launchd.bootstrap,
-            proveDaemonStopped: launchd.proveStopped,
-            resumePreparedDaemon: {
+            acquirePreparedLease: { try CompanionPreparedStartupLease(paths: paths) },
+            prepareDaemon: { generation in
+                let current = try ReleaseStateStore.loadExisting(paths: paths)
+                return try statusProvider.prepareForUpdate(
+                    expectedRelease: current.active,
+                    generation: generation
+                )
+            },
+            kickstartDaemon: launchd.restart,
+            resumePreparedDaemon: { generation in
                 let response = try ControlSocketClient.send(
                     request: ControlRequest(
                         command: .resumeUpdate,
-                        releaseStateGeneration: expectedReleaseStateGeneration
+                        releaseStateGeneration: generation
                     ),
                     to: paths.controlSocket
                 )
                 guard response.ok else { throw CLIError.updateOperationFailed }
             },
-            restartDaemon: launchd.restart,
-            healthStatus: { try statusProvider.status(command: .status) }
+            healthStatus: { release, generation in
+                try statusProvider.status(
+                    command: .status,
+                    expectedRelease: release,
+                    expectedGeneration: generation,
+                    expectedPreparedGeneration: generation
+                )
+            }
         )
     )
 
@@ -687,88 +699,6 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
     case let .updated(from, to):
         print("Runtime Raiders updated from \(from.companionVersion) to \(to.companionVersion).")
     }
-}
-
-private func runStableRecovery(paths: AgentPaths) throws {
-    let expectedReleaseStateGeneration = try ReleaseStateStore.loadExisting(paths: paths).generation
-    let enrollment = try EnrollmentConfiguration.loadExisting(
-        from: paths.stateDirectory.appendingPathComponent("enrollment.json")
-    )
-    let trustRoot = try InstalledTrustRoot(expectedBundleURL: legacyProtocolOne(paths).rollbackApplication)
-    let verifier = CandidateVerifier()
-    let layout = try StableRecoveryFileTransaction(paths: paths)
-    var boundManifest: ReleaseManifestV1?
-    let verifyBundles: (StableRecoveryPhase) throws -> Void = { phase in
-        guard try AgentController.persistedCollectorState(
-            paths: paths,
-            surfaces: enrollment.enabledSurfaces
-        ) == .disabled,
-        try trustRoot.verifyApplication(at: legacyProtocolOne(paths).rollbackApplication) ==
-            trustRoot.verifiedSelf else {
-            throw CLIError.invalidUpdateState
-        }
-        guard phase == .rollbackAndFailed else { return }
-        let currentManifest = try UpdateStateStore(paths: paths).load().cachedManifest
-        if let boundManifest {
-            guard currentManifest == boundManifest else { throw CLIError.invalidUpdateState }
-        } else {
-            guard let currentManifest else { throw CLIError.invalidUpdateState }
-            boundManifest = currentManifest
-        }
-        guard let manifest = boundManifest else { throw CLIError.invalidUpdateState }
-        let failedIdentity = try verifier.verify(
-            candidate: legacyProtocolOne(paths).failedApplication,
-            manifest: manifest,
-            installed: trustRoot.verifiedSelf.identity,
-            installedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
-        )
-        guard failedIdentity.releaseSequence > trustRoot.verifiedSelf.identity.releaseSequence else {
-            throw CLIError.invalidUpdateState
-        }
-    }
-    let runner = SystemCommandRunner()
-    let launchd = LaunchdJobController(
-        plistURL: launchAgentURL(),
-        runCommand: runner.run
-    )
-    let recovery = StableUpdateRecovery(paths: paths, operations: StableUpdateRecoveryOperations(
-        phase: { try layout.inspectAndNormalize() },
-        verifyBundles: verifyBundles,
-        persistDisabled: {
-            try AgentController.persistDisabledForRecovery(
-                paths: paths,
-                surfaces: enrollment.enabledSurfaces
-            )
-        },
-        bootout: launchd.bootout,
-        proveStopped: launchd.proveStopped,
-        restore: { try layout.restore(phase: $0) },
-        revertRestored: { try layout.revertRestore(phase: $0) },
-        verifyRestoredBundle: { _ in
-            guard try trustRoot.verifyApplication(at: legacyProtocolOne(paths).installedApplication) ==
-                    trustRoot.verifiedSelf else {
-                throw CLIError.invalidUpdateState
-            }
-        },
-        bootstrap: launchd.bootstrap,
-        verifyDisabledHealth: {
-            let statusProvider = LiveUpdateStatusProvider(
-                paths: paths,
-                surfaces: enrollment.enabledSurfaces,
-                enrollment: enrollment,
-                trustRoot: trustRoot,
-                expectedReleaseStateGeneration: expectedReleaseStateGeneration
-            )
-            let observed = try statusProvider.status(command: .status)
-            let status = observed.preparedForUpdate
-                ? try statusProvider.status(command: .resumeUpdate)
-                : observed
-            return status.verifiedApplication == trustRoot.verifiedSelf &&
-                !status.enabled && !status.preparedForUpdate && status.activeRunCount == 0
-        }
-    ))
-    try recovery.run()
-    print("Runtime Raiders restored \(trustRoot.verifiedSelf.identity.companionVersion) with collection off.")
 }
 
 private func run() throws {

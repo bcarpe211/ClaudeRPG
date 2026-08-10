@@ -15,10 +15,26 @@ public struct VerifiedReleaseAgent: Equatable, Sendable {
 public struct VerifiedReleaseArchive: Equatable, Sendable {
     public let agent: VerifiedReleaseAgent
     public let launcher: URL
+    let agentVerificationSeal: ReleaseApplicationSeal?
 
     public init(agent: VerifiedReleaseAgent, launcher: URL) {
         self.agent = agent
         self.launcher = launcher
+        agentVerificationSeal = nil
+    }
+
+    init(
+        agent: VerifiedReleaseAgent,
+        launcher: URL,
+        agentVerificationSeal: ReleaseApplicationSeal
+    ) {
+        self.agent = agent
+        self.launcher = launcher
+        self.agentVerificationSeal = agentVerificationSeal
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.agent == rhs.agent && lhs.launcher == rhs.launcher
     }
 }
 
@@ -118,7 +134,8 @@ public struct ReleaseArchiveVerifier {
             }
             return VerifiedReleaseArchive(
                 agent: VerifiedReleaseAgent(application: agent, identity: reference),
-                launcher: launcher
+                launcher: launcher,
+                agentVerificationSeal: agentSeal
             )
         } catch {
             throw ReleaseArchiveVerificationError.untrustedArchive
@@ -175,8 +192,8 @@ public struct ReleaseArchiveVerifier {
     }
 }
 
-private struct ReleaseApplicationSeal: Equatable {
-    private struct Entry: Equatable {
+struct ReleaseApplicationSeal: Equatable, Sendable {
+    private struct Entry: Equatable, Sendable {
         let path: String
         let kind: UInt16
         let device: UInt64
