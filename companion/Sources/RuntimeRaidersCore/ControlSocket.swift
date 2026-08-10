@@ -148,52 +148,74 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
 
     private let workQueue: DispatchQueue
     private let activeRunCount: () throws -> Int
+    private let validatePreparation: (Int64) throws -> Void
     private let pauseAcceptance: () -> Void
     private let pauseUploader: () -> Void
     private let pauseHeartbeat: () -> Void
     private let pauseWatcher: () -> Void
-    private let resumeAction: () throws -> Void
+    private let startAbandonmentObserver: (Int64) -> Void
+    private let validateResume: (Int64) throws -> Void
+    private let resumeAction: (Int64) throws -> Void
     private let acceptedResponse: () throws -> ControlResponse
     private let stateLock = NSLock()
-    private var prepared = false
+    private var preparedGenerationStorage: Int64?
+    private var resumedGeneration: Int64?
 
-    public var isPrepared: Bool { stateLock.withLock { prepared } }
+    public var isPrepared: Bool { preparedGeneration != nil }
+    public var preparedGeneration: Int64? { stateLock.withLock { preparedGenerationStorage } }
 
     public init(
         workQueue: DispatchQueue,
         activeRunCount: @escaping () throws -> Int,
+        validatePreparation: @escaping (Int64) throws -> Void = { _ in },
         pauseAcceptance: @escaping () -> Void,
         pauseUploader: @escaping () -> Void,
         pauseHeartbeat: @escaping () -> Void,
         pauseWatcher: @escaping () -> Void,
-        initiallyPrepared: Bool = false,
-        resume: @escaping () throws -> Void = {},
+        startAbandonmentObserver: @escaping (Int64) -> Void = { _ in },
+        initiallyPreparedGeneration: Int64? = nil,
+        validateResume: @escaping (Int64) throws -> Void = { _ in },
+        resume: @escaping (Int64) throws -> Void = { _ in },
         acceptedResponse: @escaping () throws -> ControlResponse = {
             ControlResponse(ok: true, message: "prepared for update")
         }
     ) {
         self.workQueue = workQueue
         self.activeRunCount = activeRunCount
+        self.validatePreparation = validatePreparation
         self.pauseAcceptance = pauseAcceptance
         self.pauseUploader = pauseUploader
         self.pauseHeartbeat = pauseHeartbeat
         self.pauseWatcher = pauseWatcher
-        prepared = initiallyPrepared
+        self.startAbandonmentObserver = startAbandonmentObserver
+        preparedGenerationStorage = initiallyPreparedGeneration
+        self.validateResume = validateResume
         resumeAction = resume
         self.acceptedResponse = acceptedResponse
     }
 
-    public func prepare() -> ControlResponse {
+    public func prepare(generation: Int64) -> ControlResponse {
         workQueue.sync {
             do {
+                guard Self.validGeneration(generation) else {
+                    return ControlResponse(ok: false, message: "unable to prepare update")
+                }
+                if let current = preparedGeneration {
+                    guard current == generation else {
+                        return ControlResponse(ok: false, message: "unable to prepare update")
+                    }
+                    return try acceptedResponse()
+                }
                 guard try activeRunCount() == 0 else {
                     return ControlResponse(ok: false, message: Self.activeRunRefusalMessage)
                 }
+                try validatePreparation(generation)
                 pauseAcceptance()
                 pauseUploader()
                 pauseHeartbeat()
                 pauseWatcher()
-                stateLock.withLock { prepared = true }
+                stateLock.withLock { preparedGenerationStorage = generation }
+                startAbandonmentObserver(generation)
                 return try acceptedResponse()
             } catch {
                 return ControlResponse(ok: false, message: "unable to prepare update")
@@ -201,17 +223,52 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
         }
     }
 
-    public func resume() -> ControlResponse {
+    public func resume(generation: Int64) -> ControlResponse {
         workQueue.sync {
             do {
-                guard isPrepared else { return try acceptedResponse() }
-                try resumeAction()
-                stateLock.withLock { prepared = false }
+                guard Self.validGeneration(generation) else {
+                    return ControlResponse(ok: false, message: "unable to resume after update")
+                }
+                guard preparedGeneration != nil else {
+                    guard stateLock.withLock({ resumedGeneration == generation }) else {
+                        return ControlResponse(ok: false, message: "unable to resume after update")
+                    }
+                    try validateResume(generation)
+                    return try acceptedResponse()
+                }
+                try validateResume(generation)
+                try resumeAction(generation)
+                stateLock.withLock {
+                    preparedGenerationStorage = nil
+                    resumedGeneration = generation
+                }
                 return try acceptedResponse()
             } catch {
                 return ControlResponse(ok: false, message: "unable to resume after update")
             }
         }
+    }
+
+    public func resumeAfterAbandonment(generation: Int64) -> ControlResponse {
+        workQueue.sync {
+            do {
+                guard preparedGeneration == generation else {
+                    return ControlResponse(ok: false, message: "unable to resume after update")
+                }
+                try resumeAction(generation)
+                stateLock.withLock {
+                    preparedGenerationStorage = nil
+                    resumedGeneration = generation
+                }
+                return try acceptedResponse()
+            } catch {
+                return ControlResponse(ok: false, message: "unable to resume after update")
+            }
+        }
+    }
+
+    private static func validGeneration(_ generation: Int64) -> Bool {
+        (1...ReleaseContractValidation.maximumSafeInteger).contains(generation)
     }
 }
 
@@ -670,13 +727,16 @@ public final class StableUpdateRecovery {
 public struct ControlRequest: Codable, Equatable, Sendable {
     public let command: ControlCommand
     public let claudeOTelEnvironmentPresent: Bool?
+    public let releaseStateGeneration: Int64?
 
     public init(
         command: ControlCommand,
-        claudeOTelEnvironmentPresent: Bool? = nil
+        claudeOTelEnvironmentPresent: Bool? = nil,
+        releaseStateGeneration: Int64? = nil
     ) {
         self.command = command
         self.claudeOTelEnvironmentPresent = claudeOTelEnvironmentPresent
+        self.releaseStateGeneration = releaseStateGeneration
     }
 
     public static func invocation(
@@ -687,13 +747,15 @@ public struct ControlRequest: Codable, Equatable, Sendable {
             command: command,
             claudeOTelEnvironmentPresent: command == .doctor
                 ? DoctorEnvironment.claudeOTelPresent(in: environment)
-                : nil
+                : nil,
+            releaseStateGeneration: nil
         )
     }
 
     private enum CodingKeys: String, CodingKey {
         case command
         case claudeOTelEnvironmentPresent = "claude_otel_environment_present"
+        case releaseStateGeneration = "release_state_generation"
     }
 }
 
@@ -753,9 +815,15 @@ public enum ControlSocketProtocol {
               valid(request) else {
             throw ControlSocketError.invalidFrame
         }
-        let expectedFields: Set<String> = request.command == .doctor
-            ? ["command", "claude_otel_environment_present"]
-            : ["command"]
+        let expectedFields: Set<String>
+        switch request.command {
+        case .doctor:
+            expectedFields = ["command", "claude_otel_environment_present"]
+        case .prepareUpdate, .resumeUpdate:
+            expectedFields = ["command", "release_state_generation"]
+        default:
+            expectedFields = ["command"]
+        }
         guard Set(fields.keys) == expectedFields else {
             throw ControlSocketError.invalidFrame
         }
@@ -763,9 +831,18 @@ public enum ControlSocketProtocol {
     }
 
     private static func valid(_ request: ControlRequest) -> Bool {
-        request.command == .doctor
-            ? request.claudeOTelEnvironmentPresent != nil
-            : request.claudeOTelEnvironmentPresent == nil
+        switch request.command {
+        case .doctor:
+            return request.claudeOTelEnvironmentPresent != nil &&
+                request.releaseStateGeneration == nil
+        case .prepareUpdate, .resumeUpdate:
+            guard let generation = request.releaseStateGeneration else { return false }
+            return request.claudeOTelEnvironmentPresent == nil &&
+                (1...ReleaseContractValidation.maximumSafeInteger).contains(generation)
+        default:
+            return request.claudeOTelEnvironmentPresent == nil &&
+                request.releaseStateGeneration == nil
+        }
     }
 }
 

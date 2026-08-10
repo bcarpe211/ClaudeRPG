@@ -53,7 +53,7 @@ private final class DaemonRuntime: @unchecked Sendable {
     private let controller: AgentController
     private let uploader: Uploader
     private let heartbeat: Heartbeat
-    private let releaseChecker: ReleaseChecker?
+    private var releaseChecker: ReleaseChecker?
     private var startupCoordinator: PreparedDaemonStartupCoordinator!
     private let workQueue = DispatchQueue(
         label: "com.redlattice.runtime-raiders.daemon",
@@ -80,12 +80,23 @@ private final class DaemonRuntime: @unchecked Sendable {
             guard let self else { throw CLIError.invalidRuntimeConfiguration }
             return try self.currentStatus().activeRunCount
         },
+        validatePreparation: { [weak self] generation in
+            guard let self else { throw CLIError.invalidRuntimeConfiguration }
+            try startupCoordinator.validatePreparation(generation: generation)
+        },
         pauseAcceptance: { [weak self] in self?.controller.pauseCollection() },
         pauseUploader: { [weak self] in self?.uploader.setEnabled(false) },
         pauseHeartbeat: { [weak self] in self?.heartbeat.setEnabled(false) },
         pauseWatcher: { [weak self] in self?.watcher.stop() },
-        initiallyPrepared: startupCoordinator.startsPrepared,
-        resume: { [weak self] in
+        startAbandonmentObserver: { [weak self] generation in
+            self?.startAbandonmentObserver(generation: generation)
+        },
+        initiallyPreparedGeneration: startupCoordinator.initiallyPreparedGeneration,
+        validateResume: { [weak self] generation in
+            guard let self else { throw CLIError.invalidRuntimeConfiguration }
+            try startupCoordinator.validateResume(generation: generation)
+        },
+        resume: { [weak self] _ in
             guard let self else { throw CLIError.invalidRuntimeConfiguration }
             do {
                 try startupCoordinator.resume()
@@ -105,7 +116,7 @@ private final class DaemonRuntime: @unchecked Sendable {
         }
     )
 
-    init(inputs: RuntimeInputs) throws {
+    init(inputs: RuntimeInputs, trialGeneration: Int64?) throws {
         self.inputs = inputs
         registry = try AdapterRegistry.enabled(surfaces: inputs.surfaces, codexRoot: inputs.codexRoot)
         outbox = try Outbox(directory: paths.outboxDirectory)
@@ -138,18 +149,22 @@ private final class DaemonRuntime: @unchecked Sendable {
             companionVersion: inputs.companionVersion,
             cancellableTransport: Uploader.liveCancellableTransport
         )
-        releaseChecker = try? ReleaseChecker(
+        startupCoordinator = try PreparedDaemonStartupCoordinator(
             paths: paths,
-            installed: inputs.releaseIdentity
-        )
-        startupCoordinator = try PreparedDaemonStartupCoordinator(paths: paths) { [weak self] in
+            trialGeneration: trialGeneration,
+            releaseIdentity: inputs.releaseIdentity
+        ) { [weak self] in
             guard let self else { throw CLIError.invalidRuntimeConfiguration }
             let files = try watcher.discoverProviderFiles()
             try controller.install(existingFiles: files)
             try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
             if controller.enabled { try watcher.start() }
-            updateQueue.async { [releaseChecker] in
-                _ = releaseChecker?.checkIfDue()
+            releaseChecker = try? ReleaseChecker(
+                paths: paths,
+                installed: inputs.releaseIdentity
+            )
+            updateQueue.async { [weak self] in
+                _ = self?.releaseChecker?.checkIfDue()
             }
             scheduleReadContinuationIfNeeded()
             uploader.schedule(enabled: controller.enabled)
@@ -164,10 +179,8 @@ private final class DaemonRuntime: @unchecked Sendable {
         }
         do {
             try startupCoordinator.start()
-            if startupCoordinator.startsPrepared {
-                startupCoordinator.monitorAbandonment(on: updateQueue) { [weak self] in
-                    self?.resumeAfterAbandonedPreparation()
-                }
+            if let generation = startupCoordinator.initiallyPreparedGeneration {
+                startAbandonmentObserver(generation: generation)
             }
             while !stopLock.withLock({ stopping }) {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
@@ -299,9 +312,15 @@ private final class DaemonRuntime: @unchecked Sendable {
                 }
             }
         case .prepareUpdate:
-            return updatePreparation.prepare()
+            guard let generation = request.releaseStateGeneration else {
+                return ControlResponse(ok: false, message: "invalid update generation")
+            }
+            return updatePreparation.prepare(generation: generation)
         case .resumeUpdate:
-            return updatePreparation.resume()
+            guard let generation = request.releaseStateGeneration else {
+                return ControlResponse(ok: false, message: "invalid update generation")
+            }
+            return updatePreparation.resume(generation: generation)
         }
     }
 
@@ -312,17 +331,39 @@ private final class DaemonRuntime: @unchecked Sendable {
             lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS,
             installedRelease: inputs.releaseIdentity,
             updateAvailability: releaseChecker?.availability(),
-            preparedForUpdate: updatePreparation.isPrepared
+            preparedReleaseStateGeneration: updatePreparation.preparedGeneration
         )
     }
 
-    private func resumeAfterAbandonedPreparation() {
-        let response = updatePreparation.resume()
-        guard !response.ok,
-              updatePreparation.isPrepared,
-              !stopLock.withLock({ stopping }) else { return }
-        updateQueue.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
-            self?.resumeAfterAbandonedPreparation()
+    private func startAbandonmentObserver(generation: Int64) {
+        startupCoordinator.monitorReleaseAbandonment(
+            generation: generation,
+            on: updateQueue
+        ) { [weak self] disposition in
+            self?.handleAbandonment(disposition, generation: generation)
+        }
+    }
+
+    private func handleAbandonment(
+        _ disposition: PreparedReleaseDisposition,
+        generation: Int64
+    ) {
+        guard updatePreparation.preparedGeneration == generation else { return }
+        switch disposition {
+        case .resumeCommittedActive:
+            let response = updatePreparation.resumeAfterAbandonment(generation: generation)
+            guard !response.ok else { return }
+            controller.pauseCollection()
+            uploader.setEnabled(false)
+            heartbeat.setEnabled(false)
+            watcher.stop()
+            stopLock.withLock { stopping = true }
+        case .exitUncommittedTrial, .failClosed:
+            controller.pauseCollection()
+            uploader.setEnabled(false)
+            heartbeat.setEnabled(false)
+            watcher.stop()
+            stopLock.withLock { stopping = true }
         }
     }
 
@@ -444,13 +485,18 @@ private struct LiveUpdateStatusProvider {
     let surfaces: [RunSurface]
     let enrollment: EnrollmentConfiguration
     let trustRoot: InstalledTrustRoot
+    let expectedReleaseStateGeneration: Int64
 
     func status(command: ControlCommand) throws -> CompanionUpdateStatus {
         guard command == .status || command == .prepareUpdate || command == .resumeUpdate else {
             throw CLIError.invalidUpdateState
         }
         let response = try ControlSocketClient.send(
-            request: ControlRequest(command: command),
+            request: ControlRequest(
+                command: command,
+                releaseStateGeneration: command == .prepareUpdate || command == .resumeUpdate
+                    ? expectedReleaseStateGeneration : nil
+            ),
             to: paths.controlSocket
         )
         return try validatedStatus(response)
@@ -458,7 +504,10 @@ private struct LiveUpdateStatusProvider {
 
     func prepareForUpdate() throws -> CompanionDaemonPreparationResult {
         let response = try ControlSocketClient.send(
-            request: ControlRequest(command: .prepareUpdate),
+            request: ControlRequest(
+                command: .prepareUpdate,
+                releaseStateGeneration: expectedReleaseStateGeneration
+            ),
             to: paths.controlSocket
         )
         if !response.ok,
@@ -493,7 +542,10 @@ private struct LiveUpdateStatusProvider {
               status.persistedState == persistedState,
               status.enabled == (persistedState == .enabled),
               status.activeRunCount >= 0,
-              status.queuedEventCount >= 0 else {
+              status.queuedEventCount >= 0,
+              status.preparedForUpdate == (status.preparedReleaseStateGeneration != nil),
+              !status.preparedForUpdate ||
+                status.preparedReleaseStateGeneration == expectedReleaseStateGeneration else {
             throw CLIError.invalidUpdateState
         }
         return CompanionUpdateStatus(
@@ -567,6 +619,7 @@ private func availableCapacity(at directory: URL) throws -> Int64 {
 }
 
 private func runForegroundUpdate(paths: AgentPaths) throws {
+    let expectedReleaseStateGeneration = try ReleaseStateStore.loadExisting(paths: paths).generation
     let enrollment = try EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
@@ -575,7 +628,8 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
         paths: paths,
         surfaces: enrollment.enabledSurfaces,
         enrollment: enrollment,
-        trustRoot: trustRoot
+        trustRoot: trustRoot,
+        expectedReleaseStateGeneration: expectedReleaseStateGeneration
     )
     let releaseChecker = try ReleaseChecker(
         paths: paths,
@@ -618,7 +672,10 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
             proveDaemonStopped: launchd.proveStopped,
             resumePreparedDaemon: {
                 let response = try ControlSocketClient.send(
-                    request: ControlRequest(command: .resumeUpdate),
+                    request: ControlRequest(
+                        command: .resumeUpdate,
+                        releaseStateGeneration: expectedReleaseStateGeneration
+                    ),
                     to: paths.controlSocket
                 )
                 guard response.ok else { throw CLIError.updateOperationFailed }
@@ -637,6 +694,7 @@ private func runForegroundUpdate(paths: AgentPaths) throws {
 }
 
 private func runStableRecovery(paths: AgentPaths) throws {
+    let expectedReleaseStateGeneration = try ReleaseStateStore.loadExisting(paths: paths).generation
     let enrollment = try EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
@@ -702,7 +760,8 @@ private func runStableRecovery(paths: AgentPaths) throws {
                 paths: paths,
                 surfaces: enrollment.enabledSurfaces,
                 enrollment: enrollment,
-                trustRoot: trustRoot
+                trustRoot: trustRoot,
+                expectedReleaseStateGeneration: expectedReleaseStateGeneration
             )
             let observed = try statusProvider.status(command: .status)
             let status = observed.preparedForUpdate
@@ -729,14 +788,15 @@ private func run() throws {
     }
 
     switch route {
-    case .daemon:
+    case let .daemon(trialGeneration):
         let enrollment = try EnrollmentConfiguration.load(
             from: paths.stateDirectory.appendingPathComponent("enrollment.json")
         )
         try DaemonRuntime(
             inputs: RuntimeInputs(
                 enrollment: enrollment
-            )
+            ),
+            trialGeneration: trialGeneration
         ).run()
         return
     case .foregroundUpdate:

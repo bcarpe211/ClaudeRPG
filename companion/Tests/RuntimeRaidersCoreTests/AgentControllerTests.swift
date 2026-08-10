@@ -174,6 +174,44 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testStatusReportsExactPreparedReleaseGenerationOnlyWhilePrepared() throws {
+        try withHarness { harness in
+            let installed = CompanionReleaseIdentity(
+                releaseSequence: 9,
+                releaseSHA: String(repeating: "a", count: 40),
+                companionVersion: "0.3.9",
+                updateProtocolVersion: 2
+            )
+
+            let ordinary = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil,
+                installedRelease: installed,
+                updateAvailability: nil,
+                preparedReleaseStateGeneration: nil
+            )
+            let prepared = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil,
+                installedRelease: installed,
+                updateAvailability: nil,
+                preparedReleaseStateGeneration: 7
+            )
+
+            XCTAssertFalse(ordinary.preparedForUpdate)
+            XCTAssertNil(ordinary.preparedReleaseStateGeneration)
+            XCTAssertTrue(prepared.preparedForUpdate)
+            XCTAssertEqual(prepared.preparedReleaseStateGeneration, 7)
+            let encoded = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(prepared.description.utf8))
+                    as? [String: Any]
+            )
+            XCTAssertEqual(encoded["preparedReleaseStateGeneration"] as? Int64, 7)
+        }
+    }
+
     func testDoctorReportsOnlySortedCompatibilityReasonCodes() throws {
         try withHarness { harness in
             let source = try harness.makeFile("unsupported-source.jsonl", contents: Data())

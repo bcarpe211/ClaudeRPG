@@ -4,19 +4,17 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ControlProtocolTests: XCTestCase {
-    func testPrepareUpdateUsesLongTimeoutAndCarriesNoInvocationMetadata() throws {
-        let request = ControlRequest.invocation(
-            command: .prepareUpdate,
-            environment: ["OTEL_EXPORTER_OTLP_HEADERS": "DO_NOT_EXPORT_SECRET_VALUE"]
-        )
+    func testPrepareUpdateUsesLongTimeoutAndCarriesExactReleaseGeneration() throws {
+        let request = ControlRequest(command: .prepareUpdate, releaseStateGeneration: 7)
         let frame = try ControlSocketProtocol.encode(request, maximumFrameBytes: 4_096)
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: frame.dropLast()) as? [String: Any]
         )
 
         XCTAssertEqual(ControlSocketClient.timeoutSeconds(for: .prepareUpdate), 30)
-        XCTAssertEqual(Set(object.keys), ["command"])
+        XCTAssertEqual(Set(object.keys), ["command", "release_state_generation"])
         XCTAssertEqual(object["command"] as? String, "prepare_update")
+        XCTAssertEqual(object["release_state_generation"] as? Int64, 7)
         XCTAssertNil(request.claudeOTelEnvironmentPresent)
         XCTAssertEqual(
             try ControlSocketProtocol.decode(frame, maximumFrameBytes: 4_096),
@@ -24,11 +22,8 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
-    func testResumeUpdateIsInternalLongTimeoutMetadataFreeAndNotUserRoutable() throws {
-        let request = ControlRequest.invocation(
-            command: .resumeUpdate,
-            environment: ["OTEL_EXPORTER_OTLP_HEADERS": "DO_NOT_EXPORT_SECRET_VALUE"]
-        )
+    func testResumeUpdateIsInternalGenerationBoundAndNotUserRoutable() throws {
+        let request = ControlRequest(command: .resumeUpdate, releaseStateGeneration: 8)
         let frame = try ControlSocketProtocol.encode(request, maximumFrameBytes: 4_096)
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: frame.dropLast()) as? [String: Any]
@@ -38,8 +33,9 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(ControlSocketClient.timeoutSeconds(for: .resumeUpdate), 30)
-        XCTAssertEqual(Set(object.keys), ["command"])
+        XCTAssertEqual(Set(object.keys), ["command", "release_state_generation"])
         XCTAssertEqual(object["command"] as? String, "resume_update")
+        XCTAssertEqual(object["release_state_generation"] as? Int64, 8)
         XCTAssertNil(request.claudeOTelEnvironmentPresent)
         XCTAssertNil(CompanionCommandRouter.route(
             arguments: ["resume_update"],
@@ -58,19 +54,21 @@ final class ControlProtocolTests: XCTestCase {
             pauseUploader: {},
             pauseHeartbeat: {},
             pauseWatcher: {},
-            resume: {
+            resume: { _ in
                 resumeCalls += 1
                 if resumeCalls == 1 { throw POSIXError(.EIO) }
             }
         )
-        XCTAssertTrue(preparation.prepare().ok)
+        XCTAssertTrue(preparation.prepare(generation: 7).ok)
         XCTAssertTrue(preparation.isPrepared)
+        XCTAssertEqual(preparation.preparedGeneration, 7)
 
-        XCTAssertFalse(preparation.resume().ok)
+        XCTAssertFalse(preparation.resume(generation: 8).ok)
         XCTAssertTrue(preparation.isPrepared)
-        XCTAssertTrue(preparation.resume().ok)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
         XCTAssertFalse(preparation.isPrepared)
-        XCTAssertTrue(preparation.resume().ok)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
+        XCTAssertFalse(preparation.resume(generation: 9).ok)
         XCTAssertEqual(resumeCalls, 2)
     }
 
@@ -84,14 +82,62 @@ final class ControlProtocolTests: XCTestCase {
             pauseUploader: {},
             pauseHeartbeat: {},
             pauseWatcher: {},
-            initiallyPrepared: true,
-            resume: { resumed = true }
+            initiallyPreparedGeneration: 7,
+            resume: { _ in resumed = true }
         )
 
         XCTAssertTrue(preparation.isPrepared)
-        XCTAssertTrue(preparation.resume().ok)
+        XCTAssertEqual(preparation.preparedGeneration, 7)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
         XCTAssertTrue(resumed)
         XCTAssertFalse(preparation.isPrepared)
+    }
+
+    func testAbandonmentResumeRequiresThePreparedGeneration() {
+        let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.abandoned-resume")
+        var resumeCalls = 0
+        let preparation = SerializedUpdatePreparation(
+            workQueue: queue,
+            activeRunCount: { 0 },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            initiallyPreparedGeneration: 7,
+            resume: { generation in
+                XCTAssertEqual(generation, 7)
+                resumeCalls += 1
+            }
+        )
+
+        XCTAssertFalse(preparation.resumeAfterAbandonment(generation: 8).ok)
+        XCTAssertTrue(preparation.isPrepared)
+        XCTAssertTrue(preparation.resumeAfterAbandonment(generation: 7).ok)
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertEqual(resumeCalls, 1)
+    }
+
+    func testIdempotentResumeStillRequiresTheExactCurrentCommittedGeneration() {
+        enum Injected: Error { case staleGeneration }
+        let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.resume-generation")
+        var currentCommittedGeneration: Int64 = 8
+        let preparation = SerializedUpdatePreparation(
+            workQueue: queue,
+            activeRunCount: { 0 },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            initiallyPreparedGeneration: 7,
+            validateResume: { generation in
+                if generation != currentCommittedGeneration { throw Injected.staleGeneration }
+            }
+        )
+
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
+        currentCommittedGeneration = 9
+        XCTAssertFalse(preparation.resume(generation: 8).ok)
     }
 
     func testBroadUpdateLockAloneStartsDaemonNormally() throws {
@@ -197,7 +243,7 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            preparation.prepare(),
+            preparation.prepare(generation: 7),
             ControlResponse(ok: false, message: "active Run prevents update")
         )
         XCTAssertEqual(actions, [])
@@ -251,7 +297,7 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            preparation.prepare(),
+            preparation.prepare(generation: 7),
             ControlResponse(ok: true, message: "prepared for update")
         )
         XCTAssertEqual(actions, ["acceptance", "uploader", "heartbeat", "watcher"])
@@ -260,6 +306,141 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(
             try AgentController.persistedEnabled(paths: paths, surfaces: [.codexCLI]),
             true
+        )
+    }
+
+    func testSerializedPrepareValidatesReleaseBeforeAnyPauseAndStartsOneObserver() {
+        enum Injected: Error { case invalidRelease }
+        let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.prepare-validation")
+        var actions: [String] = []
+        var valid = false
+        let preparation = SerializedUpdatePreparation(
+            workQueue: queue,
+            activeRunCount: { actions.append("runs"); return 0 },
+            validatePreparation: { generation in
+                actions.append("validate-\(generation)")
+                if !valid { throw Injected.invalidRelease }
+            },
+            pauseAcceptance: { actions.append("acceptance") },
+            pauseUploader: { actions.append("uploader") },
+            pauseHeartbeat: { actions.append("heartbeat") },
+            pauseWatcher: { actions.append("watcher") },
+            startAbandonmentObserver: { actions.append("observe-\($0)") }
+        )
+
+        XCTAssertFalse(preparation.prepare(generation: 7).ok)
+        XCTAssertEqual(actions, ["runs", "validate-7"])
+        XCTAssertNil(preparation.preparedGeneration)
+
+        actions.removeAll()
+        valid = true
+        XCTAssertTrue(preparation.prepare(generation: 7).ok)
+        XCTAssertEqual(actions, [
+            "runs", "validate-7", "acceptance", "uploader", "heartbeat", "watcher", "observe-7",
+        ])
+        XCTAssertTrue(preparation.prepare(generation: 7).ok)
+        XCTAssertEqual(actions.filter { $0 == "observe-7" }.count, 1)
+    }
+
+    func testPreparedReleaseValidationRequiresGenerationActiveIdentityTrialAndLease() throws {
+        let fixture = releaseFixture()
+
+        XCTAssertNoThrow(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 6,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.trialIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: ReleaseStateV1(
+                schemaVersion: 1,
+                generation: 7,
+                active: fixture.active,
+                fallback: nil,
+                trial: nil
+            ),
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: false
+        ))
+    }
+
+    func testLeaseAbandonmentDispositionIsGenerationAndReleaseBound() {
+        let fixture = releaseFixture()
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: false,
+                releaseIdentity: fixture.activeIdentity,
+                releaseState: fixture.trialState
+            ),
+            .resumeCommittedActive
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: true,
+                releaseIdentity: fixture.trialIdentity,
+                releaseState: fixture.trialState
+            ),
+            .exitUncommittedTrial
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: true,
+                releaseIdentity: fixture.trialIdentity,
+                releaseState: ReleaseStateV1(
+                    schemaVersion: 1,
+                    generation: 8,
+                    active: fixture.trial,
+                    fallback: fixture.active,
+                    trial: nil
+                )
+            ),
+            .resumeCommittedActive
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: false,
+                releaseIdentity: fixture.activeIdentity,
+                releaseState: ReleaseStateV1(
+                    schemaVersion: 2,
+                    generation: 7,
+                    active: fixture.active,
+                    fallback: nil,
+                    trial: fixture.trial
+                )
+            ),
+            .failClosed
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 8,
+                startedAsTrial: false,
+                releaseIdentity: fixture.activeIdentity,
+                releaseState: fixture.trialState
+            ),
+            .failClosed
         )
     }
 
@@ -1221,8 +1402,9 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
-    func testNonDoctorCommandsRoundTripWithoutDoctorMetadata() throws {
-        for command in ControlCommand.allCases where command != .doctor {
+    func testPublicNonDoctorCommandsRoundTripWithoutInternalMetadata() throws {
+        for command in ControlCommand.allCases where
+            command != .doctor && command != .prepareUpdate && command != .resumeUpdate {
             let request = ControlRequest.invocation(
                 command: command,
                 environment: ["CLAUDE_CODE_ENABLE_TELEMETRY": "DO_NOT_EXPORT_VALUE"]
@@ -1242,7 +1424,7 @@ final class ControlProtocolTests: XCTestCase {
     }
 
     func testProtocolRejectsMalformedExtraAndCommandInconsistentFields() {
-        let invalidFrames = [
+        let invalidFrames: [Data] = [
             Data("status\n".utf8),
             Data(#"{"command":"doctor"}"#.utf8) + Data([0x0A]),
             Data(#"{"command":"status","claude_otel_environment_present":false}"#.utf8)
@@ -1250,6 +1432,14 @@ final class ControlProtocolTests: XCTestCase {
             Data(#"{"command":"doctor","claude_otel_environment_present":"true"}"#.utf8)
                 + Data([0x0A]),
             Data(#"{"command":"doctor","claude_otel_environment_present":false,"extra":true}"#.utf8)
+                + Data([0x0A]),
+            Data(#"{"command":"prepare_update"}"#.utf8) + Data([0x0A]),
+            Data(#"{"command":"resume_update"}"#.utf8) + Data([0x0A]),
+            Data(#"{"command":"prepare_update","release_state_generation":0}"#.utf8)
+                + Data([0x0A]),
+            Data(#"{"command":"resume_update","release_state_generation":9007199254740992}"#.utf8)
+                + Data([0x0A]),
+            Data(#"{"command":"status","release_state_generation":7}"#.utf8)
                 + Data([0x0A]),
             Data(#"{"command":"unknown"}"#.utf8) + Data([0x0A]),
             Data("[]\n".utf8),
@@ -1270,6 +1460,18 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertThrowsError(
             try ControlSocketProtocol.encode(
                 ControlRequest(command: .status, claudeOTelEnvironmentPresent: true),
+                maximumFrameBytes: 4_096
+            )
+        )
+        XCTAssertThrowsError(
+            try ControlSocketProtocol.encode(
+                ControlRequest(command: .prepareUpdate),
+                maximumFrameBytes: 4_096
+            )
+        )
+        XCTAssertThrowsError(
+            try ControlSocketProtocol.encode(
+                ControlRequest(command: .resumeUpdate, releaseStateGeneration: -1),
                 maximumFrameBytes: 4_096
             )
         )
@@ -1422,4 +1624,40 @@ private final class PreparedStartupActionLog: @unchecked Sendable {
     func append(_ value: String) {
         lock.withLock { storage.append(value) }
     }
+}
+
+private struct PreparedReleaseFixture {
+    let active: ReleaseReference
+    let trial: ReleaseReference
+    let activeIdentity: CompanionReleaseIdentity
+    let trialIdentity: CompanionReleaseIdentity
+    let trialState: ReleaseStateV1
+}
+
+private func releaseFixture() -> PreparedReleaseFixture {
+    let active = ReleaseReference(
+        releaseSequence: 9,
+        releaseSHA: String(repeating: "a", count: 40),
+        companionVersion: "0.3.9",
+        updateProtocolVersion: 2
+    )
+    let trial = ReleaseReference(
+        releaseSequence: 10,
+        releaseSHA: String(repeating: "b", count: 40),
+        companionVersion: "0.3.10",
+        updateProtocolVersion: 2
+    )
+    return PreparedReleaseFixture(
+        active: active,
+        trial: trial,
+        activeIdentity: try! active.companionReleaseIdentity(),
+        trialIdentity: try! trial.companionReleaseIdentity(),
+        trialState: ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 7,
+            active: active,
+            fallback: nil,
+            trial: trial
+        )
+    )
 }
