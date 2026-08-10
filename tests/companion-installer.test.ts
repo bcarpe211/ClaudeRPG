@@ -55,6 +55,16 @@ function fakeReleaseLipo(fake: string, log = false): void {
   executable(join(fake, 'lipo'), [
     'if [ "$1" = -create ]; then',
     '  [ "$#" -eq 5 ] && [ "$4" = -output ] || exit 64',
+    '  output_directory=${5%/*}',
+    '  case "${5##*/}" in',
+    '    runtime-raiders-agent)',
+    '      [ "$2" = "$output_directory/raiders-arm64" ] && [ "$3" = "$output_directory/raiders-x86_64" ] || exit 70',
+    '      ;;',
+    '    runtime-raiders-launcher)',
+    '      [ "$2" = "$output_directory/runtime-raiders-launcher-arm64" ] && [ "$3" = "$output_directory/runtime-raiders-launcher-x86_64" ] || exit 71',
+    '      ;;',
+    '    *) exit 72;;',
+    '  esac',
     '  [ "$(cat "$2")" = arm64 ] && [ "$(cat "$3")" = x86_64 ] || exit 65',
     '  printf "arm64,x86_64" > "$5"',
     'elif [ "$1" = -verify_arch ]; then',
@@ -357,6 +367,7 @@ type ReleaseBuilderFixture = { build: string; repository: string; releaseSHA: st
 
 type ReleaseBuilderFixtureOptions = {
   interceptAbsoluteDitto?: boolean;
+  crossWireArm64Slice?: 'agent' | 'launcher';
 };
 
 function disposableReleaseBuilder(
@@ -373,6 +384,18 @@ function disposableReleaseBuilder(
     fixtureBuildContents = fixtureBuildContents.replaceAll(
       '/usr/bin/ditto',
       '"$RUNTIME_RAIDERS_TEST_DITTO"',
+    );
+  }
+  if (options.crossWireArm64Slice === 'agent') {
+    fixtureBuildContents = fixtureBuildContents.replace(
+      'lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"',
+      'lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"',
+    );
+  }
+  if (options.crossWireArm64Slice === 'launcher') {
+    fixtureBuildContents = fixtureBuildContents.replace(
+      'lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"',
+      'lipo -create "$WORK/raiders-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"',
     );
   }
   writeFileSync(fixtureBuild, fixtureBuildContents);
@@ -1551,6 +1574,46 @@ describe('Runtime Raiders release build', () => {
       }
     }
   });
+
+  for (const product of ['agent', 'launcher'] as const) {
+    it(`rejects a cross-wired ${product} product slice even when both architectures match`, () => {
+      // Catches a universal executable assembled from one slice of the other product.
+      const root = mkdtempSync(join(tmpdir(), `runtime-raiders-cross-wired-${product}-`));
+      try {
+        const fake = join(root, 'fakes');
+        mkdirSync(fake, { recursive: true });
+        fakeReleaseSwift(fake);
+        fakeReleaseLipo(fake);
+        executable(join(fake, 'codesign'), ['exit 0']);
+        executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
+        executable(join(fake, 'xcrun'), ['exit 0']);
+        executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+        const fixture = disposableReleaseBuilder(root, { crossWireArm64Slice: product });
+        const output = join(root, 'output');
+
+        const result = invoke(
+          fixture.build,
+          releaseBuildArgs(
+            fixture.releaseSHA,
+            '--output', output,
+            '--scratch-path', join(root, 'scratch'),
+          ),
+          {
+            ...process.env,
+            PATH: fake + ':/usr/bin:/bin',
+            RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+            RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+            RUNTIME_RAIDERS_TEAM_ID: teamId,
+          },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(existsSync(output)).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
 
   it('creates, extracts, and revalidates the notarized ditto archive before emitting a quartet', () => {
     // Catches final packaging that drops macOS signature metadata or trusts only the pre-archive app.
