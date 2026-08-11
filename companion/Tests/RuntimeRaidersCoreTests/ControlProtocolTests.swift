@@ -756,6 +756,7 @@ final class ControlProtocolTests: XCTestCase {
             InstallerMigrationSyncTarget.stagingTree,
             .stagingTombstoneTree,
             .activeJournal,
+            .activeReleaseState,
             .supportDirectory,
         ] {
             XCTAssertEqual(
@@ -962,6 +963,55 @@ final class ControlProtocolTests: XCTestCase {
                 releaseIdentity: identity
             ),
             .installerResume(generation: 1)
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: true
+            ),
+            .installerMigrationDaemon(generation: 1)
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: false
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: true
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: [
+                    "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
+                ],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: true
+            ),
+            .installerCandidateStatus(
+                generation: 1,
+                prepared: true,
+                expectedEnabled: false,
+                expectedQueuedEventCount: 3
+            )
         )
         for badGeneration in ["", "0", "+1", "01", "1.0", "9007199254740992"] {
             XCTAssertNil(

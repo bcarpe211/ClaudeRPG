@@ -489,6 +489,7 @@ public enum InstallerMigrationSyncTarget: String, Sendable {
     case stagingTree = "staging-tree"
     case stagingTombstoneTree = "staging-tombstone-tree"
     case activeJournal = "active-journal"
+    case activeReleaseState = "active-release-state"
     case supportDirectory = "support-directory"
 }
 
@@ -525,6 +526,9 @@ public enum InstallerMigrationDurability {
             let active = support.appendingPathComponent(".migration-v1", isDirectory: true)
             try synchronizeRegularFile(active.appendingPathComponent("journal.json"), maximumBytes: 16_384)
             try synchronizeDirectory(active)
+        case .activeReleaseState:
+            try synchronizeRegularFile(paths.releaseState, maximumBytes: 16_384)
+            try synchronizeDirectory(paths.installationDirectory)
         case .supportDirectory:
             try synchronizeDirectory(support)
         }

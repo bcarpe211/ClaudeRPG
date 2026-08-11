@@ -191,6 +191,7 @@ public final class PreparedDaemonStartupCoordinator: @unchecked Sendable {
     public init(
         paths: AgentPaths,
         trialGeneration: Int64? = nil,
+        installerMigrationGeneration: Int64? = nil,
         releaseIdentity: CompanionReleaseIdentity? = nil,
         loadReleaseState: (@Sendable () throws -> ReleaseStateV1)? = nil,
         deferredStart: @escaping () throws -> Void
@@ -204,7 +205,15 @@ public final class PreparedDaemonStartupCoordinator: @unchecked Sendable {
         let observed = try CompanionPreparedStartupLease.observe(paths: paths)
         observation = observed
         startsPrepared = observed != nil
-        if let releaseIdentity, observed != nil {
+        if let installerMigrationGeneration {
+            guard trialGeneration == nil,
+                  releaseIdentity != nil,
+                  observed != nil,
+                  installerMigrationGeneration == 1 else {
+                throw PreparedDaemonStartupError.invalidReleaseState
+            }
+            initiallyPreparedGeneration = installerMigrationGeneration
+        } else if let releaseIdentity, observed != nil {
             let state = try self.loadReleaseState()
             guard ReleaseStateV1.isValid(state) else {
                 throw PreparedDaemonStartupError.invalidReleaseState

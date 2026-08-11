@@ -850,7 +850,19 @@ struct ProtectedStateSnapshot: Equatable {
               initialDirectory.st_mode & 0o077 == 0 else {
             throw CompanionUpdaterError.unsafeFilesystem
         }
-        for name in try directoryNames(descriptor) where !excludedNames.contains(name) {
+        let maximumDirectoryNames: Int?
+        if let maximumEntryCount {
+            let remaining = maximumEntryCount - entries.count - 1
+            guard remaining >= 0 else { throw CompanionUpdaterError.unsafeFilesystem }
+            maximumDirectoryNames = remaining
+        } else {
+            maximumDirectoryNames = nil
+        }
+        for name in try directoryNames(
+            descriptor,
+            excluding: excludedNames,
+            maximumNameCount: maximumDirectoryNames
+        ) {
             var metadata = stat()
             guard Darwin.fstatat(descriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
                   metadata.st_uid == Darwin.geteuid(),
@@ -958,7 +970,14 @@ struct ProtectedStateSnapshot: Equatable {
         }
     }
 
-    private static func directoryNames(_ descriptor: Int32) throws -> [String] {
+    static func directoryNames(
+        _ descriptor: Int32,
+        excluding excludedNames: Set<String> = [],
+        maximumNameCount: Int?
+    ) throws -> [String] {
+        guard maximumNameCount.map({ $0 >= 0 }) ?? true else {
+            throw CompanionUpdaterError.unsafeFilesystem
+        }
         let duplicate = Darwin.dup(descriptor)
         guard duplicate >= 0, let directory = fdopendir(duplicate) else {
             if duplicate >= 0 { Darwin.close(duplicate) }
@@ -973,7 +992,12 @@ struct ProtectedStateSnapshot: Equatable {
                     String(cString: $0)
                 }
             }
-            if name != "." && name != ".." { names.append(name) }
+            if name != "." && name != ".." && !excludedNames.contains(name) {
+                guard maximumNameCount.map({ names.count < $0 }) ?? true else {
+                    throw CompanionUpdaterError.unsafeFilesystem
+                }
+                names.append(name)
+            }
             errno = 0
         }
         guard errno == 0 else { throw CompanionUpdaterError.unsafeFilesystem }

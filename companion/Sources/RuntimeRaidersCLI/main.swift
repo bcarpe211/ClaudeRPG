@@ -127,7 +127,11 @@ private final class DaemonRuntime: @unchecked Sendable {
         }
     )
 
-    init(inputs: RuntimeInputs, trialGeneration: Int64?) throws {
+    init(
+        inputs: RuntimeInputs,
+        trialGeneration: Int64?,
+        installerMigrationGeneration: Int64? = nil
+    ) throws {
         self.inputs = inputs
         registry = try AdapterRegistry.enabled(surfaces: inputs.surfaces, codexRoot: inputs.codexRoot)
         outbox = try Outbox(directory: paths.outboxDirectory)
@@ -163,6 +167,7 @@ private final class DaemonRuntime: @unchecked Sendable {
         startupCoordinator = try PreparedDaemonStartupCoordinator(
             paths: paths,
             trialGeneration: trialGeneration,
+            installerMigrationGeneration: installerMigrationGeneration,
             releaseIdentity: inputs.releaseIdentity
         ) { [weak self] in
             guard let self else { throw CLIError.invalidRuntimeConfiguration }
@@ -723,6 +728,16 @@ private func run() throws {
                 enrollment: enrollment
             ),
             trialGeneration: trialGeneration
+        ).run()
+        return
+    case let .installerMigrationDaemon(generation):
+        let enrollment = try EnrollmentConfiguration.load(
+            from: paths.stateDirectory.appendingPathComponent("enrollment.json")
+        )
+        try DaemonRuntime(
+            inputs: RuntimeInputs(enrollment: enrollment),
+            trialGeneration: nil,
+            installerMigrationGeneration: generation
         ).run()
         return
     case .foregroundUpdate:

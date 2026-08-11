@@ -85,6 +85,7 @@ MIGRATION_DIRECTORY="$SUPPORT/.migration-v1"
 MIGRATION_STAGING_DIRECTORY="$SUPPORT/.migration-v1.staging"
 MIGRATION_STAGING_TOMBSTONE="$SUPPORT/.migration-v1.staging-tombstone"
 MIGRATION_TOMBSTONE_DIRECTORY="$SUPPORT/.migration-v1.tombstone"
+MIGRATION_ROLLBACK_TOMBSTONE="$SUPPORT/.migration-v1.rollback-tombstone"
 MIGRATION_JOURNAL="$MIGRATION_DIRECTORY/journal.json"
 MIGRATION_HELPER_APP="$MIGRATION_DIRECTORY/Runtime Raiders Agent.app"
 MIGRATION_HELPER_EXECUTABLE="$MIGRATION_HELPER_APP/Contents/MacOS/runtime-raiders-agent"
@@ -130,22 +131,37 @@ done
 
 recovery_pending=0
 staging_pending=0
+cleanup_tombstone_pending=0
+cleanup_tombstone_context=''
+cleanup_tombstone_path=''
+if { [ -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] || [ -L "$MIGRATION_TOMBSTONE_DIRECTORY" ]; } &&
+   { [ -e "$MIGRATION_ROLLBACK_TOMBSTONE" ] || [ -L "$MIGRATION_ROLLBACK_TOMBSTONE" ]; }; then
+  echo "Runtime Raiders refuses conflicting migration cleanup tombstones" >&2
+  exit 1
+fi
 if { [ -e "$MIGRATION_DIRECTORY" ] || [ -L "$MIGRATION_DIRECTORY" ]; } &&
-   { [ -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] || [ -L "$MIGRATION_TOMBSTONE_DIRECTORY" ]; }; then
+   { [ -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] || [ -L "$MIGRATION_TOMBSTONE_DIRECTORY" ] ||
+     [ -e "$MIGRATION_ROLLBACK_TOMBSTONE" ] || [ -L "$MIGRATION_ROLLBACK_TOMBSTONE" ]; }; then
   echo "Runtime Raiders refuses conflicting migration journals" >&2
   exit 1
 fi
-if [ -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] || [ -L "$MIGRATION_TOMBSTONE_DIRECTORY" ]; then
-  [ ! -e "$MIGRATION_DIRECTORY" ] && [ ! -L "$MIGRATION_DIRECTORY" ] &&
-    [ -d "$MIGRATION_TOMBSTONE_DIRECTORY" ] && [ ! -L "$MIGRATION_TOMBSTONE_DIRECTORY" ] &&
-    [ "$(stat -f %u "$MIGRATION_TOMBSTONE_DIRECTORY")" = "$(id -u)" ] &&
-    [ "$(stat -f %Lp "$MIGRATION_TOMBSTONE_DIRECTORY")" = 700 ] || {
+for tombstone_context in accepted rollback; do
+  case "$tombstone_context" in
+    accepted) tombstone_path="$MIGRATION_TOMBSTONE_DIRECTORY" ;;
+    rollback) tombstone_path="$MIGRATION_ROLLBACK_TOMBSTONE" ;;
+  esac
+  if [ -e "$tombstone_path" ] || [ -L "$tombstone_path" ]; then
+    [ -d "$tombstone_path" ] && [ ! -L "$tombstone_path" ] &&
+      [ "$(stat -f %u "$tombstone_path")" = "$(id -u)" ] &&
+      [ "$(stat -f %Lp "$tombstone_path")" = 700 ] || {
       echo "Runtime Raiders refuses an unsafe migration tombstone" >&2
       exit 1
     }
-  mv "$MIGRATION_TOMBSTONE_DIRECTORY" "$MIGRATION_DIRECTORY"
-  /bin/sync
-fi
+    cleanup_tombstone_pending=1
+    cleanup_tombstone_context="$tombstone_context"
+    cleanup_tombstone_path="$tombstone_path"
+  fi
+done
 if [ -e "$MIGRATION_DIRECTORY" ] || [ -L "$MIGRATION_DIRECTORY" ]; then
   [ -d "$MIGRATION_DIRECTORY" ] && [ ! -L "$MIGRATION_DIRECTORY" ] &&
     [ "$(stat -f %u "$MIGRATION_DIRECTORY")" = "$(id -u)" ] &&
@@ -167,7 +183,8 @@ for staging_path in "$MIGRATION_STAGING_DIRECTORY" "$MIGRATION_STAGING_TOMBSTONE
   fi
 done
 
-if [ "$recovery_pending" -eq 0 ] && { [ -e "$RELEASE_STATE" ] || [ -e "$LAUNCHER_DIRECTORY" ] ||
+if [ "$recovery_pending" -eq 0 ] && [ "$cleanup_tombstone_pending" -eq 0 ] &&
+   { [ -e "$RELEASE_STATE" ] || [ -e "$LAUNCHER_DIRECTORY" ] ||
    [ -e "$RELEASES_DIRECTORY" ] || [ -e "$INSTALLATION_DIRECTORY" ]; }; then
   echo "Runtime Raiders is already using versioned releases; run 'raiders update'." >&2
   exit 1
@@ -194,7 +211,14 @@ for path in "$PLIST" "$SHIM" "$COMMAND_LINK_FILE" "$MARKER_FLAG" "$COLLECTOR_STA
 done
 
 migration=0
-if [ "$recovery_pending" -eq 1 ]; then
+if [ "$cleanup_tombstone_pending" -eq 1 ] &&
+   [ "$cleanup_tombstone_context" = accepted ]; then
+  # An accepted journal has already committed the versioned installation. Its
+  # fixed-name tombstone is deletion-only recovery state, so do not try to
+  # classify the now-versioned files as a legacy installation before retiring
+  # the remaining tombstone contents.
+  migration=0
+elif [ "$recovery_pending" -eq 1 ]; then
   [ -d "$LEGACY_APP" ] && [ ! -L "$LEGACY_APP" ] || {
     echo "Runtime Raiders cannot recover without its flat sequence-8 application" >&2
     exit 1
@@ -596,20 +620,126 @@ write_migration_journal() {
   "$helper" __runtime-raiders-installer-sync-migration active-journal || return 1
 }
 
+write_committed_release_state() {
+  temporary="$(mktemp "$INSTALLATION_DIRECTORY/.release-state.XXXXXX")"
+  printf '{"schema_version":1,"generation":1,"active":{"release_sequence":%s,"release_sha":"%s","companion_version":"%s","update_protocol_version":2},"fallback":null,"trial":null}\n' \
+    "$RELEASE_SEQUENCE" "$RELEASE_SHA" "$VERSION" > "$temporary"
+  chmod 600 "$temporary"
+  if [ -e "$RELEASE_STATE" ] || [ -L "$RELEASE_STATE" ]; then
+    private_regular_file "$RELEASE_STATE" 600 16384 && cmp -s "$temporary" "$RELEASE_STATE" || {
+      rm -f "$temporary"
+      return 1
+    }
+    rm -f "$temporary"
+  else
+    mv "$temporary" "$RELEASE_STATE" || return 1
+  fi
+  helper="$(installer_agent_executable)" || return 1
+  "$helper" __runtime-raiders-installer-sync-migration active-release-state || return 1
+  state_written=1
+}
+
+install_launchd_plist() {
+  launch_mode="$1"
+  staged_plist="$(mktemp "$WORK/plist.XXXXXX")"
+  case "$launch_mode" in
+    installer-prepared)
+      launch_arguments="<string>$RELEASE_EXECUTABLE</string><string>daemon</string><string>__runtime-raiders-installer-migration-generation</string><string>1</string>"
+      ;;
+    stable)
+      launch_arguments="<string>$LAUNCHER_EXECUTABLE</string><string>daemon</string>"
+      ;;
+    *) rm -f "$staged_plist"; return 1 ;;
+  esac
+  cat > "$staged_plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>$LABEL</string>
+<key>ProgramArguments</key><array>$launch_arguments</array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>
+</dict></plist>
+EOF
+  chmod 600 "$staged_plist"
+  mv "$staged_plist" "$PLIST" || return 1
+  /bin/sync
+  plist_replaced=1
+}
+
 remove_migration_directory() {
   cleanup_context="$1"
-  case "$cleanup_context" in accepted|rollback) ;; *) return 1 ;; esac
-  [ ! -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] && [ ! -L "$MIGRATION_TOMBSTONE_DIRECTORY" ] || return 1
+  case "$cleanup_context" in
+    accepted) cleanup_target="$MIGRATION_TOMBSTONE_DIRECTORY" ;;
+    rollback) cleanup_target="$MIGRATION_ROLLBACK_TOMBSTONE" ;;
+    *) return 1 ;;
+  esac
+  [ ! -e "$MIGRATION_TOMBSTONE_DIRECTORY" ] &&
+    [ ! -L "$MIGRATION_TOMBSTONE_DIRECTORY" ] &&
+    [ ! -e "$MIGRATION_ROLLBACK_TOMBSTONE" ] &&
+    [ ! -L "$MIGRATION_ROLLBACK_TOMBSTONE" ] || return 1
   helper="$(installer_agent_executable)" || return 1
   durable_checkpoint "$cleanup_context-cleanup-before-rename"
-  mv "$MIGRATION_DIRECTORY" "$MIGRATION_TOMBSTONE_DIRECTORY" || return 1
+  mv "$MIGRATION_DIRECTORY" "$cleanup_target" || return 1
   if [ "$helper" = "$MIGRATION_HELPER_EXECUTABLE" ]; then
-    helper="$MIGRATION_TOMBSTONE_DIRECTORY/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
+    helper="$cleanup_target/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
   fi
   "$helper" __runtime-raiders-installer-sync-migration support-directory || return 1
   durable_checkpoint "$cleanup_context-cleanup-after-rename"
   durable_checkpoint "$cleanup_context-cleanup-before-delete"
-  safe_remove_created "$MIGRATION_TOMBSTONE_DIRECTORY" || return 1
+  retire_migration_tombstone "$cleanup_context" "$cleanup_target"
+}
+
+bounded_migration_tombstone() {
+  tombstone_root="$1"
+  [ -d "$tombstone_root" ] && [ ! -L "$tombstone_root" ] &&
+    [ "$(stat -f %u "$tombstone_root")" = "$(id -u)" ] &&
+    [ "$(stat -f %Lp "$tombstone_root")" = 700 ] || return 1
+  tombstone_count="$(find "$tombstone_root" -xdev -print | wc -l | tr -d ' ')" || return 1
+  case "$tombstone_count" in *[!0-9]*|'') return 1 ;; esac
+  [ "$tombstone_count" -le 16384 ] || return 1
+  [ -z "$(find "$tombstone_root" -xdev ! -type d ! -type f -print -quit)" ] || return 1
+  tombstone_bytes="$(find "$tombstone_root" -xdev -type f -exec stat -f %z {} \; | awk \
+    'BEGIN { total = 0 } { total += $1; if (total > 536870912) exit 1 } END { if (total <= 536870912) print total }')" || return 1
+  [ -n "$tombstone_bytes" ] || return 1
+  find "$tombstone_root" -xdev -depth -mindepth 1 -print > "$WORK/migration-tombstone-entries"
+  while IFS= read -r tombstone_entry; do
+    [ ! -L "$tombstone_entry" ] &&
+      [ "$(stat -f %u "$tombstone_entry")" = "$(id -u)" ] || return 1
+    tombstone_mode="$(stat -f %Lp "$tombstone_entry")" || return 1
+    case "$tombstone_mode" in [0-7][0-7][0-7]) ;; *) return 1 ;; esac
+    case "$tombstone_mode" in ?[2367]?|??[2367]) return 1 ;; esac
+    if [ -f "$tombstone_entry" ]; then
+      [ "$(stat -f %l "$tombstone_entry")" = 1 ] || return 1
+    elif [ ! -d "$tombstone_entry" ]; then
+      return 1
+    fi
+  done < "$WORK/migration-tombstone-entries"
+}
+
+retire_migration_tombstone() {
+  cleanup_context="$1"
+  cleanup_target="$2"
+  case "$cleanup_context:$cleanup_target" in
+    "accepted:$MIGRATION_TOMBSTONE_DIRECTORY"|"rollback:$MIGRATION_ROLLBACK_TOMBSTONE") ;;
+    *) return 1 ;;
+  esac
+  bounded_migration_tombstone "$cleanup_target" || return 1
+  while IFS= read -r tombstone_entry; do
+    [ ! -L "$tombstone_entry" ] &&
+      [ "$(stat -f %u "$tombstone_entry")" = "$(id -u)" ] || return 1
+    tombstone_mode="$(stat -f %Lp "$tombstone_entry")" || return 1
+    case "$tombstone_mode" in ?[2367]?|??[2367]) return 1 ;; esac
+    if [ -f "$tombstone_entry" ]; then
+      [ "$(stat -f %l "$tombstone_entry")" = 1 ] || return 1
+      rm -f "$tombstone_entry" || return 1
+    elif [ -d "$tombstone_entry" ]; then
+      rmdir "$tombstone_entry" || return 1
+    else
+      return 1
+    fi
+    durable_checkpoint "$cleanup_context-cleanup-during-delete"
+  done < "$WORK/migration-tombstone-entries"
+  rmdir "$cleanup_target" || return 1
   /bin/sync
 }
 
@@ -669,13 +799,15 @@ recover_interrupted_migration() {
     return 2
   fi
   if [ "$journal_phase" = committed-pending-resume ]; then
-    if "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
-         candidate-prepared 1 "$journal_prior_intent" "$journal_queue" >/dev/null 2>&1; then
-      :
-    else
-      "$RELEASE_EXECUTABLE" __runtime-raiders-installer-status \
-        candidate-resumed 1 "$journal_prior_intent" "$journal_queue" >/dev/null || return 1
-    fi
+    capture_protected_state "$RELEASE_EXECUTABLE" "$WORK/recovered-protected" || return 1
+    cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
+    start_lease "$MIGRATION_HELPER_EXECUTABLE" || return 1
+    launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+    job_absent || return 1
+    write_committed_release_state || return 1
+    install_launchd_plist stable || return 1
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || return 1
+    wait_for_candidate_status candidate-prepared "$journal_prior_intent" "$journal_queue" || return 1
     capture_protected_state "$RELEASE_EXECUTABLE" "$WORK/recovered-protected" || return 1
     cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
     "$RELEASE_EXECUTABLE" __runtime-raiders-installer-resume 1 >/dev/null || return 1
@@ -683,6 +815,7 @@ recover_interrupted_migration() {
     capture_protected_state "$RELEASE_EXECUTABLE" "$WORK/recovered-protected" || return 1
     cmp -s "$MIGRATION_DIRECTORY/protected-before" "$WORK/recovered-protected" || return 1
     write_migration_journal accepted || return 1
+    close_lease
     remove_migration_directory accepted || return 1
     echo "Runtime Raiders installed. Run 'raiders status' to check it."
     return 2
@@ -833,6 +966,20 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
+
+if [ "$cleanup_tombstone_pending" -eq 1 ]; then
+  retire_migration_tombstone "$cleanup_tombstone_context" "$cleanup_tombstone_path" || {
+    echo "Runtime Raiders refuses an unsafe migration tombstone" >&2
+    exit 1
+  }
+  cleanup_tombstone_pending=0
+  if [ "$cleanup_tombstone_context" = accepted ]; then
+    echo "Runtime Raiders installed. Run 'raiders status' to check it."
+    trap - EXIT HUP INT TERM
+    rm -rf "$WORK"
+    exit 0
+  fi
+fi
 
 if [ "$recovery_pending" -eq 1 ]; then
   if recover_interrupted_migration; then recovery_result=0
@@ -1072,26 +1219,14 @@ mv "$CANDIDATE_AGENT" "$RELEASE_APP"; release_placed=1
 if [ "$migration" -eq 1 ]; then write_migration_journal release-placement; durable_checkpoint release-placement; fi
 failure_checkpoint release-placement
 
-staged_release_state="$(mktemp "$INSTALLATION_DIRECTORY/.release-state.XXXXXX")"
-printf '{"schema_version":1,"generation":1,"active":{"release_sequence":%s,"release_sha":"%s","companion_version":"%s","update_protocol_version":2},"fallback":null,"trial":null}\n' \
-  "$RELEASE_SEQUENCE" "$RELEASE_SHA" "$VERSION" > "$staged_release_state"
-chmod 600 "$staged_release_state"
-mv "$staged_release_state" "$RELEASE_STATE"; state_written=1
-if [ "$migration" -eq 1 ]; then write_migration_journal state-write; durable_checkpoint state-write; fi
-failure_checkpoint state-write
-
-staged_plist="$(mktemp "$WORK/plist.XXXXXX")"
-cat > "$staged_plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>$LABEL</string>
-<key>ProgramArguments</key><array><string>$LAUNCHER_EXECUTABLE</string><string>daemon</string></array>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>
-</dict></plist>
-EOF
-chmod 600 "$staged_plist"
-mv "$staged_plist" "$PLIST"; plist_replaced=1
+if [ "$migration" -eq 1 ]; then
+  install_launchd_plist installer-prepared
+else
+  write_committed_release_state
+  durable_checkpoint state-write
+  failure_checkpoint state-write
+  install_launchd_plist stable
+fi
 if [ "$migration" -eq 1 ]; then write_migration_journal plist-replacement; durable_checkpoint plist-replacement; fi
 failure_checkpoint plist-replacement
 
@@ -1182,6 +1317,11 @@ if [ "$migration" -eq 1 ]; then
   write_migration_journal committed-pending-resume
   transaction_committed=1
   durable_checkpoint after-commit-marker
+  write_committed_release_state
+  durable_checkpoint state-write
+  failure_checkpoint state-write
+  install_launchd_plist stable
+  durable_checkpoint stable-plist
 fi
 "$RELEASE_EXECUTABLE" __runtime-raiders-installer-resume 1 >/dev/null
 if [ "$migration" -eq 1 ]; then durable_checkpoint after-candidate-resume; fi

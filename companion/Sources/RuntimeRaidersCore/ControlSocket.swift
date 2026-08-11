@@ -17,6 +17,7 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
 
 public enum CompanionCommandRoute: Equatable, Sendable {
     case daemon(trialGeneration: Int64?)
+    case installerMigrationDaemon(generation: Int64)
     case control(ControlCommand)
     case foregroundUpdate
     case selfCheck
@@ -55,14 +56,30 @@ public enum CompanionCommandRouter {
             return .foregroundUpdate
         case ["__self-check"]:
             return .selfCheck
+        case let values where values.count == 3 &&
+            values[0] == "daemon" &&
+            values[1] == "__runtime-raiders-installer-migration-generation":
+            guard let identity = try? CompanionReleaseIdentity.load(from: .main),
+                  releaseStatePathIsAbsent(paths.releaseState) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
+            return installerRoute(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: leaseHeld
+            )
         case let values where installerStandaloneCommand(values):
             guard let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
             return installerRoute(
                 arguments: arguments,
                 executableURL: executableURL,
                 paths: paths,
                 releaseState: try? ReleaseStateStore.loadExisting(paths: paths),
-                releaseIdentity: identity
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: leaseHeld
             )
         case let values where values.count == 2 &&
             values[0] == "__runtime-raiders-installer-resume":
@@ -150,11 +167,15 @@ public enum CompanionCommandRouter {
         executableURL: URL,
         paths: AgentPaths,
         releaseState: ReleaseStateV1?,
-        releaseIdentity: CompanionReleaseIdentity
+        releaseIdentity: CompanionReleaseIdentity,
+        preparedStartupLeaseHeld: Bool = false
     ) -> CompanionCommandRoute? {
         guard releaseIdentity.updateProtocolVersion == 2,
               directAgentExecutable(executableURL, paths: paths) else { return nil }
         switch arguments {
+        case ["daemon", "__runtime-raiders-installer-migration-generation", "1"]:
+            guard releaseState == nil, preparedStartupLeaseHeld else { return nil }
+            return .installerMigrationDaemon(generation: 1)
         case ["__runtime-raiders-installer-lease"]:
             return .installerLease
         case ["__runtime-raiders-legacy-prepare"]:
@@ -182,8 +203,19 @@ public enum CompanionCommandRouter {
             ["candidate-prepared", "candidate-resumed"].contains(values[1]):
             guard let generation = canonicalGeneration(values[2]),
                   let enabled = canonicalEnabled(values[3]),
-                  let queuedEventCount = canonicalCount(values[4]),
-                  let state = releaseState,
+                  let queuedEventCount = canonicalCount(values[4]) else { return nil }
+            if values[1] == "candidate-prepared",
+               generation == 1,
+               releaseState == nil,
+               preparedStartupLeaseHeld {
+                return .installerCandidateStatus(
+                    generation: generation,
+                    prepared: true,
+                    expectedEnabled: enabled,
+                    expectedQueuedEventCount: queuedEventCount
+                )
+            }
+            guard let state = releaseState,
                   ReleaseStateV1.isValid(state),
                   state.generation == generation,
                   state.trial == nil,
@@ -264,6 +296,12 @@ public enum CompanionCommandRouter {
             "__runtime-raiders-installer-sync-migration",
             "__runtime-raiders-legacy-resume",
         ].contains(command)
+    }
+
+    private static func releaseStatePathIsAbsent(_ url: URL) -> Bool {
+        var metadata = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &metadata) }
+        return result != 0 && errno == ENOENT
     }
 
     private static func directAgentExecutable(_ executable: URL, paths: AgentPaths) -> Bool {

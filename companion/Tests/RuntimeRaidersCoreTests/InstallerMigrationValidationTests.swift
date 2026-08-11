@@ -474,6 +474,32 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testProtectedSnapshotBoundsDirectoryEnumerationBeforeSortingHighFanoutNames() throws {
+        try withTemporaryHome { _, paths in
+            for index in 0..<32 {
+                let file = paths.outboxDirectory.appendingPathComponent(
+                    String(format: "event-%03d.json", index)
+                )
+                try Data("event".utf8).write(to: file)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: file.path
+                )
+            }
+            let descriptor = Darwin.open(
+                paths.outboxDirectory.path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            XCTAssertGreaterThanOrEqual(descriptor, 0)
+            defer { if descriptor >= 0 { Darwin.close(descriptor) } }
+
+            XCTAssertThrowsError(try ProtectedStateSnapshot.directoryNames(
+                descriptor,
+                maximumNameCount: 8
+            ))
+        }
+    }
+
     func testMigrationDurabilitySynchronizesOnlyFixedValidatedTargets() throws {
         try withTemporaryHome { _, paths in
             let staging = paths.supportDirectory.appendingPathComponent(".migration-v1.staging")
@@ -505,6 +531,23 @@ final class InstallerMigrationValidationTests: XCTestCase {
             XCTAssertNoThrow(try InstallerMigrationDurability.synchronize(
                 paths: paths,
                 target: .activeJournal
+            ))
+            try FileManager.default.createDirectory(
+                at: paths.installationDirectory,
+                withIntermediateDirectories: false
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: paths.installationDirectory.path
+            )
+            try Data("{}\n".utf8).write(to: paths.releaseState)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: paths.releaseState.path
+            )
+            XCTAssertNoThrow(try InstallerMigrationDurability.synchronize(
+                paths: paths,
+                target: .activeReleaseState
             ))
             XCTAssertNoThrow(try InstallerMigrationDurability.synchronize(
                 paths: paths,
