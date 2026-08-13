@@ -12,6 +12,10 @@ let package = Package(
             name: "runtime-raiders-release-validator",
             targets: ["RuntimeRaidersReleaseValidator"]
         ),
+        .executable(
+            name: "runtime-raiders-launcher",
+            targets: ["RuntimeRaidersLauncher"]
+        ),
     ],
     targets: [
         .target(name: "RuntimeRaidersCore"),
@@ -21,6 +25,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "RuntimeRaidersReleaseValidator",
+            dependencies: ["RuntimeRaidersCore"]
+        ),
+        .executableTarget(
+            name: "RuntimeRaidersLauncher",
             dependencies: ["RuntimeRaidersCore"]
         ),
         .testTarget(

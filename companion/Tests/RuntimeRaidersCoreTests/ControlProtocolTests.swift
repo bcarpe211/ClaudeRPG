@@ -4,19 +4,17 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ControlProtocolTests: XCTestCase {
-    func testPrepareUpdateUsesLongTimeoutAndCarriesNoInvocationMetadata() throws {
-        let request = ControlRequest.invocation(
-            command: .prepareUpdate,
-            environment: ["OTEL_EXPORTER_OTLP_HEADERS": "DO_NOT_EXPORT_SECRET_VALUE"]
-        )
+    func testPrepareUpdateUsesLongTimeoutAndCarriesExactReleaseGeneration() throws {
+        let request = ControlRequest(command: .prepareUpdate, releaseStateGeneration: 7)
         let frame = try ControlSocketProtocol.encode(request, maximumFrameBytes: 4_096)
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: frame.dropLast()) as? [String: Any]
         )
 
         XCTAssertEqual(ControlSocketClient.timeoutSeconds(for: .prepareUpdate), 30)
-        XCTAssertEqual(Set(object.keys), ["command"])
+        XCTAssertEqual(Set(object.keys), ["command", "release_state_generation"])
         XCTAssertEqual(object["command"] as? String, "prepare_update")
+        XCTAssertEqual(object["release_state_generation"] as? Int64, 7)
         XCTAssertNil(request.claudeOTelEnvironmentPresent)
         XCTAssertEqual(
             try ControlSocketProtocol.decode(frame, maximumFrameBytes: 4_096),
@@ -24,11 +22,8 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
-    func testResumeUpdateIsInternalLongTimeoutMetadataFreeAndNotUserRoutable() throws {
-        let request = ControlRequest.invocation(
-            command: .resumeUpdate,
-            environment: ["OTEL_EXPORTER_OTLP_HEADERS": "DO_NOT_EXPORT_SECRET_VALUE"]
-        )
+    func testResumeUpdateIsInternalGenerationBoundAndNotUserRoutable() throws {
+        let request = ControlRequest(command: .resumeUpdate, releaseStateGeneration: 8)
         let frame = try ControlSocketProtocol.encode(request, maximumFrameBytes: 4_096)
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: frame.dropLast()) as? [String: Any]
@@ -38,8 +33,9 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(ControlSocketClient.timeoutSeconds(for: .resumeUpdate), 30)
-        XCTAssertEqual(Set(object.keys), ["command"])
+        XCTAssertEqual(Set(object.keys), ["command", "release_state_generation"])
         XCTAssertEqual(object["command"] as? String, "resume_update")
+        XCTAssertEqual(object["release_state_generation"] as? Int64, 8)
         XCTAssertNil(request.claudeOTelEnvironmentPresent)
         XCTAssertNil(CompanionCommandRouter.route(
             arguments: ["resume_update"],
@@ -58,19 +54,21 @@ final class ControlProtocolTests: XCTestCase {
             pauseUploader: {},
             pauseHeartbeat: {},
             pauseWatcher: {},
-            resume: {
+            resume: { _ in
                 resumeCalls += 1
                 if resumeCalls == 1 { throw POSIXError(.EIO) }
             }
         )
-        XCTAssertTrue(preparation.prepare().ok)
+        XCTAssertTrue(preparation.prepare(generation: 7).ok)
         XCTAssertTrue(preparation.isPrepared)
+        XCTAssertEqual(preparation.preparedGeneration, 7)
 
-        XCTAssertFalse(preparation.resume().ok)
+        XCTAssertFalse(preparation.resume(generation: 8).ok)
         XCTAssertTrue(preparation.isPrepared)
-        XCTAssertTrue(preparation.resume().ok)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
         XCTAssertFalse(preparation.isPrepared)
-        XCTAssertTrue(preparation.resume().ok)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
+        XCTAssertFalse(preparation.resume(generation: 9).ok)
         XCTAssertEqual(resumeCalls, 2)
     }
 
@@ -84,14 +82,62 @@ final class ControlProtocolTests: XCTestCase {
             pauseUploader: {},
             pauseHeartbeat: {},
             pauseWatcher: {},
-            initiallyPrepared: true,
-            resume: { resumed = true }
+            initiallyPreparedGeneration: 7,
+            resume: { _ in resumed = true }
         )
 
         XCTAssertTrue(preparation.isPrepared)
-        XCTAssertTrue(preparation.resume().ok)
+        XCTAssertEqual(preparation.preparedGeneration, 7)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
         XCTAssertTrue(resumed)
         XCTAssertFalse(preparation.isPrepared)
+    }
+
+    func testAbandonmentResumeRequiresThePreparedGeneration() {
+        let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.abandoned-resume")
+        var resumeCalls = 0
+        let preparation = SerializedUpdatePreparation(
+            workQueue: queue,
+            activeRunCount: { 0 },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            initiallyPreparedGeneration: 7,
+            resume: { generation in
+                XCTAssertEqual(generation, 7)
+                resumeCalls += 1
+            }
+        )
+
+        XCTAssertFalse(preparation.resumeAfterAbandonment(generation: 8).ok)
+        XCTAssertTrue(preparation.isPrepared)
+        XCTAssertTrue(preparation.resumeAfterAbandonment(generation: 7).ok)
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertEqual(resumeCalls, 1)
+    }
+
+    func testIdempotentResumeStillRequiresTheExactCurrentCommittedGeneration() {
+        enum Injected: Error { case staleGeneration }
+        let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.resume-generation")
+        var currentCommittedGeneration: Int64 = 8
+        let preparation = SerializedUpdatePreparation(
+            workQueue: queue,
+            activeRunCount: { 0 },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            initiallyPreparedGeneration: 7,
+            validateResume: { generation in
+                if generation != currentCommittedGeneration { throw Injected.staleGeneration }
+            }
+        )
+
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
+        XCTAssertTrue(preparation.resume(generation: 8).ok)
+        currentCommittedGeneration = 9
+        XCTAssertFalse(preparation.resume(generation: 8).ok)
     }
 
     func testBroadUpdateLockAloneStartsDaemonNormally() throws {
@@ -197,7 +243,7 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            preparation.prepare(),
+            preparation.prepare(generation: 7),
             ControlResponse(ok: false, message: "active Run prevents update")
         )
         XCTAssertEqual(actions, [])
@@ -251,7 +297,7 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            preparation.prepare(),
+            preparation.prepare(generation: 7),
             ControlResponse(ok: true, message: "prepared for update")
         )
         XCTAssertEqual(actions, ["acceptance", "uploader", "heartbeat", "watcher"])
@@ -261,6 +307,334 @@ final class ControlProtocolTests: XCTestCase {
             try AgentController.persistedEnabled(paths: paths, surfaces: [.codexCLI]),
             true
         )
+    }
+
+    func testSerializedPrepareValidatesReleaseBeforeAnyPauseAndStartsOneObserver() {
+        enum Injected: Error { case invalidRelease }
+        let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.prepare-validation")
+        var actions: [String] = []
+        var valid = false
+        let preparation = SerializedUpdatePreparation(
+            workQueue: queue,
+            activeRunCount: { actions.append("runs"); return 0 },
+            validatePreparation: { generation in
+                actions.append("validate-\(generation)")
+                if !valid { throw Injected.invalidRelease }
+            },
+            pauseAcceptance: { actions.append("acceptance") },
+            pauseUploader: { actions.append("uploader") },
+            pauseHeartbeat: { actions.append("heartbeat") },
+            pauseWatcher: { actions.append("watcher") },
+            startAbandonmentObserver: { actions.append("observe-\($0)") }
+        )
+
+        XCTAssertFalse(preparation.prepare(generation: 7).ok)
+        XCTAssertEqual(actions, ["runs", "validate-7"])
+        XCTAssertNil(preparation.preparedGeneration)
+
+        actions.removeAll()
+        valid = true
+        XCTAssertTrue(preparation.prepare(generation: 7).ok)
+        XCTAssertEqual(actions, [
+            "runs", "validate-7", "acceptance", "uploader", "heartbeat", "watcher", "observe-7",
+        ])
+        XCTAssertTrue(preparation.prepare(generation: 7).ok)
+        XCTAssertEqual(actions.filter { $0 == "observe-7" }.count, 1)
+    }
+
+    func testPreparedReleaseValidationRequiresGenerationActiveIdentityTrialAndLease() throws {
+        let fixture = releaseFixture()
+
+        XCTAssertNoThrow(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 6,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.trialIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: ReleaseStateV1(
+                schemaVersion: 1,
+                generation: 7,
+                active: fixture.active,
+                fallback: nil,
+                trial: nil
+            ),
+            leaseHeld: true
+        ))
+        XCTAssertThrowsError(try PreparedDaemonStartupCoordinator.validatePreparation(
+            generation: 7,
+            releaseIdentity: fixture.activeIdentity,
+            releaseState: fixture.trialState,
+            leaseHeld: false
+        ))
+    }
+
+    func testLeaseAbandonmentDispositionIsGenerationAndReleaseBound() {
+        let fixture = releaseFixture()
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: false,
+                releaseIdentity: fixture.activeIdentity,
+                releaseState: fixture.trialState
+            ),
+            .resumeCommittedActive
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: true,
+                releaseIdentity: fixture.trialIdentity,
+                releaseState: fixture.trialState
+            ),
+            .exitUncommittedTrial
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: true,
+                releaseIdentity: fixture.trialIdentity,
+                releaseState: ReleaseStateV1(
+                    schemaVersion: 1,
+                    generation: 8,
+                    active: fixture.trial,
+                    fallback: fixture.active,
+                    trial: nil
+                )
+            ),
+            .resumeCommittedActive
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 7,
+                startedAsTrial: false,
+                releaseIdentity: fixture.activeIdentity,
+                releaseState: ReleaseStateV1(
+                    schemaVersion: 2,
+                    generation: 7,
+                    active: fixture.active,
+                    fallback: nil,
+                    trial: fixture.trial
+                )
+            ),
+            .failClosed
+        )
+        XCTAssertEqual(
+            PreparedDaemonStartupCoordinator.disposition(
+                preparedGeneration: 8,
+                startedAsTrial: false,
+                releaseIdentity: fixture.activeIdentity,
+                releaseState: fixture.trialState
+            ),
+            .failClosed
+        )
+    }
+
+    func testLockDrivenAbandonmentResumesCommittedActive() throws {
+        let fixture = releaseFixture()
+        let started = expectation(description: "committed active resumes")
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.activeIdentity,
+            trialGeneration: nil,
+            deferredStart: { started.fulfill() }
+        )
+        defer { harness.cleanup() }
+        let preparation = harness.preparation()
+        let stopped = LockedFlag()
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            exitUncommittedTrial: { stopped.set() },
+            failClosed: { stopped.set() }
+        )
+
+        orchestrator.start(generation: 7)
+        harness.lease.unlock()
+        wait(for: [started], timeout: 2)
+
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertFalse(stopped.value)
+    }
+
+    func testLockDrivenAbandonmentExitsUncommittedTrialWithoutDeferredStart() throws {
+        let fixture = releaseFixture()
+        let exited = expectation(description: "uncommitted trial exits")
+        let deferredStarts = LockedCounter()
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.trialIdentity,
+            trialGeneration: 7,
+            deferredStart: { deferredStarts.increment() }
+        )
+        defer { harness.cleanup() }
+        let preparation = harness.preparation()
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            exitUncommittedTrial: { exited.fulfill() },
+            failClosed: { XCTFail("unexpected fail-closed") }
+        )
+
+        orchestrator.start(generation: 7)
+        harness.lease.unlock()
+        wait(for: [exited], timeout: 2)
+
+        XCTAssertEqual(deferredStarts.value, 0)
+        XCTAssertTrue(preparation.isPrepared)
+    }
+
+    func testLockDrivenAbandonmentResumesCommittedFormerTrial() throws {
+        let fixture = releaseFixture()
+        let started = expectation(description: "committed former trial resumes")
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.trialIdentity,
+            trialGeneration: 7,
+            deferredStart: { started.fulfill() }
+        )
+        defer { harness.cleanup() }
+        let preparation = harness.preparation()
+        let stopped = LockedFlag()
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            exitUncommittedTrial: { stopped.set() },
+            failClosed: { stopped.set() }
+        )
+        harness.releaseState.value = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 8,
+            active: fixture.trial,
+            fallback: fixture.active,
+            trial: nil
+        )
+
+        orchestrator.start(generation: 7)
+        harness.lease.unlock()
+        wait(for: [started], timeout: 2)
+
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertFalse(stopped.value)
+    }
+
+    func testLockDrivenMalformedAndContradictoryAbandonmentStopFailClosed() throws {
+        let fixture = releaseFixture()
+        let otherTrial = ReleaseReference(
+            releaseSequence: 11,
+            releaseSHA: String(repeating: "c", count: 40),
+            companionVersion: "0.3.11",
+            updateProtocolVersion: 2
+        )
+        let unsafeStates = [
+            ReleaseStateV1(
+                schemaVersion: 2,
+                generation: 7,
+                active: fixture.active,
+                fallback: nil,
+                trial: fixture.trial
+            ),
+            ReleaseStateV1(
+                schemaVersion: 1,
+                generation: 8,
+                active: fixture.active,
+                fallback: nil,
+                trial: otherTrial
+            ),
+        ]
+
+        for (index, unsafeState) in unsafeStates.enumerated() {
+            let stopped = expectation(description: "unsafe state \(index) stops")
+            let deferredStarts = LockedCounter()
+            let harness = try ReleaseAbandonmentHarness(
+                releaseState: fixture.trialState,
+                releaseIdentity: fixture.trialIdentity,
+                trialGeneration: 7,
+                deferredStart: { deferredStarts.increment() }
+            )
+            let preparation = harness.preparation()
+            let orchestrator = harness.orchestrator(
+                preparation: preparation,
+                exitUncommittedTrial: { XCTFail("unsafe state must fail closed") },
+                failClosed: { stopped.fulfill() }
+            )
+            harness.releaseState.value = unsafeState
+
+            orchestrator.start(generation: 7)
+            harness.lease.unlock()
+            wait(for: [stopped], timeout: 2)
+
+            XCTAssertEqual(deferredStarts.value, 0)
+            XCTAssertTrue(preparation.isPrepared)
+            harness.cleanup()
+        }
+    }
+
+    func testExplicitResumeRacingLeaseReleaseStartsOnceWithoutStaleStop() throws {
+        let fixture = releaseFixture()
+        let deferredStartEntered = DispatchSemaphore(value: 0)
+        let allowDeferredStart = DispatchSemaphore(value: 0)
+        let abandonmentAttempted = DispatchSemaphore(value: 0)
+        let explicitResumeFinished = expectation(description: "explicit resume finishes")
+        let deferredStarts = LockedCounter()
+        let stopped = LockedFlag()
+        let harness = try ReleaseAbandonmentHarness(
+            releaseState: fixture.trialState,
+            releaseIdentity: fixture.trialIdentity,
+            trialGeneration: 7,
+            deferredStart: {
+                deferredStarts.increment()
+                deferredStartEntered.signal()
+                _ = allowDeferredStart.wait(timeout: .now() + 2)
+            }
+        )
+        defer { harness.cleanup() }
+        harness.releaseState.value = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 8,
+            active: fixture.trial,
+            fallback: fixture.active,
+            trial: nil
+        )
+        let preparation = harness.preparation(validateResume: { generation in
+            guard generation == 8 else { throw PreparedDaemonStartupError.invalidReleaseState }
+        })
+        let orchestrator = harness.orchestrator(
+            preparation: preparation,
+            resumeAfterAbandonment: { generation in
+                abandonmentAttempted.signal()
+                return preparation.resumeAfterAbandonment(generation: generation)
+            },
+            exitUncommittedTrial: { stopped.set() },
+            failClosed: { stopped.set() }
+        )
+        orchestrator.start(generation: 7)
+
+        DispatchQueue(label: "com.redlattice.runtime-raiders.tests.explicit-resume").async {
+            XCTAssertTrue(preparation.resume(generation: 8).ok)
+            explicitResumeFinished.fulfill()
+        }
+        XCTAssertEqual(deferredStartEntered.wait(timeout: .now() + 2), .success)
+        harness.lease.unlock()
+        XCTAssertEqual(abandonmentAttempted.wait(timeout: .now() + 2), .success)
+        allowDeferredStart.signal()
+        wait(for: [explicitResumeFinished], timeout: 2)
+        harness.queue.sync {}
+
+        XCTAssertEqual(deferredStarts.value, 1)
+        XCTAssertFalse(preparation.isPrepared)
+        XCTAssertFalse(stopped.value)
     }
 
     func testCommandRoutingKeepsUpdateLocalAndRejectsInternalControlName() {
@@ -307,31 +681,535 @@ final class ControlProtocolTests: XCTestCase {
                 paths: paths
             )
         )
+        for privateCommand in [
+            "__runtime-raiders-installer-lease",
+            "__runtime-raiders-legacy-prepare",
+            "__runtime-raiders-installer-resume",
+            "__runtime-raiders-installer-sync-migration",
+        ] {
+            XCTAssertNil(
+                LauncherInvocation(arguments: [privateCommand]),
+                "stable launcher accepted installer-private route \(privateCommand)"
+            )
+        }
+    }
+
+    func testInstallerPrivateRoutesRequireProtocolTwoDirectAgentAndExactActivePath() throws {
+        let paths = AgentPaths(
+            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-installer-routing")
+        )
+        let active = ReleaseReference(
+            releaseSequence: 9,
+            releaseSHA: String(repeating: "a", count: 40),
+            companionVersion: "0.3.0",
+            updateProtocolVersion: 2
+        )
+        let state = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 1,
+            active: active,
+            fallback: nil,
+            trial: nil
+        )
+        let identity = try active.companionReleaseIdentity()
+        let staged = URL(fileURLWithPath: "/private/tmp/staged/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent")
+        let activeExecutable = try paths.executable(for: active)
+        let wrongExecutable = URL(fileURLWithPath: "/private/tmp/not-the-agent")
+        let protocolOne = CompanionReleaseIdentity(
+            releaseSequence: 8,
+            releaseSHA: String(repeating: "b", count: 40),
+            companionVersion: "0.2.6",
+            updateProtocolVersion: 1
+        )
+
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-lease"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerLease
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-legacy-prepare"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .legacyPrepare
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-validate-legacy"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerValidateLegacy
+        )
+        for target in [
+            InstallerMigrationSyncTarget.stagingTree,
+            .stagingTombstoneTree,
+            .activeJournal,
+            .activeReleaseState,
+            .supportDirectory,
+        ] {
+            XCTAssertEqual(
+                CompanionCommandRouter.installerRoute(
+                    arguments: ["__runtime-raiders-installer-sync-migration", target.rawValue],
+                    executableURL: staged,
+                    paths: paths,
+                    releaseState: nil,
+                    releaseIdentity: identity
+                ),
+                .installerSyncMigration(target: target)
+            )
+        }
+        for invalid in [
+            ["__runtime-raiders-installer-sync-migration"],
+            ["__runtime-raiders-installer-sync-migration", "arbitrary-path"],
+            ["__runtime-raiders-installer-sync-migration", "staging-tree", "/tmp/other"],
+        ] {
+            XCTAssertNil(CompanionCommandRouter.installerRoute(
+                arguments: invalid,
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ))
+        }
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-status", "legacy-running"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerLegacyStatus(
+                prepared: false,
+                expectedEnabled: nil,
+                expectedQueuedEventCount: nil
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-status", "legacy-prepared", "enabled", "3"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerLegacyStatus(
+                prepared: true,
+                expectedEnabled: true,
+                expectedQueuedEventCount: 3
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-status", "legacy-running", "disabled", "3"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerLegacyStatus(
+                prepared: false,
+                expectedEnabled: false,
+                expectedQueuedEventCount: 3
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: [
+                    "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
+                ],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            ),
+            .installerCandidateStatus(
+                generation: 1,
+                prepared: true,
+                expectedEnabled: false,
+                expectedQueuedEventCount: 3
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: [
+                    "__runtime-raiders-installer-status", "candidate-resumed", "1", "enabled", "3",
+                ],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            ),
+            .installerCandidateStatus(
+                generation: 1,
+                prepared: false,
+                expectedEnabled: true,
+                expectedQueuedEventCount: 3
+            )
+        )
+        XCTAssertNil(CompanionCommandRouter.installerRoute(
+            arguments: [
+                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
+            ],
+            executableURL: staged,
+            paths: paths,
+            releaseState: nil,
+            releaseIdentity: identity
+        ))
+        let wrongActive = ReleaseReference(
+            releaseSequence: active.releaseSequence,
+            releaseSHA: String(repeating: "c", count: 40),
+            companionVersion: active.companionVersion,
+            updateProtocolVersion: active.updateProtocolVersion
+        )
+        XCTAssertNil(CompanionCommandRouter.installerRoute(
+            arguments: [
+                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
+            ],
+            executableURL: activeExecutable,
+            paths: paths,
+            releaseState: ReleaseStateV1(
+                schemaVersion: 1,
+                generation: 1,
+                active: wrongActive,
+                fallback: nil,
+                trial: nil
+            ),
+            releaseIdentity: identity
+        ))
+        for command in [
+            "__runtime-raiders-installer-protected-state",
+            "__runtime-raiders-legacy-resume",
+        ] {
+            XCTAssertNotNil(CompanionCommandRouter.installerRoute(
+                arguments: [command],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ))
+            XCTAssertNil(CompanionCommandRouter.installerRoute(
+                arguments: [command, "extra"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ))
+        }
+        for arguments in [
+            ["__runtime-raiders-installer-status"],
+            ["__runtime-raiders-installer-status", "legacy-prepared"],
+            ["__runtime-raiders-installer-status", "legacy-running", "enabled"],
+            ["__runtime-raiders-installer-status", "legacy-prepared", "enabled", "-1"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "0", "disabled", "3"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "+1", "disabled", "3"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "1", "unknown", "3"],
+            ["__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "-1"],
+            ["__runtime-raiders-installer-status", "candidate-running", "1", "disabled", "3"],
+        ] {
+            XCTAssertNil(CompanionCommandRouter.installerRoute(
+                arguments: arguments,
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ))
+        }
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-lease", "extra"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-legacy-prepare"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: protocolOne
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-lease"],
+                executableURL: wrongExecutable,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-resume", "1"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            ),
+            .installerResume(generation: 1)
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: true
+            ),
+            .installerMigrationDaemon(generation: 1)
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: false
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: true
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: [
+                    "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
+                ],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: true
+            ),
+            .installerCandidateStatus(
+                generation: 1,
+                prepared: true,
+                expectedEnabled: false,
+                expectedQueuedEventCount: 3
+            )
+        )
+        for badGeneration in ["", "0", "+1", "01", "1.0", "9007199254740992"] {
+            XCTAssertNil(
+                CompanionCommandRouter.installerRoute(
+                    arguments: ["__runtime-raiders-installer-resume", badGeneration],
+                    executableURL: activeExecutable,
+                    paths: paths,
+                    releaseState: state,
+                    releaseIdentity: identity
+                )
+            )
+        }
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-resume", "1"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-resume", "1"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: ReleaseStateV1(
+                    schemaVersion: 1,
+                    generation: 2,
+                    active: active,
+                    fallback: nil,
+                    trial: nil
+                ),
+                releaseIdentity: identity
+            )
+        )
+    }
+
+    func testLegacyMigrationControlUsesOnlyExactBoundedFrameAndResponse() throws {
+        let paths = AgentPaths(
+            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-legacy-control")
+        )
+        var observedFrame = Data()
+        var observedSocket: URL?
+        let control = LegacyMigrationControl(exchange: { frame, socket, maximumBytes, timeout in
+            observedFrame = frame
+            observedSocket = socket
+            XCTAssertEqual(maximumBytes, 4_096)
+            XCTAssertEqual(timeout, 30)
+            return Data(#"{"ok":true,"message":"prepared"}"#.utf8) + Data([0x0A])
+        })
+
+        XCTAssertEqual(try control.prepare(paths: paths), ControlResponse(ok: true, message: "prepared"))
+        XCTAssertEqual(observedFrame, Data(#"{"command":"prepare_update"}"#.utf8) + Data([0x0A]))
+        XCTAssertEqual(observedSocket, paths.controlSocket)
+
+        XCTAssertEqual(try control.resume(paths: paths), ControlResponse(ok: true, message: "prepared"))
+        XCTAssertEqual(observedFrame, Data(#"{"command":"resume_update"}"#.utf8) + Data([0x0A]))
+
+        for response in [
+            Data(),
+            Data(#"{"ok":true}"#.utf8) + Data([0x0A]),
+            Data(#"{"ok":true,"message":"prepared","extra":1}"#.utf8) + Data([0x0A]),
+            Data(repeating: 0x61, count: 4_097),
+        ] {
+            let malformed = LegacyMigrationControl(exchange: { _, _, _, _ in response })
+            XCTAssertThrowsError(try malformed.prepare(paths: paths))
+        }
+        let timedOut = LegacyMigrationControl(exchange: { _, _, _, _ in throw POSIXError(.ETIMEDOUT) })
+        XCTAssertThrowsError(try timedOut.prepare(paths: paths))
+    }
+
+    func testInstallerLeaseKeeperHoldsUntilInputClosesAndWritesOneReadinessLine() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent(
+            "rr-installer-lease-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AgentPaths(applicationSupportDirectory: root)
+        let input = Pipe()
+        let output = Pipe()
+        input.fileHandleForWriting.closeFile()
+        var heldAtReadiness = false
+        try InstallerPreparedLeaseKeeper.run(
+            paths: paths,
+            input: input.fileHandleForReading,
+            output: output.fileHandleForWriting
+        ) {
+            heldAtReadiness = try CompanionPreparedStartupLease.observe(paths: paths) != nil
+        }
+        output.fileHandleForWriting.closeFile()
+        let readiness = output.fileHandleForReading.readDataToEndOfFile()
+        XCTAssertEqual(String(decoding: readiness, as: UTF8.self), "runtime-raiders-installer-lease-ready\n")
+        XCTAssertTrue(heldAtReadiness)
+        XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: paths))
     }
 
     func testDaemonAndInternalCommandsRequireExactSingleArgumentAndPathRules() {
         let paths = AgentPaths(
             applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-internal-routing")
         )
-        let installedExecutable = paths.installedApplication
-            .appendingPathComponent("Contents/MacOS/runtime-raiders-agent")
-        let rollbackExecutable = paths.rollbackApplication
-            .appendingPathComponent("Contents/MacOS/runtime-raiders-agent")
+        let active = ReleaseReference(
+            releaseSequence: 9,
+            releaseSHA: String(repeating: "a", count: 40),
+            companionVersion: "0.3.9",
+            updateProtocolVersion: 2
+        )
+        let trial = ReleaseReference(
+            releaseSequence: 10,
+            releaseSHA: String(repeating: "b", count: 40),
+            companionVersion: "0.3.10",
+            updateProtocolVersion: 2
+        )
+        let state = ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 7,
+            active: active,
+            fallback: nil,
+            trial: trial
+        )
+        let activeExecutable = try! paths.executable(for: active)
+        let trialExecutable = try! paths.executable(for: trial)
         let otherExecutable = URL(fileURLWithPath: "/private/tmp/runtime-raiders-agent")
 
         XCTAssertEqual(
             CompanionCommandRouter.route(
                 arguments: ["daemon"],
-                executableURL: installedExecutable,
-                paths: paths
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: false,
+                releaseIdentity: try! active.companionReleaseIdentity()
             ),
-            .daemon
+            .daemon(trialGeneration: nil)
         )
         XCTAssertNil(
             CompanionCommandRouter.route(
                 arguments: ["daemon"],
                 executableURL: otherExecutable,
-                paths: paths
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: false,
+                releaseIdentity: try! active.companionReleaseIdentity()
+            )
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: trialExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: true,
+                releaseIdentity: try! trial.companionReleaseIdentity()
+            ),
+            .daemon(trialGeneration: 7)
+        )
+        for malformed in ["", "0", "-1", "+7", "7.0", " 7", "9007199254740992"] {
+            XCTAssertNil(
+                CompanionCommandRouter.route(
+                    arguments: ["daemon", "__runtime-raiders-trial-generation", malformed],
+                    executableURL: trialExecutable,
+                    paths: paths,
+                    releaseState: state,
+                    preparedStartupLeaseHeld: true,
+                    releaseIdentity: try! trial.companionReleaseIdentity()
+                ),
+                "accepted malformed generation \(malformed)"
+            )
+        }
+        XCTAssertNil(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: activeExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: true,
+                releaseIdentity: try! trial.companionReleaseIdentity()
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: trialExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: false,
+                releaseIdentity: try! trial.companionReleaseIdentity()
+            )
+        )
+        XCTAssertNil(
+            CompanionCommandRouter.route(
+                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
+                executableURL: trialExecutable,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: true,
+                releaseIdentity: try! active.companionReleaseIdentity()
             )
         )
         XCTAssertEqual(
@@ -346,28 +1224,6 @@ final class ControlProtocolTests: XCTestCase {
             CompanionCommandRouter.route(
                 arguments: ["__self-check", "status"],
                 executableURL: otherExecutable,
-                paths: paths
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.route(
-                arguments: ["__recover-update"],
-                executableURL: rollbackExecutable,
-                paths: paths
-            ),
-            .recoverUpdate
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["__recover-update"],
-                executableURL: installedExecutable,
-                paths: paths
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["__recover-update", "status"],
-                executableURL: rollbackExecutable,
                 paths: paths
             )
         )
@@ -397,732 +1253,26 @@ final class ControlProtocolTests: XCTestCase {
         ])
     }
 
-    func testLaunchdControllerUsesOnlyFixedExecutableAndExactJobArguments() throws {
-        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
-            .appendingPathComponent("rr-launchd-control-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let plist = root.appendingPathComponent("com.redlattice.runtime-raiders-agent.plist")
-        try Data("plist".utf8).write(to: plist)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: plist.path)
+    func testLaunchdControllerUsesOnlyKickstartForTheStableLoadedJob() throws {
         var calls: [(String, [String], TimeInterval)] = []
         let controller = LaunchdJobController(
             userIdentifier: 501,
-            plistURL: plist,
             runCommand: { executable, arguments, timeout in
                 calls.append((executable.path, arguments, timeout))
                 return SystemCommandResult(exitStatus: .exited(0), stdout: Data(), stderr: Data())
             }
         )
 
-        try controller.bootout()
-        try controller.bootstrap()
         try controller.restart()
 
-        XCTAssertEqual(calls.count, 3)
+        XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(calls[0].0, "/bin/launchctl")
         XCTAssertEqual(calls[0].1, [
-            "bootout",
-            "gui/501/com.redlattice.runtime-raiders-agent",
-        ])
-        XCTAssertEqual(calls[0].2, 10)
-        XCTAssertEqual(calls[1].0, "/bin/launchctl")
-        XCTAssertEqual(calls[1].1, [
-            "bootstrap",
-            "gui/501",
-            plist.standardizedFileURL.path,
-        ])
-        XCTAssertEqual(calls[1].2, 10)
-        XCTAssertEqual(calls[2].0, "/bin/launchctl")
-        XCTAssertEqual(calls[2].1, [
             "kickstart",
             "-k",
             "gui/501/com.redlattice.runtime-raiders-agent",
         ])
-        XCTAssertEqual(calls[2].2, 10)
-    }
-
-    func testLaunchdStoppedProofRequiresIndependentPositiveJobAbsenceEvidence() {
-        let plist = URL(fileURLWithPath: "/private/tmp/com.redlattice.runtime-raiders-agent.plist")
-        func controller(
-            _ operation: @escaping () throws -> SystemCommandResult
-        ) -> LaunchdJobController {
-            LaunchdJobController(
-                userIdentifier: 501,
-                plistURL: plist,
-                runCommand: { executable, arguments, timeout in
-                    XCTAssertEqual(executable.path, "/bin/launchctl")
-                    XCTAssertEqual(arguments, [
-                        "print",
-                        "gui/501/com.redlattice.runtime-raiders-agent",
-                    ])
-                    XCTAssertEqual(timeout, 5)
-                    return try operation()
-                }
-            )
-        }
-
-        XCTAssertTrue(controller {
-            SystemCommandResult(
-                exitStatus: .exited(113),
-                stdout: Data(),
-                stderr: Data("Could not find service in domain for user gui: 501".utf8)
-            )
-        }.proveStopped())
-        XCTAssertFalse(controller {
-            SystemCommandResult(
-                exitStatus: .exited(0),
-                stdout: Data("running".utf8),
-                stderr: Data()
-            )
-        }.proveStopped())
-        XCTAssertFalse(controller {
-            SystemCommandResult(
-                exitStatus: .exited(113),
-                stdout: Data(),
-                stderr: Data("response was lost".utf8)
-            )
-        }.proveStopped())
-        XCTAssertFalse(controller {
-            throw POSIXError(.EIO)
-        }.proveStopped())
-    }
-
-    func testStableRecoveryRevalidatesBundlesAfterStoppedProofBeforeRestore() throws {
-        let paths = try makeRecoveryPaths("ordered")
-        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        var log: [String] = []
-        let recovery = StableUpdateRecovery(paths: paths, operations: StableUpdateRecoveryOperations(
-            phase: {
-                log.append("phase")
-                return .rollbackOnly
-            },
-            verifyBundles: { phase in
-                XCTAssertEqual(phase, .rollbackOnly)
-                log.append("verify")
-            },
-            persistDisabled: { log.append("disable") },
-            bootout: { log.append("bootout") },
-            proveStopped: {
-                log.append("proof")
-                return true
-            },
-            restore: { phase in
-                XCTAssertEqual(phase, .rollbackOnly)
-                log.append("restore")
-            },
-            revertRestored: { _ in log.append("revert") },
-            verifyRestoredBundle: { phase in
-                XCTAssertEqual(phase, .rollbackOnly)
-                log.append("verify-restored")
-            },
-            bootstrap: {
-                XCTAssertNotNil(try CompanionPreparedStartupLease.observe(paths: paths))
-                log.append("bootstrap")
-            },
-            verifyDisabledHealth: {
-                log.append("health")
-                return true
-            }
-        ))
-
-        try recovery.run()
-
-        XCTAssertEqual(log, [
-            "phase", "verify", "disable", "bootout", "proof", "verify", "restore",
-            "verify-restored", "bootstrap", "health",
-        ])
-    }
-
-    func testStableRecoveryTreatsBootoutResponseLossConservativelyAndGatesRestoreOnProof() throws {
-        let responsePaths = try makeRecoveryPaths("response-lost")
-        defer {
-            try? FileManager.default.removeItem(
-                at: responsePaths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        var restoredAfterResponseLoss = false
-        let responseLost = StableUpdateRecovery(paths: responsePaths, operations: StableUpdateRecoveryOperations(
-            phase: { .rollbackOnly },
-            verifyBundles: { _ in },
-            persistDisabled: {},
-            bootout: { throw POSIXError(.EIO) },
-            proveStopped: { true },
-            restore: { _ in restoredAfterResponseLoss = true },
-            revertRestored: { _ in },
-            verifyRestoredBundle: { _ in },
-            bootstrap: {},
-            verifyDisabledHealth: { true }
-        ))
-        try responseLost.run()
-        XCTAssertTrue(restoredAfterResponseLoss)
-
-        let noProofPaths = try makeRecoveryPaths("no-proof")
-        defer {
-            try? FileManager.default.removeItem(
-                at: noProofPaths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        var restoredWithoutProof = false
-        let notProven = StableUpdateRecovery(paths: noProofPaths, operations: StableUpdateRecoveryOperations(
-            phase: { .rollbackOnly },
-            verifyBundles: { _ in },
-            persistDisabled: {},
-            bootout: {},
-            proveStopped: { false },
-            restore: { _ in restoredWithoutProof = true },
-            revertRestored: { _ in },
-            verifyRestoredBundle: { _ in },
-            bootstrap: {},
-            verifyDisabledHealth: { true }
-        ))
-        XCTAssertThrowsError(try notProven.run()) { error in
-            XCTAssertEqual(error as? StableUpdateRecoveryError, .daemonNotProvenStopped)
-        }
-        XCTAssertFalse(restoredWithoutProof)
-    }
-
-    func testStableRecoveryLayoutAcceptsSafe0755RollbackOnlyAndRestoresItOwnerOnly() throws {
-        let paths = try makeRecoveryPaths("rollback-only")
-        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o755)
-        let rollbackInode = try recoveryInode(paths.rollbackApplication)
-        let layout = try StableRecoveryFileTransaction(paths: paths)
-
-        let phase = try layout.inspectAndNormalize()
-
-        XCTAssertEqual(phase, .rollbackOnly)
-        XCTAssertEqual(try recoveryPermissions(paths.rollbackApplication), 0o700)
-        try layout.restore(phase: phase)
-        XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.failedApplication.path))
-    }
-
-    func testStableRecoveryLayoutRequiresExactPostSwapPairAndPreservesAmbiguousState() throws {
-        let postSwap = try makeRecoveryPaths("post-swap")
-        defer { try? FileManager.default.removeItem(at: postSwap.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(postSwap.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(postSwap.failedApplication, marker: "new", mode: 0o700)
-        let failedInode = try recoveryInode(postSwap.failedApplication)
-        let layout = try StableRecoveryFileTransaction(paths: postSwap)
-        let phase = try layout.inspectAndNormalize()
-        XCTAssertEqual(phase, .rollbackAndFailed)
-        try layout.restore(phase: phase)
-        XCTAssertEqual(try recoveryMarker(postSwap.installedApplication), "old")
-        XCTAssertEqual(try recoveryInode(postSwap.failedApplication), failedInode)
-        XCTAssertEqual(try recoveryMarker(postSwap.failedApplication), "new")
-
-        let ambiguous = try makeRecoveryPaths("ambiguous")
-        defer { try? FileManager.default.removeItem(at: ambiguous.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(ambiguous.installedApplication, marker: "installed", mode: 0o755)
-        try makeRecoveryApp(ambiguous.rollbackApplication, marker: "rollback", mode: 0o700)
-        let installedInode = try recoveryInode(ambiguous.installedApplication)
-        let rollbackInode = try recoveryInode(ambiguous.rollbackApplication)
-        let ambiguousLayout = try StableRecoveryFileTransaction(paths: ambiguous)
-        XCTAssertThrowsError(try ambiguousLayout.inspectAndNormalize())
-        XCTAssertEqual(try recoveryInode(ambiguous.installedApplication), installedInode)
-        XCTAssertEqual(try recoveryInode(ambiguous.rollbackApplication), rollbackInode)
-
-        let unsafeFailed = try makeRecoveryPaths("unsafe-failed")
-        defer {
-            try? FileManager.default.removeItem(
-                at: unsafeFailed.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        try makeRecoveryApp(unsafeFailed.rollbackApplication, marker: "rollback", mode: 0o755)
-        try makeRecoveryApp(unsafeFailed.failedApplication, marker: "failed", mode: 0o755)
-        let unsafeLayout = try StableRecoveryFileTransaction(paths: unsafeFailed)
-        XCTAssertThrowsError(try unsafeLayout.inspectAndNormalize())
-        XCTAssertEqual(try recoveryPermissions(unsafeFailed.rollbackApplication), 0o755)
-        XCTAssertEqual(try recoveryPermissions(unsafeFailed.failedApplication), 0o755)
-    }
-
-    func testStableRecoveryLayoutRevertsExactRollbackAfterEveryPostRenameThrow() throws {
-        enum Injected: Error { case operation }
-
-        for fault: StableRecoveryRestoreFault in [
-            .parentSynchronize,
-            .installedPostcheck,
-            .failedCandidatePostcheck,
-        ] {
-            let paths = try makeRecoveryPaths("restore-post-rename-\(fault)")
-            defer {
-                try? FileManager.default.removeItem(
-                    at: paths.supportDirectory.deletingLastPathComponent()
-                )
-            }
-            try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-            try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-            let rollbackInode = try recoveryInode(paths.rollbackApplication)
-            let failedInode = try recoveryInode(paths.failedApplication)
-            var pendingFault: StableRecoveryRestoreFault? = fault
-            let layout = try StableRecoveryFileTransaction(
-                paths: paths,
-                restoreFault: { checkpoint in
-                    guard pendingFault == checkpoint else { return }
-                    pendingFault = nil
-                    throw Injected.operation
-                }
-            )
-            let phase = try layout.inspectAndNormalize()
-
-            XCTAssertThrowsError(try layout.restore(phase: phase), String(describing: fault)) {
-                XCTAssertTrue($0 is Injected, String(describing: fault))
-            }
-            let installedExists = FileManager.default.fileExists(
-                atPath: paths.installedApplication.path
-            )
-            let rollbackExists = FileManager.default.fileExists(
-                atPath: paths.rollbackApplication.path
-            )
-            XCTAssertFalse(installedExists, String(describing: fault))
-            XCTAssertTrue(rollbackExists, String(describing: fault))
-            guard !installedExists, rollbackExists else { continue }
-            XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.rollbackApplication), "old")
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
-
-            let retryPhase = try layout.inspectAndNormalize()
-            XCTAssertEqual(retryPhase, .rollbackAndFailed)
-            try layout.restore(phase: retryPhase)
-            XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-        }
-    }
-
-    func testStableRecoveryLayoutReturnsTypedTerminalErrorWhenInternalRevertIsUnsafe() throws {
-        enum Injected: Error { case operation }
-
-        let paths = try makeRecoveryPaths("restore-post-rename-unsafe-revert")
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-        let failedInode = try recoveryInode(paths.failedApplication)
-        let layout = try StableRecoveryFileTransaction(
-            paths: paths,
-            restoreFault: { checkpoint in
-                guard checkpoint == .installedPostcheck else { return }
-                try FileManager.default.removeItem(at: paths.installedApplication)
-                try self.makeRecoveryApp(
-                    paths.installedApplication,
-                    marker: "intruder",
-                    mode: 0o700
-                )
-                throw Injected.operation
-            }
-        )
-        let phase = try layout.inspectAndNormalize()
-
-        XCTAssertThrowsError(try layout.restore(phase: phase)) { error in
-            XCTAssertEqual(error as? StableUpdateRecoveryError, .retrySafetyFailure)
-        }
-        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "intruder")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-        XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
-    }
-
-    func testStableRecoveryBootsOutWhenBootstrapStartsDaemonThenThrowsAndRetrySucceeds() throws {
-        enum Injected: Error { case operation }
-
-        let paths = try makeRecoveryPaths("bootstrap-start-then-throw")
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-        let rollbackInode = try recoveryInode(paths.rollbackApplication)
-        let failedInode = try recoveryInode(paths.failedApplication)
-        let layout = try StableRecoveryFileTransaction(paths: paths)
-        var attempt = 0
-        var bootouts = 0
-        var stoppedProofs = 0
-        var daemonRunning = true
-        let recovery = StableUpdateRecovery(
-            paths: paths,
-            operations: StableUpdateRecoveryOperations(
-                phase: {
-                    attempt += 1
-                    return try layout.inspectAndNormalize()
-                },
-                verifyBundles: { _ in },
-                persistDisabled: {},
-                bootout: {
-                    bootouts += 1
-                    daemonRunning = false
-                },
-                proveStopped: {
-                    stoppedProofs += 1
-                    return !daemonRunning
-                },
-                restore: { try layout.restore(phase: $0) },
-                revertRestored: { try layout.revertRestore(phase: $0) },
-                verifyRestoredBundle: { _ in },
-                bootstrap: {
-                    daemonRunning = true
-                    if attempt == 1 { throw Injected.operation }
-                },
-                verifyDisabledHealth: { true }
-            )
-        )
-
-        XCTAssertThrowsError(try recovery.run()) { error in
-            XCTAssertTrue(error is Injected)
-        }
-        XCTAssertEqual(bootouts, 2)
-        XCTAssertEqual(stoppedProofs, 2)
-        XCTAssertFalse(daemonRunning)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.installedApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-
-        try recovery.run()
-
-        XCTAssertEqual(attempt, 2)
-        XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-        XCTAssertTrue(daemonRunning)
-    }
-
-    func testStableRecoveryRevertsEveryPostRestoreFailureAndSecondRunSucceeds() throws {
-        enum Failure: String, CaseIterable {
-            case restoredVerification
-            case bootstrap
-            case invalidHealth
-            case healthTimeout
-        }
-        enum Injected: Error { case operation }
-
-        for failure in Failure.allCases {
-            let paths = try makeRecoveryPaths("retry-\(failure.rawValue)")
-            defer {
-                try? FileManager.default.removeItem(
-                    at: paths.supportDirectory.deletingLastPathComponent()
-                )
-            }
-            try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-            try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-            let rollbackInode = try recoveryInode(paths.rollbackApplication)
-            let failedInode = try recoveryInode(paths.failedApplication)
-            let layout = try StableRecoveryFileTransaction(paths: paths)
-            var attempt = 0
-            var bootouts = 0
-            var stoppedProofs = 0
-            var daemonRunning = true
-            var now: TimeInterval = 0
-            let recovery = StableUpdateRecovery(
-                paths: paths,
-                operations: StableUpdateRecoveryOperations(
-                    phase: {
-                        attempt += 1
-                        now = 0
-                        return try layout.inspectAndNormalize()
-                    },
-                    verifyBundles: { phase in
-                        XCTAssertEqual(phase, .rollbackAndFailed)
-                        XCTAssertEqual(try self.recoveryInode(paths.rollbackApplication), rollbackInode)
-                        XCTAssertEqual(try self.recoveryMarker(paths.rollbackApplication), "old")
-                        XCTAssertEqual(try self.recoveryInode(paths.failedApplication), failedInode)
-                        XCTAssertEqual(try self.recoveryMarker(paths.failedApplication), "new")
-                    },
-                    persistDisabled: {},
-                    bootout: {
-                        bootouts += 1
-                        daemonRunning = false
-                    },
-                    proveStopped: {
-                        stoppedProofs += 1
-                        return !daemonRunning
-                    },
-                    restore: { try layout.restore(phase: $0) },
-                    revertRestored: { try layout.revertRestore(phase: $0) },
-                    verifyRestoredBundle: { phase in
-                        XCTAssertEqual(phase, .rollbackAndFailed)
-                        XCTAssertEqual(try self.recoveryInode(paths.installedApplication), rollbackInode)
-                        XCTAssertEqual(try self.recoveryMarker(paths.installedApplication), "old")
-                        XCTAssertEqual(try self.recoveryInode(paths.failedApplication), failedInode)
-                        if attempt == 1, failure == .restoredVerification {
-                            throw Injected.operation
-                        }
-                    },
-                    bootstrap: {
-                        if attempt == 1, failure == .bootstrap { throw Injected.operation }
-                        daemonRunning = true
-                    },
-                    verifyDisabledHealth: {
-                        if attempt == 1, failure == .invalidHealth { throw Injected.operation }
-                        return attempt != 1 || failure != .healthTimeout
-                    },
-                    monotonicNow: { now },
-                    sleep: { now += max($0, 10) }
-                )
-            )
-
-            XCTAssertThrowsError(try recovery.run(), failure.rawValue) { error in
-                if failure == .restoredVerification || failure == .bootstrap {
-                    XCTAssertTrue(error is Injected)
-                } else {
-                    XCTAssertEqual(
-                        error as? StableUpdateRecoveryError,
-                        .healthVerificationFailed
-                    )
-                }
-            }
-            XCTAssertEqual(bootouts, 2, failure.rawValue)
-            XCTAssertEqual(stoppedProofs, 2, failure.rawValue)
-            XCTAssertFalse(daemonRunning, failure.rawValue)
-            XCTAssertFalse(
-                FileManager.default.fileExists(atPath: paths.installedApplication.path),
-                failure.rawValue
-            )
-            XCTAssertEqual(try recoveryInode(paths.rollbackApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.rollbackApplication), "old")
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
-
-            try recovery.run()
-
-            XCTAssertEqual(attempt, 2, failure.rawValue)
-            XCTAssertEqual(try recoveryInode(paths.installedApplication), rollbackInode)
-            XCTAssertEqual(try recoveryMarker(paths.installedApplication), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-            XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-            XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
-            XCTAssertTrue(daemonRunning, failure.rawValue)
-        }
-    }
-
-    func testStableRecoveryReportsDistinctTerminalErrorWhenExactRevertIsUnsafe() throws {
-        enum Injected: Error { case operation }
-
-        let paths = try makeRecoveryPaths("unsafe-retry-revert")
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        try makeRecoveryApp(paths.rollbackApplication, marker: "old", mode: 0o700)
-        try makeRecoveryApp(paths.failedApplication, marker: "new", mode: 0o700)
-        let failedInode = try recoveryInode(paths.failedApplication)
-        let layout = try StableRecoveryFileTransaction(paths: paths)
-        var bootouts = 0
-        let recovery = StableUpdateRecovery(
-            paths: paths,
-            operations: StableUpdateRecoveryOperations(
-                phase: { try layout.inspectAndNormalize() },
-                verifyBundles: { _ in },
-                persistDisabled: {},
-                bootout: { bootouts += 1 },
-                proveStopped: { true },
-                restore: { try layout.restore(phase: $0) },
-                revertRestored: { try layout.revertRestore(phase: $0) },
-                verifyRestoredBundle: { _ in
-                    try FileManager.default.removeItem(at: paths.installedApplication)
-                    try self.makeRecoveryApp(
-                        paths.installedApplication,
-                        marker: "intruder",
-                        mode: 0o700
-                    )
-                    throw Injected.operation
-                },
-                bootstrap: {},
-                verifyDisabledHealth: { true }
-            )
-        )
-
-        XCTAssertThrowsError(try recovery.run()) { error in
-            XCTAssertEqual(error as? StableUpdateRecoveryError, .retrySafetyFailure)
-        }
-        XCTAssertEqual(bootouts, 2)
-        XCTAssertEqual(try recoveryMarker(paths.installedApplication), "intruder")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        XCTAssertEqual(try recoveryInode(paths.failedApplication), failedInode)
-        XCTAssertEqual(try recoveryMarker(paths.failedApplication), "new")
-    }
-
-    func testStableRecoveryPollsHealthWithoutRealSleepAndPreservesInstalledOnDeadline() throws {
-        let delayedPaths = try makeRecoveryPaths("delayed-health")
-        defer { try? FileManager.default.removeItem(at: delayedPaths.supportDirectory.deletingLastPathComponent()) }
-        var healthCalls = 0
-        var now: TimeInterval = 0
-        var sleeps: [TimeInterval] = []
-        let delayed = StableUpdateRecovery(paths: delayedPaths, operations: StableUpdateRecoveryOperations(
-            phase: { .rollbackOnly },
-            verifyBundles: { _ in },
-            persistDisabled: {},
-            bootout: {},
-            proveStopped: { true },
-            restore: { _ in },
-            revertRestored: { _ in },
-            verifyRestoredBundle: { _ in },
-            bootstrap: {},
-            verifyDisabledHealth: {
-                healthCalls += 1
-                return healthCalls == 3
-            },
-            monotonicNow: { now },
-            sleep: { interval in
-                sleeps.append(interval)
-                now += interval
-            }
-        ))
-        try delayed.run()
-        XCTAssertEqual(healthCalls, 3)
-        XCTAssertEqual(sleeps, [0.1, 0.1])
-
-        let timeoutPaths = try makeRecoveryPaths("health-timeout")
-        defer { try? FileManager.default.removeItem(at: timeoutPaths.supportDirectory.deletingLastPathComponent()) }
-        try makeRecoveryApp(timeoutPaths.rollbackApplication, marker: "old", mode: 0o700)
-        let timeoutLayout = try StableRecoveryFileTransaction(paths: timeoutPaths)
-        var timeoutNow: TimeInterval = 0
-        let timedOut = StableUpdateRecovery(paths: timeoutPaths, operations: StableUpdateRecoveryOperations(
-            phase: { try timeoutLayout.inspectAndNormalize() },
-            verifyBundles: { _ in },
-            persistDisabled: {},
-            bootout: {},
-            proveStopped: { true },
-            restore: { try timeoutLayout.restore(phase: $0) },
-            revertRestored: { try timeoutLayout.revertRestore(phase: $0) },
-            verifyRestoredBundle: { _ in },
-            bootstrap: {},
-            verifyDisabledHealth: { false },
-            monotonicNow: { timeoutNow },
-            sleep: { timeoutNow += max($0, 5) }
-        ))
-        XCTAssertThrowsError(try timedOut.run()) { error in
-            XCTAssertEqual(error as? StableUpdateRecoveryError, .healthVerificationFailed)
-        }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: timeoutPaths.installedApplication.path))
-        XCTAssertEqual(try recoveryMarker(timeoutPaths.rollbackApplication), "old")
-    }
-
-    func testStableRecoveryRefusesHeldSharedUpdateLockBeforeEffectsAndReleasesAfterFailure() throws {
-        let paths = try makeRecoveryPaths("shared-lock")
-        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
-        let held = try CompanionUpdateLock(paths: paths)
-        var effects = 0
-        let blocked = StableUpdateRecovery(paths: paths, operations: StableUpdateRecoveryOperations(
-            phase: {
-                effects += 1
-                return .rollbackOnly
-            },
-            verifyBundles: { _ in effects += 1 },
-            persistDisabled: { effects += 1 },
-            bootout: { effects += 1 },
-            proveStopped: {
-                effects += 1
-                return true
-            },
-            restore: { _ in effects += 1 },
-            revertRestored: { _ in effects += 1 },
-            verifyRestoredBundle: { _ in effects += 1 },
-            bootstrap: { effects += 1 },
-            verifyDisabledHealth: {
-                effects += 1
-                return true
-            }
-        ))
-        XCTAssertThrowsError(try blocked.run()) { error in
-            XCTAssertEqual(error as? CompanionUpdaterError, .updateInProgress)
-        }
-        XCTAssertEqual(effects, 0)
-        held.unlock()
-
-        let failing = StableUpdateRecovery(paths: paths, operations: StableUpdateRecoveryOperations(
-            phase: { .rollbackOnly },
-            verifyBundles: { _ in throw POSIXError(.EIO) },
-            persistDisabled: {},
-            bootout: {},
-            proveStopped: { true },
-            restore: { _ in },
-            revertRestored: { _ in },
-            verifyRestoredBundle: { _ in },
-            bootstrap: {},
-            verifyDisabledHealth: { true }
-        ))
-        XCTAssertThrowsError(try failing.run())
-        let reacquired = try CompanionUpdateLock(paths: paths)
-        reacquired.unlock()
-    }
-
-    func testStableRecoveryReleasesSharedLockAcrossEveryFailingStage() throws {
-        enum Failure: String, CaseIterable {
-            case phase
-            case firstVerification
-            case persistDisabled
-            case stoppedProof
-            case secondVerification
-            case restore
-            case restoredVerification
-            case bootstrap
-            case health
-            case clock
-        }
-
-        for failure in Failure.allCases {
-            let paths = try makeRecoveryPaths("release-lock-\(failure.rawValue)")
-            var verificationCount = 0
-            var now: TimeInterval = 0
-            let recovery = StableUpdateRecovery(
-                paths: paths,
-                operations: StableUpdateRecoveryOperations(
-                    phase: {
-                        if failure == .phase { throw POSIXError(.EIO) }
-                        return .rollbackOnly
-                    },
-                    verifyBundles: { _ in
-                        verificationCount += 1
-                        if failure == .firstVerification && verificationCount == 1 {
-                            throw POSIXError(.EIO)
-                        }
-                        if failure == .secondVerification && verificationCount == 2 {
-                            throw POSIXError(.EIO)
-                        }
-                    },
-                    persistDisabled: {
-                        if failure == .persistDisabled { throw POSIXError(.EIO) }
-                    },
-                    bootout: {},
-                    proveStopped: { failure != .stoppedProof },
-                    restore: { _ in
-                        if failure == .restore { throw POSIXError(.EIO) }
-                    },
-                    revertRestored: { _ in },
-                    verifyRestoredBundle: { _ in
-                        if failure == .restoredVerification { throw POSIXError(.EIO) }
-                    },
-                    bootstrap: {
-                        if failure == .bootstrap { throw POSIXError(.EIO) }
-                    },
-                    verifyDisabledHealth: {
-                        if failure == .health { throw POSIXError(.EIO) }
-                        return true
-                    },
-                    monotonicNow: {
-                        failure == .clock ? .nan : now
-                    },
-                    sleep: { now += max($0, 10) }
-                )
-            )
-
-            XCTAssertThrowsError(try recovery.run(), failure.rawValue)
-            let reacquired = try CompanionUpdateLock(paths: paths)
-            reacquired.unlock()
-            try FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
+        XCTAssertEqual(calls[0].2, 10)
     }
 
     func testDoctorRequestCarriesOnlyKnownInvocationEnvironmentPresence() throws {
@@ -1152,8 +1302,9 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
-    func testNonDoctorCommandsRoundTripWithoutDoctorMetadata() throws {
-        for command in ControlCommand.allCases where command != .doctor {
+    func testPublicNonDoctorCommandsRoundTripWithoutInternalMetadata() throws {
+        for command in ControlCommand.allCases where
+            command != .doctor && command != .prepareUpdate && command != .resumeUpdate {
             let request = ControlRequest.invocation(
                 command: command,
                 environment: ["CLAUDE_CODE_ENABLE_TELEMETRY": "DO_NOT_EXPORT_VALUE"]
@@ -1173,7 +1324,7 @@ final class ControlProtocolTests: XCTestCase {
     }
 
     func testProtocolRejectsMalformedExtraAndCommandInconsistentFields() {
-        let invalidFrames = [
+        let invalidFrames: [Data] = [
             Data("status\n".utf8),
             Data(#"{"command":"doctor"}"#.utf8) + Data([0x0A]),
             Data(#"{"command":"status","claude_otel_environment_present":false}"#.utf8)
@@ -1181,6 +1332,14 @@ final class ControlProtocolTests: XCTestCase {
             Data(#"{"command":"doctor","claude_otel_environment_present":"true"}"#.utf8)
                 + Data([0x0A]),
             Data(#"{"command":"doctor","claude_otel_environment_present":false,"extra":true}"#.utf8)
+                + Data([0x0A]),
+            Data(#"{"command":"prepare_update"}"#.utf8) + Data([0x0A]),
+            Data(#"{"command":"resume_update"}"#.utf8) + Data([0x0A]),
+            Data(#"{"command":"prepare_update","release_state_generation":0}"#.utf8)
+                + Data([0x0A]),
+            Data(#"{"command":"resume_update","release_state_generation":9007199254740992}"#.utf8)
+                + Data([0x0A]),
+            Data(#"{"command":"status","release_state_generation":7}"#.utf8)
                 + Data([0x0A]),
             Data(#"{"command":"unknown"}"#.utf8) + Data([0x0A]),
             Data("[]\n".utf8),
@@ -1201,6 +1360,18 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertThrowsError(
             try ControlSocketProtocol.encode(
                 ControlRequest(command: .status, claudeOTelEnvironmentPresent: true),
+                maximumFrameBytes: 4_096
+            )
+        )
+        XCTAssertThrowsError(
+            try ControlSocketProtocol.encode(
+                ControlRequest(command: .prepareUpdate),
+                maximumFrameBytes: 4_096
+            )
+        )
+        XCTAssertThrowsError(
+            try ControlSocketProtocol.encode(
+                ControlRequest(command: .resumeUpdate, releaseStateGeneration: -1),
                 maximumFrameBytes: 4_096
             )
         )
@@ -1256,6 +1427,44 @@ final class ControlProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(response, ControlResponse(ok: true, message: "present"))
+    }
+
+    func testAttestedSocketResponseReportsTheActualServingExecutable() throws {
+        let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-attested-control-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let socketURL = parent.appendingPathComponent("agent.sock")
+        let server = ControlSocketServer(socketURL: socketURL)
+        try server.startRequests { _ in ControlResponse(ok: true, message: "status") }
+        defer { server.stop() }
+
+        let (response, peer) = try ControlSocketClient.sendAttested(
+            request: ControlRequest(command: .status),
+            to: socketURL
+        )
+
+        XCTAssertEqual(response, ControlResponse(ok: true, message: "status"))
+        XCTAssertEqual(
+            peer.executableURL.resolvingSymlinksInPath().standardizedFileURL.path,
+            try XCTUnwrap(Bundle.main.executableURL)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+        )
+        XCTAssertEqual(peer.auditToken.count, MemoryLayout<audit_token_t>.size)
+        XCTAssertTrue(InstallerDynamicCodeIdentityValidator().matches(
+            peer: peer,
+            expectedExecutable: peer.executableURL
+        ))
+        XCTAssertFalse(InstallerDynamicCodeIdentityValidator().matches(
+            peer: peer,
+            expectedExecutable: URL(fileURLWithPath: "/usr/bin/xcrun")
+        ))
+        XCTAssertFalse(InstallerDynamicCodeIdentityValidator().matches(
+            peer: ControlPeerIdentity(
+                executableURL: peer.executableURL,
+                auditToken: Data(repeating: 0, count: MemoryLayout<audit_token_t>.size)
+            ),
+            expectedExecutable: peer.executableURL
+        ))
     }
 
     func testOnWaitsForSafeInitializationBeyondFastControlTimeout() throws {
@@ -1352,5 +1561,141 @@ private final class PreparedStartupActionLog: @unchecked Sendable {
 
     func append(_ value: String) {
         lock.withLock { storage.append(value) }
+    }
+}
+
+private struct PreparedReleaseFixture {
+    let active: ReleaseReference
+    let trial: ReleaseReference
+    let activeIdentity: CompanionReleaseIdentity
+    let trialIdentity: CompanionReleaseIdentity
+    let trialState: ReleaseStateV1
+}
+
+private func releaseFixture() -> PreparedReleaseFixture {
+    let active = ReleaseReference(
+        releaseSequence: 9,
+        releaseSHA: String(repeating: "a", count: 40),
+        companionVersion: "0.3.9",
+        updateProtocolVersion: 2
+    )
+    let trial = ReleaseReference(
+        releaseSequence: 10,
+        releaseSHA: String(repeating: "b", count: 40),
+        companionVersion: "0.3.10",
+        updateProtocolVersion: 2
+    )
+    return PreparedReleaseFixture(
+        active: active,
+        trial: trial,
+        activeIdentity: try! active.companionReleaseIdentity(),
+        trialIdentity: try! trial.companionReleaseIdentity(),
+        trialState: ReleaseStateV1(
+            schemaVersion: 1,
+            generation: 7,
+            active: active,
+            fallback: nil,
+            trial: trial
+        )
+    )
+}
+
+private final class LockedReleaseState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: ReleaseStateV1
+
+    init(_ value: ReleaseStateV1) { storage = value }
+
+    var value: ReleaseStateV1 {
+        get { lock.withLock { storage } }
+        set { lock.withLock { storage = newValue } }
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int { lock.withLock { storage } }
+    func increment() { lock.withLock { storage += 1 } }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = false
+
+    var value: Bool { lock.withLock { storage } }
+    func set() { lock.withLock { storage = true } }
+}
+
+private final class ReleaseAbandonmentHarness {
+    let root: URL
+    let paths: AgentPaths
+    let lease: CompanionPreparedStartupLease
+    let releaseState: LockedReleaseState
+    let coordinator: PreparedDaemonStartupCoordinator
+    let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.release-abandonment")
+
+    init(
+        releaseState: ReleaseStateV1,
+        releaseIdentity: CompanionReleaseIdentity,
+        trialGeneration: Int64?,
+        deferredStart: @escaping () throws -> Void
+    ) throws {
+        root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-release-abandonment-\(UUID().uuidString)", isDirectory: true)
+        paths = AgentPaths(applicationSupportDirectory: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        lease = try CompanionPreparedStartupLease(paths: paths)
+        let state = LockedReleaseState(releaseState)
+        self.releaseState = state
+        coordinator = try PreparedDaemonStartupCoordinator(
+            paths: paths,
+            trialGeneration: trialGeneration,
+            releaseIdentity: releaseIdentity,
+            loadReleaseState: { state.value },
+            deferredStart: deferredStart
+        )
+    }
+
+    func preparation(
+        validateResume: @escaping (Int64) throws -> Void = { _ in }
+    ) -> SerializedUpdatePreparation {
+        SerializedUpdatePreparation(
+            workQueue: DispatchQueue(
+                label: "com.redlattice.runtime-raiders.tests.release-abandonment-work"
+            ),
+            activeRunCount: { 0 },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            initiallyPreparedGeneration: coordinator.initiallyPreparedGeneration,
+            validateResume: validateResume,
+            resume: { _ in try self.coordinator.resume() }
+        )
+    }
+
+    func orchestrator(
+        preparation: SerializedUpdatePreparation,
+        resumeAfterAbandonment: (@Sendable (Int64) -> ControlResponse)? = nil,
+        exitUncommittedTrial: @escaping @Sendable () -> Void,
+        failClosed: @escaping @Sendable () -> Void
+    ) -> PreparedReleaseAbandonmentOrchestrator {
+        PreparedReleaseAbandonmentOrchestrator(
+            coordinator: coordinator,
+            queue: queue,
+            preparedGeneration: { preparation.preparedGeneration },
+            resumeAfterAbandonment: resumeAfterAbandonment ?? {
+                preparation.resumeAfterAbandonment(generation: $0)
+            },
+            exitUncommittedTrial: exitUncommittedTrial,
+            failClosed: failClosed
+        )
+    }
+
+    func cleanup() {
+        lease.unlock()
+        try? FileManager.default.removeItem(at: root)
     }
 }

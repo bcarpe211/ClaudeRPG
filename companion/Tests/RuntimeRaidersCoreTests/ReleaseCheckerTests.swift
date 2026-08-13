@@ -180,33 +180,34 @@ final class ReleaseCheckerTests: XCTestCase {
             )
             XCTAssertEqual(newInstance.availability(), availability)
 
-            var recoveryBoundManifest: ReleaseManifestV1?
-            let recovery = StableUpdateRecovery(
-                paths: paths,
-                operations: StableUpdateRecoveryOperations(
-                    phase: { .rollbackAndFailed },
-                    verifyBundles: { phase in
-                        XCTAssertEqual(phase, .rollbackAndFailed)
-                        let persistedManifest = try UpdateStateStore(paths: paths)
-                            .load().cachedManifest
-                        if let recoveryBoundManifest {
-                            XCTAssertEqual(persistedManifest, recoveryBoundManifest)
-                        } else {
-                            recoveryBoundManifest = persistedManifest
-                        }
-                    },
-                    persistDisabled: {},
-                    bootout: {},
-                    proveStopped: { true },
-                    restore: { _ in },
-                    revertRestored: { _ in },
-                    verifyRestoredBundle: { _ in },
-                    bootstrap: {},
-                    verifyDisabledHealth: { true }
-                )
+        }
+    }
+
+    func testProtocolOneCachedManifestIsReadableAndIgnoredWithoutRewriteByProtocolTwoIdentity() throws {
+        try withPaths { paths in
+            let cached = manifest
+            let store = try UpdateStateStore(paths: paths)
+            try store.save(UpdateStateV1(
+                lastCheckAttemptMS: now,
+                lastObservedReleaseSequence: cached.releaseSequence,
+                cachedManifest: cached
+            ))
+            let originalBytes = try Data(contentsOf: paths.updateState)
+            let protocolTwo = CompanionReleaseIdentity(
+                releaseSequence: 1,
+                releaseSHA: String(repeating: "c", count: 40),
+                companionVersion: "0.2.0",
+                updateProtocolVersion: 2
             )
-            try recovery.run()
-            XCTAssertEqual(recoveryBoundManifest, manifest)
+            let checker = try ReleaseChecker(
+                paths: paths,
+                installed: protocolTwo,
+                transport: { _ in throw URLError(.cannotConnectToHost) }
+            )
+
+            XCTAssertEqual(try store.load().cachedManifest, cached)
+            XCTAssertNil(checker.availability())
+            XCTAssertEqual(try Data(contentsOf: paths.updateState), originalBytes)
         }
     }
 

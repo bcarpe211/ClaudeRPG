@@ -7,6 +7,18 @@ public struct CompanionReleaseIdentity: Codable, Equatable, Sendable {
     public let companionVersion: String
     public let updateProtocolVersion: Int
 
+    public init(
+        releaseSequence: Int64,
+        releaseSHA: String,
+        companionVersion: String,
+        updateProtocolVersion: Int
+    ) {
+        self.releaseSequence = releaseSequence
+        self.releaseSHA = releaseSHA
+        self.companionVersion = companionVersion
+        self.updateProtocolVersion = updateProtocolVersion
+    }
+
     public static func load(from bundle: Bundle = .main) throws -> Self {
         let infoURL = bundle.bundleURL
             .appendingPathComponent("Contents/Info.plist", isDirectory: false)
@@ -30,9 +42,10 @@ public struct CompanionReleaseIdentity: Codable, Equatable, Sendable {
               ),
               let releaseSHA = infoDictionary["RuntimeRaidersReleaseSHA"] as? String,
               ReleaseContractValidation.isLowercaseHex(releaseSHA, count: 40),
-              ReleaseContractValidation.positiveSafeInteger(
+              let updateProtocolVersion = ReleaseContractValidation.positiveSafeInteger(
                   infoDictionary["RuntimeRaidersUpdateProtocolVersion"]
-              ) == 1 else {
+              ),
+              [1, 2].contains(updateProtocolVersion) else {
             throw ReleaseContractError.invalidIdentity
         }
 
@@ -40,7 +53,32 @@ public struct CompanionReleaseIdentity: Codable, Equatable, Sendable {
             releaseSequence: releaseSequence,
             releaseSHA: releaseSHA,
             companionVersion: companionVersion,
-            updateProtocolVersion: 1
+            updateProtocolVersion: Int(updateProtocolVersion)
+        )
+    }
+
+    public func releaseReference() throws -> ReleaseReference {
+        let reference = ReleaseReference(
+            releaseSequence: releaseSequence,
+            releaseSHA: releaseSHA,
+            companionVersion: companionVersion,
+            updateProtocolVersion: updateProtocolVersion
+        )
+        guard ReleaseReference.isValid(reference) else {
+            throw ReleaseContractError.invalidReleaseState
+        }
+        return reference
+    }
+}
+
+public extension ReleaseReference {
+    func companionReleaseIdentity() throws -> CompanionReleaseIdentity {
+        guard Self.isValid(self) else { throw ReleaseContractError.invalidReleaseState }
+        return CompanionReleaseIdentity(
+            releaseSequence: releaseSequence,
+            releaseSHA: releaseSHA,
+            companionVersion: companionVersion,
+            updateProtocolVersion: updateProtocolVersion
         )
     }
 }
@@ -48,6 +86,7 @@ public struct CompanionReleaseIdentity: Codable, Equatable, Sendable {
 enum ReleaseContractError: Error {
     case invalidIdentity
     case invalidManifest
+    case invalidReleaseState
 }
 
 enum ReleaseContractValidation {

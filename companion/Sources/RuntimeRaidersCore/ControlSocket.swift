@@ -16,11 +16,29 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
 }
 
 public enum CompanionCommandRoute: Equatable, Sendable {
-    case daemon
+    case daemon(trialGeneration: Int64?)
+    case installerMigrationDaemon(generation: Int64)
     case control(ControlCommand)
     case foregroundUpdate
     case selfCheck
-    case recoverUpdate
+    case installerLease
+    case legacyPrepare
+    case installerResume(generation: Int64)
+    case installerValidateLegacy
+    case installerLegacyStatus(
+        prepared: Bool,
+        expectedEnabled: Bool?,
+        expectedQueuedEventCount: Int?
+    )
+    case installerCandidateStatus(
+        generation: Int64,
+        prepared: Bool,
+        expectedEnabled: Bool,
+        expectedQueuedEventCount: Int
+    )
+    case installerProtectedState
+    case installerSyncMigration(target: InstallerMigrationSyncTarget)
+    case legacyResume
 }
 
 public enum CompanionCommandRouter {
@@ -29,38 +47,274 @@ public enum CompanionCommandRouter {
         executableURL: URL,
         paths: AgentPaths
     ) -> CompanionCommandRoute? {
-        guard arguments.count == 1, let argument = arguments.first else { return nil }
-        switch argument {
-        case "on", "off", "status", "doctor", "uninstall":
-            guard let command = ControlCommand(rawValue: argument) else { return nil }
+        switch arguments {
+        case ["on"], ["off"], ["status"], ["doctor"], ["uninstall"]:
+            guard let argument = arguments.first,
+                  let command = ControlCommand(rawValue: argument) else { return nil }
             return .control(command)
-        case "update":
+        case ["update"]:
             return .foregroundUpdate
-        case "daemon":
-            return exactExecutable(executableURL, equals: installedExecutable(paths))
-                ? .daemon : nil
-        case "__self-check":
+        case ["__self-check"]:
             return .selfCheck
-        case "__recover-update":
-            return exactExecutable(executableURL, equals: rollbackExecutable(paths))
-                ? .recoverUpdate : nil
+        case let values where values.count == 3 &&
+            values[0] == "daemon" &&
+            values[1] == "__runtime-raiders-installer-migration-generation":
+            guard let identity = try? CompanionReleaseIdentity.load(from: .main),
+                  releaseStatePathIsAbsent(paths.releaseState) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
+            return installerRoute(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: leaseHeld
+            )
+        case let values where installerStandaloneCommand(values):
+            guard let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
+            return installerRoute(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: try? ReleaseStateStore.loadExisting(paths: paths),
+                releaseIdentity: identity,
+                preparedStartupLeaseHeld: leaseHeld
+            )
+        case let values where values.count == 2 &&
+            values[0] == "__runtime-raiders-installer-resume":
+            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
+                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            return installerRoute(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: state,
+                releaseIdentity: identity
+            )
+        case ["daemon"]:
+            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
+                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
+            return route(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: leaseHeld,
+                releaseIdentity: identity
+            )
+        case let values where values.count == 3 &&
+            values[0] == "daemon" &&
+            values[1] == "__runtime-raiders-trial-generation":
+            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
+                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
+            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
+            return route(
+                arguments: arguments,
+                executableURL: executableURL,
+                paths: paths,
+                releaseState: state,
+                preparedStartupLeaseHeld: leaseHeld,
+                releaseIdentity: identity
+            )
         default:
             return nil
         }
     }
 
-    private static func installedExecutable(_ paths: AgentPaths) -> URL {
-        paths.installedApplication.appendingPathComponent(
-            "Contents/MacOS/runtime-raiders-agent",
-            isDirectory: false
-        )
+    static func route(
+        arguments: [String],
+        executableURL: URL,
+        paths: AgentPaths,
+        releaseState: ReleaseStateV1,
+        preparedStartupLeaseHeld: Bool,
+        releaseIdentity: CompanionReleaseIdentity
+    ) -> CompanionCommandRoute? {
+        guard ReleaseStateV1.isValid(releaseState) else { return nil }
+        switch arguments {
+        case ["daemon"]:
+            guard let activeExecutable = try? paths.executable(for: releaseState.active),
+                  releaseIdentity == (try? releaseState.active.companionReleaseIdentity()),
+                  exactExecutable(executableURL, equals: activeExecutable) else {
+                return nil
+            }
+            return .daemon(trialGeneration: nil)
+        case let values where values.count == 3 &&
+            values[0] == "daemon" &&
+            values[1] == "__runtime-raiders-trial-generation":
+            let rawGeneration = values[2]
+            guard rawGeneration.first != "+",
+                  let generation = Int64(rawGeneration),
+                  String(generation) == rawGeneration,
+                  (1...ReleaseContractValidation.maximumSafeInteger).contains(generation),
+                  generation == releaseState.generation,
+                  let trial = releaseState.trial,
+                  releaseIdentity == (try? trial.companionReleaseIdentity()),
+                  preparedStartupLeaseHeld,
+                  let trialExecutable = try? paths.executable(for: trial),
+                  exactExecutable(executableURL, equals: trialExecutable) else {
+                return nil
+            }
+            return .daemon(trialGeneration: generation)
+        default:
+            return nil
+        }
     }
 
-    private static func rollbackExecutable(_ paths: AgentPaths) -> URL {
-        paths.rollbackApplication.appendingPathComponent(
-            "Contents/MacOS/runtime-raiders-agent",
-            isDirectory: false
-        )
+    static func installerRoute(
+        arguments: [String],
+        executableURL: URL,
+        paths: AgentPaths,
+        releaseState: ReleaseStateV1?,
+        releaseIdentity: CompanionReleaseIdentity,
+        preparedStartupLeaseHeld: Bool = false
+    ) -> CompanionCommandRoute? {
+        guard releaseIdentity.updateProtocolVersion == 2,
+              directAgentExecutable(executableURL, paths: paths) else { return nil }
+        switch arguments {
+        case ["daemon", "__runtime-raiders-installer-migration-generation", "1"]:
+            guard releaseState == nil, preparedStartupLeaseHeld else { return nil }
+            return .installerMigrationDaemon(generation: 1)
+        case ["__runtime-raiders-installer-lease"]:
+            return .installerLease
+        case ["__runtime-raiders-legacy-prepare"]:
+            return .legacyPrepare
+        case ["__runtime-raiders-installer-validate-legacy"]:
+            return .installerValidateLegacy
+        case ["__runtime-raiders-installer-status", "legacy-running"]:
+            return .installerLegacyStatus(
+                prepared: false,
+                expectedEnabled: nil,
+                expectedQueuedEventCount: nil
+            )
+        case let values where values.count == 4 &&
+            values[0] == "__runtime-raiders-installer-status" &&
+            ["legacy-running", "legacy-prepared"].contains(values[1]):
+            guard let enabled = canonicalEnabled(values[2]),
+                  let queuedEventCount = canonicalCount(values[3]) else { return nil }
+            return .installerLegacyStatus(
+                prepared: values[1] == "legacy-prepared",
+                expectedEnabled: enabled,
+                expectedQueuedEventCount: queuedEventCount
+            )
+        case let values where values.count == 5 &&
+            values[0] == "__runtime-raiders-installer-status" &&
+            ["candidate-prepared", "candidate-resumed"].contains(values[1]):
+            guard let generation = canonicalGeneration(values[2]),
+                  let enabled = canonicalEnabled(values[3]),
+                  let queuedEventCount = canonicalCount(values[4]) else { return nil }
+            if values[1] == "candidate-prepared",
+               generation == 1,
+               releaseState == nil,
+               preparedStartupLeaseHeld {
+                return .installerCandidateStatus(
+                    generation: generation,
+                    prepared: true,
+                    expectedEnabled: enabled,
+                    expectedQueuedEventCount: queuedEventCount
+                )
+            }
+            guard let state = releaseState,
+                  ReleaseStateV1.isValid(state),
+                  state.generation == generation,
+                  state.trial == nil,
+                  state.fallback == nil,
+                  state.active == (try? releaseIdentity.releaseReference()),
+                  let activeExecutable = try? paths.executable(for: state.active),
+                  exactExecutable(executableURL, equals: activeExecutable) else { return nil }
+            return .installerCandidateStatus(
+                generation: generation,
+                prepared: values[1] == "candidate-prepared",
+                expectedEnabled: enabled,
+                expectedQueuedEventCount: queuedEventCount
+            )
+        case ["__runtime-raiders-installer-protected-state"]:
+            return .installerProtectedState
+        case let values where values.count == 2 &&
+            values[0] == "__runtime-raiders-installer-sync-migration":
+            guard let target = InstallerMigrationSyncTarget(rawValue: values[1]) else { return nil }
+            return .installerSyncMigration(target: target)
+        case ["__runtime-raiders-legacy-resume"]:
+            return .legacyResume
+        case let values where values.count == 2 &&
+            values[0] == "__runtime-raiders-installer-resume":
+            guard let state = releaseState,
+                  ReleaseStateV1.isValid(state),
+                  state.trial == nil,
+                  state.fallback == nil,
+                  state.active == (try? releaseIdentity.releaseReference()),
+                  let generation = canonicalGeneration(values[1]),
+                  generation == state.generation,
+                  let activeExecutable = try? paths.executable(for: state.active),
+                  exactExecutable(executableURL, equals: activeExecutable) else {
+                return nil
+            }
+            return .installerResume(generation: generation)
+        default:
+            return nil
+        }
+    }
+
+    private static func canonicalGeneration(_ raw: String) -> Int64? {
+        guard raw.first != "+",
+              let generation = Int64(raw),
+              String(generation) == raw,
+              (1...ReleaseContractValidation.maximumSafeInteger).contains(generation) else {
+            return nil
+        }
+        return generation
+    }
+
+    private static func canonicalEnabled(_ raw: String) -> Bool? {
+        switch raw {
+        case "enabled": true
+        case "disabled": false
+        default: nil
+        }
+    }
+
+    private static func canonicalCount(_ raw: String) -> Int? {
+        guard raw.first != "+",
+              let count = Int(raw),
+              String(count) == raw,
+              count >= 0,
+              Int64(count) <= ReleaseContractValidation.maximumSafeInteger else {
+            return nil
+        }
+        return count
+    }
+
+    private static func installerStandaloneCommand(_ arguments: [String]) -> Bool {
+        guard let command = arguments.first else { return false }
+        return [
+            "__runtime-raiders-installer-lease",
+            "__runtime-raiders-legacy-prepare",
+            "__runtime-raiders-installer-validate-legacy",
+            "__runtime-raiders-installer-status",
+            "__runtime-raiders-installer-protected-state",
+            "__runtime-raiders-installer-sync-migration",
+            "__runtime-raiders-legacy-resume",
+        ].contains(command)
+    }
+
+    private static func releaseStatePathIsAbsent(_ url: URL) -> Bool {
+        var metadata = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &metadata) }
+        return result != 0 && errno == ENOENT
+    }
+
+    private static func directAgentExecutable(_ executable: URL, paths: AgentPaths) -> Bool {
+        guard executable.isFileURL,
+              executable.lastPathComponent == "runtime-raiders-agent" else { return false }
+        let application = executable
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        guard application.lastPathComponent == "Runtime Raiders Agent.app" else { return false }
+        let standardized = application.standardizedFileURL.path
+        return standardized != paths.legacyFlatApplication.standardizedFileURL.path &&
+            !standardized.hasPrefix(paths.launcherDirectory.standardizedFileURL.path + "/")
     }
 
     private static func exactExecutable(_ first: URL, equals second: URL) -> Bool {
@@ -104,52 +358,74 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
 
     private let workQueue: DispatchQueue
     private let activeRunCount: () throws -> Int
+    private let validatePreparation: (Int64) throws -> Void
     private let pauseAcceptance: () -> Void
     private let pauseUploader: () -> Void
     private let pauseHeartbeat: () -> Void
     private let pauseWatcher: () -> Void
-    private let resumeAction: () throws -> Void
+    private let startAbandonmentObserver: (Int64) -> Void
+    private let validateResume: (Int64) throws -> Void
+    private let resumeAction: (Int64) throws -> Void
     private let acceptedResponse: () throws -> ControlResponse
     private let stateLock = NSLock()
-    private var prepared = false
+    private var preparedGenerationStorage: Int64?
+    private var resumedGeneration: Int64?
 
-    public var isPrepared: Bool { stateLock.withLock { prepared } }
+    public var isPrepared: Bool { preparedGeneration != nil }
+    public var preparedGeneration: Int64? { stateLock.withLock { preparedGenerationStorage } }
 
     public init(
         workQueue: DispatchQueue,
         activeRunCount: @escaping () throws -> Int,
+        validatePreparation: @escaping (Int64) throws -> Void = { _ in },
         pauseAcceptance: @escaping () -> Void,
         pauseUploader: @escaping () -> Void,
         pauseHeartbeat: @escaping () -> Void,
         pauseWatcher: @escaping () -> Void,
-        initiallyPrepared: Bool = false,
-        resume: @escaping () throws -> Void = {},
+        startAbandonmentObserver: @escaping (Int64) -> Void = { _ in },
+        initiallyPreparedGeneration: Int64? = nil,
+        validateResume: @escaping (Int64) throws -> Void = { _ in },
+        resume: @escaping (Int64) throws -> Void = { _ in },
         acceptedResponse: @escaping () throws -> ControlResponse = {
             ControlResponse(ok: true, message: "prepared for update")
         }
     ) {
         self.workQueue = workQueue
         self.activeRunCount = activeRunCount
+        self.validatePreparation = validatePreparation
         self.pauseAcceptance = pauseAcceptance
         self.pauseUploader = pauseUploader
         self.pauseHeartbeat = pauseHeartbeat
         self.pauseWatcher = pauseWatcher
-        prepared = initiallyPrepared
+        self.startAbandonmentObserver = startAbandonmentObserver
+        preparedGenerationStorage = initiallyPreparedGeneration
+        self.validateResume = validateResume
         resumeAction = resume
         self.acceptedResponse = acceptedResponse
     }
 
-    public func prepare() -> ControlResponse {
+    public func prepare(generation: Int64) -> ControlResponse {
         workQueue.sync {
             do {
+                guard Self.validGeneration(generation) else {
+                    return ControlResponse(ok: false, message: "unable to prepare update")
+                }
+                if let current = preparedGeneration {
+                    guard current == generation else {
+                        return ControlResponse(ok: false, message: "unable to prepare update")
+                    }
+                    return try acceptedResponse()
+                }
                 guard try activeRunCount() == 0 else {
                     return ControlResponse(ok: false, message: Self.activeRunRefusalMessage)
                 }
+                try validatePreparation(generation)
                 pauseAcceptance()
                 pauseUploader()
                 pauseHeartbeat()
                 pauseWatcher()
-                stateLock.withLock { prepared = true }
+                stateLock.withLock { preparedGenerationStorage = generation }
+                startAbandonmentObserver(generation)
                 return try acceptedResponse()
             } catch {
                 return ControlResponse(ok: false, message: "unable to prepare update")
@@ -157,22 +433,56 @@ public final class SerializedUpdatePreparation: @unchecked Sendable {
         }
     }
 
-    public func resume() -> ControlResponse {
+    public func resume(generation: Int64) -> ControlResponse {
         workQueue.sync {
             do {
-                guard isPrepared else { return try acceptedResponse() }
-                try resumeAction()
-                stateLock.withLock { prepared = false }
+                guard Self.validGeneration(generation) else {
+                    return ControlResponse(ok: false, message: "unable to resume after update")
+                }
+                guard preparedGeneration != nil else {
+                    guard stateLock.withLock({ resumedGeneration == generation }) else {
+                        return ControlResponse(ok: false, message: "unable to resume after update")
+                    }
+                    try validateResume(generation)
+                    return try acceptedResponse()
+                }
+                try validateResume(generation)
+                try resumeAction(generation)
+                stateLock.withLock {
+                    preparedGenerationStorage = nil
+                    resumedGeneration = generation
+                }
                 return try acceptedResponse()
             } catch {
                 return ControlResponse(ok: false, message: "unable to resume after update")
             }
         }
     }
+
+    public func resumeAfterAbandonment(generation: Int64) -> ControlResponse {
+        workQueue.sync {
+            do {
+                guard preparedGeneration == generation else {
+                    return ControlResponse(ok: false, message: "unable to resume after update")
+                }
+                try resumeAction(generation)
+                stateLock.withLock {
+                    preparedGenerationStorage = nil
+                    resumedGeneration = generation
+                }
+                return try acceptedResponse()
+            } catch {
+                return ControlResponse(ok: false, message: "unable to resume after update")
+            }
+        }
+    }
+
+    private static func validGeneration(_ generation: Int64) -> Bool {
+        (1...ReleaseContractValidation.maximumSafeInteger).contains(generation)
+    }
 }
 
 public enum LaunchdJobControllerError: Error, Equatable {
-    case unsafeLaunchAgent
     case commandFailed
 }
 
@@ -186,40 +496,14 @@ public struct LaunchdJobController {
     private static let label = "com.redlattice.runtime-raiders-agent"
     private static let executable = URL(fileURLWithPath: "/bin/launchctl")
     private let userIdentifier: uid_t
-    private let plistURL: URL
     private let runCommand: Command
 
     public init(
         userIdentifier: uid_t = Darwin.geteuid(),
-        plistURL: URL,
         runCommand: @escaping Command
     ) {
         self.userIdentifier = userIdentifier
-        self.plistURL = plistURL.standardizedFileURL
         self.runCommand = runCommand
-    }
-
-    public func bootout() throws {
-        let result = try runCommand(
-            Self.executable,
-            ["bootout", jobTarget],
-            10
-        )
-        guard result.exitStatus == .exited(0) else {
-            throw LaunchdJobControllerError.commandFailed
-        }
-    }
-
-    public func bootstrap() throws {
-        try validateLaunchAgent()
-        let result = try runCommand(
-            Self.executable,
-            ["bootstrap", domainTarget, plistURL.path],
-            10
-        )
-        guard result.exitStatus == .exited(0) else {
-            throw LaunchdJobControllerError.commandFailed
-        }
     }
 
     public func restart() throws {
@@ -233,406 +517,23 @@ public struct LaunchdJobController {
         }
     }
 
-    public func proveStopped() -> Bool {
-        guard let result = try? runCommand(
-            Self.executable,
-            ["print", jobTarget],
-            5
-        ),
-        result.exitStatus == .exited(113),
-        result.stdout.isEmpty,
-        String(decoding: result.stderr, as: UTF8.self).contains("Could not find service") else {
-            return false
-        }
-        return true
-    }
-
     private var domainTarget: String { "gui/\(userIdentifier)" }
     private var jobTarget: String { "\(domainTarget)/\(Self.label)" }
-
-    private func validateLaunchAgent() throws {
-        guard plistURL.isFileURL,
-              plistURL.path.hasPrefix("/"),
-              plistURL.lastPathComponent == "\(Self.label).plist" else {
-            throw LaunchdJobControllerError.unsafeLaunchAgent
-        }
-        var metadata = stat()
-        guard Darwin.lstat(plistURL.path, &metadata) == 0,
-              metadata.st_mode & S_IFMT == S_IFREG,
-              metadata.st_uid == Darwin.geteuid(),
-              metadata.st_mode & 0o777 == 0o600,
-              metadata.st_nlink == 1 else {
-            throw LaunchdJobControllerError.unsafeLaunchAgent
-        }
-    }
-}
-
-public enum StableUpdateRecoveryError: Error, Equatable {
-    case daemonNotProvenStopped
-    case healthVerificationFailed
-    case retrySafetyFailure
-}
-
-public enum StableRecoveryPhase: Equatable, Sendable {
-    case rollbackOnly
-    case rollbackAndFailed
-}
-
-enum StableRecoveryRestoreFault {
-    case parentSynchronize
-    case installedPostcheck
-    case failedCandidatePostcheck
-}
-
-public final class StableRecoveryFileTransaction {
-    private struct Entry: Equatable {
-        let device: UInt64
-        let inode: UInt64
-        let mode: UInt16
-    }
-
-    private struct Snapshot {
-        let phase: StableRecoveryPhase
-        let rollback: Entry
-        let failed: Entry?
-    }
-
-    private let paths: AgentPaths
-    private let supportDescriptor: Int32
-    private let restoreFault: (StableRecoveryRestoreFault) throws -> Void
-    private var snapshot: Snapshot?
-
-    public convenience init(paths: AgentPaths) throws {
-        try self.init(paths: paths, restoreFault: { _ in })
-    }
-
-    init(
-        paths: AgentPaths,
-        restoreFault: @escaping (StableRecoveryRestoreFault) throws -> Void
-    ) throws {
-        self.paths = paths
-        guard let descriptor = try OwnerOnlyDirectory.openExisting(paths.supportDirectory) else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        supportDescriptor = descriptor
-        self.restoreFault = restoreFault
-    }
-
-    deinit { Darwin.close(supportDescriptor) }
-
-    public func inspectAndNormalize() throws -> StableRecoveryPhase {
-        try requireMissing(paths.installedApplication.lastPathComponent)
-        let rollbackName = paths.rollbackApplication.lastPathComponent
-        let rollbackBefore = try ownedDirectory(rollbackName, allowSafeReadableMode: true)
-        let failedName = paths.failedApplication.lastPathComponent
-        let failed: Entry?
-        let phase: StableRecoveryPhase
-        if exists(failedName) {
-            failed = try ownedDirectory(failedName, allowSafeReadableMode: false)
-            phase = .rollbackAndFailed
-        } else {
-            try requireMissing(failedName)
-            failed = nil
-            phase = .rollbackOnly
-        }
-        let rollbackDescriptor = Darwin.openat(
-            supportDescriptor,
-            rollbackName,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-        )
-        guard rollbackDescriptor >= 0 else { throw CompanionUpdaterError.unsafeFilesystem }
-        defer { Darwin.close(rollbackDescriptor) }
-        var rollbackMetadata = stat()
-        guard Darwin.fstat(rollbackDescriptor, &rollbackMetadata) == 0,
-              UInt64(rollbackMetadata.st_dev) == rollbackBefore.device,
-              UInt64(rollbackMetadata.st_ino) == rollbackBefore.inode,
-              Darwin.fchmod(rollbackDescriptor, 0o700) == 0 else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        let rollback = try ownedDirectory(rollbackName, allowSafeReadableMode: false)
-        guard rollback.device == rollbackBefore.device,
-              rollback.inode == rollbackBefore.inode else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        snapshot = Snapshot(phase: phase, rollback: rollback, failed: failed)
-        return phase
-    }
-
-    public func restore(phase: StableRecoveryPhase) throws {
-        guard let snapshot, snapshot.phase == phase,
-              try ownedDirectory(
-                  paths.rollbackApplication.lastPathComponent,
-                  allowSafeReadableMode: false
-              ) == snapshot.rollback else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        try requireMissing(paths.installedApplication.lastPathComponent)
-        switch (phase, snapshot.failed) {
-        case (.rollbackOnly, nil):
-            try requireMissing(paths.failedApplication.lastPathComponent)
-        case let (.rollbackAndFailed, failed?):
-            guard try ownedDirectory(
-                paths.failedApplication.lastPathComponent,
-                allowSafeReadableMode: false
-            ) == failed else {
-                throw CompanionUpdaterError.unsafeFilesystem
-            }
-        default:
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        guard Darwin.renameat(
-            supportDescriptor,
-            paths.rollbackApplication.lastPathComponent,
-            supportDescriptor,
-            paths.installedApplication.lastPathComponent
-        ) == 0 else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        do {
-            try restoreFault(.parentSynchronize)
-            try synchronize()
-            try restoreFault(.installedPostcheck)
-            guard try ownedDirectory(
-                paths.installedApplication.lastPathComponent,
-                allowSafeReadableMode: false
-            ) == snapshot.rollback else {
-                throw CompanionUpdaterError.unsafeFilesystem
-            }
-            if let failed = snapshot.failed {
-                try restoreFault(.failedCandidatePostcheck)
-                guard try ownedDirectory(
-                    paths.failedApplication.lastPathComponent,
-                    allowSafeReadableMode: false
-                ) == failed else {
-                    throw CompanionUpdaterError.unsafeFilesystem
-                }
-            } else {
-                try requireMissing(paths.failedApplication.lastPathComponent)
-            }
-        } catch {
-            let postRenameError = error
-            do {
-                try revertRestore(phase: phase)
-            } catch {
-                throw StableUpdateRecoveryError.retrySafetyFailure
-            }
-            throw postRenameError
-        }
-    }
-
-    public func revertRestore(phase: StableRecoveryPhase) throws {
-        guard let snapshot, snapshot.phase == phase,
-              try ownedDirectory(
-                  paths.installedApplication.lastPathComponent,
-                  allowSafeReadableMode: false
-              ) == snapshot.rollback else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        try requireMissing(paths.rollbackApplication.lastPathComponent)
-        switch (phase, snapshot.failed) {
-        case (.rollbackOnly, nil):
-            try requireMissing(paths.failedApplication.lastPathComponent)
-        case let (.rollbackAndFailed, failed?):
-            guard try ownedDirectory(
-                paths.failedApplication.lastPathComponent,
-                allowSafeReadableMode: false
-            ) == failed else {
-                throw CompanionUpdaterError.unsafeFilesystem
-            }
-        default:
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        guard Darwin.renameat(
-            supportDescriptor,
-            paths.installedApplication.lastPathComponent,
-            supportDescriptor,
-            paths.rollbackApplication.lastPathComponent
-        ) == 0 else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        try synchronize()
-        try requireMissing(paths.installedApplication.lastPathComponent)
-        guard try ownedDirectory(
-            paths.rollbackApplication.lastPathComponent,
-            allowSafeReadableMode: false
-        ) == snapshot.rollback else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        if let failed = snapshot.failed {
-            guard try ownedDirectory(
-                paths.failedApplication.lastPathComponent,
-                allowSafeReadableMode: false
-            ) == failed else {
-                throw CompanionUpdaterError.unsafeFilesystem
-            }
-        } else {
-            try requireMissing(paths.failedApplication.lastPathComponent)
-        }
-    }
-
-    private func ownedDirectory(
-        _ name: String,
-        allowSafeReadableMode: Bool
-    ) throws -> Entry {
-        var metadata = stat()
-        let mode: mode_t
-        guard Darwin.fstatat(supportDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
-              metadata.st_mode & S_IFMT == S_IFDIR,
-              metadata.st_uid == Darwin.geteuid() else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        mode = metadata.st_mode & 0o777
-        guard mode == 0o700 || (allowSafeReadableMode && mode == 0o755) else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-        return Entry(
-            device: UInt64(metadata.st_dev),
-            inode: UInt64(metadata.st_ino),
-            mode: UInt16(mode)
-        )
-    }
-
-    private func requireMissing(_ name: String) throws {
-        var metadata = stat()
-        guard Darwin.fstatat(supportDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) != 0,
-              errno == ENOENT else {
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-    }
-
-    private func exists(_ name: String) -> Bool {
-        var metadata = stat()
-        return Darwin.fstatat(supportDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0
-    }
-
-    private func synchronize() throws {
-        while Darwin.fsync(supportDescriptor) != 0 {
-            if errno == EINTR { continue }
-            throw CompanionUpdaterError.unsafeFilesystem
-        }
-    }
-}
-
-public struct StableUpdateRecoveryOperations {
-    let phase: () throws -> StableRecoveryPhase
-    let verifyBundles: (StableRecoveryPhase) throws -> Void
-    let persistDisabled: () throws -> Void
-    let bootout: () throws -> Void
-    let proveStopped: () -> Bool
-    let restore: (StableRecoveryPhase) throws -> Void
-    let revertRestored: (StableRecoveryPhase) throws -> Void
-    let verifyRestoredBundle: (StableRecoveryPhase) throws -> Void
-    let bootstrap: () throws -> Void
-    let verifyDisabledHealth: () throws -> Bool
-    let monotonicNow: () -> TimeInterval
-    let sleep: (TimeInterval) -> Void
-
-    public init(
-        phase: @escaping () throws -> StableRecoveryPhase,
-        verifyBundles: @escaping (StableRecoveryPhase) throws -> Void,
-        persistDisabled: @escaping () throws -> Void,
-        bootout: @escaping () throws -> Void,
-        proveStopped: @escaping () -> Bool,
-        restore: @escaping (StableRecoveryPhase) throws -> Void,
-        revertRestored: @escaping (StableRecoveryPhase) throws -> Void,
-        verifyRestoredBundle: @escaping (StableRecoveryPhase) throws -> Void,
-        bootstrap: @escaping () throws -> Void,
-        verifyDisabledHealth: @escaping () throws -> Bool,
-        monotonicNow: @escaping () -> TimeInterval = {
-            ProcessInfo.processInfo.systemUptime
-        },
-        sleep: @escaping (TimeInterval) -> Void = {
-            Thread.sleep(forTimeInterval: $0)
-        }
-    ) {
-        self.phase = phase
-        self.verifyBundles = verifyBundles
-        self.persistDisabled = persistDisabled
-        self.bootout = bootout
-        self.proveStopped = proveStopped
-        self.restore = restore
-        self.revertRestored = revertRestored
-        self.verifyRestoredBundle = verifyRestoredBundle
-        self.bootstrap = bootstrap
-        self.verifyDisabledHealth = verifyDisabledHealth
-        self.monotonicNow = monotonicNow
-        self.sleep = sleep
-    }
-}
-
-public final class StableUpdateRecovery {
-    private static let healthTimeout: TimeInterval = 10
-    private static let healthPollInterval: TimeInterval = 0.1
-    private let paths: AgentPaths
-    private let operations: StableUpdateRecoveryOperations
-
-    public init(paths: AgentPaths, operations: StableUpdateRecoveryOperations) {
-        self.paths = paths
-        self.operations = operations
-    }
-
-    public func run() throws {
-        let updateLock = try CompanionUpdateLock(paths: paths)
-        defer { updateLock.unlock() }
-        var preparedStartupLease: CompanionPreparedStartupLease?
-        defer { preparedStartupLease?.unlock() }
-        let phase = try operations.phase()
-        try operations.verifyBundles(phase)
-        try operations.persistDisabled()
-        try? operations.bootout()
-        guard operations.proveStopped() else {
-            throw StableUpdateRecoveryError.daemonNotProvenStopped
-        }
-        try operations.verifyBundles(phase)
-        try operations.restore(phase)
-        do {
-            try operations.verifyRestoredBundle(phase)
-            preparedStartupLease = try CompanionPreparedStartupLease(paths: paths)
-            try operations.bootstrap()
-            let start = operations.monotonicNow()
-            guard start.isFinite else {
-                throw StableUpdateRecoveryError.healthVerificationFailed
-            }
-            let deadline = start + Self.healthTimeout
-            repeat {
-                if (try? operations.verifyDisabledHealth()) == true {
-                    preparedStartupLease?.unlock()
-                    preparedStartupLease = nil
-                    return
-                }
-                let now = operations.monotonicNow()
-                guard now.isFinite, now < deadline else {
-                    throw StableUpdateRecoveryError.healthVerificationFailed
-                }
-                operations.sleep(min(Self.healthPollInterval, deadline - now))
-            } while true
-        } catch {
-            let postRestoreError = error
-            try? operations.bootout()
-            guard operations.proveStopped() else {
-                throw StableUpdateRecoveryError.retrySafetyFailure
-            }
-            do {
-                try operations.revertRestored(phase)
-                try operations.verifyBundles(phase)
-            } catch {
-                throw StableUpdateRecoveryError.retrySafetyFailure
-            }
-            throw postRestoreError
-        }
-    }
 }
 
 public struct ControlRequest: Codable, Equatable, Sendable {
     public let command: ControlCommand
     public let claudeOTelEnvironmentPresent: Bool?
+    public let releaseStateGeneration: Int64?
 
     public init(
         command: ControlCommand,
-        claudeOTelEnvironmentPresent: Bool? = nil
+        claudeOTelEnvironmentPresent: Bool? = nil,
+        releaseStateGeneration: Int64? = nil
     ) {
         self.command = command
         self.claudeOTelEnvironmentPresent = claudeOTelEnvironmentPresent
+        self.releaseStateGeneration = releaseStateGeneration
     }
 
     public static func invocation(
@@ -643,13 +544,15 @@ public struct ControlRequest: Codable, Equatable, Sendable {
             command: command,
             claudeOTelEnvironmentPresent: command == .doctor
                 ? DoctorEnvironment.claudeOTelPresent(in: environment)
-                : nil
+                : nil,
+            releaseStateGeneration: nil
         )
     }
 
     private enum CodingKeys: String, CodingKey {
         case command
         case claudeOTelEnvironmentPresent = "claude_otel_environment_present"
+        case releaseStateGeneration = "release_state_generation"
     }
 }
 
@@ -709,9 +612,15 @@ public enum ControlSocketProtocol {
               valid(request) else {
             throw ControlSocketError.invalidFrame
         }
-        let expectedFields: Set<String> = request.command == .doctor
-            ? ["command", "claude_otel_environment_present"]
-            : ["command"]
+        let expectedFields: Set<String>
+        switch request.command {
+        case .doctor:
+            expectedFields = ["command", "claude_otel_environment_present"]
+        case .prepareUpdate, .resumeUpdate:
+            expectedFields = ["command", "release_state_generation"]
+        default:
+            expectedFields = ["command"]
+        }
         guard Set(fields.keys) == expectedFields else {
             throw ControlSocketError.invalidFrame
         }
@@ -719,9 +628,18 @@ public enum ControlSocketProtocol {
     }
 
     private static func valid(_ request: ControlRequest) -> Bool {
-        request.command == .doctor
-            ? request.claudeOTelEnvironmentPresent != nil
-            : request.claudeOTelEnvironmentPresent == nil
+        switch request.command {
+        case .doctor:
+            return request.claudeOTelEnvironmentPresent != nil &&
+                request.releaseStateGeneration == nil
+        case .prepareUpdate, .resumeUpdate:
+            guard let generation = request.releaseStateGeneration else { return false }
+            return request.claudeOTelEnvironmentPresent == nil &&
+                (1...ReleaseContractValidation.maximumSafeInteger).contains(generation)
+        default:
+            return request.claudeOTelEnvironmentPresent == nil &&
+                request.releaseStateGeneration == nil
+        }
     }
 }
 
@@ -1001,6 +919,11 @@ public final class ControlSocketServer: @unchecked Sendable {
 }
 
 public enum ControlSocketClient {
+    struct PeerIdentity: Equatable, Sendable {
+        let executableURL: URL
+        let auditToken: Data
+    }
+
     static func timeoutSeconds(for command: ControlCommand) -> Int {
         switch command {
         case .on, .off, .uninstall, .prepareUpdate, .resumeUpdate:
@@ -1030,6 +953,37 @@ public enum ControlSocketClient {
         to socketURL: URL,
         maximumFrameBytes: Int = 4_096
     ) throws -> ControlResponse {
+        try exchange(
+            request: request,
+            to: socketURL,
+            maximumFrameBytes: maximumFrameBytes,
+            attestPeer: false
+        ).response
+    }
+
+    static func sendAttested(
+        request: ControlRequest,
+        to socketURL: URL,
+        maximumFrameBytes: Int = 4_096
+    ) throws -> (ControlResponse, PeerIdentity) {
+        let result = try exchange(
+            request: request,
+            to: socketURL,
+            maximumFrameBytes: maximumFrameBytes,
+            attestPeer: true
+        )
+        guard let peerIdentity = result.peerIdentity else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        return (result.response, peerIdentity)
+    }
+
+    private static func exchange(
+        request: ControlRequest,
+        to socketURL: URL,
+        maximumFrameBytes: Int,
+        attestPeer: Bool
+    ) throws -> (response: ControlResponse, peerIdentity: PeerIdentity?) {
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ControlSocketServer.currentPOSIXError() }
         try ControlSocketServer.disableSIGPIPE(descriptor)
@@ -1043,6 +997,7 @@ public enum ControlSocketClient {
                 throw ControlSocketServer.currentPOSIXError()
             }
         }
+        let peerIdentity = attestPeer ? try peerIdentity(descriptor) : nil
         try ControlSocketServer.writeAll(
             ControlSocketProtocol.encode(request, maximumFrameBytes: maximumFrameBytes),
             to: descriptor
@@ -1051,6 +1006,47 @@ public enum ControlSocketClient {
             descriptor,
             maximumFrameBytes: maximumFrameBytes
         )
-        return try JSONDecoder().decode(ControlResponse.self, from: data.dropLast())
+        return (
+            try JSONDecoder().decode(ControlResponse.self, from: data.dropLast()),
+            peerIdentity
+        )
+    }
+
+    private static func peerIdentity(_ descriptor: Int32) throws -> PeerIdentity {
+        var auditToken = audit_token_t()
+        var auditTokenSize = socklen_t(MemoryLayout<audit_token_t>.size)
+        guard Darwin.getsockopt(
+            descriptor,
+            SOL_LOCAL,
+            LOCAL_PEERTOKEN,
+            &auditToken,
+            &auditTokenSize
+        ) == 0,
+        auditTokenSize == MemoryLayout<audit_token_t>.size else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        let auditTokenData = withUnsafeBytes(of: &auditToken) { Data($0) }
+        guard auditTokenData.count == MemoryLayout<audit_token_t>.size,
+              auditTokenData.contains(where: { $0 != 0 }) else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        var path = [CChar](repeating: 0, count: Int(PATH_MAX) * 4)
+        let count = proc_pidpath_audittoken(&auditToken, &path, UInt32(path.count))
+        guard count > 0,
+              Int(count) < path.count,
+              path[Int(count)] == 0 else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        let value = String(
+            decoding: path.prefix(Int(count)).map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        guard value.hasPrefix("/"), !value.contains("\n") else {
+            throw ControlSocketError.unsafeSocketPath
+        }
+        return PeerIdentity(
+            executableURL: URL(fileURLWithPath: value, isDirectory: false),
+            auditToken: auditTokenData
+        )
     }
 }

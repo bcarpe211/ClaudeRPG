@@ -4,28 +4,26 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ZipArchiveValidatorTests: XCTestCase {
-    func testAcceptsOneExactApplicationRootWithRegularFiles() throws {
+    func testAcceptsExactReleaseContainerWithAgentAndLauncherApplications() throws {
         try withArchive(entries: validEntries()) { archive in
             XCTAssertEqual(
                 try ZipArchiveValidator.validate(archive),
-                ZipArchiveSummary(entryCount: 2, totalUncompressedSize: 3)
+                ZipArchiveSummary(entryCount: 5, totalUncompressedSize: 6)
             )
         }
     }
 
     func testAcceptsExactSignedDataDescriptorForm() throws {
-        let entries = [
-            validEntries()[0],
-            ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+        var entries = validEntries()
+        entries[2] = ZipEntry(
+                name: agentInfoPlist,
                 flags: 0x0008,
                 data: Data("abc".utf8)
-            ),
-        ]
+            )
         try withArchive(entries: entries) { archive in
             XCTAssertEqual(
                 try ZipArchiveValidator.validate(archive),
-                ZipArchiveSummary(entryCount: 2, totalUncompressedSize: 3)
+                ZipArchiveSummary(entryCount: 5, totalUncompressedSize: 6)
             )
         }
     }
@@ -37,15 +35,19 @@ final class ZipArchiveValidatorTests: XCTestCase {
             try? FileManager.default.removeItem(at: staging)
             try? FileManager.default.removeItem(at: archive)
         }
-        let app = staging.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
-        let contents = app.appendingPathComponent("Contents", isDirectory: true)
-        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
-        try Data("plist".utf8).write(to: contents.appendingPathComponent("Info.plist"))
+        let release = staging.appendingPathComponent("Runtime Raiders Release", isDirectory: true)
+        for applicationName in ["Runtime Raiders Agent.app", "Runtime Raiders Launcher.app"] {
+            let contents = release
+                .appendingPathComponent(applicationName, isDirectory: true)
+                .appendingPathComponent("Contents", isDirectory: true)
+            try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            try Data("plist".utf8).write(to: contents.appendingPathComponent("Info.plist"))
+        }
 
         let ditto = Process()
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         ditto.arguments = [
-            "-c", "-k", "--sequesterRsrc", "--keepParent", app.path, archive.path,
+            "-c", "-k", "--sequesterRsrc", "--keepParent", release.path, archive.path,
         ]
         try ditto.run()
         ditto.waitUntilExit()
@@ -53,20 +55,19 @@ final class ZipArchiveValidatorTests: XCTestCase {
 
         XCTAssertEqual(
             try ZipArchiveValidator.validate(archive),
-            ZipArchiveSummary(entryCount: 3, totalUncompressedSize: 5)
+            ZipArchiveSummary(entryCount: 7, totalUncompressedSize: 10)
         )
     }
 
     func testRejectsUnsupportedGeneralPurposeFlagBitsAndCombinations() throws {
         for flags: UInt16 in [0x0001, 0x0002, 0x0004, 0x0009, 0x0800] {
-            try assertInvalid(entries: [
-                validEntries()[0],
-                ZipEntry(
-                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+            var entries = validEntries()
+            entries[2] = ZipEntry(
+                    name: agentInfoPlist,
                     flags: flags,
                     data: Data("abc".utf8)
-                ),
-            ])
+                )
+            try assertInvalid(entries: entries)
         }
     }
 
@@ -76,39 +77,36 @@ final class ZipArchiveValidatorTests: XCTestCase {
             (crc: UInt32(0), compressed: UInt32(1), uncompressed: UInt32(0)),
             (crc: UInt32(0), compressed: UInt32(0), uncompressed: UInt32(1)),
         ] {
-            try assertInvalid(entries: [
-                validEntries()[0],
-                ZipEntry(
-                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+            var entries = validEntries()
+            entries[2] = ZipEntry(
+                    name: agentInfoPlist,
                     flags: 0x0008,
                     data: Data("abc".utf8),
                     localCRC: placeholders.crc,
                     localCompressedSize: placeholders.compressed,
                     localUncompressedSize: placeholders.uncompressed
-                ),
-            ])
+                )
+            try assertInvalid(entries: entries)
         }
     }
 
     func testRejectsCentralAndLocalDescriptorFlagMismatch() throws {
-        try assertInvalid(entries: [
-            validEntries()[0],
-            ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+        var centralDescriptor = validEntries()
+        centralDescriptor[2] = ZipEntry(
+                name: agentInfoPlist,
                 flags: 0x0008,
                 localFlags: 0,
                 data: Data("abc".utf8)
-            ),
-        ])
-        try assertInvalid(entries: [
-            validEntries()[0],
-            ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+            )
+        try assertInvalid(entries: centralDescriptor)
+        var localDescriptor = validEntries()
+        localDescriptor[2] = ZipEntry(
+                name: agentInfoPlist,
                 flags: 0,
                 localFlags: 0x0008,
                 data: Data("abc".utf8)
-            ),
-        ])
+            )
+        try assertInvalid(entries: localDescriptor)
     }
 
     func testRejectsMissingTruncatedOrUnsignedDataDescriptors() throws {
@@ -117,15 +115,14 @@ final class ZipArchiveValidatorTests: XCTestCase {
             Data(repeating: 0, count: 15),
             dataDescriptor(signature: nil, crc: 0, compressedSize: 3, uncompressedSize: 3),
         ] {
-            try assertInvalid(entries: [
-                validEntries()[0],
-                ZipEntry(
-                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+            var entries = validEntries()
+            entries[2] = ZipEntry(
+                    name: agentInfoPlist,
                     flags: 0x0008,
                     data: Data("abc".utf8),
                     dataDescriptor: descriptor
-                ),
-            ])
+                )
+            try assertInvalid(entries: entries)
         }
     }
 
@@ -136,15 +133,14 @@ final class ZipArchiveValidatorTests: XCTestCase {
             dataDescriptor(signature: 0x08074b50, crc: 0, compressedSize: 2, uncompressedSize: 3),
             dataDescriptor(signature: 0x08074b50, crc: 0, compressedSize: 3, uncompressedSize: 2),
         ] {
-            try assertInvalid(entries: [
-                validEntries()[0],
-                ZipEntry(
-                    name: "Runtime Raiders Agent.app/Contents/Info.plist",
+            var entries = validEntries()
+            entries[2] = ZipEntry(
+                    name: agentInfoPlist,
                     flags: 0x0008,
                     data: Data("abc".utf8),
                     dataDescriptor: descriptor
-                ),
-            ])
+                )
+            try assertInvalid(entries: entries)
         }
     }
 
@@ -156,58 +152,106 @@ final class ZipArchiveValidatorTests: XCTestCase {
             uncompressedSize: 3
         )
         descriptor.append(Data(repeating: 0, count: 8))
-        try assertInvalid(entries: [
-            validEntries()[0],
-            ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+        var entries = validEntries()
+        entries[2] = ZipEntry(
+                name: agentInfoPlist,
                 flags: 0x0008,
                 data: Data("abc".utf8),
                 dataDescriptor: descriptor
-            ),
-        ])
+            )
+        try assertInvalid(entries: entries)
     }
 
-    func testRejectsUnexpectedOrMissingApplicationRoot() throws {
-        for entries in [
-            [ZipEntry(name: "Other.app/", directory: true)],
-            [ZipEntry(name: "Runtime Raiders Agent.app/file", data: Data("abc".utf8))],
-            validEntries() + [ZipEntry(name: "Other.app/file", data: Data())],
-        ] {
-            try assertInvalid(entries: entries)
-        }
+    func testRejectsEitherMissingRequiredApplication() throws {
+        try assertInvalid(entries: Array(validEntries()[0...0]) + Array(validEntries()[3...4]))
+        try assertInvalid(entries: Array(validEntries()[0...2]))
+    }
+
+    func testRejectsAnyThirdTopLevelRootOrReleaseChild() throws {
+        try assertInvalid(entries: validEntries() + [ZipEntry(name: "Other.app/", directory: true)])
+        try assertInvalid(entries: validEntries() + [
+            ZipEntry(name: "Runtime Raiders Release/Other.app/", directory: true),
+        ])
     }
 
     func testRejectsUnsafePathForms() throws {
         let unsafeNames = [
-            "/Runtime Raiders Agent.app/file",
-            "Runtime Raiders Agent.app/../file",
-            "Runtime Raiders Agent.app/./file",
-            "Runtime Raiders Agent.app//file",
-            "Runtime Raiders Agent.app\\file",
-            "Runtime Raiders Agent.app/bad\u{7f}",
+            "/Runtime Raiders Release/Runtime Raiders Agent.app/file",
+            "Runtime Raiders Release/Runtime Raiders Agent.app/../file",
+            "Runtime Raiders Release/Runtime Raiders Agent.app/./file",
+            "Runtime Raiders Release/Runtime Raiders Agent.app//file",
+            "Runtime Raiders Release/Runtime Raiders Agent.app\\file",
+            "Runtime Raiders Release/Runtime Raiders Agent.app/bad\u{7f}",
         ]
         for name in unsafeNames {
-            try assertInvalid(entries: [validEntries()[0], ZipEntry(name: name, data: Data())])
+            try assertInvalid(entries: validEntries() + [ZipEntry(name: name, data: Data())])
         }
     }
 
-    func testRejectsDuplicateAndCaseInsensitiveCollidingPaths() throws {
+    func testRejectsDuplicatePaths() throws {
         try assertInvalid(entries: validEntries() + [validEntries()[1]])
+    }
+
+    func testRejectsFileDirectoryAliasesInEitherOrderAndAcrossCaseFolding() throws {
+        let file = ZipEntry(name: "\(agentRoot)Contents/item", data: Data("file".utf8))
+        let directory = ZipEntry(name: "\(agentRoot)Contents/item/", directory: true)
+        let foldedDirectory = ZipEntry(name: "\(agentRoot)Contents/ITEM/", directory: true)
+
+        for aliases in [
+            [file, directory],
+            [directory, file],
+            [file, foldedDirectory],
+            [foldedDirectory, file],
+        ] {
+            try assertInvalid(entries: validEntries() + aliases)
+        }
+    }
+
+    func testRejectsRegularFileAncestorsInEitherOrderAndAcrossCaseFolding() throws {
+        let ancestor = ZipEntry(name: "\(agentRoot)Contents/item", data: Data("file".utf8))
+        let descendant = ZipEntry(name: "\(agentRoot)Contents/item/child", data: Data("child".utf8))
+        let foldedDescendant = ZipEntry(
+            name: "\(agentRoot)Contents/ITEM/child",
+            data: Data("child".utf8)
+        )
+
+        for collision in [
+            [ancestor, descendant],
+            [descendant, ancestor],
+            [ancestor, foldedDescendant],
+            [foldedDescendant, ancestor],
+        ] {
+            try assertInvalid(entries: validEntries() + collision)
+        }
+    }
+
+    func testRejectsCaseInsensitiveCollidingPaths() throws {
         try assertInvalid(entries: validEntries() + [
-            ZipEntry(name: "runtime raiders agent.app/CONTENTS/info.plist", data: Data()),
+            ZipEntry(name: "runtime raiders release/RUNTIME RAIDERS AGENT.APP/", directory: true),
         ])
+    }
+
+    func testRejectsArchiveFileLargerThanDownloadLimit() throws {
+        let archive = temporaryURL(prefix: "rr-oversized-archive").appendingPathExtension("zip")
+        defer { try? FileManager.default.removeItem(at: archive) }
+        XCTAssertTrue(FileManager.default.createFile(atPath: archive.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: archive)
+        try handle.truncate(atOffset: UInt64(ArtifactDownloader.maximumByteCount + 1))
+        try handle.close()
+
+        XCTAssertThrowsError(try ZipArchiveValidator.validate(archive))
     }
 
     func testRejectsNonASCIIPathBytesAndCentralLocalNameMismatch() throws {
         try assertInvalid(entries: [
-            validEntries()[0],
-            ZipEntry(nameBytes: Array("Runtime Raiders Agent.app/caf".utf8) + [0xe9], data: Data()),
+            validEntries()[0], validEntries()[1], validEntries()[3], validEntries()[4],
+            ZipEntry(nameBytes: Array("Runtime Raiders Release/Runtime Raiders Agent.app/caf".utf8) + [0xe9], data: Data()),
         ])
         try assertInvalid(entries: [
-            validEntries()[0],
+            validEntries()[0], validEntries()[1], validEntries()[3], validEntries()[4],
             ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/Info.plist",
-                localName: "Runtime Raiders Agent.app/Contents/Other.plist",
+                name: agentInfoPlist,
+                localName: "Runtime Raiders Release/Runtime Raiders Agent.app/Contents/Other.plist",
                 data: Data()
             ),
         ])
@@ -216,9 +260,9 @@ final class ZipArchiveValidatorTests: XCTestCase {
     func testRejectsSymlinkAndSpecialFileUnixModes() throws {
         for mode in [UInt32(S_IFLNK | 0o777), UInt32(S_IFSOCK | 0o600), UInt32(S_IFCHR | 0o600)] {
             try assertInvalid(entries: [
-                validEntries()[0],
+                validEntries()[0], validEntries()[1], validEntries()[2], validEntries()[3], validEntries()[4],
                 ZipEntry(
-                    name: "Runtime Raiders Agent.app/Contents/item",
+                    name: "Runtime Raiders Release/Runtime Raiders Agent.app/Contents/item",
                     data: Data(),
                     unixMode: mode
                 ),
@@ -228,37 +272,36 @@ final class ZipArchiveValidatorTests: XCTestCase {
 
     func testRejectsGroupOrWorldWritableRegularFilesAndDirectories() throws {
         try assertInvalid(entries: [
-            validEntries()[0],
+            validEntries()[0], validEntries()[1], validEntries()[2], validEntries()[3], validEntries()[4],
             ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/writable",
+                name: "Runtime Raiders Release/Runtime Raiders Agent.app/Contents/writable",
                 data: Data(),
                 unixMode: UInt32(S_IFREG | 0o666)
             ),
         ])
-        try assertInvalid(entries: [
-            ZipEntry(
-                name: "Runtime Raiders Agent.app/",
+        var writableDirectory = validEntries()
+        writableDirectory[1] = ZipEntry(
+                name: agentRoot,
                 directory: true,
                 unixMode: UInt32(S_IFDIR | 0o777)
-            ),
-            validEntries()[1],
-        ])
+            )
+        try assertInvalid(entries: writableDirectory)
     }
 
     func testRejectsEncryptedUnsupportedCompressionAndMultiDiskArchives() throws {
-        try assertInvalid(entries: [validEntries()[0], ZipEntry(
-            name: "Runtime Raiders Agent.app/file", flags: 1, data: Data()
+        try assertInvalid(entries: validEntries() + [ZipEntry(
+            name: "Runtime Raiders Release/Runtime Raiders Agent.app/file", flags: 1, data: Data()
         )])
-        try assertInvalid(entries: [validEntries()[0], ZipEntry(
-            name: "Runtime Raiders Agent.app/file", method: 99, data: Data()
+        try assertInvalid(entries: validEntries() + [ZipEntry(
+            name: "Runtime Raiders Release/Runtime Raiders Agent.app/file", method: 99, data: Data()
         )])
         try assertInvalid(entries: validEntries(), options: .init(diskNumber: 1))
     }
 
     func testRejectsZip64SentinelsInDirectoryAndEntries() throws {
         try assertInvalid(entries: validEntries(), options: .init(entryCount: UInt16.max))
-        try assertInvalid(entries: [validEntries()[0], ZipEntry(
-            name: "Runtime Raiders Agent.app/file",
+        try assertInvalid(entries: validEntries() + [ZipEntry(
+            name: "Runtime Raiders Release/Runtime Raiders Agent.app/file",
             data: Data(),
             centralCompressedSize: UInt32.max
         )])
@@ -269,22 +312,21 @@ final class ZipArchiveValidatorTests: XCTestCase {
         try withRawArchive(Data(valid.dropLast())) { XCTAssertThrowsError(try ZipArchiveValidator.validate($0)) }
         try withRawArchive(valid + Data([0])) { XCTAssertThrowsError(try ZipArchiveValidator.validate($0)) }
         try assertInvalid(entries: validEntries(), options: .init(centralDirectoryOffset: 0))
-        try assertInvalid(entries: [
-            validEntries()[0],
-            ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/Info.plist",
+        var overlapping = validEntries()
+        overlapping[2] = ZipEntry(
+                name: agentInfoPlist,
                 data: Data("abc".utf8),
                 localHeaderOffset: 1
-            ),
-        ])
+            )
+        try assertInvalid(entries: overlapping)
         try assertInvalid(entries: validEntries(), options: .init(undeclaredBytesBeforeCentralDirectory: 1))
     }
 
     func testRejectsMoreThan4096Entries() throws {
-        var entries = [validEntries()[0]]
-        for index in 0..<4_096 {
+        var entries = validEntries()
+        for index in 0..<4_092 {
             entries.append(ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/file-\(index)",
+                name: "Runtime Raiders Release/Runtime Raiders Agent.app/Contents/file-\(index)",
                 method: 8,
                 data: Data()
             ))
@@ -294,15 +336,15 @@ final class ZipArchiveValidatorTests: XCTestCase {
 
     func testRejectsTotalUncompressedSizeAbove256MiB() throws {
         try assertInvalid(entries: [
-            validEntries()[0],
+            validEntries()[0], validEntries()[1], validEntries()[2], validEntries()[3], validEntries()[4],
             ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/one",
+                name: "Runtime Raiders Release/Runtime Raiders Agent.app/Contents/one",
                 method: 8,
                 data: Data(),
                 uncompressedSize: 134_217_729
             ),
             ZipEntry(
-                name: "Runtime Raiders Agent.app/Contents/two",
+                name: "Runtime Raiders Release/Runtime Raiders Agent.app/Contents/two",
                 method: 8,
                 data: Data(),
                 uncompressedSize: 134_217_728
@@ -313,28 +355,47 @@ final class ZipArchiveValidatorTests: XCTestCase {
     func testExtractedTreeAuditRejectsSymlinksAndUnexpectedRoots() throws {
         let staging = temporaryURL(prefix: "rr-extracted-tree")
         defer { try? FileManager.default.removeItem(at: staging) }
-        let app = staging.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
-        let contents = app.appendingPathComponent("Contents", isDirectory: true)
-        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
-        try Data("plist".utf8).write(to: contents.appendingPathComponent("Info.plist"))
+        let release = staging.appendingPathComponent("Runtime Raiders Release", isDirectory: true)
+        let agent = release.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
+        let launcher = release.appendingPathComponent("Runtime Raiders Launcher.app", isDirectory: true)
+        let agentContents = agent.appendingPathComponent("Contents", isDirectory: true)
+        let launcherContents = launcher.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agentContents, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: launcherContents, withIntermediateDirectories: true)
+        try Data("agent".utf8).write(to: agentContents.appendingPathComponent("Info.plist"))
+        try Data("launcher".utf8).write(to: launcherContents.appendingPathComponent("Info.plist"))
 
         XCTAssertNoThrow(try ZipArchiveValidator.validateExtractedTree(staging))
 
-        let link = contents.appendingPathComponent("link")
+        try FileManager.default.removeItem(at: launcher)
+        XCTAssertThrowsError(try ZipArchiveValidator.validateExtractedTree(staging))
+        try FileManager.default.createDirectory(at: launcherContents, withIntermediateDirectories: true)
+        try Data("launcher".utf8).write(to: launcherContents.appendingPathComponent("Info.plist"))
+
+        let link = agentContents.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/private/tmp")
         XCTAssertThrowsError(try ZipArchiveValidator.validateExtractedTree(staging))
         try FileManager.default.removeItem(at: link)
 
-        try Data().write(to: staging.appendingPathComponent("extra"))
+        try Data().write(to: release.appendingPathComponent("extra"))
         XCTAssertThrowsError(try ZipArchiveValidator.validateExtractedTree(staging))
     }
 
     private func validEntries() -> [ZipEntry] {
         [
-            ZipEntry(name: "Runtime Raiders Agent.app/", directory: true),
-            ZipEntry(name: "Runtime Raiders Agent.app/Contents/Info.plist", data: Data("abc".utf8)),
+            ZipEntry(name: releaseRoot, directory: true),
+            ZipEntry(name: agentRoot, directory: true),
+            ZipEntry(name: agentInfoPlist, data: Data("abc".utf8)),
+            ZipEntry(name: launcherRoot, directory: true),
+            ZipEntry(name: launcherInfoPlist, data: Data("abc".utf8)),
         ]
     }
+
+    private var releaseRoot: String { "Runtime Raiders Release/" }
+    private var agentRoot: String { "Runtime Raiders Release/Runtime Raiders Agent.app/" }
+    private var launcherRoot: String { "Runtime Raiders Release/Runtime Raiders Launcher.app/" }
+    private var agentInfoPlist: String { "\(agentRoot)Contents/Info.plist" }
+    private var launcherInfoPlist: String { "\(launcherRoot)Contents/Info.plist" }
 
     private func assertInvalid(
         entries: [ZipEntry],

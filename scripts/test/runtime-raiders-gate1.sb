@@ -1,0 +1,16 @@
+(version 1)
+
+(allow default)
+
+; Keep local IPC available to the Swift/Vitest suites while denying every
+; non-loopback IP connection, regardless of whether a tool was PATH-shadowed.
+(deny network-outbound (remote ip))
+(allow network-outbound (remote ip "localhost:*"))
+
+; Gate 1 is never allowed to invoke the live service manager directly.
+(deny process-exec (literal "/bin/launchctl"))
+(deny process-exec (literal "/usr/bin/launchctl"))
+
+; Even an absolute tool or native API cannot mutate the caller's real state.
+(deny file-write* (subpath (param "RUNTIME_RAIDERS_REAL_SUPPORT")))
+(deny file-write* (subpath (param "RUNTIME_RAIDERS_GATE1_PROTECTED")))

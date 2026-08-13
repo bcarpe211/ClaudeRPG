@@ -19,11 +19,38 @@ final class CompanionReleaseTests: XCTestCase {
             replacing("RuntimeRaidersReleaseSequence", with: true),
             replacing("RuntimeRaidersReleaseSequence", with: 9_007_199_254_740_992),
             replacing("RuntimeRaidersReleaseSHA", with: String(repeating: "A", count: 40)),
-            replacing("RuntimeRaidersUpdateProtocolVersion", with: 2),
+            replacing("RuntimeRaidersUpdateProtocolVersion", with: 3),
             removing("RuntimeRaidersReleaseSHA"),
         ] {
             XCTAssertThrowsError(try CompanionReleaseIdentity.parse(infoDictionary: invalid))
         }
+    }
+
+    func testReleaseIdentityConvertsOnlyValidatedFieldsToProtocolTwoReference() throws {
+        var protocolTwo = validInfoDictionary()
+        protocolTwo["RuntimeRaidersUpdateProtocolVersion"] = 2
+        let identity = try CompanionReleaseIdentity.parse(infoDictionary: protocolTwo)
+        let reference = ReleaseReference(
+            releaseSequence: 1,
+            releaseSHA: String(repeating: "a", count: 40),
+            companionVersion: "0.2.0",
+            updateProtocolVersion: 2
+        )
+        XCTAssertEqual(try identity.releaseReference(), reference)
+        XCTAssertEqual(try reference.companionReleaseIdentity(), identity)
+
+        XCTAssertThrowsError(try CompanionReleaseIdentity(
+            releaseSequence: 1,
+            releaseSHA: String(repeating: "A", count: 40),
+            companionVersion: "0.2.0",
+            updateProtocolVersion: 2
+        ).releaseReference())
+        XCTAssertThrowsError(try CompanionReleaseIdentity(
+            releaseSequence: 1,
+            releaseSHA: String(repeating: "a", count: 40),
+            companionVersion: "0.2.0",
+            updateProtocolVersion: 1
+        ).releaseReference())
     }
 
     func testSealedBundleIdentityLoadsExactMetadataAndInvalidBundleFailsClosed() throws {

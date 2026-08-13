@@ -4,1298 +4,629 @@ import Foundation
 import XCTest
 @testable import RuntimeRaidersCore
 
-@_silgen_name("flock")
-private func updaterTestFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
-
-@_silgen_name("fork")
-private func updaterTestFork() -> pid_t
-
 final class CompanionUpdaterTests: XCTestCase {
-    func testAlreadyCurrentReturnsWithoutDownload() throws {
+    func testAlreadyCurrentStopsBeforeDownload() throws {
         try withHarness { harness in
-            harness.manifest = harness.oldManifest
+            harness.manifest = harness.manifest(for: harness.n)
 
             XCTAssertEqual(try harness.makeUpdater().run(), .alreadyCurrent)
-            XCTAssertEqual(harness.log.values, ["lock", "status", "fetch", "unlock"])
             XCTAssertFalse(harness.downloadCalled)
+            XCTAssertEqual(try harness.state(), harness.initialState)
         }
     }
 
-    func testInitialActiveRunRefusesBeforeDownload() throws {
+    func testTwoSuccessiveUpdatesUseVersionedTrialsAndRetainEveryRelease() throws {
         try withHarness { harness in
-            harness.initialStatus = harness.oldStatus(activeRunCount: 1)
+            try harness.runUpdate(to: harness.n1)
 
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .activeRun)
-            }
-            XCTAssertEqual(harness.log.values, ["lock", "status", "unlock"])
-            XCTAssertFalse(harness.downloadCalled)
-        }
-    }
+            let afterFirst = try harness.state()
+            XCTAssertEqual(afterFirst.generation, 3)
+            XCTAssertEqual(afterFirst.active, harness.n1)
+            XCTAssertEqual(afterFirst.fallback, harness.n)
+            XCTAssertNil(afterFirst.trial)
+            XCTAssertTrue(harness.activeObservedDuringTrialHealth)
+            XCTAssertEqual(harness.kickstartCount, 1)
 
-    func testPrepareActiveRunRefusalDoesNotRestartUnpreparedDaemon() throws {
-        try withHarness { harness in
-            harness.preparedStatus = harness.oldStatus(activeRunCount: 1)
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .activeRun)
-            }
-            XCTAssertTrue(harness.log.values.contains("status-recheck"))
-            XCTAssertTrue(harness.log.values.contains("prepare-daemon"))
-            XCTAssertEqual(harness.bootoutCallCount, 0)
-            XCTAssertEqual(harness.bootstrapCallCount, 0)
-            XCTAssertEqual(harness.resumePreparedCallCount, 0)
-            XCTAssertEqual(harness.restartCallCount, 0)
-            XCTAssertEqual(try harness.installedMarker(), "old")
-        }
-    }
-
-    func testPreparedReplacementCommitsBeforeEnabledUploadCanDrainOutbox() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [harness.newStatus(preparedForUpdate: true)]
-            harness.bootstrapSideEffect = { _ in
-                XCTAssertNotNil(
-                    try CompanionPreparedStartupLease.observe(paths: harness.paths)
-                )
-            }
-            harness.resumePreparedSideEffect = {
-                let outbox = try Outbox(directory: harness.paths.outboxDirectory)
-                let first = try XCTUnwrap(outbox.records(limit: 100).first)
-                try outbox.acknowledge([first])
-            }
-
-            XCTAssertEqual(
-                try harness.makeUpdater().run(),
-                .updated(from: harness.oldIdentity, to: harness.newIdentity)
+            let oldWorkspaceResidue = harness.paths.supportDirectory.appendingPathComponent(
+                "update-old-diagnostic-residue",
+                isDirectory: true
             )
-            XCTAssertEqual(harness.resumePreparedCallCount, 1)
-            XCTAssertEqual(
-                try Outbox.queuedCount(inExistingDirectory: harness.paths.outboxDirectory),
-                1
+            try privateDirectory(oldWorkspaceResidue)
+            try writeOwnerFile(
+                Data("untouched".utf8),
+                to: oldWorkspaceResidue.appendingPathComponent("evidence")
             )
+            try harness.leaveMalformedJournalAndOldReleaseResidue()
+            harness.resetForNextUpdate(to: harness.n2)
+            try harness.runUpdate(to: harness.n2)
+
+            let afterSecond = try harness.state()
+            XCTAssertEqual(afterSecond.generation, 5)
+            XCTAssertEqual(afterSecond.active, harness.n2)
+            XCTAssertEqual(afterSecond.fallback, harness.n1)
+            XCTAssertNil(afterSecond.trial)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try harness.paths.application(for: harness.n).path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try harness.paths.application(for: harness.n1).path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try harness.paths.application(for: harness.n2).path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: oldWorkspaceResidue.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.unselectedResidue.path))
+            XCTAssertEqual(harness.kickstartCount, 2)
         }
     }
 
-    func testUpdateLockRefusesSymlinkWithoutTouchingTarget() throws {
+    func testJournalAndCleanupFailuresCannotChangeCommitOrBlockHigherSequence() throws {
         try withHarness { harness in
-            let trap = harness.root.appendingPathComponent("DO_NOT_LOCK")
-            try writeOwnerFile(Data("trap".utf8), to: trap)
-            try FileManager.default.createSymbolicLink(
-                at: harness.paths.updateLock,
-                withDestinationURL: trap
-            )
+            harness.transactionFaults = [.journalWrite, .workspaceCleanup]
+            try harness.runUpdate(to: harness.n1)
+            XCTAssertEqual(try harness.state().active, harness.n1)
 
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .unsafeFilesystem)
-            }
-            XCTAssertEqual(try Data(contentsOf: trap), Data("trap".utf8))
-            XCTAssertFalse(harness.log.values.contains("status"))
+            harness.resetForNextUpdate(to: harness.n2)
+            harness.transactionFaults = [.journalWrite, .workspaceCleanup]
+            try harness.runUpdate(to: harness.n2)
+
+            let final = try harness.state()
+            XCTAssertEqual(final.active, harness.n2)
+            XCTAssertEqual(final.fallback, harness.n1)
+            XCTAssertNil(final.trial)
         }
     }
 
-    func testDigestOrCandidateFailureNeverStopsDaemon() throws {
+    func testActiveRunRefusesBeforeFetchingOrChangingSelection() throws {
         try withHarness { harness in
-            harness.receiptDigest = String(repeating: "d", count: 64)
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .digestMismatch)
+            harness.activeRunCount = 1
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .activeRun)
             }
-            XCTAssertFalse(harness.log.values.contains("prepare-daemon"))
-            XCTAssertFalse(harness.log.values.contains("bootout"))
-        }
-        try withHarness { harness in
-            harness.candidateFailure = true
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .candidateRejected)
-            }
-            XCTAssertFalse(harness.log.values.contains("prepare-daemon"))
-            XCTAssertFalse(harness.log.values.contains("bootout"))
+            XCTAssertFalse(harness.fetchCalled)
+            XCTAssertEqual(try harness.state(), harness.initialState)
         }
     }
 
-    func testInsufficientSpaceRefusesBeforeQuiescence() throws {
-        try withHarness { harness in
-            harness.availableCapacity = 0
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .insufficientSpace)
-            }
-            XCTAssertFalse(harness.log.values.contains("self-check"))
-            XCTAssertFalse(harness.log.values.contains("status-recheck"))
-            XCTAssertFalse(harness.log.values.contains("prepare-daemon"))
-            XCTAssertFalse(harness.log.values.contains("bootout"))
-        }
-    }
-
-    func testSuccessfulUpdatePreservesEnabledAndDisabledIntent() throws {
-        for enabled in [true, false] {
+    func testFailuresAroundPreTrialStagesLeaveCommittedSelectionUntouched() throws {
+        let checkpoints: [CompanionUpdaterCheckpoint] = [
+            .beforeDownload, .afterDownload,
+            .beforeArchiveValidation, .afterArchiveValidation,
+            .beforeExtraction, .afterExtraction,
+            .beforeCandidateVerification, .afterCandidateVerification,
+            .beforePromotion, .afterPromotion,
+        ]
+        for checkpoint in checkpoints {
             try withHarness { harness in
-                harness.initialStatus = harness.oldStatus(enabled: enabled)
-                harness.recheckStatus = harness.oldStatus(enabled: enabled)
-                harness.preparedStatus = harness.oldStatus(
-                    enabled: enabled,
-                    preparedForUpdate: true
-                )
-                harness.healthStatuses = [harness.newStatus(enabled: enabled)]
-                try harness.setCollectorEnabled(enabled)
-
-                XCTAssertEqual(
-                    try harness.makeUpdater().run(),
-                    .updated(from: harness.oldIdentity, to: harness.newIdentity)
-                )
-                XCTAssertEqual(
-                    harness.log.values,
-                    [
-                        "lock", "status", "fetch", "download", "archive-validate",
-                        "extract", "candidate-verify", "self-check", "status-recheck",
-                        "prepare-daemon", "bootout", "swap", "bootstrap",
-                        "health-verify", "cleanup", "unlock",
-                    ]
-                )
-                XCTAssertEqual(try harness.installedMarker(), "new")
-                XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-                XCTAssertEqual(
-                    try AgentController.persistedEnabled(
-                        paths: harness.paths,
-                        surfaces: [.codexCLI]
-                    ),
-                    enabled
-                )
+                harness.failOnce(at: checkpoint)
+                XCTAssertThrowsError(try harness.makeUpdater().run())
+                XCTAssertEqual(try harness.state(), harness.initialState, "checkpoint \(checkpoint)")
+                XCTAssertEqual(harness.kickstartCount, 0, "checkpoint \(checkpoint)")
             }
         }
     }
 
-    func testPostSwapHealthFailureRestoresOldBundleAndState() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [
-                harness.newStatus(enabled: false),
-                harness.oldStatus(enabled: true, preparedForUpdate: true),
-            ]
-            let before = try harness.protectedBytes()
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
-            }
-
-            XCTAssertEqual(try harness.installedMarker(), "old")
-            XCTAssertEqual(try harness.protectedBytes(), before)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
-        }
-    }
-
-    func testAcceptedPreparationBootoutFailureRestartsUnchangedApplicationWithoutTerminalRecovery() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
-            harness.bootoutSideEffect = { call in
-                if call == 0 { throw InjectedUpdaterFailure.responseLost }
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
-            }
-
-            XCTAssertEqual(try harness.installedMarker(), "old")
-            XCTAssertEqual(harness.bootstrapCallCount, 1)
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertEqual(
-                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                true
-            )
-            XCTAssertFalse(harness.hasUpdateWorkspace)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
-        }
-    }
-
-    func testNoSwapRecoveryPreservesUnknownFailedBlockerWithStagedCandidate() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
-            let blockerBytes = Data("unrelated-failed-blocker".utf8)
-            var blockerInode: UInt64?
-            let protectedBefore = try harness.protectedBytes()
-            harness.bootoutSideEffect = { call in
-                guard call == 0 else { return }
-                try writeOwnerFile(blockerBytes, to: harness.paths.failedApplication)
-                blockerInode = try inode(harness.paths.failedApplication)
-                throw InjectedUpdaterFailure.responseLost
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
-            }
-
-            XCTAssertEqual(try harness.installedMarker(), "old")
-            XCTAssertEqual(try harness.protectedBytes(), protectedBefore)
-            XCTAssertEqual(
-                try inode(harness.paths.failedApplication),
-                try XCTUnwrap(blockerInode)
-            )
-            XCTAssertEqual(try Data(contentsOf: harness.paths.failedApplication), blockerBytes)
-            XCTAssertEqual(harness.bootoutCallCount, 2)
-            XCTAssertEqual(harness.bootstrapCallCount, 1)
-            XCTAssertEqual(harness.stoppedProofCallCount, 0)
-            XCTAssertTrue(harness.daemonRunning)
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertFalse(harness.hasUpdateWorkspace)
-            XCTAssertFalse(
-                FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path)
-            )
-        }
-    }
-
-    func testPreSwapRefusalRestartsUnchangedApplicationAndRetainsUnownedBlocker() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
-            harness.beforeSwap = {
-                try FileManager.default.createDirectory(
-                    at: harness.paths.rollbackApplication,
-                    withIntermediateDirectories: false
-                )
-                try FileManager.default.setAttributes(
-                    [.posixPermissions: 0o700],
-                    ofItemAtPath: harness.paths.rollbackApplication.path
-                )
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
-            }
-
-            XCTAssertEqual(try harness.installedMarker(), "old")
-            XCTAssertTrue(
-                FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path)
-            )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertFalse(harness.hasUpdateWorkspace)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
-        }
-    }
-
-    func testRollbackBlockerPreservesBundlesAndDoesNotEmitUnusableCommand() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [harness.newStatus(enabled: false)]
-            harness.beforeFirstHealth = {
-                try FileManager.default.createDirectory(
-                    at: harness.paths.failedApplication,
-                    withIntermediateDirectories: false
-                )
-                try FileManager.default.setAttributes(
-                    [.posixPermissions: 0o700],
-                    ofItemAtPath: harness.paths.failedApplication.path
-                )
-            }
-            let enrollmentBefore = try Data(contentsOf: harness.enrollment)
-            let outboxBefore = try Data(contentsOf: harness.outboxRecord)
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.installedApplication.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
-            XCTAssertEqual(try harness.installedMarker(), "new")
-            XCTAssertEqual(try Data(contentsOf: harness.enrollment), enrollmentBefore)
-            XCTAssertEqual(try Data(contentsOf: harness.outboxRecord), outboxBefore)
-            XCTAssertEqual(
-                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                false
-            )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertFalse(harness.daemonRunning)
-        }
-    }
-
-    func testConcurrentUpdateLockRefusesSecondUpdater() throws {
-        try withHarness { harness in
-            let enteredStatus = DispatchSemaphore(value: 0)
-            let releaseStatus = DispatchSemaphore(value: 0)
-            harness.beforeInitialStatus = {
-                enteredStatus.signal()
-                _ = releaseStatus.wait(timeout: .now() + 5)
-            }
-            let firstResult = LockedValues<Result<CompanionUpdateResult, Error>>([])
-            let finished = DispatchSemaphore(value: 0)
-            DispatchQueue.global(qos: .utility).async {
-                firstResult.append(Result { try harness.makeUpdater().run() })
-                finished.signal()
-            }
-            XCTAssertEqual(enteredStatus.wait(timeout: .now() + 2), .success)
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .updateInProgress)
-            }
-
-            releaseStatus.signal()
-            XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
-            XCTAssertEqual(try firstResult.values.first?.get(), .updated(from: harness.oldIdentity, to: harness.newIdentity))
-        }
-    }
-
-    func testUpdateLockExcludesIndependentProcessWhileHeld() throws {
-        try withHarness { harness in
-            XCTAssertFalse(try CompanionUpdateLock.isHeldByAnotherProcess(paths: harness.paths))
-            let held = try CompanionUpdateLock(paths: harness.paths)
-            defer { held.unlock() }
-            XCTAssertTrue(try CompanionUpdateLock.isHeldByAnotherProcess(paths: harness.paths))
-            var descriptors = [Int32](repeating: -1, count: 2)
-            guard Darwin.pipe(&descriptors) == 0 else { throw POSIXError(.EIO) }
-            let lockPath = strdup(harness.paths.updateLock.path)
-            guard let lockPath else {
-                Darwin.close(descriptors[0])
-                Darwin.close(descriptors[1])
-                throw POSIXError(.ENOMEM)
-            }
-            defer { free(lockPath) }
-            let child = updaterTestFork()
-            guard child >= 0 else {
-                Darwin.close(descriptors[0])
-                Darwin.close(descriptors[1])
-                throw POSIXError(.EIO)
-            }
-            if child == 0 {
-                Darwin.close(descriptors[0])
-                if descriptors[1] != STDERR_FILENO {
-                    guard Darwin.dup2(descriptors[1], STDERR_FILENO) >= 0 else {
-                        Darwin._exit(125)
-                    }
-                    Darwin.close(descriptors[1])
-                }
-                var inheritedDescriptor = STDERR_FILENO + 1
-                while inheritedDescriptor < Darwin.getdtablesize() {
-                    Darwin.close(inheritedDescriptor)
-                    inheritedDescriptor += 1
-                }
-                let descriptor = Darwin.open(lockPath, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
-                var outcome: Int32 = descriptor >= 0
-                    ? updaterTestFlock(descriptor, LOCK_EX | LOCK_NB)
-                    : -errno
-                if descriptor >= 0, outcome != 0 { outcome = -errno }
-                _ = Darwin.write(
-                    STDERR_FILENO,
-                    &outcome,
-                    MemoryLayout<Int32>.size
-                )
-                if descriptor >= 0 { Darwin.close(descriptor) }
-                Darwin.close(STDERR_FILENO)
-                Darwin._exit(0)
-            }
-            Darwin.close(descriptors[1])
-            var outcome: Int32 = 0
-            let count = Darwin.read(
-                descriptors[0],
-                &outcome,
-                MemoryLayout<Int32>.size
-            )
-            Darwin.close(descriptors[0])
-            var status: Int32 = 0
-            XCTAssertEqual(Darwin.waitpid(child, &status, 0), child)
-            XCTAssertEqual(count, MemoryLayout<Int32>.size)
-            XCTAssertTrue(outcome == -EWOULDBLOCK || outcome == -EAGAIN)
-        }
-    }
-
-    func testFileTransactionCreatesOwnerOnlyWorkspaceAndUsesSiblingRenames() throws {
-        try withTransaction { transaction, paths in
-            XCTAssertEqual(try permissions(transaction.workspaceDirectory), 0o700)
-            XCTAssertEqual(try permissions(transaction.stagingDirectory), 0o700)
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: transaction.candidateApplication.path
-            )
-            try transaction.sealValidatedCandidate()
-            let installedInode = try inode(paths.installedApplication)
-            let candidateInode = try inode(transaction.candidateApplication)
-
-            try transaction.swap()
-
-            XCTAssertEqual(try inode(paths.installedApplication), candidateInode)
-            XCTAssertEqual(try inode(paths.rollbackApplication), installedInode)
-            XCTAssertEqual(try permissions(paths.installedApplication), 0o700)
-            XCTAssertEqual(try permissions(paths.rollbackApplication), 0o700)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: transaction.promotedCandidateApplication.path))
-        }
-    }
-
-    func testFileTransactionNeverFollowsSymlinkTargets() throws {
-        let root = temporaryURL("rr-updater-symlink")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let paths = AgentPaths(applicationSupportDirectory: root)
-        try privateDirectory(paths.supportDirectory)
-        let target = root.appendingPathComponent("DO_NOT_TOUCH", isDirectory: true)
-        try makeFakeApp(target, marker: "trap")
-        try FileManager.default.createSymbolicLink(
-            at: paths.installedApplication,
-            withDestinationURL: target
-        )
-
-        XCTAssertThrowsError(try UpdateFileTransaction(paths: paths))
-        XCTAssertEqual(try marker(target), "trap")
-    }
-
-    func testRollbackMovesFailedCandidateAsideBeforeRestoringOldApp() throws {
-        try withTransaction { transaction, paths in
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
-            try transaction.sealValidatedCandidate()
-            let oldInode = try inode(paths.installedApplication)
-            let candidateInode = try inode(transaction.candidateApplication)
-            try transaction.swap()
-
-            try transaction.rollback()
-
-            XCTAssertEqual(try inode(paths.installedApplication), oldInode)
-            XCTAssertEqual(try inode(paths.failedApplication), candidateInode)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        }
-    }
-
-    func testCleanupNeverDeletesOnlyVerifiedApplication() throws {
-        try withTransaction { transaction, paths in
-            try FileManager.default.moveItem(
-                at: paths.installedApplication,
-                to: paths.rollbackApplication
-            )
-
-            XCTAssertThrowsError(try transaction.cleanupAfterSuccess())
-            XCTAssertTrue(FileManager.default.fileExists(atPath: paths.rollbackApplication.path))
-        }
-    }
-
-    func testCleanupFailureAfterVerifiedHealthKeepsNewAppInstalled() throws {
-        try withHarness { harness in
-            let trap = harness.root.appendingPathComponent("DO_NOT_TOUCH_CLEANUP_TRAP")
-            try Data("trap".utf8).write(to: trap)
-            harness.beforeFirstHealth = {
-                try FileManager.default.createSymbolicLink(
-                    at: harness.paths.rollbackApplication.appendingPathComponent("0-trap"),
-                    withDestinationURL: trap
-                )
-            }
-
-            XCTAssertEqual(
-                try harness.makeUpdater().run(),
-                .updated(from: harness.oldIdentity, to: harness.newIdentity)
-            )
-            XCTAssertEqual(try harness.installedMarker(), "new")
-            XCTAssertEqual(try Data(contentsOf: trap), Data("trap".utf8))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-        }
-    }
-
-    func testFreshDiscoveryMayChangeOnlyUpdateStateThenAllProtectedBytesStayStable() throws {
-        try withHarness { harness in
-            let protectedBefore = try harness.protectedBytes()
-            let updateBefore = try Data(contentsOf: harness.paths.updateState)
-            harness.assertFrozenState = {
-                XCTAssertEqual(try harness.protectedBytes(), protectedBefore)
-            }
-
-            _ = try harness.makeUpdater().run()
-
-            let updateAfter = try Data(contentsOf: harness.paths.updateState)
-            XCTAssertNotEqual(updateBefore, updateAfter)
-            XCTAssertEqual(
-                try UpdateStateStore(paths: harness.paths).load().cachedManifest,
-                harness.manifest
-            )
-            try harness.assertFrozenState()
-        }
-    }
-
-    func testOnlyFreshFetchMayChangeUpdateState() throws {
-        try withHarness { harness in
-            harness.beforeInitialStatus = {
-                try! writeOwnerFile(
-                    Data("{\"lastCheckAttemptMS\":2,\"version\":1}".utf8),
-                    to: harness.paths.updateState
-                )
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .protectedStateChanged)
-            }
-            XCTAssertFalse(harness.log.values.contains("fetch"))
-        }
-    }
-
-    func testCandidateContentSealRejectsSameLengthRewriteWithRestoredModificationTime() throws {
-        try withHarness { harness in
-            harness.candidateVerificationSideEffect = { candidate in
-                try rewriteSameLengthRestoringModificationTime(
-                    candidate.appendingPathComponent("marker"),
-                    with: Data("bad".utf8)
-                )
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .unsafeFilesystem)
-            }
-            XCTAssertEqual(try harness.installedMarker(), "old")
-            XCTAssertFalse(harness.log.values.contains("prepare-daemon"))
-        }
-    }
-
-    func testCandidateSealRejectsPathnameSubstitutionAfterVerification() throws {
-        try withHarness { harness in
-            harness.candidateVerificationSideEffect = { candidate in
-                let displaced = candidate.deletingLastPathComponent()
-                    .appendingPathComponent("verified-but-displaced.app", isDirectory: true)
-                try FileManager.default.moveItem(at: candidate, to: displaced)
-                try makeFakeApp(candidate, marker: "new")
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .unsafeFilesystem)
-            }
-            XCTAssertEqual(try harness.installedMarker(), "old")
-        }
-    }
-
-    func testCandidateContentSealIsRecheckedAfterSelfCheck() throws {
-        try withHarness { harness in
-            harness.selfCheckSideEffect = { executable in
-                try rewriteSameLengthRestoringModificationTime(
-                    executable.deletingLastPathComponent().deletingLastPathComponent()
-                        .deletingLastPathComponent().appendingPathComponent("marker"),
-                    with: Data("bad".utf8)
-                )
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .unsafeFilesystem)
-            }
-            XCTAssertFalse(harness.log.values.contains("prepare-daemon"))
-            XCTAssertEqual(try harness.installedMarker(), "old")
-        }
-    }
-
-    func testPriorBundleSealRejectsSameMetadataRewriteBeforeRollback() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [harness.newStatus(enabled: false)]
-            harness.beforeFirstHealth = {
-                try rewriteSameLengthRestoringModificationTime(
-                    harness.paths.rollbackApplication.appendingPathComponent("marker"),
-                    with: Data("bad".utf8)
-                )
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-        }
-    }
-
-    func testCleanupRetainsRollbackWhenInstalledCandidateChangesAfterHealth() throws {
-        try withHarness { harness in
-            harness.beforeCleanup = {
-                try! rewriteSameLengthRestoringModificationTime(
-                    harness.paths.installedApplication.appendingPathComponent("marker"),
-                    with: Data("bad".utf8)
-                )
-            }
-
-            XCTAssertEqual(
-                try harness.makeUpdater().run(),
-                .updated(from: harness.oldIdentity, to: harness.newIdentity)
-            )
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertThrowsError(try harness.makeUpdater().run())
-        }
-    }
-
-    func testCleanupRetainsRollbackWhenPriorBundleChangesAfterHealth() throws {
-        try withHarness { harness in
-            harness.beforeCleanup = {
-                try! rewriteSameLengthRestoringModificationTime(
-                    harness.paths.rollbackApplication.appendingPathComponent("marker"),
-                    with: Data("bad".utf8)
-                )
-            }
-
-            XCTAssertEqual(
-                try harness.makeUpdater().run(),
-                .updated(from: harness.oldIdentity, to: harness.newIdentity)
-            )
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-        }
-    }
-
-    func testCleanupRetainsRollbackOnInstalledPathnameSubstitutionAfterHealth() throws {
-        try withHarness { harness in
-            harness.beforeCleanup = {
-                let displaced = harness.paths.supportDirectory
-                    .appendingPathComponent("substituted-healthy-candidate.app", isDirectory: true)
-                try! FileManager.default.moveItem(at: harness.paths.installedApplication, to: displaced)
-                try! makeFakeApp(harness.paths.installedApplication, marker: "new")
-            }
-
-            XCTAssertEqual(
-                try harness.makeUpdater().run(),
-                .updated(from: harness.oldIdentity, to: harness.newIdentity)
-            )
-            XCTAssertTrue(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertTrue(
-                FileManager.default.fileExists(
-                    atPath: harness.paths.supportDirectory
-                        .appendingPathComponent("substituted-healthy-candidate.app").path
-                )
-            )
-        }
-    }
-
-    func testArchiveDigestSealRejectsInPlaceSameLengthRewriteBeforeExtraction() throws {
-        try withHarness { harness in
-            harness.extractionSideEffect = { archive in
-                let original = try Data(contentsOf: archive)
-                var changed = original
-                let payload = try XCTUnwrap(changed.range(of: Data("abc".utf8)))
-                changed.replaceSubrange(payload, with: Data("xyz".utf8))
-                try rewriteSameLengthRestoringModificationTime(archive, with: changed)
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .digestMismatch)
-            }
-            XCTAssertFalse(harness.log.values.contains("prepare-daemon"))
-            XCTAssertEqual(try harness.installedMarker(), "old")
-        }
-    }
-
-    func testAcceptedPrepareWithLostResponseRestartsUnchangedInstalledApplication() throws {
-        try withHarness { harness in
-            harness.prepareSideEffect = { throw InjectedUpdaterFailure.responseLost }
-            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? InjectedUpdaterFailure, .responseLost)
-            }
-            XCTAssertEqual(harness.bootoutCallCount, 1)
-            XCTAssertEqual(harness.bootstrapCallCount, 1)
-            XCTAssertEqual(try harness.installedMarker(), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-        }
-    }
-
-    func testAmbiguousInvalidPrepareResponseRestartsUnchangedInstalledApplication() throws {
-        try withHarness { harness in
-            harness.preparedStatus = harness.oldStatus()
-            harness.healthStatuses = [harness.oldStatus(preparedForUpdate: true)]
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .invalidStatus)
-            }
-            XCTAssertEqual(harness.bootoutCallCount, 1)
-            XCTAssertEqual(harness.bootstrapCallCount, 1)
-            XCTAssertEqual(try harness.installedMarker(), "old")
-        }
-    }
-
-    func testProtectedStateMutationWinsOverFetchThrow() throws {
-        try withHarness { harness in
-            harness.fetchSideEffect = {
-                try writeOwnerFile(Data("changed-enrollment".utf8), to: harness.enrollment)
-                throw InjectedUpdaterFailure.operation
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .protectedStateChanged)
-            }
-        }
-    }
-
-    func testProtectedStateMutationWinsOverDownloadThrow() throws {
-        try withHarness { harness in
-            harness.downloadSideEffect = { _ in
-                try writeOwnerFile(
-                    Data("changed-collector".utf8),
-                    to: harness.paths.stateDirectory.appendingPathComponent("collector-state.json")
-                )
-                throw InjectedUpdaterFailure.operation
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .protectedStateChanged)
-            }
-        }
-    }
-
-    func testProtectedStateMutationWinsOverNonzeroSelfCheck() throws {
-        try withHarness { harness in
-            harness.selfCheckSideEffect = { _ in
-                try writeOwnerFile(Data("changed-outbox".utf8), to: harness.outboxRecords[1])
-            }
-            harness.selfCheckResult = .init(
-                exitStatus: .exited(9),
-                stdout: Data(),
-                stderr: Data("failed".utf8)
-            )
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .protectedStateChanged)
-            }
-        }
-    }
-
-    func testTerminalRecoveryRestoresStableVerifiedRollbackBeforeEmittingCommand() throws {
-        for failure in RecoveryFailure.allCases {
+    func testFailuresAroundTrialPrepareAndHealthClearTrialAndRestorePriorActive() throws {
+        let checkpoints: [CompanionUpdaterCheckpoint] = [
+            .beforeTrialRecord, .afterTrialRecord,
+            .beforeLease, .afterLease,
+            .beforePrepare, .afterPrepare,
+            .beforeKickstart, .afterKickstart,
+            .beforeTrialHealth, .afterTrialHealth,
+        ]
+        for checkpoint in checkpoints {
             try withHarness { harness in
-                harness.healthStatuses = [
-                    harness.newStatus(enabled: false),
-                    harness.oldStatus(enabled: true, preparedForUpdate: true),
-                ]
-                switch failure {
-                case .bootstrap:
-                    harness.bootstrapSideEffect = { call in
-                        if call == 1 { throw InjectedUpdaterFailure.operation }
-                    }
-                case .health:
-                    harness.healthStatuses = [
-                        harness.newStatus(enabled: false),
-                        harness.newStatus(enabled: false),
-                    ]
-                case .protectedSnapshot:
-                    harness.healthSideEffect = { call in
-                        if call == 2 {
-                            try writeOwnerFile(Data("changed-enrollment".utf8), to: harness.enrollment)
-                        }
-                    }
-                case .cleanup:
-                    harness.healthSideEffect = { call in
-                        if call == 2 { try harness.installWorkspaceCleanupTrap() }
-                    }
-                }
-
+                harness.failOnce(at: checkpoint)
                 XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                    XCTAssertEqual(
-                        error as? CompanionUpdaterError,
-                        .rollbackFailed(recoveryCommand: CompanionUpdater.recoveryCommand),
-                        "failure: \(failure)"
-                    )
+                    if checkpoint == .beforeTrialRecord {
+                        XCTAssertNotEqual(error as? CompanionUpdaterError, .rollbackFailed)
+                    } else {
+                        XCTAssertEqual(error as? CompanionUpdaterError, .updateRolledBack)
+                    }
                 }
-                XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
-                XCTAssertTrue(
-                    FileManager.default.fileExists(atPath: harness.paths.failedApplication.path),
-                    "missing failed candidate for \(failure)"
-                )
-                if FileManager.default.fileExists(atPath: harness.paths.failedApplication.path) {
-                    XCTAssertEqual(try marker(harness.paths.failedApplication), "new")
+                let final = try harness.state()
+                XCTAssertEqual(final.active, harness.n, "checkpoint \(checkpoint)")
+                XCTAssertNil(final.fallback, "checkpoint \(checkpoint)")
+                XCTAssertNil(final.trial, "checkpoint \(checkpoint)")
+            }
+        }
+    }
+
+    func testCandidateHealthFailureClearsTrialBeforeKickstartingPriorActive() throws {
+        try withHarness { harness in
+            harness.rejectCandidateHealth = true
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .updateRolledBack)
+            }
+            let final = try harness.state()
+            XCTAssertEqual(final.active, harness.n)
+            XCTAssertNil(final.trial)
+            XCTAssertEqual(harness.kickstartSelections, [harness.n1, harness.n])
+            XCTAssertEqual(harness.resumedGenerations.last, final.generation)
+        }
+    }
+
+    func testCandidateHealthWithActiveRunRollsBackBeforeCommit() throws {
+        try withHarness { harness in
+            harness.candidateHealthActiveRunCount = 1
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .updateRolledBack)
+            }
+            let final = try harness.state()
+            XCTAssertEqual(final.active, harness.n)
+            XCTAssertNil(final.trial)
+        }
+    }
+
+    func testPriorActiveHealthWithActiveRunFailsRollbackClosed() throws {
+        try withHarness { harness in
+            harness.rejectCandidateHealth = true
+            harness.priorHealthActiveRunCount = 1
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .rollbackFailed)
+            }
+            XCTAssertEqual(try harness.state().active, harness.n)
+            XCTAssertNil(try harness.state().trial)
+        }
+    }
+
+    func testResumeFailureAfterCommitRestoresExactPreTrialSelection() throws {
+        try withHarness(initialActive: .n1WithFallback) { harness in
+            harness.failCandidateResume = true
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .updateRolledBack)
+            }
+
+            let final = try harness.state()
+            XCTAssertEqual(final.generation, 5)
+            XCTAssertEqual(final.active, harness.n1)
+            XCTAssertEqual(final.fallback, harness.n)
+            XCTAssertNil(final.trial)
+            XCTAssertEqual(harness.kickstartSelections, [harness.n2, harness.n1])
+            XCTAssertEqual(harness.resumedGenerations.last, final.generation)
+        }
+    }
+
+    func testPriorActiveHealthFailureAfterRollbackIsTerminalRollbackFailure() throws {
+        try withHarness { harness in
+            harness.rejectCandidateHealth = true
+            harness.rejectPriorHealth = true
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .rollbackFailed)
+            }
+            XCTAssertEqual(try harness.state().active, harness.n)
+            XCTAssertNil(try harness.state().trial)
+        }
+    }
+
+    func testFailureAfterCommitBeforeResumeRestoresPriorSelection() throws {
+        try withHarness(initialActive: .n1WithFallback) { harness in
+            harness.failOnce(at: .afterCommit)
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .updateRolledBack)
+            }
+            let final = try harness.state()
+            XCTAssertEqual(final.active, harness.n1)
+            XCTAssertEqual(final.fallback, harness.n)
+            XCTAssertNil(final.trial)
+        }
+    }
+
+    func testCommitAndResumeBoundaryFailuresHaveDeterministicSelection() throws {
+        for checkpoint: CompanionUpdaterCheckpoint in [.beforeCommit, .afterCommit, .beforeResume] {
+            try withHarness { harness in
+                harness.failOnce(at: checkpoint)
+                XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                    XCTAssertEqual($0 as? CompanionUpdaterError, .updateRolledBack)
                 }
-                XCTAssertTrue(
-                    FileManager.default.fileExists(
-                        atPath: harness.paths.rollbackApplication
-                            .appendingPathComponent("Contents/MacOS/runtime-raiders-agent").path
+                XCTAssertEqual(try harness.state().active, harness.n, "checkpoint \(checkpoint)")
+                XCTAssertNil(try harness.state().trial, "checkpoint \(checkpoint)")
+            }
+        }
+
+        try withHarness { harness in
+            harness.failOnce(at: .afterResume)
+            try harness.runUpdate(to: harness.n1)
+            XCTAssertEqual(try harness.state().active, harness.n1)
+            XCTAssertEqual(try harness.state().fallback, harness.n)
+            XCTAssertNil(try harness.state().trial)
+        }
+    }
+
+    func testRevertAndPriorHealthBoundaryFailuresFailClosedWithoutFixedSlots() throws {
+        for checkpoint: CompanionUpdaterCheckpoint in [.beforeRevert, .afterRevert] {
+            try withHarness { harness in
+                harness.failCandidateResume = true
+                harness.failOnce(at: checkpoint)
+                XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                    XCTAssertEqual($0 as? CompanionUpdaterError, .rollbackFailed)
+                }
+                let current = try harness.state()
+                if checkpoint == .beforeRevert {
+                    XCTAssertEqual(current.active, harness.n1)
+                    XCTAssertEqual(current.fallback, harness.n)
+                } else {
+                    XCTAssertEqual(current.active, harness.n)
+                    XCTAssertNil(current.fallback)
+                }
+                XCTAssertNil(current.trial)
+            }
+        }
+
+        for checkpoint: CompanionUpdaterCheckpoint in [.beforePriorHealth, .afterPriorHealth] {
+            try withHarness { harness in
+                harness.rejectCandidateHealth = true
+                harness.failOnce(at: checkpoint)
+                XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                    XCTAssertEqual($0 as? CompanionUpdaterError, .rollbackFailed)
+                }
+                XCTAssertEqual(try harness.state().active, harness.n)
+                XCTAssertNil(try harness.state().trial)
+            }
+        }
+    }
+
+    func testStaleTrialWithoutLeaseIsClearedBeforeAHealthyHigherUpdate() throws {
+        try withHarness { harness in
+            try harness.promoteAndRecordTrial(harness.n1)
+            let staleGeneration = try harness.state().generation
+            try harness.leaveMalformedJournalAndOldReleaseResidue()
+            harness.resetForNextUpdate(to: harness.n2)
+
+            try harness.runUpdate(to: harness.n2)
+
+            let final = try harness.state()
+            XCTAssertGreaterThan(final.generation, staleGeneration)
+            XCTAssertEqual(final.active, harness.n2)
+            XCTAssertEqual(final.fallback, harness.n)
+            XCTAssertNil(final.trial)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try harness.paths.application(for: harness.n1).path))
+        }
+    }
+
+    func testStaleTrialReconciliationRequiresHealthyCommittedActive() throws {
+        try withHarness { harness in
+            try harness.promoteAndRecordTrial(harness.n1)
+            harness.initialDaemonRunning = false
+
+            XCTAssertThrowsError(try harness.makeUpdater().run()) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .invalidStatus)
+            }
+            XCTAssertEqual(try harness.state().trial, harness.n1)
+        }
+    }
+
+    func testUniquePromotionMovesOnlyAgentAndRefusesExistingReleaseTarget() throws {
+        try withHarness { harness in
+            let transaction = try harness.makeTransaction()
+            try harness.populateExtractedRelease(transaction, release: harness.n1)
+            let verified = try harness.verifiedArchive(transaction, release: harness.n1)
+
+            XCTAssertEqual(try transaction.promoteVerifiedCandidate(verified), harness.n1)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try harness.paths.application(for: harness.n1).path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: verified.launcher.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: verified.agent.application.path))
+
+            let duplicate = try harness.makeTransaction()
+            try harness.populateExtractedRelease(duplicate, release: harness.n1)
+            XCTAssertThrowsError(try duplicate.promoteVerifiedCandidate(
+                harness.verifiedArchive(duplicate, release: harness.n1)
+            )) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .unsafeFilesystem)
+            }
+        }
+    }
+
+    func testPromotionRejectsAgentChangedAfterArchiveVerification() throws {
+        try withHarness { harness in
+            let transaction = try harness.makeTransaction()
+            try harness.populateExtractedRelease(transaction, release: harness.n1)
+            let verified = try harness.verifiedArchive(transaction, release: harness.n1)
+            try Data("xx".utf8).write(
+                to: verified.agent.application.appendingPathComponent("marker")
+            )
+
+            XCTAssertThrowsError(try transaction.promoteVerifiedCandidate(verified)) {
+                XCTAssertEqual($0 as? CompanionUpdaterError, .unsafeFilesystem)
+            }
+            XCTAssertEqual(try harness.state(), harness.initialState)
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: try harness.paths.application(for: harness.n1).path
+            ))
+        }
+    }
+
+    func testTrialCommitClearAndRestoreAlwaysAdvanceOneGeneration() throws {
+        try withHarness(initialActive: .n1WithFallback) { harness in
+            let transaction = try harness.makeTransaction()
+            try harness.populateExtractedRelease(transaction, release: harness.n2)
+            _ = try transaction.promoteVerifiedCandidate(
+                harness.verifiedArchive(transaction, release: harness.n2)
+            )
+            let trial = try transaction.recordTrial(harness.n2)
+            XCTAssertEqual(trial.generation, 3)
+            XCTAssertEqual(trial.active, harness.n1)
+            let committed = try transaction.commitTrial(expectedGeneration: trial.generation)
+            XCTAssertEqual(committed.generation, 4)
+            XCTAssertEqual(committed.active, harness.n2)
+            let restored = try transaction.restorePriorSelection(expectedGeneration: committed.generation)
+            XCTAssertEqual(restored.generation, 5)
+            XCTAssertEqual(restored.active, harness.n1)
+            XCTAssertEqual(restored.fallback, harness.n)
+        }
+    }
+
+    func testDiscardedTransactionAtEachDurableBoundaryUsesOnlyReleaseStateForRecovery() throws {
+        try withHarness { harness in
+            do {
+                let transaction = try harness.makeTransaction()
+                try harness.populateExtractedRelease(transaction, release: harness.n1)
+                _ = try transaction.promoteVerifiedCandidate(
+                    harness.verifiedArchive(transaction, release: harness.n1)
+                )
+            }
+            XCTAssertEqual(try harness.state(), harness.initialState)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try harness.paths.application(for: harness.n1).path))
+        }
+        try withHarness { harness in
+            let trialTransaction = try harness.makeTransaction()
+            try harness.populateExtractedRelease(trialTransaction, release: harness.n1)
+            _ = try trialTransaction.promoteVerifiedCandidate(
+                harness.verifiedArchive(trialTransaction, release: harness.n1)
+            )
+            let trial = try trialTransaction.recordTrial(harness.n1)
+            XCTAssertEqual(trial.active, harness.n)
+            harness.manifest = harness.manifest(for: harness.n)
+            XCTAssertEqual(try harness.makeUpdater().run(), .alreadyCurrent)
+            XCTAssertNil(try harness.state().trial)
+            XCTAssertEqual(try harness.state().active, harness.n)
+
+        }
+        try withHarness { harness in
+            let commitTransaction = try harness.makeTransaction()
+            try harness.populateExtractedRelease(commitTransaction, release: harness.n1)
+            _ = try commitTransaction.promoteVerifiedCandidate(
+                harness.verifiedArchive(commitTransaction, release: harness.n1)
+            )
+            let rerecorded = try commitTransaction.recordTrial(harness.n1)
+            let committed = try commitTransaction.commitTrial(expectedGeneration: rerecorded.generation)
+            XCTAssertEqual(committed.active, harness.n1)
+            XCTAssertNil(committed.trial)
+            XCTAssertEqual(try harness.state(), committed)
+        }
+    }
+
+    func testEveryLeaseBoundCrashUsesRealLauncherAndPreparedDaemonRecovery() throws {
+        for boundary in LeaseBoundCrashBoundary.allCases {
+            try withHarness { harness in
+                var transaction: VersionedReleaseTransaction? = try harness.makeTransaction()
+                try harness.populateExtractedRelease(try XCTUnwrap(transaction), release: harness.n1)
+                _ = try XCTUnwrap(transaction).promoteVerifiedCandidate(
+                    try harness.verifiedArchive(try XCTUnwrap(transaction), release: harness.n1)
+                )
+                let trialState = try XCTUnwrap(transaction).recordTrial(harness.n1)
+
+                let activeSelection = try harness.daemonSelection()
+                XCTAssertEqual(activeSelection.release, harness.n, "boundary \(boundary)")
+                let activeRuntime = try harness.preparedRuntime(selection: activeSelection)
+                try activeRuntime.start()
+                XCTAssertEqual(activeRuntime.startCount, 1, "boundary \(boundary)")
+
+                let lease = try CompanionPreparedStartupLease(paths: harness.paths)
+                XCTAssertNotNil(try CompanionPreparedStartupLease.observe(paths: harness.paths))
+                let heldSelection = try harness.daemonSelection()
+                XCTAssertEqual(heldSelection.release, harness.n1, "boundary \(boundary)")
+                XCTAssertEqual(
+                    heldSelection.arguments,
+                    ["daemon", "__runtime-raiders-trial-generation", String(trialState.generation)],
+                    "boundary \(boundary)"
+                )
+
+                if boundary == .afterLease {
+                    transaction = nil
+                    lease.unlock()
+                    XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: harness.paths))
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n)
+                    try harness.reconcileAbandonedTrial()
+                    XCTAssertNil(try harness.state().trial)
+                    return
+                }
+
+                if boundary == .afterPrepare {
+                    XCTAssertTrue(activeRuntime.prepare(generation: trialState.generation).ok)
+                    XCTAssertTrue(activeRuntime.preparation.isPrepared)
+                    transaction = nil
+                    lease.unlock()
+                    activeRuntime.drainAbandonment()
+                    XCTAssertEqual(activeRuntime.events, [.resumed], "boundary \(boundary)")
+                    XCTAssertFalse(activeRuntime.preparation.isPrepared)
+                    XCTAssertEqual(activeRuntime.startCount, 1)
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n)
+                    try harness.reconcileAbandonedTrial()
+                    XCTAssertNil(try harness.state().trial)
+                    return
+                }
+
+                let candidateRuntime = try harness.preparedRuntime(selection: heldSelection)
+                try candidateRuntime.start()
+                XCTAssertTrue(candidateRuntime.preparation.isPrepared)
+                XCTAssertEqual(candidateRuntime.startCount, 0)
+                candidateRuntime.observeAbandonment(generation: trialState.generation)
+
+                var committed: ReleaseStateV1?
+                if boundary == .afterCommit || boundary == .afterResume {
+                    committed = try XCTUnwrap(transaction).commitTrial(
+                        expectedGeneration: trialState.generation
                     )
-                )
-                XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
-                XCTAssertEqual(harness.bootoutCallCount, 3, "failure: \(failure)")
-                XCTAssertEqual(harness.stoppedProofCallCount, 1, "failure: \(failure)")
-                XCTAssertFalse(harness.daemonRunning, "failure: \(failure)")
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n1)
+                }
+                if boundary == .afterResume {
+                    XCTAssertTrue(candidateRuntime.preparation.resume(
+                        generation: try XCTUnwrap(committed).generation
+                    ).ok)
+                    XCTAssertFalse(candidateRuntime.preparation.isPrepared)
+                    XCTAssertEqual(candidateRuntime.startCount, 1)
+                }
+
+                transaction = nil
+                lease.unlock()
+                candidateRuntime.drainAbandonment()
+                XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: harness.paths))
+
+                switch boundary {
+                case .afterKickstart, .afterHealth:
+                    XCTAssertEqual(candidateRuntime.events, [.exited], "boundary \(boundary)")
+                    XCTAssertEqual(candidateRuntime.startCount, 0)
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n)
+                    try harness.reconcileAbandonedTrial()
+                    XCTAssertNil(try harness.state().trial)
+                case .afterCommit:
+                    XCTAssertEqual(candidateRuntime.events, [.resumed])
+                    XCTAssertEqual(candidateRuntime.startCount, 1)
+                    XCTAssertFalse(candidateRuntime.preparation.isPrepared)
+                    XCTAssertEqual(try harness.state(), try XCTUnwrap(committed))
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n1)
+                case .afterResume:
+                    XCTAssertEqual(candidateRuntime.events, [])
+                    XCTAssertEqual(candidateRuntime.startCount, 1)
+                    XCTAssertEqual(try harness.state(), try XCTUnwrap(committed))
+                    XCTAssertEqual(try harness.daemonSelection().release, harness.n1)
+                case .afterLease, .afterPrepare:
+                    XCTFail("handled before candidate launch")
+                }
             }
         }
     }
 
-    func testNoSwapPersistenceFailureLeavesInstalledBundlePathInodeAndModeUnchanged() throws {
+    func testProtectedStateAndOutboxRemainByteExactThroughTrialHealth() throws {
         try withHarness { harness in
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: harness.paths.installedApplication.path
-            )
-            let installedInode = try inode(harness.paths.installedApplication)
-            let installedMode = try permissions(harness.paths.installedApplication)
-            harness.prepareSideEffect = { throw InjectedUpdaterFailure.responseLost }
-            harness.bootstrapSideEffect = { call in
-                if call == 0 { throw InjectedUpdaterFailure.operation }
+            let before = try harness.protectedBytes()
+            harness.onCandidateHealth = {
+                XCTAssertEqual(try harness.protectedBytes(), before)
             }
-            harness.bootoutSideEffect = { call in
-                guard call == 1 else { return }
-                let state = harness.paths.stateDirectory.appendingPathComponent("collector-state.json")
-                try FileManager.default.removeItem(at: state)
-                try FileManager.default.createDirectory(at: state, withIntermediateDirectories: false)
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertEqual(harness.stoppedProofCallCount, 1)
-            XCTAssertFalse(harness.daemonRunning)
-            XCTAssertEqual(try inode(harness.paths.installedApplication), installedInode)
-            XCTAssertEqual(try permissions(harness.paths.installedApplication), installedMode)
-            XCTAssertEqual(try marker(harness.paths.installedApplication), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.rollbackApplication.path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
+            try harness.runUpdate(to: harness.n1)
+            XCTAssertEqual(try harness.protectedBytes(), before)
         }
-    }
-
-    func testSwappedPersistenceFailureLeavesSwappedBundleLayoutInodeAndModeUnchanged() throws {
-        try withHarness { harness in
-            let priorInode = try inode(harness.paths.installedApplication)
-            var candidateInode: UInt64?
-            var candidateMode: Int?
-            var rollbackMode: Int?
-            harness.healthStatuses = [harness.newStatus(enabled: false)]
-            harness.beforeFirstHealth = {
-                candidateInode = try inode(harness.paths.installedApplication)
-                candidateMode = try permissions(harness.paths.installedApplication)
-                rollbackMode = try permissions(harness.paths.rollbackApplication)
-            }
-            harness.bootoutSideEffect = { call in
-                guard call == 1 else { return }
-                let state = harness.paths.stateDirectory.appendingPathComponent("collector-state.json")
-                try FileManager.default.removeItem(at: state)
-                try FileManager.default.createDirectory(at: state, withIntermediateDirectories: false)
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertEqual(harness.stoppedProofCallCount, 1)
-            XCTAssertFalse(harness.daemonRunning)
-            XCTAssertEqual(try inode(harness.paths.installedApplication), try XCTUnwrap(candidateInode))
-            XCTAssertEqual(try permissions(harness.paths.installedApplication), try XCTUnwrap(candidateMode))
-            XCTAssertEqual(try marker(harness.paths.installedApplication), "new")
-            XCTAssertEqual(try inode(harness.paths.rollbackApplication), priorInode)
-            XCTAssertEqual(
-                try permissions(harness.paths.rollbackApplication),
-                try XCTUnwrap(rollbackMode)
-            )
-            XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
-        }
-    }
-
-    func testTerminalRecoveryPreservesPriorIntentAndResumesWithoutStoppedProof() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [
-                harness.newStatus(enabled: false),
-                harness.oldStatus(enabled: true, preparedForUpdate: false),
-            ]
-            harness.bootoutSideEffect = { call in
-                if call == 2 { throw InjectedUpdaterFailure.responseLost }
-            }
-            harness.bootstrapSideEffect = { call in
-                if call == 1 { throw InjectedUpdaterFailure.operation }
-            }
-            harness.stoppedProofOverride = false
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-
-            XCTAssertEqual(
-                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                true
-            )
-            XCTAssertTrue(harness.daemonRunning)
-            XCTAssertEqual(harness.stoppedProofCallCount, 1)
-            XCTAssertEqual(harness.resumePreparedCallCount, 1)
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-        }
-    }
-
-    func testTerminalNoStoppedProofPositivelyResumesPausedDaemonWithPriorIntent() throws {
-        try withHarness { harness in
-            harness.bootoutSideEffect = { _ in throw InjectedUpdaterFailure.responseLost }
-            harness.stoppedProofOverride = false
-            harness.resumePreparedSideEffect = { throw InjectedUpdaterFailure.responseLost }
-            harness.healthStatuses = [harness.oldStatus(enabled: true, preparedForUpdate: false)]
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-
-            XCTAssertEqual(harness.resumePreparedCallCount, 1)
-            XCTAssertEqual(harness.restartCallCount, 0)
-            XCTAssertTrue(harness.daemonRunning)
-            XCTAssertEqual(
-                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                true
-            )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-        }
-    }
-
-    func testTerminalUsesBoundedRestartWhenResumeCannotProveUnpaused() throws {
-        try withHarness { harness in
-            harness.bootoutSideEffect = { _ in throw InjectedUpdaterFailure.responseLost }
-            harness.stoppedProofOverride = false
-            harness.resumePreparedSideEffect = { throw InjectedUpdaterFailure.operation }
-            harness.healthStatuses = [
-                harness.oldStatus(enabled: true, preparedForUpdate: true),
-                harness.oldStatus(enabled: true, preparedForUpdate: true),
-                harness.oldStatus(enabled: true, preparedForUpdate: false),
-            ]
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-
-            XCTAssertEqual(harness.resumePreparedCallCount, 1)
-            XCTAssertEqual(harness.restartCallCount, 1)
-            XCTAssertTrue(harness.daemonRunning)
-            XCTAssertEqual(
-                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                true
-            )
-        }
-    }
-
-    func testPreSwapTerminalRecoveryNormalizesRealistic0755RollbackAndEmitsUsableCommand() throws {
-        try withHarness { harness in
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: harness.paths.installedApplication.path
-            )
-            harness.prepareSideEffect = { throw InjectedUpdaterFailure.responseLost }
-            harness.bootstrapSideEffect = { call in
-                if call == 0 { throw InjectedUpdaterFailure.operation }
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(
-                    error as? CompanionUpdaterError,
-                    .rollbackFailed(recoveryCommand: CompanionUpdater.recoveryCommand)
-                )
-            }
-
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.installedApplication.path))
-            XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
-            XCTAssertEqual(try permissions(harness.paths.rollbackApplication), 0o700)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: harness.paths.failedApplication.path))
-            XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
-        }
-    }
-
-    func testTerminalRecoveryRefusesAmbiguousThreeBundleStateWithoutMutationOrCommand() throws {
-        try withHarness { harness in
-            let blocker = Data("unrelated-failed-blocker".utf8)
-            var installedInode: UInt64?
-            var installedMode: Int?
-            var rollbackInode: UInt64?
-            var rollbackMode: Int?
-            var failedInode: UInt64?
-            var failedMode: Int?
-            harness.healthStatuses = [harness.newStatus(enabled: false)]
-            harness.beforeFirstHealth = {
-                try writeOwnerFile(blocker, to: harness.paths.failedApplication)
-                installedInode = try inode(harness.paths.installedApplication)
-                installedMode = try permissions(harness.paths.installedApplication)
-                rollbackInode = try inode(harness.paths.rollbackApplication)
-                rollbackMode = try permissions(harness.paths.rollbackApplication)
-                failedInode = try inode(harness.paths.failedApplication)
-                failedMode = try permissions(harness.paths.failedApplication)
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-
-            XCTAssertEqual(try marker(harness.paths.installedApplication), "new")
-            XCTAssertEqual(try marker(harness.paths.rollbackApplication), "old")
-            XCTAssertEqual(try Data(contentsOf: harness.paths.failedApplication), blocker)
-            XCTAssertEqual(try inode(harness.paths.installedApplication), try XCTUnwrap(installedInode))
-            XCTAssertEqual(try permissions(harness.paths.installedApplication), try XCTUnwrap(installedMode))
-            XCTAssertEqual(try inode(harness.paths.rollbackApplication), try XCTUnwrap(rollbackInode))
-            XCTAssertEqual(try permissions(harness.paths.rollbackApplication), try XCTUnwrap(rollbackMode))
-            XCTAssertEqual(try inode(harness.paths.failedApplication), try XCTUnwrap(failedInode))
-            XCTAssertEqual(try permissions(harness.paths.failedApplication), try XCTUnwrap(failedMode))
-            XCTAssertEqual(
-                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                false
-            )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-            XCTAssertFalse(harness.daemonRunning)
-        }
-    }
-
-    func testTerminalRecoveryAcceptsLostBootoutResponseOnlyWithPositiveStoppedProof() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [harness.newStatus(enabled: false)]
-            harness.bootoutSideEffect = { call in
-                guard call == 2 else { return }
-                harness.markDaemonStopped()
-                throw InjectedUpdaterFailure.responseLost
-            }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(
-                    error as? CompanionUpdaterError,
-                    .rollbackFailed(recoveryCommand: CompanionUpdater.recoveryCommand)
-                )
-            }
-
-            XCTAssertFalse(harness.daemonRunning)
-            XCTAssertEqual(harness.stoppedProofCallCount, 1)
-            XCTAssertEqual(harness.recoveryCommands.values, [CompanionUpdater.recoveryCommand])
-        }
-    }
-
-    func testTerminalRecoveryEmitsNoCommandWhenStoppedProofThrows() throws {
-        try withHarness { harness in
-            harness.healthStatuses = [
-                harness.newStatus(enabled: false),
-                harness.newStatus(enabled: false),
-                harness.oldStatus(enabled: true, preparedForUpdate: false),
-            ]
-            harness.bootstrapSideEffect = { call in
-                if call == 1 { throw InjectedUpdaterFailure.operation }
-            }
-            harness.stoppedProofSideEffect = { throw InjectedUpdaterFailure.responseLost }
-
-            XCTAssertThrowsError(try harness.makeUpdater().run()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .terminalSafetyFailure)
-            }
-
-            XCTAssertTrue(harness.daemonRunning)
-            XCTAssertEqual(harness.stoppedProofCallCount, 1)
-            XCTAssertEqual(
-                try AgentController.persistedEnabled(paths: harness.paths, surfaces: [.codexCLI]),
-                true
-            )
-            XCTAssertTrue(harness.recoveryCommands.values.isEmpty)
-        }
-    }
-
-    func testCandidateAuditRejectsHardlinkedRegularFile() throws {
-        try withTransaction { transaction, _ in
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
-            let marker = transaction.candidateApplication.appendingPathComponent("marker")
-            let alias = transaction.candidateApplication.appendingPathComponent("marker-alias")
-            guard Darwin.link(marker.path, alias.path) == 0 else { throw POSIXError(.EIO) }
-
-            XCTAssertThrowsError(try transaction.sealValidatedCandidate()) { error in
-                XCTAssertEqual(error as? CompanionUpdaterError, .unsafeFilesystem)
-            }
-        }
-    }
-
-    func testNoSwapCleanupPreservesUnknownFailedBlockerWithPromotedCandidate() throws {
-        try withTransaction { transaction, paths in
-            try makeFakeApp(transaction.candidateApplication, marker: "candidate")
-            try transaction.sealValidatedCandidate()
-            let blockerBytes = Data("unrelated-promoted-blocker".utf8)
-            try writeOwnerFile(blockerBytes, to: paths.failedApplication)
-            let blockerInode = try inode(paths.failedApplication)
-            try FileManager.default.moveItem(
-                at: transaction.candidateApplication,
-                to: transaction.promotedCandidateApplication
-            )
-
-            try transaction.cleanupAfterNoSwap()
-
-            XCTAssertEqual(try marker(paths.installedApplication), "installed")
-            XCTAssertFalse(
-                FileManager.default.fileExists(
-                    atPath: transaction.promotedCandidateApplication.path
-                )
-            )
-            XCTAssertFalse(
-                FileManager.default.fileExists(atPath: transaction.workspaceDirectory.path)
-            )
-            XCTAssertEqual(try inode(paths.failedApplication), blockerInode)
-            XCTAssertEqual(try Data(contentsOf: paths.failedApplication), blockerBytes)
-            XCTAssertFalse(
-                FileManager.default.fileExists(atPath: paths.rollbackApplication.path)
-            )
-        }
-    }
-
-    private func withHarness(_ body: (UpdaterHarness) throws -> Void) throws {
-        let harness = try UpdaterHarness()
-        defer { try? FileManager.default.removeItem(at: harness.root) }
-        try body(harness)
-    }
-
-    private func withTransaction(
-        _ body: (UpdateFileTransaction, AgentPaths) throws -> Void
-    ) throws {
-        let root = temporaryURL("rr-file-transaction")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let paths = AgentPaths(applicationSupportDirectory: root)
-        try privateDirectory(paths.supportDirectory)
-        try makeFakeApp(paths.installedApplication, marker: "installed")
-        let transaction = try UpdateFileTransaction(paths: paths)
-        try body(transaction, paths)
     }
 }
 
-private final class UpdaterHarness: @unchecked Sendable {
-    let root = temporaryURL("rr-companion-updater")
+private enum InitialActive {
+    case n
+    case n1WithFallback
+}
+
+private enum HarnessFailure: Error {
+    case injected
+}
+
+private final class VersionedUpdaterHarness {
+    let root = temporaryURL("runtime-raiders-versioned-updater")
     let paths: AgentPaths
-    let oldIdentity = CompanionReleaseIdentity(
-        releaseSequence: 1,
-        releaseSHA: String(repeating: "c", count: 40),
-        companionVersion: "0.2.0",
-        updateProtocolVersion: 1
-    )
-    let newIdentity = CompanionReleaseIdentity(
-        releaseSequence: 2,
-        releaseSHA: String(repeating: "a", count: 40),
-        companionVersion: "0.2.1",
-        updateProtocolVersion: 1
-    )
-    let log = LockedValues<String>([])
-    let recoveryCommands = LockedValues<String>([])
-    let enrollment: URL
-    let outboxRecords: [URL]
-    var outboxRecord: URL { outboxRecords[0] }
+    let n = release(9, "a", "0.3.0")
+    let n1 = release(10, "b", "0.3.1")
+    let n2 = release(11, "c", "0.3.2")
+    let team = "ABCDEFGHIJ"
+    let initialState: ReleaseStateV1
+    let unselectedResidue: URL
+
     var manifest: ReleaseManifestV1
-    var initialStatus: CompanionUpdateStatus
-    var recheckStatus: CompanionUpdateStatus
-    var preparedStatus: CompanionUpdateStatus
-    var healthStatuses: [CompanionUpdateStatus]
-    var receiptDigest: String
-    var availableCapacity = Int64.max
-    var candidateFailure = false
+    var activeRunCount = 0
+    var initialDaemonRunning = true
     var downloadCalled = false
-    var beforeInitialStatus: () -> Void = {}
-    var beforeFirstHealth: () throws -> Void = {}
-    var fetchSideEffect: () throws -> Void = {}
-    var downloadSideEffect: (URL) throws -> Void = { _ in }
-    var extractionSideEffect: (URL) throws -> Void = { _ in }
-    var candidateVerificationSideEffect: (URL) throws -> Void = { _ in }
-    var selfCheckSideEffect: (URL) throws -> Void = { _ in }
-    var selfCheckResult: SystemCommandResult?
-    var prepareSideEffect: () throws -> Void = {}
-    var bootoutSideEffect: (Int) throws -> Void = { _ in }
-    var bootstrapSideEffect: (Int) throws -> Void = { _ in }
-    var healthSideEffect: (Int) throws -> Void = { _ in }
-    var stoppedProofSideEffect: () throws -> Void = {}
-    var stoppedProofOverride: Bool?
-    var resumePreparedSideEffect: () throws -> Void = {}
-    var restartSideEffect: () throws -> Void = {}
-    var beforeSwap: () throws -> Void = {}
-    var beforeCleanup: () -> Void = {}
-    var assertFrozenState: () throws -> Void = {}
-    private var statusCalls = 0
-    private var healthCalls = 0
-    private var bootoutCalls = 0
-    private var bootstrapCalls = 0
-    private var stoppedProofCalls = 0
-    private var resumePreparedCalls = 0
-    private var restartCalls = 0
-    private var daemonIsRunning = true
-    private var healthNow: TimeInterval = 0
-    private var releaseCheckNow: Int64 = 1_800_000_000_000
-    private let variableLock = NSLock()
+    var fetchCalled = false
+    var activeObservedDuringTrialHealth = false
+    var rejectCandidateHealth = false
+    var rejectPriorHealth = false
+    var candidateHealthActiveRunCount = 0
+    var priorHealthActiveRunCount = 0
+    var failCandidateResume = false
+    var onCandidateHealth: () throws -> Void = {}
+    var kickstartCount = 0
+    var kickstartSelections: [ReleaseReference] = []
+    var resumedGenerations: [Int64] = []
+    var workspaces: [URL] = []
+    var transactionFaults: Set<VersionedReleaseTransactionFault> = []
+    private var failedCheckpoint: CompanionUpdaterCheckpoint?
+    private var failureConsumed = false
 
-    var bootoutCallCount: Int { variableLock.withLock { bootoutCalls } }
-    var bootstrapCallCount: Int { variableLock.withLock { bootstrapCalls } }
-    var stoppedProofCallCount: Int { variableLock.withLock { stoppedProofCalls } }
-    var resumePreparedCallCount: Int { variableLock.withLock { resumePreparedCalls } }
-    var restartCallCount: Int { variableLock.withLock { restartCalls } }
-    var daemonRunning: Bool { variableLock.withLock { daemonIsRunning } }
-
-    init() throws {
+    init(initialActive: InitialActive) throws {
         paths = AgentPaths(applicationSupportDirectory: root)
-        enrollment = paths.stateDirectory.appendingPathComponent("enrollment.json")
-        let archiveDigest = sha256Hex(testArchiveData())
-        receiptDigest = archiveDigest
-        manifest = try makeManifest(identity: newIdentity, zipSHA256: archiveDigest)
-        let verifiedOld = VerifiedCompanionApplication(identity: oldIdentity, teamIdentifier: "REDLATTICE")
-        let verifiedNew = VerifiedCompanionApplication(identity: newIdentity, teamIdentifier: "REDLATTICE")
-        initialStatus = CompanionUpdateStatus(
-            verifiedApplication: verifiedOld,
-            daemonRunning: true,
-            enabled: true,
-            enrollmentValid: true,
-            collectorStateValid: true,
-            activeRunCount: 0,
-            queuedEventCount: 2
+        unselectedResidue = paths.releasesDirectory.appendingPathComponent(
+            "sequence-7-" + String(repeating: "d", count: 40),
+            isDirectory: true
         )
-        recheckStatus = initialStatus
-        preparedStatus = CompanionUpdateStatus(
-            verifiedApplication: verifiedOld,
-            daemonRunning: true,
-            enabled: true,
-            enrollmentValid: true,
-            collectorStateValid: true,
-            activeRunCount: 0,
-            queuedEventCount: 2,
-            preparedForUpdate: true
-        )
-        healthStatuses = [CompanionUpdateStatus(
-            verifiedApplication: verifiedNew,
-            daemonRunning: true,
-            enabled: true,
-            enrollmentValid: true,
-            collectorStateValid: true,
-            activeRunCount: 0,
-            queuedEventCount: 2,
-            preparedForUpdate: true
-        )]
-
         try privateDirectory(paths.supportDirectory)
         try privateDirectory(paths.stateDirectory)
         try privateDirectory(paths.outboxDirectory)
-        try makeFakeApp(paths.installedApplication, marker: "old")
-        try writeOwnerFile(
-            Data(#"{"cutover_at":1700000000000,"dedupe_secret":"abababababababababababababababababababababababababababababababab","device_id":"00000000-0000-4000-8000-000000000001","device_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","enabled_surfaces":["codex_cli"],"server_url":"http://127.0.0.1:8765","version":1}"#.utf8),
-            to: enrollment
-        )
-        let outbox = try Outbox(directory: paths.outboxDirectory)
-        try outbox.enqueue(makeUpdaterEvent(sequence: 1))
-        try outbox.enqueue(makeUpdaterEvent(sequence: 2))
-        outboxRecords = try outbox.records(limit: 100).map(\.url)
+        try privateDirectory(paths.releasesDirectory)
+        try privateDirectory(paths.installationDirectory)
+        try writeOwnerFile(Data("enrollment".utf8), to: paths.stateDirectory.appendingPathComponent("enrollment.json"))
+        try writeOwnerFile(Data("collector".utf8), to: paths.stateDirectory.appendingPathComponent("collector-state.json"))
+        try writeOwnerFile(Data("event".utf8), to: paths.outboxDirectory.appendingPathComponent(String(repeating: "e", count: 64) + ".json"))
 
-        let providerRoot = root.appendingPathComponent("codex", isDirectory: true)
-        try privateDirectory(providerRoot)
-        let provider = providerRoot.appendingPathComponent("nested-snapshot.jsonl")
-        try Data("{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"fixture\",\"originator\":\"originator\",\"source\":\"exec\",\"cli_version\":\"0.146.0-alpha.3.1\"}}\n".utf8).write(to: provider)
-        let registry = try AdapterRegistry.enabled(surfaces: [.codexCLI], codexRoot: providerRoot)
-        let controller = try AgentController(
-            registry: registry,
-            paths: paths,
-            outbox: outbox,
-            configuration: .init(
-                companionVersion: "0.2.0",
-                deviceID: "00000000-0000-4000-8000-000000000001",
-                dedupeSecret: Data("fixture-secret".utf8)
+        let selectedState: ReleaseStateV1
+        let selectedManifest: ReleaseManifestV1
+        let installedReleases: [ReleaseReference]
+        switch initialActive {
+        case .n:
+            selectedState = ReleaseStateV1(
+                schemaVersion: 1, generation: 1, active: n, fallback: nil, trial: nil
             )
-        )
-        try controller.turnOn(existingFiles: [provider])
-        try UpdateStateStore(paths: paths).save(UpdateStateV1(lastCheckAttemptMS: 1))
+            selectedManifest = try makeManifest(n1)
+            installedReleases = [n]
+        case .n1WithFallback:
+            selectedState = ReleaseStateV1(
+                schemaVersion: 1, generation: 2, active: n1, fallback: n, trial: nil
+            )
+            selectedManifest = try makeManifest(n2)
+            installedReleases = [n, n1]
+        }
+        initialState = selectedState
+        manifest = selectedManifest
+        for release in installedReleases { try makeInstalledRelease(release) }
+        let store = try ReleaseStateStore(paths: paths)
+        if selectedState.generation == 1 {
+            try store.createInitial(selectedState)
+        } else {
+            let generationOne = ReleaseStateV1(
+                schemaVersion: 1, generation: 1, active: n, fallback: nil, trial: nil
+            )
+            try store.createInitial(generationOne)
+            try store.replace(expectedGeneration: 1, with: selectedState)
+        }
     }
 
-    var oldManifest: ReleaseManifestV1 {
-        try! makeManifest(identity: oldIdentity, zipSHA256: sha256Hex(testArchiveData()))
+    deinit { try? FileManager.default.removeItem(at: root) }
+
+    func state() throws -> ReleaseStateV1 { try ReleaseStateStore(paths: paths).load() }
+
+    func manifest(for release: ReleaseReference) -> ReleaseManifestV1 {
+        try! makeManifest(release)
     }
 
-    func oldStatus(
-        enabled: Bool = true,
-        activeRunCount: Int = 0,
-        preparedForUpdate: Bool = false
-    ) -> CompanionUpdateStatus {
-        CompanionUpdateStatus(
-            verifiedApplication: .init(identity: oldIdentity, teamIdentifier: "REDLATTICE"),
-            daemonRunning: true,
-            enabled: enabled,
-            enrollmentValid: true,
-            collectorStateValid: true,
-            activeRunCount: activeRunCount,
-            queuedEventCount: 2,
-            preparedForUpdate: preparedForUpdate
+    func runUpdate(to release: ReleaseReference) throws {
+        manifest = manifest(for: release)
+        let from = try state().active.companionReleaseIdentity()
+        XCTAssertEqual(
+            try makeUpdater().run(),
+            .updated(from: from, to: try release.companionReleaseIdentity())
         )
     }
 
-    func newStatus(
-        enabled: Bool = true,
-        preparedForUpdate: Bool = true
-    ) -> CompanionUpdateStatus {
-        CompanionUpdateStatus(
-            verifiedApplication: .init(identity: newIdentity, teamIdentifier: "REDLATTICE"),
-            daemonRunning: true,
-            enabled: enabled,
-            enrollmentValid: true,
-            collectorStateValid: true,
-            activeRunCount: 0,
-            queuedEventCount: 2,
-            preparedForUpdate: preparedForUpdate
-        )
+    func resetForNextUpdate(to release: ReleaseReference) {
+        manifest = manifest(for: release)
+        activeObservedDuringTrialHealth = false
+        rejectCandidateHealth = false
+        rejectPriorHealth = false
+        failCandidateResume = false
+        failedCheckpoint = nil
+        failureConsumed = false
+    }
+
+    func failOnce(at checkpoint: CompanionUpdaterCheckpoint) {
+        failedCheckpoint = checkpoint
+        failureConsumed = false
     }
 
     func makeUpdater() -> CompanionUpdater {
@@ -1303,210 +634,423 @@ private final class UpdaterHarness: @unchecked Sendable {
             paths: paths,
             surfaces: [.codexCLI],
             operations: CompanionUpdaterOperations(
-                status: {
-                    let call = self.variableLock.withLock { () -> Int in
-                        defer { self.statusCalls += 1 }
-                        return self.statusCalls
+                status: { [unowned self] expected, generation in
+                    let current = try state()
+                    guard current.active == expected, current.generation == generation else {
+                        throw CompanionUpdaterError.invalidStatus
                     }
-                    if call == 0 {
-                        self.beforeInitialStatus()
-                        return self.initialStatus
-                    }
-                    return self.recheckStatus
-                },
-                fetchManifest: {
-                    try self.fetchSideEffect()
-                    let now = self.variableLock.withLock { () -> Int64 in
-                        defer { self.releaseCheckNow += 24 * 60 * 60 * 1_000 + 1 }
-                        return self.releaseCheckNow
-                    }
-                    let body = manifestData(self.manifest)
-                    let checker = try ReleaseChecker(
-                        paths: self.paths,
-                        installed: self.oldIdentity,
-                        transport: { _ in .init(statusCode: 200, body: body) },
-                        notifier: { true },
-                        clockMS: { now }
+                    return updateStatus(
+                        release: expected,
+                        daemonRunning: initialDaemonRunning,
+                        activeRuns: activeRunCount
                     )
-                    guard case .checked = checker.checkIfDue() else {
-                        throw InjectedUpdaterFailure.operation
-                    }
-                    return self.manifest
                 },
-                downloadArchive: { source, destination, digest in
-                    self.downloadCalled = true
-                    XCTAssertEqual(source, self.manifest.zipURL)
-                    XCTAssertEqual(digest, self.manifest.zipSHA256)
-                    let archive = testArchiveData()
-                    try archive.write(to: destination)
-                    try FileManager.default.setAttributes(
-                        [.posixPermissions: 0o600],
-                        ofItemAtPath: destination.path
-                    )
-                    try self.downloadSideEffect(destination)
-                    return DownloadReceipt(byteCount: Int64(archive.count), sha256: self.receiptDigest)
+                fetchManifest: { [unowned self] in
+                    fetchCalled = true
+                    return manifest
                 },
-                runCommand: { executable, arguments, _ in
+                downloadArchive: { [unowned self] _, destination, digest in
+                    downloadCalled = true
+                    let data = testArchiveData()
+                    try data.write(to: destination)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+                    return DownloadReceipt(byteCount: Int64(data.count), sha256: digest)
+                },
+                runCommand: { [unowned self] executable, arguments, _ in
                     if executable.path == "/usr/bin/ditto" {
-                        XCTAssertEqual(arguments.prefix(2), ["-x", "-k"])
-                        try self.extractionSideEffect(URL(fileURLWithPath: arguments[2]))
-                        let staging = URL(fileURLWithPath: arguments[3], isDirectory: true)
-                        try makeFakeApp(
-                            staging.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true),
-                            marker: "new"
-                        )
-                        return .init(exitStatus: .exited(0), stdout: Data(), stderr: Data())
+                        let destination = URL(fileURLWithPath: arguments.last!)
+                        try createExtractedReleaseFixture(at: destination, release: manifest.reference)
+                        return SystemCommandResult(exitStatus: .exited(0), stdout: Data(), stderr: Data())
                     }
-                    XCTAssertEqual(executable.lastPathComponent, "runtime-raiders-agent")
-                    XCTAssertEqual(arguments, ["__self-check"])
-                    try self.selfCheckSideEffect(executable)
-                    if let selfCheckResult = self.selfCheckResult { return selfCheckResult }
-                    return .init(
+                    let reference = try manifest.reference.companionReleaseIdentity()
+                    return SystemCommandResult(
                         exitStatus: .exited(0),
-                        stdout: selfCheckData(self.newIdentity),
+                        stdout: selfCheckData(reference),
                         stderr: Data()
                     )
                 },
-                verifyCandidate: { candidate, manifest, installed in
-                    XCTAssertEqual(candidate.lastPathComponent, "Runtime Raiders Agent.app")
-                    XCTAssertEqual(installed.identity, self.oldIdentity)
-                    XCTAssertEqual(installed.teamIdentifier, "REDLATTICE")
-                    XCTAssertEqual(manifest, self.manifest)
-                    try self.candidateVerificationSideEffect(candidate)
-                    if self.candidateFailure { throw CompanionUpdaterError.candidateRejected }
-                    return self.newIdentity
-                },
-                availableCapacity: { _ in self.availableCapacity },
-                prepareDaemon: {
-                    try self.assertFrozenState()
-                    try self.prepareSideEffect()
-                    if self.preparedStatus.activeRunCount > 0,
-                       !self.preparedStatus.preparedForUpdate {
-                        return .refusedActiveRun
+                verifyArchive: { [unowned self] root, manifest, installed in
+                    let activeIdentity = try state().active.companionReleaseIdentity()
+                    guard installed.identity == activeIdentity,
+                          manifest.reference == self.manifest.reference else {
+                        throw CompanionUpdaterError.candidateRejected
                     }
-                    return .prepared(self.preparedStatus)
+                    return try testReleaseArchiveVerifier(
+                        identity: try manifest.reference.companionReleaseIdentity(),
+                        teamIdentifier: team
+                    ).verify(
+                        extractedRoot: root,
+                        manifest: manifest,
+                        installed: installed.identity,
+                        installedTeamIdentifier: installed.teamIdentifier
+                    )
                 },
-                bootout: {
-                    let call = self.variableLock.withLock { () -> Int in
-                        defer { self.bootoutCalls += 1 }
-                        return self.bootoutCalls
+                availableCapacity: { _ in Int64.max },
+                acquirePreparedLease: { [paths] in try CompanionPreparedStartupLease(paths: paths) },
+                prepareDaemon: { [unowned self] generation in
+                    let current = try state()
+                    guard current.generation == generation, current.trial != nil else {
+                        throw CompanionUpdaterError.invalidStatus
                     }
-                    try self.bootoutSideEffect(call)
-                    self.variableLock.withLock { self.daemonIsRunning = false }
-                    try self.assertFrozenState()
+                    if activeRunCount > 0 { return .refusedActiveRun }
+                    return .prepared(updateStatus(
+                        release: current.active,
+                        preparedGeneration: generation
+                    ))
                 },
-                bootstrap: {
-                    let call = self.variableLock.withLock { () -> Int in
-                        defer { self.bootstrapCalls += 1 }
-                        return self.bootstrapCalls
+                kickstartDaemon: { [unowned self] in
+                    kickstartCount += 1
+                    kickstartSelections.append(try daemonSelection().release)
+                },
+                resumePreparedDaemon: { [unowned self] generation in
+                    let current = try state()
+                    if failCandidateResume, current.active == manifest.reference {
+                        failCandidateResume = false
+                        throw HarnessFailure.injected
                     }
-                    self.variableLock.withLock { self.daemonIsRunning = true }
-                    try self.bootstrapSideEffect(call)
-                    try self.assertFrozenState()
-                },
-                proveDaemonStopped: {
-                    self.variableLock.withLock { self.stoppedProofCalls += 1 }
-                    try self.stoppedProofSideEffect()
-                    return self.stoppedProofOverride ?? !self.daemonRunning
-                },
-                resumePreparedDaemon: {
-                    self.variableLock.withLock { self.resumePreparedCalls += 1 }
-                    try self.resumePreparedSideEffect()
-                    self.variableLock.withLock { self.daemonIsRunning = true }
-                },
-                restartDaemon: {
-                    self.variableLock.withLock {
-                        self.restartCalls += 1
-                        self.daemonIsRunning = true
+                    guard current.generation == generation, current.trial == nil else {
+                        throw CompanionUpdaterError.invalidStatus
                     }
-                    try self.restartSideEffect()
+                    resumedGenerations.append(generation)
                 },
-                healthStatus: {
-                    let index = self.variableLock.withLock { () -> Int in
-                        defer { self.healthCalls += 1 }
-                        return self.healthCalls
+                healthStatus: { [unowned self] expected, generation in
+                    let current = try state()
+                    guard current.generation == generation else {
+                        throw CompanionUpdaterError.invalidStatus
                     }
-                    if index == 0 { try self.beforeFirstHealth() }
-                    try self.healthSideEffect(index)
-                    try self.assertFrozenState()
-                    return self.healthStatuses[min(index, self.healthStatuses.count - 1)]
+                    if expected == manifest.reference {
+                        try onCandidateHealth()
+                        activeObservedDuringTrialHealth = current.active != expected && current.trial == expected
+                        if rejectCandidateHealth {
+                            return updateStatus(release: current.active, preparedGeneration: generation)
+                        }
+                    } else if rejectPriorHealth {
+                        return updateStatus(release: manifest.reference, preparedGeneration: generation)
+                    }
+                    return updateStatus(
+                        release: expected,
+                        activeRuns: expected == manifest.reference
+                            ? candidateHealthActiveRunCount
+                            : priorHealthActiveRunCount,
+                        preparedGeneration: generation
+                    )
                 },
-                emitRecoveryCommand: { self.recoveryCommands.append($0) },
-                observe: {
-                    if $0 == .swap { try? self.beforeSwap() }
-                    if $0 == .cleanup { self.beforeCleanup() }
-                    self.log.append($0.rawValue)
-                },
-                monotonicNow: { self.variableLock.withLock { self.healthNow } },
-                sleep: { interval in
-                    self.variableLock.withLock { self.healthNow += max(interval, 10) }
+                checkpoint: { [unowned self] checkpoint in
+                    if checkpoint == failedCheckpoint, !failureConsumed {
+                        failureConsumed = true
+                        throw HarnessFailure.injected
+                    }
                 }
-            )
+            ),
+            transactionFactory: { [unowned self] in try makeTransaction() }
         )
     }
 
-    func installedMarker() throws -> String { try marker(paths.installedApplication) }
-
-    func markDaemonStopped() {
-        variableLock.withLock { daemonIsRunning = false }
+    func makeTransaction() throws -> VersionedReleaseTransaction {
+        let transaction = try VersionedReleaseTransaction(
+            paths: paths,
+            fault: { [unowned self] fault in
+                if transactionFaults.contains(fault) { throw HarnessFailure.injected }
+            }
+        )
+        workspaces.append(transaction.workspaceDirectory)
+        return transaction
     }
 
-    var hasUpdateWorkspace: Bool {
-        (try? FileManager.default.contentsOfDirectory(atPath: paths.supportDirectory.path))?
-            .contains(where: { $0.hasPrefix(".runtime-raiders-update-") }) == true
+    func populateExtractedRelease(_ transaction: VersionedReleaseTransaction, release: ReleaseReference) throws {
+        try createExtractedReleaseFixture(at: transaction.stagingDirectory, release: release)
+    }
+
+    func verifiedArchive(
+        _ transaction: VersionedReleaseTransaction,
+        release: ReleaseReference
+    ) throws -> VerifiedReleaseArchive {
+        let installed = try state().active.companionReleaseIdentity()
+        return try testReleaseArchiveVerifier(
+            identity: try release.companionReleaseIdentity(),
+            teamIdentifier: team
+        ).verify(
+            extractedRoot: transaction.stagingDirectory,
+            manifest: manifest(for: release),
+            installed: installed,
+            installedTeamIdentifier: team
+        )
+    }
+
+    func promoteAndRecordTrial(_ release: ReleaseReference) throws {
+        let transaction = try makeTransaction()
+        try populateExtractedRelease(transaction, release: release)
+        _ = try transaction.promoteVerifiedCandidate(verifiedArchive(transaction, release: release))
+        _ = try transaction.recordTrial(release)
+    }
+
+    func leaveMalformedJournalAndOldReleaseResidue() throws {
+        try writeOwnerFile(Data("not-json".utf8), to: paths.updateJournal)
+        try privateDirectory(unselectedResidue)
+        try writeOwnerFile(Data("untouched".utf8), to: unselectedResidue.appendingPathComponent("evidence"))
     }
 
     func protectedBytes() throws -> [String: Data] {
-        var bytes = [
-            "enrollment": try Data(contentsOf: enrollment),
+        [
+            "enrollment": try Data(contentsOf: paths.stateDirectory.appendingPathComponent("enrollment.json")),
             "collector": try Data(contentsOf: paths.stateDirectory.appendingPathComponent("collector-state.json")),
+            "outbox": try Data(contentsOf: paths.outboxDirectory.appendingPathComponent(String(repeating: "e", count: 64) + ".json")),
         ]
-        for (index, record) in outboxRecords.enumerated() {
-            bytes["outbox-\(index)"] = try Data(contentsOf: record)
-        }
-        return bytes
     }
 
-    func setCollectorEnabled(_ enabled: Bool) throws {
-        if !enabled {
-            try AgentController.persistDisabledForRecovery(paths: paths, surfaces: [.codexCLI])
-        }
+    func daemonSelection() throws -> LauncherSelection {
+        let knownReleases = [n, n1, n2]
+        let launcher = LauncherBundleValidation(
+            bundle: paths.launcherApplication,
+            executable: paths.launcherExecutable,
+            bundleIdentifier: "com.redlattice.runtime-raiders-launcher",
+            teamIdentifier: team,
+            hardenedRuntime: true,
+            allArchitecturesValid: true,
+            launcherProtocolVersion: 1,
+            releaseIdentity: nil
+        )
+        let selector = LauncherSelector(operations: LauncherSelectionOperations(
+            paths: paths,
+            loadReleaseState: { [paths] in try ReleaseStateStore.loadExisting(paths: paths) },
+            preparedStartupLeaseIsHeld: { [paths] in
+                try CompanionPreparedStartupLease.observe(paths: paths) != nil
+            },
+            inspectLauncher: { launcher },
+            inspectAgent: { [paths, team] application in
+                guard let release = try knownReleases.first(where: {
+                    try paths.application(for: $0).standardizedFileURL ==
+                        application.standardizedFileURL
+                }) else {
+                    throw HarnessFailure.injected
+                }
+                return LauncherBundleValidation(
+                    bundle: application,
+                    executable: try paths.executable(for: release),
+                    bundleIdentifier: "com.redlattice.runtime-raiders-agent",
+                    teamIdentifier: team,
+                    hardenedRuntime: true,
+                    allArchitecturesValid: true,
+                    launcherProtocolVersion: nil,
+                    releaseIdentity: try release.companionReleaseIdentity()
+                )
+            }
+        ))
+        return try selector.select(invocation: .daemon)
     }
 
-    func installWorkspaceCleanupTrap() throws {
-        let name = try XCTUnwrap(
-            FileManager.default.contentsOfDirectory(atPath: paths.supportDirectory.path)
-                .first { $0.hasPrefix(".runtime-raiders-update-") }
+    func preparedRuntime(selection: LauncherSelection) throws -> CrashPreparedRuntime {
+        let trialGeneration = selection.arguments.count == 3
+            ? selection.releaseStateGeneration
+            : nil
+        let starts = CrashStartCounter()
+        let coordinator = try PreparedDaemonStartupCoordinator(
+            paths: paths,
+            trialGeneration: trialGeneration,
+            releaseIdentity: try selection.release.companionReleaseIdentity(),
+            loadReleaseState: { [paths] in try ReleaseStateStore.loadExisting(paths: paths) },
+            deferredStart: { starts.increment() }
         )
-        let workspace = paths.supportDirectory.appendingPathComponent(name, isDirectory: true)
-        let trapTarget = root.appendingPathComponent("DO_NOT_TOUCH_WORKSPACE_TRAP")
-        try writeOwnerFile(Data("trap".utf8), to: trapTarget)
-        try FileManager.default.createSymbolicLink(
-            at: workspace.appendingPathComponent("staging/cleanup-trap"),
-            withDestinationURL: trapTarget
+        return CrashPreparedRuntime(coordinator: coordinator, starts: starts)
+    }
+
+    func reconcileAbandonedTrial() throws {
+        manifest = manifest(for: try state().active)
+        XCTAssertEqual(try makeUpdater().run(), .alreadyCurrent)
+    }
+
+    private func updateStatus(
+        release: ReleaseReference,
+        daemonRunning: Bool = true,
+        activeRuns: Int = 0,
+        preparedGeneration: Int64? = nil
+    ) -> CompanionUpdateStatus {
+        CompanionUpdateStatus(
+            verifiedApplication: VerifiedCompanionApplication(
+                identity: try! release.companionReleaseIdentity(),
+                teamIdentifier: team
+            ),
+            daemonRunning: daemonRunning,
+            enabled: true,
+            enrollmentValid: true,
+            collectorStateValid: true,
+            activeRunCount: activeRuns,
+            queuedEventCount: 1,
+            preparedReleaseStateGeneration: preparedGeneration
         )
+    }
+
+    private func makeInstalledRelease(_ release: ReleaseReference) throws {
+        let app = try paths.application(for: release)
+        try makeFakeApp(app, marker: String(release.releaseSequence))
+        try privateDirectory(app.deletingLastPathComponent())
     }
 }
 
-private final class LockedValues<Value>: @unchecked Sendable {
+private enum LeaseBoundCrashBoundary: CaseIterable {
+    case afterLease
+    case afterPrepare
+    case afterKickstart
+    case afterHealth
+    case afterCommit
+    case afterResume
+}
+
+private enum CrashPreparedEvent: Equatable {
+    case resumed
+    case exited
+    case failedClosed
+}
+
+private final class CrashStartCounter: @unchecked Sendable {
     private let lock = NSLock()
-    private var storage: [Value]
+    private var storage = 0
 
-    init(_ values: [Value]) { storage = values }
-    var values: [Value] { lock.withLock { storage } }
-    func append(_ value: Value) { lock.withLock { storage.append(value) } }
+    var value: Int { lock.withLock { storage } }
+    func increment() { lock.withLock { storage += 1 } }
 }
 
-private enum InjectedUpdaterFailure: Error, Equatable {
-    case operation
-    case responseLost
+private final class CrashPreparedRuntime: @unchecked Sendable {
+    let coordinator: PreparedDaemonStartupCoordinator
+    let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.crash-recovery")
+    private let starts: CrashStartCounter
+    private let bridge: CrashAbandonmentBridge
+    let preparation: SerializedUpdatePreparation
+
+    init(coordinator: PreparedDaemonStartupCoordinator, starts: CrashStartCounter) {
+        self.coordinator = coordinator
+        self.starts = starts
+        let bridge = CrashAbandonmentBridge()
+        self.bridge = bridge
+        let preparation = SerializedUpdatePreparation(
+            workQueue: DispatchQueue(
+                label: "com.redlattice.runtime-raiders.tests.crash-recovery-work"
+            ),
+            activeRunCount: { 0 },
+            validatePreparation: { generation in
+                try coordinator.validatePreparation(generation: generation)
+            },
+            pauseAcceptance: {},
+            pauseUploader: {},
+            pauseHeartbeat: {},
+            pauseWatcher: {},
+            startAbandonmentObserver: { generation in bridge.start(generation: generation) },
+            initiallyPreparedGeneration: coordinator.initiallyPreparedGeneration,
+            validateResume: { generation in
+                try coordinator.validateResume(generation: generation)
+            },
+            resume: { _ in try coordinator.resume() }
+        )
+        let orchestrator = PreparedReleaseAbandonmentOrchestrator(
+            coordinator: coordinator,
+            queue: queue,
+            preparedGeneration: { bridge.preparedGeneration },
+            resumeAfterAbandonment: { generation in
+                bridge.resumeAfterAbandonment(generation: generation)
+            },
+            exitUncommittedTrial: { bridge.append(.exited) },
+            failClosed: { bridge.append(.failedClosed) }
+        )
+        bridge.connect(preparation: preparation, orchestrator: orchestrator)
+        self.preparation = preparation
+    }
+
+    var events: [CrashPreparedEvent] { bridge.events }
+    var startCount: Int { starts.value }
+
+    func start() throws {
+        try coordinator.start()
+    }
+
+    func prepare(generation: Int64) -> ControlResponse {
+        preparation.prepare(generation: generation)
+    }
+
+    func observeAbandonment(generation: Int64) {
+        bridge.start(generation: generation)
+    }
+
+    func drainAbandonment() {
+        queue.sync {}
+    }
+
 }
 
-private enum RecoveryFailure: String, CaseIterable {
-    case bootstrap
-    case health
-    case protectedSnapshot
-    case cleanup
+private final class CrashAbandonmentBridge: @unchecked Sendable {
+    private let lock = NSLock()
+    private var preparation: SerializedUpdatePreparation?
+    private var orchestrator: PreparedReleaseAbandonmentOrchestrator?
+    private var eventStorage: [CrashPreparedEvent] = []
+
+    var preparedGeneration: Int64? {
+        lock.withLock { preparation?.preparedGeneration }
+    }
+
+    var events: [CrashPreparedEvent] { lock.withLock { eventStorage } }
+
+    func connect(
+        preparation: SerializedUpdatePreparation,
+        orchestrator: PreparedReleaseAbandonmentOrchestrator
+    ) {
+        lock.withLock {
+            self.preparation = preparation
+            self.orchestrator = orchestrator
+        }
+    }
+
+    func start(generation: Int64) {
+        lock.withLock { orchestrator }?.start(generation: generation)
+    }
+
+    func resumeAfterAbandonment(generation: Int64) -> ControlResponse {
+        guard let preparation = lock.withLock({ preparation }) else {
+            return ControlResponse(ok: false, message: "unconnected preparation")
+        }
+        let response = preparation.resumeAfterAbandonment(generation: generation)
+        if response.ok { append(.resumed) }
+        return response
+    }
+
+    func append(_ event: CrashPreparedEvent) {
+        lock.withLock { eventStorage.append(event) }
+    }
+}
+
+private func withHarness(
+    initialActive: InitialActive = .n,
+    _ body: (VersionedUpdaterHarness) throws -> Void
+) throws {
+    let harness = try VersionedUpdaterHarness(initialActive: initialActive)
+    try body(harness)
+}
+
+private func release(_ sequence: Int64, _ scalar: Character, _ version: String) -> ReleaseReference {
+    ReleaseReference(
+        releaseSequence: sequence,
+        releaseSHA: String(repeating: String(scalar), count: 40),
+        companionVersion: version,
+        updateProtocolVersion: 2
+    )
+}
+
+private func makeManifest(_ release: ReleaseReference) throws -> ReleaseManifestV1 {
+    let digest = SHA256.hash(data: testArchiveData())
+        .map { String(format: "%02x", $0) }
+        .joined()
+    return try ReleaseManifestV1.decode(Data(
+        "{\"manifest_version\":1,\"companion_version\":\"\(release.companionVersion)\",\"release_sequence\":\(release.releaseSequence),\"release_sha\":\"\(release.releaseSHA)\",\"update_protocol_version\":2,\"zip_sha256\":\"\(digest)\",\"zip_url\":\"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip\"}".utf8
+    ))
+}
+
+private extension ReleaseManifestV1 {
+    var reference: ReleaseReference {
+        ReleaseReference(
+            releaseSequence: releaseSequence,
+            releaseSHA: releaseSHA,
+            companionVersion: companionVersion,
+            updateProtocolVersion: updateProtocolVersion
+        )
+    }
 }
 
 private func temporaryURL(_ prefix: String) -> URL {
@@ -1524,95 +1068,53 @@ private func writeOwnerFile(_ data: Data, to file: URL) throws {
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
 }
 
-private func rewriteSameLengthRestoringModificationTime(_ file: URL, with data: Data) throws {
-    var metadata = stat()
-    guard Darwin.lstat(file.path, &metadata) == 0,
-          metadata.st_mode & S_IFMT == S_IFREG,
-          metadata.st_size == data.count else {
-        throw POSIXError(.EINVAL)
-    }
-    try data.write(to: file)
-    let times = [metadata.st_atimespec, metadata.st_mtimespec]
-    let result = file.path.withCString { path in
-        times.withUnsafeBufferPointer {
-            Darwin.utimensat(AT_FDCWD, path, $0.baseAddress, AT_SYMLINK_NOFOLLOW)
-        }
-    }
-    guard result == 0 else { throw POSIXError(.EIO) }
-}
-
-private func sha256Hex(_ data: Data) -> String {
-    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-}
-
-private func makeManifest(
-    identity: CompanionReleaseIdentity,
-    zipSHA256: String
-) throws -> ReleaseManifestV1 {
-    try ReleaseManifestV1.decode(
-        Data(
-            "{\"manifest_version\":1,\"companion_version\":\"\(identity.companionVersion)\",\"release_sequence\":\(identity.releaseSequence),\"release_sha\":\"\(identity.releaseSHA)\",\"update_protocol_version\":\(identity.updateProtocolVersion),\"zip_sha256\":\"\(zipSHA256)\",\"zip_url\":\"https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip\"}".utf8
-        )
-    )
-}
-
-private func manifestData(_ manifest: ReleaseManifestV1) -> Data {
-    Data(
-        "{\"manifest_version\":1,\"companion_version\":\"\(manifest.companionVersion)\",\"release_sequence\":\(manifest.releaseSequence),\"release_sha\":\"\(manifest.releaseSHA)\",\"update_protocol_version\":\(manifest.updateProtocolVersion),\"zip_sha256\":\"\(manifest.zipSHA256)\",\"zip_url\":\"\(manifest.zipURL.absoluteString)\"}".utf8
-    )
-}
-
-private func makeUpdaterEvent(sequence: Int64) -> RunEventV1 {
-    RunEventV1(
-        schemaVersion: 1,
-        companionVersion: "0.2.0",
-        deviceID: "00000000-0000-4000-8000-000000000001",
-        provider: .codex,
-        surface: .codexCLI,
-        runKey: String(repeating: "a", count: 64),
-        sequence: sequence,
-        eventTimeMS: 1_800_000_000_000 + sequence,
-        observedAtMS: 1_800_000_000_100 + sequence,
-        startedAtMS: 1_800_000_000_000,
-        state: .open,
-        usage: .init(
-            input: sequence,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            reasoningOutput: 0
-        ),
-        model: nil,
-        effort: nil,
-        idempotencyKey: String(format: "%064llx", sequence)
-    )
-}
-
-private func makeFakeApp(_ app: URL, marker value: String) throws {
+private func makeFakeApp(_ app: URL, marker: String) throws {
     let executableDirectory = app.appendingPathComponent("Contents/MacOS", isDirectory: true)
-    try FileManager.default.createDirectory(at: executableDirectory, withIntermediateDirectories: true)
-    for directory in [app, app.appendingPathComponent("Contents", isDirectory: true), executableDirectory] {
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-    }
-    try writeOwnerFile(Data(value.utf8), to: app.appendingPathComponent("marker"))
+    try privateDirectory(executableDirectory)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: app.path)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: app.appendingPathComponent("Contents", isDirectory: true).path
+    )
+    try writeOwnerFile(Data(marker.utf8), to: app.appendingPathComponent("marker"))
     let executable = executableDirectory.appendingPathComponent("runtime-raiders-agent")
     try writeOwnerFile(Data("fixture".utf8), to: executable)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
 }
 
-private func marker(_ app: URL) throws -> String {
-    String(decoding: try Data(contentsOf: app.appendingPathComponent("marker")), as: UTF8.self)
+private func createExtractedReleaseFixture(at staging: URL, release: ReleaseReference) throws {
+    let root = staging.appendingPathComponent("Runtime Raiders Release", isDirectory: true)
+    let agent = root.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
+    let launcher = root.appendingPathComponent("Runtime Raiders Launcher.app", isDirectory: true)
+    try makeFakeApp(agent, marker: String(release.releaseSequence))
+    try privateDirectory(launcher.appendingPathComponent("Contents", isDirectory: true))
+    try writeOwnerFile(Data("launcher".utf8), to: launcher.appendingPathComponent("Contents/Info.plist"))
+    for directory in [root, agent, launcher] {
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    }
 }
 
-private func permissions(_ url: URL) throws -> Int {
-    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-    return try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue & 0o777
-}
-
-private func inode(_ url: URL) throws -> UInt64 {
-    var metadata = stat()
-    guard Darwin.lstat(url.path, &metadata) == 0 else { throw POSIXError(.ENOENT) }
-    return UInt64(metadata.st_ino)
+private func testReleaseArchiveVerifier(
+    identity: CompanionReleaseIdentity,
+    teamIdentifier: String
+) -> ReleaseArchiveVerifier {
+    ReleaseArchiveVerifier(
+        signatureInspector: { application in
+            CandidateSignatureFacts(
+                bundleIdentifier: application.lastPathComponent == "Runtime Raiders Agent.app"
+                    ? "com.redlattice.runtime-raiders-agent"
+                    : "com.redlattice.runtime-raiders-launcher",
+                teamIdentifier: teamIdentifier,
+                signatureValid: true,
+                allArchitecturesValid: true,
+                hardenedRuntime: true,
+                secureTimestampPresent: true,
+                gatekeeperNotarized: true
+            )
+        },
+        agentIdentityLoader: { _ in identity },
+        launcherProtocolLoader: { _ in 1 }
+    )
 }
 
 private func selfCheckData(_ identity: CompanionReleaseIdentity) -> Data {
@@ -1620,66 +1122,42 @@ private func selfCheckData(_ identity: CompanionReleaseIdentity) -> Data {
 }
 
 private func testArchiveData() -> Data {
-    let entries: [(name: String, data: Data, mode: UInt32)] = [
-        ("Runtime Raiders Agent.app/", Data(), UInt32(S_IFDIR | 0o755)),
-        ("Runtime Raiders Agent.app/Contents/Info.plist", Data("abc".utf8), UInt32(S_IFREG | 0o644)),
+    let entries: [(String, Data, UInt32)] = [
+        ("Runtime Raiders Release/", Data(), UInt32(S_IFDIR | 0o755)),
+        ("Runtime Raiders Release/Runtime Raiders Agent.app/", Data(), UInt32(S_IFDIR | 0o755)),
+        ("Runtime Raiders Release/Runtime Raiders Agent.app/Contents/Info.plist", Data("abc".utf8), UInt32(S_IFREG | 0o644)),
+        ("Runtime Raiders Release/Runtime Raiders Launcher.app/", Data(), UInt32(S_IFDIR | 0o755)),
+        ("Runtime Raiders Release/Runtime Raiders Launcher.app/Contents/Info.plist", Data("abc".utf8), UInt32(S_IFREG | 0o644)),
     ]
     var archive = Data()
     var offsets: [UInt32] = []
-    for entry in entries {
-        let name = Array(entry.name.utf8)
+    for (name, data, _) in entries {
+        let bytes = Array(name.utf8)
         offsets.append(UInt32(archive.count))
-        archive.appendLittleEndian(UInt32(0x04034b50))
-        archive.appendLittleEndian(UInt16(20))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt32(0))
-        archive.appendLittleEndian(UInt32(entry.data.count))
-        archive.appendLittleEndian(UInt32(entry.data.count))
-        archive.appendLittleEndian(UInt16(name.count))
-        archive.appendLittleEndian(UInt16(0))
-        archive.append(contentsOf: name)
-        archive.append(entry.data)
+        archive.appendLE(UInt32(0x04034b50)); archive.appendLE(UInt16(20))
+        archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0))
+        archive.appendLE(UInt32(0)); archive.appendLE(UInt32(data.count)); archive.appendLE(UInt32(data.count))
+        archive.appendLE(UInt16(bytes.count)); archive.appendLE(UInt16(0)); archive.append(contentsOf: bytes); archive.append(data)
     }
     let centralOffset = UInt32(archive.count)
     for (index, entry) in entries.enumerated() {
-        let name = Array(entry.name.utf8)
-        archive.appendLittleEndian(UInt32(0x02014b50))
-        archive.appendLittleEndian(UInt16(0x0314))
-        archive.appendLittleEndian(UInt16(20))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt32(0))
-        archive.appendLittleEndian(UInt32(entry.data.count))
-        archive.appendLittleEndian(UInt32(entry.data.count))
-        archive.appendLittleEndian(UInt16(name.count))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(UInt16(0))
-        archive.appendLittleEndian(entry.mode << 16)
-        archive.appendLittleEndian(offsets[index])
-        archive.append(contentsOf: name)
+        let bytes = Array(entry.0.utf8)
+        archive.appendLE(UInt32(0x02014b50)); archive.appendLE(UInt16(0x0314)); archive.appendLE(UInt16(20))
+        archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0))
+        archive.appendLE(UInt32(0)); archive.appendLE(UInt32(entry.1.count)); archive.appendLE(UInt32(entry.1.count))
+        archive.appendLE(UInt16(bytes.count)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0))
+        archive.appendLE(entry.2 << 16); archive.appendLE(offsets[index]); archive.append(contentsOf: bytes)
     }
     let centralSize = UInt32(archive.count) - centralOffset
-    archive.appendLittleEndian(UInt32(0x06054b50))
-    archive.appendLittleEndian(UInt16(0))
-    archive.appendLittleEndian(UInt16(0))
-    archive.appendLittleEndian(UInt16(entries.count))
-    archive.appendLittleEndian(UInt16(entries.count))
-    archive.appendLittleEndian(centralSize)
-    archive.appendLittleEndian(centralOffset)
-    archive.appendLittleEndian(UInt16(0))
+    archive.appendLE(UInt32(0x06054b50)); archive.appendLE(UInt16(0)); archive.appendLE(UInt16(0))
+    archive.appendLE(UInt16(entries.count)); archive.appendLE(UInt16(entries.count))
+    archive.appendLE(centralSize); archive.appendLE(centralOffset); archive.appendLE(UInt16(0))
     return archive
 }
 
 private extension Data {
-    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
+    mutating func appendLE<T: FixedWidthInteger>(_ value: T) {
+        var little = value.littleEndian
+        Swift.withUnsafeBytes(of: &little) { append(contentsOf: $0) }
     }
 }

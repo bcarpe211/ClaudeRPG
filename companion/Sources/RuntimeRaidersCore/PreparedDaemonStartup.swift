@@ -133,6 +133,41 @@ public final class CompanionPreparedStartupObservation: @unchecked Sendable {
     }
 }
 
+public enum InstallerPreparedLeaseKeeper {
+    public static let readinessLine = "runtime-raiders-installer-lease-ready\n"
+
+    public static func run(
+        paths: AgentPaths,
+        input: FileHandle = .standardInput,
+        output: FileHandle = .standardOutput
+    ) throws {
+        try run(paths: paths, input: input, output: output, onReady: {})
+    }
+
+    static func run(
+        paths: AgentPaths,
+        input: FileHandle,
+        output: FileHandle,
+        onReady: () throws -> Void
+    ) throws {
+        let lease = try CompanionPreparedStartupLease(paths: paths)
+        try output.write(contentsOf: Data(readinessLine.utf8))
+        try onReady()
+        while let data = try input.read(upToCount: 4_096), !data.isEmpty {}
+        withExtendedLifetime(lease) {}
+    }
+}
+
+public enum PreparedReleaseDisposition: Equatable, Sendable {
+    case resumeCommittedActive
+    case exitUncommittedTrial
+    case failClosed
+}
+
+public enum PreparedDaemonStartupError: Error, Equatable {
+    case invalidReleaseState
+}
+
 public final class PreparedDaemonStartupCoordinator: @unchecked Sendable {
     private enum State {
         case pending
@@ -140,17 +175,131 @@ public final class PreparedDaemonStartupCoordinator: @unchecked Sendable {
         case started
     }
 
-    private let observation: CompanionPreparedStartupObservation?
+    private let paths: AgentPaths
+    private let releaseIdentity: CompanionReleaseIdentity?
+    private let startedAsTrial: Bool
+    private let loadReleaseState: @Sendable () throws -> ReleaseStateV1
+    private let observationLock = NSLock()
+    private var observation: CompanionPreparedStartupObservation?
     private let deferredStart: () throws -> Void
     private let stateLock = NSLock()
     private var state = State.pending
 
     public let startsPrepared: Bool
+    public let initiallyPreparedGeneration: Int64?
 
-    public init(paths: AgentPaths, deferredStart: @escaping () throws -> Void) throws {
-        observation = try CompanionPreparedStartupLease.observe(paths: paths)
-        startsPrepared = observation != nil
+    public init(
+        paths: AgentPaths,
+        trialGeneration: Int64? = nil,
+        installerMigrationGeneration: Int64? = nil,
+        releaseIdentity: CompanionReleaseIdentity? = nil,
+        loadReleaseState: (@Sendable () throws -> ReleaseStateV1)? = nil,
+        deferredStart: @escaping () throws -> Void
+    ) throws {
+        self.paths = paths
+        self.releaseIdentity = releaseIdentity
+        startedAsTrial = trialGeneration != nil
+        self.loadReleaseState = loadReleaseState ?? {
+            try ReleaseStateStore.loadExisting(paths: paths)
+        }
+        let observed = try CompanionPreparedStartupLease.observe(paths: paths)
+        observation = observed
+        startsPrepared = observed != nil
+        if let installerMigrationGeneration {
+            guard trialGeneration == nil,
+                  releaseIdentity != nil,
+                  observed != nil,
+                  installerMigrationGeneration == 1 else {
+                throw PreparedDaemonStartupError.invalidReleaseState
+            }
+            initiallyPreparedGeneration = installerMigrationGeneration
+        } else if let releaseIdentity, observed != nil {
+            let state = try self.loadReleaseState()
+            guard ReleaseStateV1.isValid(state) else {
+                throw PreparedDaemonStartupError.invalidReleaseState
+            }
+            if let trialGeneration {
+                guard state.generation == trialGeneration,
+                      state.trial.flatMap({ try? $0.companionReleaseIdentity() }) == releaseIdentity else {
+                    throw PreparedDaemonStartupError.invalidReleaseState
+                }
+            } else {
+                guard (try? state.active.companionReleaseIdentity()) == releaseIdentity else {
+                    throw PreparedDaemonStartupError.invalidReleaseState
+                }
+            }
+            initiallyPreparedGeneration = state.generation
+        } else {
+            guard trialGeneration == nil else {
+                throw PreparedDaemonStartupError.invalidReleaseState
+            }
+            initiallyPreparedGeneration = nil
+        }
         self.deferredStart = deferredStart
+    }
+
+    public static func validatePreparation(
+        generation: Int64,
+        releaseIdentity: CompanionReleaseIdentity,
+        releaseState: ReleaseStateV1,
+        leaseHeld: Bool
+    ) throws {
+        guard ReleaseStateV1.isValid(releaseState),
+              releaseState.generation == generation,
+              (try? releaseState.active.companionReleaseIdentity()) == releaseIdentity,
+              releaseState.trial != nil,
+              leaseHeld else {
+            throw PreparedDaemonStartupError.invalidReleaseState
+        }
+    }
+
+    public static func disposition(
+        preparedGeneration: Int64,
+        startedAsTrial: Bool,
+        releaseIdentity: CompanionReleaseIdentity,
+        releaseState: ReleaseStateV1
+    ) -> PreparedReleaseDisposition {
+        guard ReleaseStateV1.isValid(releaseState),
+              releaseState.generation >= preparedGeneration else {
+            return .failClosed
+        }
+        if (try? releaseState.active.companionReleaseIdentity()) == releaseIdentity {
+            return .resumeCommittedActive
+        }
+        if startedAsTrial,
+           releaseState.generation == preparedGeneration,
+           releaseState.trial.flatMap({ try? $0.companionReleaseIdentity() }) == releaseIdentity {
+            return .exitUncommittedTrial
+        }
+        return .failClosed
+    }
+
+    public func validatePreparation(generation: Int64) throws {
+        guard let releaseIdentity else { throw PreparedDaemonStartupError.invalidReleaseState }
+        let observed = try CompanionPreparedStartupLease.observe(paths: paths)
+        guard let observed else { throw PreparedDaemonStartupError.invalidReleaseState }
+        do {
+            try Self.validatePreparation(
+                generation: generation,
+                releaseIdentity: releaseIdentity,
+                releaseState: try loadReleaseState(),
+                leaseHeld: true
+            )
+            observationLock.withLock { observation = observed }
+        } catch {
+            throw PreparedDaemonStartupError.invalidReleaseState
+        }
+    }
+
+    public func validateResume(generation: Int64) throws {
+        guard let releaseIdentity,
+              let state = try? loadReleaseState(),
+              ReleaseStateV1.isValid(state),
+              state.generation == generation,
+              (try? state.active.companionReleaseIdentity()) == releaseIdentity,
+              state.trial == nil else {
+            throw PreparedDaemonStartupError.invalidReleaseState
+        }
     }
 
     public func start() throws {
@@ -177,10 +326,84 @@ public final class PreparedDaemonStartupCoordinator: @unchecked Sendable {
         on queue: DispatchQueue,
         whenReleased: @escaping @Sendable () -> Void
     ) {
-        guard let observation else { return }
+        guard let observation = observationLock.withLock({ observation }) else { return }
         queue.async {
             guard (try? observation.waitUntilReleased()) != nil else { return }
             whenReleased()
+        }
+    }
+
+    public func monitorReleaseAbandonment(
+        generation: Int64,
+        on queue: DispatchQueue,
+        whenReleased: @escaping @Sendable (PreparedReleaseDisposition) -> Void
+    ) {
+        guard let observation = observationLock.withLock({ observation }),
+              let releaseIdentity else { return }
+        let loadReleaseState = self.loadReleaseState
+        let startedAsTrial = self.startedAsTrial
+        queue.async {
+            guard (try? observation.waitUntilReleased()) != nil else {
+                whenReleased(.failClosed)
+                return
+            }
+            guard let state = try? loadReleaseState() else {
+                whenReleased(.failClosed)
+                return
+            }
+            whenReleased(Self.disposition(
+                preparedGeneration: generation,
+                startedAsTrial: startedAsTrial,
+                releaseIdentity: releaseIdentity,
+                releaseState: state
+            ))
+        }
+    }
+}
+
+public final class PreparedReleaseAbandonmentOrchestrator: @unchecked Sendable {
+    private let coordinator: PreparedDaemonStartupCoordinator
+    private let queue: DispatchQueue
+    private let preparedGeneration: @Sendable () -> Int64?
+    private let resumeAfterAbandonment: @Sendable (Int64) -> ControlResponse
+    private let exitUncommittedTrial: @Sendable () -> Void
+    private let failClosed: @Sendable () -> Void
+
+    public init(
+        coordinator: PreparedDaemonStartupCoordinator,
+        queue: DispatchQueue,
+        preparedGeneration: @escaping @Sendable () -> Int64?,
+        resumeAfterAbandonment: @escaping @Sendable (Int64) -> ControlResponse,
+        exitUncommittedTrial: @escaping @Sendable () -> Void,
+        failClosed: @escaping @Sendable () -> Void
+    ) {
+        self.coordinator = coordinator
+        self.queue = queue
+        self.preparedGeneration = preparedGeneration
+        self.resumeAfterAbandonment = resumeAfterAbandonment
+        self.exitUncommittedTrial = exitUncommittedTrial
+        self.failClosed = failClosed
+    }
+
+    public func start(generation: Int64) {
+        coordinator.monitorReleaseAbandonment(
+            generation: generation,
+            on: queue
+        ) { [preparedGeneration, resumeAfterAbandonment, exitUncommittedTrial, failClosed] disposition in
+            guard preparedGeneration() == generation else { return }
+            switch disposition {
+            case .resumeCommittedActive:
+                let response = resumeAfterAbandonment(generation)
+                guard !response.ok else { return }
+                // Explicit resume may have held the serialized work queue after
+                // the check above and completed before this call acquired it.
+                guard preparedGeneration() == generation else { return }
+                failClosed()
+            case .exitUncommittedTrial:
+                exitUncommittedTrial()
+            case .failClosed:
+                failClosed()
+            }
         }
     }
 }

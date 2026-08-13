@@ -138,16 +138,8 @@ final class AtomicStoreTests: XCTestCase {
                 support.appendingPathComponent("state/update.lock", isDirectory: false)
             )
             XCTAssertEqual(
-                paths.installedApplication,
+                paths.legacyFlatApplication,
                 support.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
-            )
-            XCTAssertEqual(
-                paths.rollbackApplication,
-                support.appendingPathComponent("Runtime Raiders Agent.rollback.app", isDirectory: true)
-            )
-            XCTAssertEqual(
-                paths.failedApplication,
-                support.appendingPathComponent("Runtime Raiders Agent.failed.app", isDirectory: true)
             )
             XCTAssertFalse(FileManager.default.fileExists(atPath: support.path))
         }

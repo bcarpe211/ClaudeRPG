@@ -41,6 +41,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     public let availableReleaseSequence: Int64?
     public let updateCommand: String?
     public let preparedForUpdate: Bool
+    public let preparedReleaseStateGeneration: Int64?
 
     public init(
         enabled: Bool,
@@ -56,7 +57,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         availableCompanionVersion: String?,
         availableReleaseSequence: Int64?,
         updateCommand: String?,
-        preparedForUpdate: Bool = false
+        preparedReleaseStateGeneration: Int64? = nil
     ) {
         self.enabled = enabled
         self.daemonRunning = daemonRunning
@@ -71,7 +72,8 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         self.availableCompanionVersion = availableCompanionVersion
         self.availableReleaseSequence = availableReleaseSequence
         self.updateCommand = updateCommand
-        self.preparedForUpdate = preparedForUpdate
+        self.preparedForUpdate = preparedReleaseStateGeneration != nil
+        self.preparedReleaseStateGeneration = preparedReleaseStateGeneration
     }
 
     public init(
@@ -98,7 +100,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
             availableCompanionVersion: nil,
             availableReleaseSequence: nil,
             updateCommand: nil,
-            preparedForUpdate: false
+            preparedReleaseStateGeneration: nil
         )
     }
 
@@ -733,7 +735,7 @@ public final class AgentController: @unchecked Sendable {
         lastSuccessfulUploadMS: Int64?,
         installedRelease: CompanionReleaseIdentity,
         updateAvailability: CompanionUpdateAvailability?,
-        preparedForUpdate: Bool = false
+        preparedReleaseStateGeneration: Int64? = nil
     ) throws -> AgentStatus {
         try lock.withLock {
             var health: [RunSurface: AdapterHealth] = [
@@ -758,7 +760,7 @@ public final class AgentController: @unchecked Sendable {
                 availableCompanionVersion: updateAvailability?.availableVersion,
                 availableReleaseSequence: updateAvailability?.availableSequence,
                 updateCommand: updateAvailability?.updateCommand,
-                preparedForUpdate: preparedForUpdate
+                preparedReleaseStateGeneration: preparedReleaseStateGeneration
             )
         }
     }
