@@ -662,8 +662,8 @@ install_launchd_plist() {
 EOF
   chmod 600 "$staged_plist"
   mv "$staged_plist" "$PLIST" || return 1
-  /bin/sync
   plist_replaced=1
+  /bin/sync
 }
 
 remove_migration_directory() {

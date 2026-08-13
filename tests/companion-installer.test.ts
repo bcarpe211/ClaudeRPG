@@ -165,6 +165,14 @@ function renderedProtocolTwoInstaller(root: string): string {
     .replaceAll(
       '/bin/ln -s "$SHIM" "$command_path"',
       '"$RUNTIME_RAIDERS_TEST_LN" -s "$SHIM" "$command_path"',
+    )
+    .replace(
+      '  /bin/sync\n  plist_replaced=1\n}\n\nremove_migration_directory()',
+      '  "$RUNTIME_RAIDERS_TEST_SYNC"\n  plist_replaced=1\n}\n\nremove_migration_directory()',
+    )
+    .replace(
+      '  plist_replaced=1\n  /bin/sync\n}\n\nremove_migration_directory()',
+      '  plist_replaced=1\n  "$RUNTIME_RAIDERS_TEST_SYNC"\n}\n\nremove_migration_directory()',
     ));
   chmodSync(path, 0o755);
   return path;
@@ -385,6 +393,10 @@ function fakes(root: string): string {
   ]);
   executable(join(bin, 'uuidgen'), ['printf "%s\\n" "00000000-0000-4000-8000-000000000001"']);
   executable(join(bin, 'sleep'), ['printf "sleep %s\\n" "$*" >> "$RUNTIME_RAIDERS_TEST_LOG"']);
+  executable(join(bin, 'sync'), [
+    '[ "${FAKE_SYNC_FAIL:-0}" != 1 ] || exit 74',
+    'exec /bin/sync "$@"',
+  ]);
   executable(join(bin, 'plutil'), [
     'case "$2" in',
     'device_token) printf "%s\\n" "' + token + '";;',
@@ -430,6 +442,7 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     FAKE_MUTATE_PROTECTED_DURING_ROLLBACK: '0',
     FAKE_SIMULATE_LEASE_ABANDONMENT: '0',
     FAKE_KILL_DURING_TOMBSTONE_DELETE: '0',
+    FAKE_SYNC_FAIL: '0',
     FAKE_STATUS_PEER_MISMATCH: '',
     FAKE_CODE_FILE_OWNER: '',
     RUNTIME_RAIDERS_TEST_CODE_FILE: '',
@@ -438,6 +451,7 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     RUNTIME_RAIDERS_TEST_ZIP: files.zip,
     RUNTIME_RAIDERS_TEST_CHECKSUM: files.checksum,
     RUNTIME_RAIDERS_TEST_LN: join(fake, 'ln'),
+    RUNTIME_RAIDERS_TEST_SYNC: join(fake, 'sync'),
     RUNTIME_RAIDERS_TEST_ENROLLMENT: JSON.stringify({
       device_token: token, dedupe_secret: secret, server_url: 'https://raiders.redlattice.com',
       cutover_at: 1700000000000, enabled_surfaces: ['codex_desktop', 'codex_cli'],
@@ -827,6 +841,26 @@ describe('Runtime Raiders protocol-two installer', () => {
       const binaryLog = readFileSync(join(fixture.home, 'binary.log'), 'utf8');
       expect(binaryLog.indexOf('__runtime-raiders-legacy-prepare')).toBeLessThan(binaryLog.indexOf('__runtime-raiders-installer-resume 1'));
       expect(readFileSync(fixture.collectorState, 'utf8')).toContain(`"enabled":${enabled}`);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('restores the legacy plist after its replacement fails durability sync and permits retry', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-plist-sync-rollback-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, true, 3);
+      const plistBefore = readFileSync(fixture.plist);
+      const failed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        FAKE_SYNC_FAIL: '1',
+      });
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(fixture.plist)).toEqual(plistBefore);
+
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status, retry.stderr + retry.stdout).toBe(0);
+      expect(readFileSync(fixture.plist, 'utf8')).toContain(
+        '/launcher/Runtime Raiders Launcher.app/',
+      );
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
