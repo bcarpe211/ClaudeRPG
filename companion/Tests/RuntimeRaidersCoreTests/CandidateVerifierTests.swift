@@ -15,6 +15,50 @@ final class CandidateVerifierTests: XCTestCase {
         )
     }
 
+    func testExecutableContainmentAcceptsParentAliasAndRejectsEscapes() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rr-executable-containment-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let physicalParent = root.appendingPathComponent("physical", isDirectory: true)
+        let application = physicalParent.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
+        let executable = application.appendingPathComponent(
+            "Contents/MacOS/runtime-raiders-agent",
+            isDirectory: false
+        )
+        try FileManager.default.createDirectory(
+            at: executable.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("binary".utf8).write(to: executable)
+
+        let parentAlias = root.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: parentAlias, withDestinationURL: physicalParent)
+        let executableThroughAlias = parentAlias.appendingPathComponent(
+            "Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent",
+            isDirectory: false
+        )
+        let contained = try XCTUnwrap(
+            SignedBundleTrustInspector.containedExecutablePath(
+                application: application,
+                executable: executableThroughAlias
+            )
+        )
+        XCTAssertTrue(contained.hasSuffix(
+            "/physical/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
+        ))
+
+        let outside = root.appendingPathComponent("outside", isDirectory: false)
+        try Data("outside".utf8).write(to: outside)
+        let escapingLink = executable.deletingLastPathComponent().appendingPathComponent("escape")
+        try FileManager.default.createSymbolicLink(at: escapingLink, withDestinationURL: outside)
+        XCTAssertNil(
+            SignedBundleTrustInspector.containedExecutablePath(
+                application: application,
+                executable: escapingLink
+            )
+        )
+    }
+
     func testRejectsInvalidSignature() throws {
         try assertRejected(facts: replacingValidFacts(signatureValid: false))
     }

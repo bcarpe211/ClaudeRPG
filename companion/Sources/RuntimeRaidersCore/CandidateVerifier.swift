@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Security
 
@@ -284,17 +285,43 @@ struct SignedBundleTrustInspector {
         [executablePath, "-verify_arch", "arm64", "x86_64"]
     }
 
+    static func containedExecutablePath(application: URL, executable: URL) -> String? {
+        var applicationInfo = stat()
+        var executableInfo = stat()
+        guard application.path.withCString({ Darwin.lstat($0, &applicationInfo) }) == 0,
+              applicationInfo.st_mode & S_IFMT == S_IFDIR,
+              executable.path.withCString({ Darwin.lstat($0, &executableInfo) }) == 0,
+              executableInfo.st_mode & S_IFMT == S_IFREG,
+              let canonicalApplication = canonicalPath(application.path),
+              let canonicalExecutable = canonicalPath(executable.path),
+              canonicalExecutable.hasPrefix(canonicalApplication + "/") else {
+            return nil
+        }
+        return canonicalExecutable
+    }
+
     private func containsRequiredArchitectures(_ application: URL) throws -> Bool {
         guard let executable = Bundle(url: application)?.executableURL,
-              executable.path.hasPrefix(application.path + "/") else {
+              let executablePath = Self.containedExecutablePath(
+                  application: application,
+                  executable: executable
+              ) else {
             throw CandidateVerificationError.untrustedCandidate
         }
         let result = try runner.run(
             executable: URL(fileURLWithPath: "/usr/bin/lipo"),
-            arguments: Self.requiredArchitectureArguments(executablePath: executable.path),
+            arguments: Self.requiredArchitectureArguments(executablePath: executablePath),
             timeout: 30
         )
         return result.exitStatus == .exited(0)
+    }
+
+    private static func canonicalPath(_ path: String) -> String? {
+        path.withCString { source in
+            guard let resolved = Darwin.realpath(source, nil) else { return nil }
+            defer { Darwin.free(resolved) }
+            return String(cString: resolved)
+        }
     }
 
     private static let allArchitectureValidationFlags = SecCSFlags(rawValue:
