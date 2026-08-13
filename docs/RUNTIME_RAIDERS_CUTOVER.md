@@ -992,7 +992,7 @@ download_exact_https() {
     --write-out '%{http_code}' "$url")" || return 1
   test "$status" = 200
 }
-download_exact_https 1048576 \
+download_exact_https 8388608 \
   "$VERIFY_DIR/install.sh" "$VERIFY_DIR/install.headers" \
   'https://raiders.redlattice.com/install.sh'
 download_exact_https 134217728 \
@@ -1099,7 +1099,7 @@ chmod 0600 "$CANARY_INSTALLER"
 chmod 0600 "$CANARY_CODE_FILE"
 CANARY_STATUS="$(curl --fail --silent --show-error --proto '=https' \
   --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
-  --max-filesize 1048576 --output "$CANARY_INSTALLER" \
+  --max-filesize 8388608 --output "$CANARY_INSTALLER" \
   --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh')"
 test "$CANARY_STATUS" = 200
 test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = \

@@ -156,7 +156,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
 
   it('locks the exact publisher verification and secondary-withdrawal contract', () => {
     const quartet = [
-      ['`/install.sh`', '1 MiB'],
+      ['`/install.sh`', '8 MiB'],
       ['`/downloads/runtime-raiders-agent.zip`', '128 MiB'],
       ['`/downloads/runtime-raiders-agent.zip.sha256`', '4 KiB'],
       ['`/downloads/runtime-raiders-agent.update.json`', '64 KiB'],
@@ -225,7 +225,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(publication).toContain('--suppress-connect-headers');
     expect(publication).toContain('--connect-timeout 10');
     expect(publication).toContain('--max-time 120');
-    for (const bound of ['1048576', '134217728', '4096']) {
+    for (const bound of ['8388608', '134217728', '4096']) {
       expect(publication).toContain(`download_exact_https ${bound}`);
     }
   });

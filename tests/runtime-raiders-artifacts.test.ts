@@ -28,7 +28,7 @@ const releaseSequence = '1';
 const updateProtocolVersion = 1;
 const zipUrl = 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip';
 const publicTargets = [
-  ['installer', 'https://raiders.redlattice.com/install.sh', '1048576'],
+  ['installer', 'https://raiders.redlattice.com/install.sh', '8388608'],
   ['zip', 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip', '134217728'],
   ['checksum', 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256', '4096'],
   ['manifest', 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json', '65536'],
@@ -223,7 +223,7 @@ test "$seen_no_location" = 1 && test "$seen_fail" = 1 &&
   test "$seen_silent" = 1 && test "$seen_show_error" = 1
 test -n "$output" && test -n "$url" && test -n "$protocol" && test -n "$write_out"
 case "$url:$max_size" in
-  'https://raiders.redlattice.com/install.sh:1048576')
+  'https://raiders.redlattice.com/install.sh:8388608')
     label=installer; source="$RUNTIME_RAIDERS_ARTIFACT_ROOT/current/install.sh" ;;
   'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip:134217728')
     label=zip; source="$RUNTIME_RAIDERS_ARTIFACT_ROOT/current/downloads/runtime-raiders-agent.zip" ;;
@@ -321,7 +321,7 @@ curl_result=0
 /bin/cp "$source" "$output"
 if test "$corrupt" = 1; then printf '%s\\n' 'corrupt public artifact' > "$output"; fi
 if test "$label" = installer && test "\${RUNTIME_RAIDERS_TEST_PUBLIC_INSTALLER_OVERSIZED:-0}" = 1; then
-  /usr/bin/perl -e 'print "x" x 1048577' > "$output"
+  /usr/bin/perl -e 'print "x" x 8388609' > "$output"
   curl_result=63
 fi
 case "\${RUNTIME_RAIDERS_TEST_PUBLIC_HEADER_SCENARIO:-single-exact}" in
@@ -761,6 +761,9 @@ describe('Runtime Raiders artifact publication', () => {
     ['unsafe release sequence', (f: PublicationFixture) => { f.args[12] = '9007199254740992'; }],
     ['empty companion version', (f: PublicationFixture) => { f.args[14] = ''; }],
     ['unsafe companion version', (f: PublicationFixture) => { f.args[14] = '0.2.0 beta'; }],
+    ['oversized source installer', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, `#${'x'.repeat(8 * 1024 * 1024)}\n`);
+    }],
     ['missing installer', (f: PublicationFixture) => { unlinkSync(f.files.installer); }],
     ['missing update manifest', (f: PublicationFixture) => { unlinkSync(f.files.updateManifest); }],
     ['empty ZIP', (f: PublicationFixture) => { writeFileSync(f.files.zip, ''); }],
@@ -1630,6 +1633,21 @@ describe('Runtime Raiders artifact publication', () => {
     const status = run(environment, ['status']);
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain('update_protocol_version=2\n');
+  });
+
+  it('publishes a protocol-2 installer larger than the legacy 1 MiB bound', () => {
+    const f = publicationFixture();
+    const minimumRenderedSize = 4 * 1024 * 1024;
+    appendFileSync(
+      f.files.installer,
+      `#${'x'.repeat(minimumRenderedSize - statSync(f.files.installer).size - 2)}\n`,
+    );
+
+    const published = runPublish(f);
+
+    expect(statSync(f.files.installer).size).toBe(minimumRenderedSize);
+    expect(published.status, published.stderr).toBe(0);
+    expect(published.stdout).toContain('update_protocol_version=1\n');
   });
 
   it('publishes the rendered production installer with legitimate runtime URL references', () => {

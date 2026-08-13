@@ -489,6 +489,7 @@ type ReleaseBuilderFixtureOptions = {
   interceptAbsoluteDitto?: boolean;
   crossWireArm64Slice?: 'agent' | 'launcher';
   rendererFailure?: boolean;
+  oversizedRenderer?: boolean;
 };
 
 function disposableReleaseBuilder(
@@ -523,11 +524,20 @@ function disposableReleaseBuilder(
     );
   }
   writeFileSync(fixtureBuild, fixtureBuildContents);
-  writeFileSync(
-    fixtureRenderer,
-    options.rendererFailure ? '#!/bin/sh\nexit 89\n' : readFileSync(installerRenderer),
-    { mode: 0o700 },
-  );
+  let fixtureRendererContents = options.rendererFailure
+    ? '#!/bin/sh\nexit 89\n'
+    : readFileSync(installerRenderer, 'utf8');
+  if (options.oversizedRenderer) {
+    fixtureRendererContents = [
+      '#!/bin/sh',
+      'set -eu',
+      'OUTPUT="$8"',
+      '/bin/dd if=/dev/zero bs=1048576 count=9 of="$OUTPUT" 2>/dev/null',
+      'chmod 755 "$OUTPUT"',
+      '',
+    ].join('\n');
+  }
+  writeFileSync(fixtureRenderer, fixtureRendererContents, { mode: 0o700 });
   writeFileSync(
     fixtureValidatorBuilder,
     readFileSync(releaseValidatorBuilder, 'utf8')
@@ -1717,6 +1727,43 @@ describe('Runtime Raiders release build', () => {
     }
   });
 
+  it('rejects a rendered installer above the public 8 MiB bound before emitting a quartet', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-installer-bound-'));
+    try {
+      const fake = join(root, 'fakes');
+      mkdirSync(fake, { recursive: true });
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      executable(join(fake, 'codesign'), ['exit 0']);
+      executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
+      executable(join(fake, 'xcrun'), ['exit 0']);
+      executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+      const fixture = disposableReleaseBuilder(root, { oversizedRenderer: true });
+      const output = join(root, 'output');
+
+      const result = invoke(
+        fixture.build,
+        releaseBuildArgs(fixture.releaseSHA, '--output', output, '--scratch-path', join(root, 'scratch')),
+        {
+          ...process.env,
+          PATH: fake + ':/usr/bin:/bin',
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(
+        result.stderr,
+        JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout }),
+      ).toContain('rendered installer exceeds public size limit');
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('points the launchd template only at the stable launcher and literal daemon command', () => {
     const template = readFileSync(join(
       process.cwd(),
@@ -1871,8 +1918,8 @@ describe('Runtime Raiders release build', () => {
         if (state === 'mismatched HEAD') requestedSHA = 'e'.repeat(40);
         if (state === 'dirty tracked') writeFileSync(join(fixture.repository, 'companion/RELEASE'), [
           'version=1',
-          'companion_version=0.3.1',
-          'release_sequence=10',
+          'companion_version=0.3.2',
+          'release_sequence=11',
           'update_protocol_version=2',
           '',
         ].join('\n'));

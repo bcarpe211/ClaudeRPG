@@ -64,7 +64,7 @@ four reviewed files in one root-controlled, nonsymlink `SOURCE_DIR` beneath
 
 The publisher verifies all four exact HTTPS objects before returning success:
 
-- `/install.sh`, at most 1 MiB;
+- `/install.sh`, at most 8 MiB;
 - `/downloads/runtime-raiders-agent.zip`, at most 128 MiB;
 - `/downloads/runtime-raiders-agent.zip.sha256`, at most 4 KiB; and
 - `/downloads/runtime-raiders-agent.update.json`, at most 64 KiB.
@@ -139,7 +139,7 @@ trap cleanup_canary_files EXIT
 chmod 0600 "$CANARY_INSTALLER" "$CANARY_CODE_FILE"
 CANARY_STATUS="$(curl --fail --silent --show-error --proto '=https' \
   --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 \
-  --max-filesize 1048576 --output "$CANARY_INSTALLER" \
+  --max-filesize 8388608 --output "$CANARY_INSTALLER" \
   --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh')"
 test "$CANARY_STATUS" = 200
 test "$(shasum -a 256 "$CANARY_INSTALLER" | awk '{print $1}')" = "$INSTALLER_SHA256"

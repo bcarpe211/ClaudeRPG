@@ -71,6 +71,10 @@ for file in "$INSTALLER" "$ARCHIVE" "$CHECKSUM" "$MANIFEST"; do
   validate_local_regular "$file" || { echo "Gate 2 refuses unsafe quartet member: $file" >&2; exit 1; }
 done
 [ -x "$INSTALLER" ] || { echo "Gate 2 requires an executable rendered installer" >&2; exit 1; }
+[ "$(wc -c < "$INSTALLER" | tr -d ' ')" -le 8388608 ] || {
+  echo "Gate 2 refuses an installer above the public size limit" >&2
+  exit 1
+}
 [ "$(find "$QUARTET" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 4 ] || {
   echo "Gate 2 requires exactly the signed quartet" >&2
   exit 1

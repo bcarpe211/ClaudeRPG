@@ -320,6 +320,10 @@ printf '%s\n' "$MANIFEST_JSON" > "$STAGED_OUTPUT/runtime-raiders-agent.update.js
   "$RELEASE_SHA" \
   "$PACKAGED_UPDATE_PROTOCOL_VERSION" \
   "$STAGED_OUTPUT/install.sh"
+[ "$(wc -c < "$STAGED_OUTPUT/install.sh" | tr -d ' ')" -le 8388608 ] || {
+  echo "rendered installer exceeds public size limit" >&2
+  exit 1
+}
 [ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
   echo "release output must be absent; publish immutable generations with scripts/pi/runtime-raiders-artifacts.sh" >&2
   exit 1

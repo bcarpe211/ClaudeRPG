@@ -22,7 +22,7 @@ PUBLIC_CHECKSUM_URL=$PUBLIC_ORIGIN/downloads/runtime-raiders-agent.zip.sha256
 PUBLIC_UPDATE_MANIFEST_URL=$PUBLIC_ORIGIN/downloads/runtime-raiders-agent.update.json
 PUBLIC_HEALTH_URL=$PUBLIC_ORIGIN/health
 LOCAL_HEALTH_URL=http://127.0.0.1:8080/health
-INSTALLER_MAX_BYTES=1048576
+INSTALLER_MAX_BYTES=8388608
 ZIP_MAX_BYTES=134217728
 CHECKSUM_MAX_BYTES=4096
 UPDATE_MANIFEST_MAX_BYTES=65536
@@ -108,6 +108,12 @@ require_directory() {
 require_regular_file() {
   test -f "$1" && test ! -L "$1" || die "$2 must be a regular file"
   test -s "$1" || die "$2 must be nonempty"
+}
+
+require_file_at_most() {
+  local byte_count
+  byte_count=$(wc -c < "$1" 2>/dev/null | tr -d ' ') || die "$3 is invalid"
+  [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le "$2" || die "$3 is too large"
 }
 
 canonicalize() {
@@ -201,6 +207,7 @@ validate_source() {
   SOURCE_CHECKSUM=$SOURCE/runtime-raiders-agent.zip.sha256
   SOURCE_UPDATE_MANIFEST=$SOURCE/runtime-raiders-agent.update.json
   require_regular_file "$SOURCE_INSTALLER" 'source installer'
+  require_file_at_most "$SOURCE_INSTALLER" "$INSTALLER_MAX_BYTES" 'source installer'
   require_regular_file "$SOURCE_ZIP" 'source ZIP'
   require_regular_file "$SOURCE_CHECKSUM" 'source checksum'
   require_regular_file "$SOURCE_UPDATE_MANIFEST" 'source update manifest'
