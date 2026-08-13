@@ -3,6 +3,18 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class CandidateVerifierTests: XCTestCase {
+    func testRequiredArchitectureArgumentsFollowAppleLipoOrdering() {
+        XCTAssertEqual(
+            SignedBundleTrustInspector.requiredArchitectureArguments(
+                executablePath: "/private/tmp/Runtime Raiders Agent.app/Contents/MacOS/raiders"
+            ),
+            [
+                "/private/tmp/Runtime Raiders Agent.app/Contents/MacOS/raiders",
+                "-verify_arch", "arm64", "x86_64",
+            ]
+        )
+    }
+
     func testRejectsInvalidSignature() throws {
         try assertRejected(facts: replacingValidFacts(signatureValid: false))
     }

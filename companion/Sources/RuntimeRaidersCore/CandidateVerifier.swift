@@ -280,6 +280,10 @@ struct SignedBundleTrustInspector {
             UInt32(kSecCSRestrictSymlinks)
     )
 
+    static func requiredArchitectureArguments(executablePath: String) -> [String] {
+        [executablePath, "-verify_arch", "arm64", "x86_64"]
+    }
+
     private func containsRequiredArchitectures(_ application: URL) throws -> Bool {
         guard let executable = Bundle(url: application)?.executableURL,
               executable.path.hasPrefix(application.path + "/") else {
@@ -287,7 +291,7 @@ struct SignedBundleTrustInspector {
         }
         let result = try runner.run(
             executable: URL(fileURLWithPath: "/usr/bin/lipo"),
-            arguments: ["-verify_arch", "arm64", "x86_64", executable.path],
+            arguments: Self.requiredArchitectureArguments(executablePath: executable.path),
             timeout: 30
         )
         return result.exitStatus == .exited(0)

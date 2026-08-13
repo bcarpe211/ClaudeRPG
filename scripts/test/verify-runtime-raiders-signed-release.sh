@@ -158,8 +158,8 @@ LAUNCHER_REQUIREMENT='identifier "com.redlattice.runtime-raiders-launcher" and a
 
 /usr/bin/codesign --verify --strict --deep --all-architectures -R="$AGENT_REQUIREMENT" "$agent_app"
 /usr/bin/codesign --verify --strict --deep --all-architectures -R="$LAUNCHER_REQUIREMENT" "$launcher_app"
-/usr/bin/lipo -verify_arch arm64 x86_64 "$agent_executable"
-/usr/bin/lipo -verify_arch arm64 x86_64 "$launcher_executable"
+/usr/bin/lipo "$agent_executable" -verify_arch arm64 x86_64
+/usr/bin/lipo "$launcher_executable" -verify_arch arm64 x86_64
 /usr/sbin/spctl --assess --type execute --verbose=4 "$agent_app"
 /usr/sbin/spctl --assess --type execute --verbose=4 "$launcher_app"
 /usr/bin/xcrun stapler validate "$agent_app"

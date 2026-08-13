@@ -179,8 +179,8 @@ for arch in arm64 x86_64; do
 done
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
 lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"
-lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-agent"
-lipo -verify_arch arm64 x86_64 "$WORK/runtime-raiders-launcher"
+lipo "$WORK/runtime-raiders-agent" -verify_arch arm64 x86_64
+lipo "$WORK/runtime-raiders-launcher" -verify_arch arm64 x86_64
 "$ROOT/scripts/release/build-runtime-raiders-release-validator.sh" \
   "$ROOT/companion" \
   "$WORK/validator-scratch" \
