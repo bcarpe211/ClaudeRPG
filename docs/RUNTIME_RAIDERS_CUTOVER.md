@@ -893,8 +893,9 @@ SSE state payload.
 Only after sections 5.1 and 5.2 pass may the release owner separately authorize
 publication of the exact validated `install.sh`, ZIP, adjacent checksum, and
 static update manifest. Record `INSTALLER_SHA256`, `ZIP_SHA256`,
-`CHECKSUM_SHA256`, `UPDATE_MANIFEST_SHA256`, `RELEASE_SEQUENCE`, and
-`COMPANION_VERSION` separately in the restricted operator record. The tracked
+`CHECKSUM_SHA256`, `UPDATE_MANIFEST_SHA256`, `RELEASE_SEQUENCE`,
+`COMPANION_VERSION`, and `UPDATE_PROTOCOL_VERSION` separately in the restricted
+operator record. The tracked
 `companion/RELEASE` binds the clean SHA to its version and monotonic sequence.
 Copy exactly those four reviewed files into one root-controlled, nonsymlink
 `SOURCE_DIR` beneath `/var/lib/runtime-raiders` on the Pi. That directory
@@ -914,6 +915,7 @@ From the exact deployed checkout, publish only after the separate approval:
   --release-sha "$RELEASE_SHA" \
   --release-sequence "$RELEASE_SEQUENCE" \
   --companion-version "$COMPANION_VERSION" \
+  --update-protocol-version "$UPDATE_PROTOCOL_VERSION" \
   --installer-sha256 "$INSTALLER_SHA256" \
   --zip-sha256 "$ZIP_SHA256" \
   --checksum-sha256 "$CHECKSUM_SHA256" \

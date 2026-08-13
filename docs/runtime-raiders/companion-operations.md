@@ -28,7 +28,8 @@ Version strings do not authorize a downgrade or sequence reuse. The build
 signs, notarizes, staples, validates, and transactionally emits all four files.
 Record these four separate values only in the restricted operator record:
 `INSTALLER_SHA256`, `ZIP_SHA256`, `CHECKSUM_SHA256`, and
-`UPDATE_MANIFEST_SHA256`, plus `RELEASE_SEQUENCE` and `COMPANION_VERSION`.
+`UPDATE_MANIFEST_SHA256`, plus `RELEASE_SEQUENCE`, `COMPANION_VERSION`, and
+`UPDATE_PROTOCOL_VERSION`.
 
 Approval order is: Caddy route preparation; recovery sequence-2
 build/review/publication; sequence-2 installed-off canary; separately reviewed
@@ -52,6 +53,7 @@ four reviewed files in one root-controlled, nonsymlink `SOURCE_DIR` beneath
   --release-sha "$RELEASE_SHA" \
   --release-sequence "$RELEASE_SEQUENCE" \
   --companion-version "$COMPANION_VERSION" \
+  --update-protocol-version "$UPDATE_PROTOCOL_VERSION" \
   --installer-sha256 "$INSTALLER_SHA256" \
   --zip-sha256 "$ZIP_SHA256" \
   --checksum-sha256 "$CHECKSUM_SHA256" \

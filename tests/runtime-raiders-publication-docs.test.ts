@@ -69,6 +69,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
       expect(document).toContain('runtime-raiders-artifacts.sh publish');
       expect(document).toContain('--release-sequence "$RELEASE_SEQUENCE"');
       expect(document).toContain('--companion-version "$COMPANION_VERSION"');
+      expect(document).toContain('--update-protocol-version "$UPDATE_PROTOCOL_VERSION"');
       expect(document).toContain('--installer-sha256 "$INSTALLER_SHA256"');
       expect(document).toContain('--zip-sha256 "$ZIP_SHA256"');
       expect(document).toContain('--checksum-sha256 "$CHECKSUM_SHA256"');
