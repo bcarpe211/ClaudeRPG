@@ -92,6 +92,9 @@ require_companion_version() {
   [[ $1 =~ ^[A-Za-z0-9._+-]+$ ]] || die 'invalid companion version'
   test "${#1}" -le 100 || die 'invalid companion version'
 }
+require_update_protocol_version() {
+  test "$1" = 1 || test "$1" = 2 || die 'invalid update protocol version'
+}
 sha256_file() { sha256sum -- "$1" 2>/dev/null | awk 'NR == 1 && NF >= 1 { print $1; exit }'; }
 metadata() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null; }
 ownership() { stat -c '%u:%g' -- "$1" 2>/dev/null; }
@@ -149,6 +152,7 @@ validate_public_manifest() {
   local expected_release_sequence=$3
   local expected_companion_version=$4
   local expected_zip_sha256=$5
+  local expected_update_protocol_version=$6
   local byte_count
   require_regular_file "$manifest" 'public update manifest'
   byte_count=$(wc -c < "$manifest" 2>/dev/null | tr -d ' ') ||
@@ -156,9 +160,10 @@ validate_public_manifest() {
   [[ $byte_count =~ ^[1-9][0-9]*$ ]] && test "$byte_count" -le 65536 ||
     die 'public update manifest is invalid'
   if ! "$NODE" - "$manifest" "$expected_release_sha" "$expected_release_sequence" \
-      "$expected_companion_version" "$expected_zip_sha256" <<'NODE' >/dev/null 2>&1
+      "$expected_companion_version" "$expected_zip_sha256" \
+      "$expected_update_protocol_version" <<'NODE' >/dev/null 2>&1
 const fs = require('node:fs');
-const [path, releaseSHA, releaseSequenceText, companionVersion, zipSHA256] = process.argv.slice(2);
+const [path, releaseSHA, releaseSequenceText, companionVersion, zipSHA256, updateProtocolText] = process.argv.slice(2);
 const bytes = fs.readFileSync(path);
 if (bytes.length === 0 || bytes.length > 65536) throw new Error('invalid manifest');
 const text = bytes.toString('utf8');
@@ -168,7 +173,7 @@ const expected = {
   manifest_version: 1,
   release_sequence: Number(releaseSequenceText),
   release_sha: releaseSHA,
-  update_protocol_version: 1,
+  update_protocol_version: Number(updateProtocolText),
   zip_sha256: zipSHA256,
   zip_url: 'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip',
 };
@@ -255,7 +260,7 @@ validate_source() {
     die 'checksum file does not match the approved ZIP'
   rm -f -- "$STAGE/expected.sha256"
   validate_public_manifest "$SOURCE_UPDATE_MANIFEST" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
-    "$COMPANION_VERSION" "$ZIP_SHA256"
+    "$COMPANION_VERSION" "$ZIP_SHA256" "$UPDATE_PROTOCOL_VERSION"
 }
 
 validate_release() {
@@ -337,15 +342,16 @@ validate_release() {
       test "$version_line" = 'version=2' || die 'release manifest is invalid'
       [[ $sequence_line == release_sequence=* ]] || die 'release manifest is invalid'
       [[ $companion_version_line == companion_version=* ]] || die 'release manifest is invalid'
-      test "$protocol_line" = 'update_protocol_version=1' || die 'release manifest is invalid'
+      [[ $protocol_line == update_protocol_version=* ]] || die 'release manifest is invalid'
       [[ $update_manifest_line == update_manifest_sha256=* ]] || die 'release manifest is invalid'
       VALIDATED_MANIFEST_VERSION=2
       VALIDATED_RELEASE_SEQUENCE=${sequence_line#release_sequence=}
       VALIDATED_COMPANION_VERSION=${companion_version_line#companion_version=}
-      VALIDATED_UPDATE_PROTOCOL_VERSION=1
+      VALIDATED_UPDATE_PROTOCOL_VERSION=${protocol_line#update_protocol_version=}
       VALIDATED_UPDATE_MANIFEST_SHA256=${update_manifest_line#update_manifest_sha256=}
       require_release_sequence "$VALIDATED_RELEASE_SEQUENCE"
       require_companion_version "$VALIDATED_COMPANION_VERSION"
+      require_update_protocol_version "$VALIDATED_UPDATE_PROTOCOL_VERSION"
       require_digest "$VALIDATED_UPDATE_MANIFEST_SHA256" 'update manifest'
       ;;
     *) die 'release manifest is invalid' ;;
@@ -371,7 +377,8 @@ validate_release() {
     test "$(sha256_file "$update_manifest")" = "$VALIDATED_UPDATE_MANIFEST_SHA256" ||
       die 'release update manifest SHA-256 mismatch'
     validate_public_manifest "$update_manifest" "$VALIDATED_RELEASE_SHA" \
-      "$VALIDATED_RELEASE_SEQUENCE" "$VALIDATED_COMPANION_VERSION" "$VALIDATED_ZIP_SHA256"
+      "$VALIDATED_RELEASE_SEQUENCE" "$VALIDATED_COMPANION_VERSION" "$VALIDATED_ZIP_SHA256" \
+      "$VALIDATED_UPDATE_PROTOCOL_VERSION"
   fi
 }
 
@@ -525,7 +532,7 @@ verify_public_artifact() {
                 verification_checkpoint "$label" "$attempt" "$max_attempts" ok nosniff
                 if test "$label" = manifest &&
                     ! ( validate_public_manifest "$output" "$RELEASE_SHA" "$RELEASE_SEQUENCE" \
-                      "$COMPANION_VERSION" "$ZIP_SHA256" ) >/dev/null 2>&1; then
+                      "$COMPANION_VERSION" "$ZIP_SHA256" "$UPDATE_PROTOCOL_VERSION" ) >/dev/null 2>&1; then
                   category=manifest
                 else
                   verification_checkpoint "$label" "$attempt" "$max_attempts" ok complete
@@ -707,6 +714,7 @@ publish_command() {
   CHECKSUM_SHA256=
   RELEASE_SEQUENCE=
   COMPANION_VERSION=
+  UPDATE_PROTOCOL_VERSION=
   UPDATE_MANIFEST_SHA256=
   local seen_source=0
   local seen_release_sha=0
@@ -715,6 +723,7 @@ publish_command() {
   local seen_checksum_sha256=0
   local seen_release_sequence=0
   local seen_companion_version=0
+  local seen_update_protocol_version=0
   local seen_update_manifest_sha256=0
 
   while test "$#" -gt 0; do
@@ -755,6 +764,11 @@ publish_command() {
         COMPANION_VERSION=$2
         seen_companion_version=1
         ;;
+      --update-protocol-version)
+        test "$seen_update_protocol_version" -eq 0 || die 'duplicate --update-protocol-version'
+        UPDATE_PROTOCOL_VERSION=$2
+        seen_update_protocol_version=1
+        ;;
       --update-manifest-sha256)
         test "$seen_update_manifest_sha256" -eq 0 || die 'duplicate --update-manifest-sha256'
         UPDATE_MANIFEST_SHA256=$2
@@ -772,6 +786,7 @@ publish_command() {
   test "$seen_checksum_sha256" -eq 1 || die 'missing --checksum-sha256'
   test "$seen_release_sequence" -eq 1 || die 'missing --release-sequence'
   test "$seen_companion_version" -eq 1 || die 'missing --companion-version'
+  test "$seen_update_protocol_version" -eq 1 || die 'missing --update-protocol-version'
   test "$seen_update_manifest_sha256" -eq 1 || die 'missing --update-manifest-sha256'
   require_release_sha "$RELEASE_SHA"
   require_digest "$INSTALLER_SHA256" 'installer'
@@ -779,6 +794,7 @@ publish_command() {
   require_digest "$CHECKSUM_SHA256" 'checksum'
   require_release_sequence "$RELEASE_SEQUENCE"
   require_companion_version "$COMPANION_VERSION"
+  require_update_protocol_version "$UPDATE_PROTOCOL_VERSION"
   require_digest "$UPDATE_MANIFEST_SHA256" 'update manifest'
   require_root
   validate_store
@@ -875,7 +891,7 @@ publish_command() {
       "release_sha=$RELEASE_SHA" \
       "release_sequence=$RELEASE_SEQUENCE" \
       "companion_version=$COMPANION_VERSION" \
-      'update_protocol_version=1' \
+      "update_protocol_version=$UPDATE_PROTOCOL_VERSION" \
       "installer_sha256=$INSTALLER_SHA256" \
       "zip_sha256=$ZIP_SHA256" \
       "checksum_sha256=$CHECKSUM_SHA256" \

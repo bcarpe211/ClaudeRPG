@@ -492,6 +492,7 @@ function publicationFixture(selectedReleaseSha = releaseSha) {
     '--release-sequence', releaseSequence,
     '--companion-version', companionVersion,
     '--update-manifest-sha256', sha256(files.updateManifest),
+    '--update-protocol-version', String(updateProtocolVersion),
   ];
   return { ...environment, files, args, originalArgs: [...args], releaseSha: selectedReleaseSha };
 }
@@ -723,6 +724,7 @@ function runScript(
         '--release-sequence', releaseSequence,
         '--companion-version', companionVersion,
         '--update-manifest-sha256', sha256(files.updateManifest),
+        '--update-protocol-version', String(updateProtocolVersion),
       ]
     : ['status'];
   return spawnSync('bash', [SCRIPT, ...args], {
@@ -829,6 +831,7 @@ describe('Runtime Raiders artifact publication', () => {
     ['release sequence', '--release-sequence'],
     ['companion version', '--companion-version'],
     ['update manifest digest', '--update-manifest-sha256'],
+    ['update protocol version', '--update-protocol-version'],
   ])('requires %s exactly once', (_name, option) => {
     const missing = publicationFixture();
     const optionIndex = missing.args.indexOf(option);
@@ -1594,6 +1597,39 @@ describe('Runtime Raiders artifact publication', () => {
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toBe(expectedOutput);
     expect(status.stderr).toBe('');
+  });
+
+  it('publishes a protocol-2 quartet and preserves its protocol in private status', () => {
+    const environment = fixture();
+    const files = sourceTriplet(environment.artifactRoot);
+    const protocol2Manifest = JSON.parse(readFileSync(files.updateManifest, 'utf8'));
+    protocol2Manifest.update_protocol_version = 2;
+    writeFileSync(files.updateManifest, `${JSON.stringify(protocol2Manifest)}\n`);
+    const args = [
+      'publish',
+      '--source', files.source,
+      '--release-sha', releaseSha,
+      '--installer-sha256', sha256(files.installer),
+      '--zip-sha256', sha256(files.zip),
+      '--checksum-sha256', sha256(files.checksum),
+      '--release-sequence', releaseSequence,
+      '--companion-version', companionVersion,
+      '--update-manifest-sha256', sha256(files.updateManifest),
+      '--update-protocol-version', '2',
+    ];
+
+    const published = run(environment, args);
+
+    expect(published.status, published.stderr).toBe(0);
+    expect(published.stdout).toContain('update_protocol_version=2\n');
+    const privateManifest = readFileSync(
+      join(environment.artifactRoot, 'releases', releaseSha, '.release-manifest'),
+      'utf8',
+    );
+    expect(privateManifest).toContain('update_protocol_version=2\n');
+    const status = run(environment, ['status']);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain('update_protocol_version=2\n');
   });
 
   it('publishes the rendered production installer with legitimate runtime URL references', () => {
