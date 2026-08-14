@@ -424,6 +424,32 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testProtectedSnapshotExcludesTransientUpdateStateLock() throws {
+        try withTemporaryHome { _, paths in
+            let collectorState = paths.stateDirectory
+                .appendingPathComponent("collector-state.json")
+            try Data(#"{"enabled":false,"files":{},"version":1}"#.utf8)
+                .write(to: collectorState)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: collectorState.path
+            )
+            let baseline = try InstallerProtectedStateSnapshot.capture(paths: paths)
+            let transientLock = paths.stateDirectory
+                .appendingPathComponent("update-state.lock")
+            try Data().write(to: transientLock)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: transientLock.path
+            )
+
+            XCTAssertEqual(
+                try InstallerProtectedStateSnapshot.capture(paths: paths),
+                baseline
+            )
+        }
+    }
+
     func testProtectedSnapshotRejectsSymlinkHardlinkAndUnsafeMode() throws {
         try withTemporaryHome { _, paths in
             let state = paths.stateDirectory.appendingPathComponent("collector-state.json")

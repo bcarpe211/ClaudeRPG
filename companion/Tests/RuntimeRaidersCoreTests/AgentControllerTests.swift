@@ -6,6 +6,27 @@ import XCTest
 final class AgentControllerTests: XCTestCase {
     private let now: Int64 = 1_800_000_000_000
 
+    func testInstallPreservesDisabledCollectorStateByteForByte() throws {
+        try withHarness { harness in
+            try harness.controller.turnOff()
+            let stateFile = harness.paths.stateDirectory
+                .appendingPathComponent("collector-state.json")
+            let before = try Data(contentsOf: stateFile)
+            let beforeAttributes = try FileManager.default.attributesOfItem(
+                atPath: stateFile.path
+            )
+            let provider = try harness.makeFile("disabled-install.jsonl", contents: Data())
+
+            try harness.controller.install(existingFiles: [provider])
+
+            XCTAssertEqual(try Data(contentsOf: stateFile), before)
+            let afterAttributes = try FileManager.default.attributesOfItem(atPath: stateFile.path)
+            XCTAssertEqual(afterAttributes[.systemFileNumber] as? NSNumber,
+                           beforeAttributes[.systemFileNumber] as? NSNumber)
+            XCTAssertFalse(harness.controller.enabled)
+        }
+    }
+
     func testPersistDisabledForRecoveryChangesOnlyEnabledAndPreservesQueue() throws {
         try withHarness { harness in
             let stateFile = harness.paths.stateDirectory.appendingPathComponent("collector-state.json")

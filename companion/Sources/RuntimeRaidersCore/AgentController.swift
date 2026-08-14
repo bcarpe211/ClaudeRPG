@@ -575,6 +575,10 @@ public final class AgentController: @unchecked Sendable {
 
     public func install(existingFiles: [URL]) throws {
         try lock.withLock {
+            guard state.enabled else {
+                lastCallbackBytesRead = 0
+                return
+            }
             let files = normalized(existingFiles)
             let existingPaths = Set(files.map(\.path))
             for path in Array(state.files.keys)
@@ -586,11 +590,6 @@ public final class AgentController: @unchecked Sendable {
             state.deferredSeedPaths.subtract(existingPaths)
             for file in files where state.files[file.path] == nil {
                 state.files[file.path] = initialFileState(seeding: true)
-            }
-            guard state.enabled else {
-                try persist()
-                lastCallbackBytesRead = 0
-                return
             }
             pauseCollection()
             try captureSeedBoundaries(files)

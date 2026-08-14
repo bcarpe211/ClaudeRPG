@@ -437,7 +437,7 @@ public struct InstallerDaemonStatusAttestor {
 public enum InstallerProtectedStateSnapshot {
     private static let header = Data("runtime-raiders-protected-state-v2\n".utf8)
     private static let exclusions: Set<String> = [
-        "command-link", "path-marker-owned",
+        "command-link", "path-marker-owned", "update-state.lock",
     ]
     // Covers the 50 MiB production outbox plus protected state and exact framing overhead.
     public static let maximumSerializedBytes = 128 * 1_024 * 1_024
