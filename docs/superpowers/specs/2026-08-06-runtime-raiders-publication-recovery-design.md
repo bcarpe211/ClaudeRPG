@@ -82,7 +82,7 @@ exact public objects:
 
 | Object | HTTPS path | Maximum bytes | Expected digest |
 | --- | --- | ---: | --- |
-| Installer | `/install.sh` | 1 MiB | `INSTALLER_SHA256` |
+| Installer | `/install.sh` | 8 MiB shared artifact contract | `INSTALLER_SHA256` |
 | Companion ZIP | `/downloads/runtime-raiders-agent.zip` | 128 MiB | `ZIP_SHA256` |
 | ZIP checksum | `/downloads/runtime-raiders-agent.zip.sha256` | 4 KiB | `CHECKSUM_SHA256` |
 | Update manifest | `/downloads/runtime-raiders-agent.update.json` | 64 KiB | `UPDATE_MANIFEST_SHA256` |

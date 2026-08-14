@@ -305,11 +305,13 @@ verified installer because the current release has no `raiders update` command.
 All later protocol-1 releases can use the explicit foreground command.
 
 After the controlled installed-off canary passes, routine first-time office
-onboarding retains the intended single-line `curl .../install.sh | /bin/sh`
-experience. The controlled canary still downloads the installer into an
-owner-only file and verifies its recorded SHA-256 before execution. Neither
-path changes the update rule: manifests and ZIPs are never piped to a shell,
-and an installed player upgrades only with `raiders update`.
+onboarding uses the website-generated single-line command documented in
+`docs/runtime-raiders/companion-operations.md`. It downloads the complete
+installer into an owner-only temporary file, checks the shared size and file
+safety contract, and only then executes the local file. The controlled canary
+also verifies its separately recorded SHA-256. Neither path changes the update
+rule: manifests and ZIPs are never piped to a shell, and an installed player
+upgrades only with `raiders update`.
 
 ## 8. Failure behavior
 

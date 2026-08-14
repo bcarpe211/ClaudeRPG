@@ -764,6 +764,15 @@ private func run() throws {
             expectedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
         )
         return
+    case .installerRetireSequenceEightCommand:
+        let link = SequenceEightCanaryCommandLink()
+        try link.retireIfPresent(
+            commandRecord: paths.supportDirectory
+                .appendingPathComponent(".migration-v1", isDirectory: true)
+                .appendingPathComponent("old-command-link", isDirectory: false),
+            expectedShim: paths.supportDirectory.appendingPathComponent("raiders")
+        )
+        return
     case let .installerLegacyStatus(prepared, expectedEnabled, expectedQueuedEventCount):
         let snapshot = try InstallerStatusValidator.inspectLegacy(
             InstallerDaemonStatusAttestor().status(

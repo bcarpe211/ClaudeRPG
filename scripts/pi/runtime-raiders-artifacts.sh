@@ -13,6 +13,13 @@ if [[ ${RUNTIME_RAIDERS_TEST_MODE:-0} == 1 ]]; then
   NODE=${RUNTIME_RAIDERS_NODE:?test node is required}
   SLEEP=${RUNTIME_RAIDERS_SLEEP:?test sleep is required}
 fi
+SCRIPT_DIRECTORY=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
+INSTALLER_MAX_BYTES=$(
+  "$NODE" "$SCRIPT_DIRECTORY/../lib/runtime-raiders-artifact-contract.mjs" installer_max_bytes
+) || {
+  printf 'runtime-raiders-artifacts: artifact contract is invalid\n' >&2
+  exit 64
+}
 RELEASES=$ARTIFACT_ROOT/releases
 CURRENT=$ARTIFACT_ROOT/current
 PUBLIC_ORIGIN=https://raiders.redlattice.com
@@ -22,7 +29,6 @@ PUBLIC_CHECKSUM_URL=$PUBLIC_ORIGIN/downloads/runtime-raiders-agent.zip.sha256
 PUBLIC_UPDATE_MANIFEST_URL=$PUBLIC_ORIGIN/downloads/runtime-raiders-agent.update.json
 PUBLIC_HEALTH_URL=$PUBLIC_ORIGIN/health
 LOCAL_HEALTH_URL=http://127.0.0.1:8080/health
-INSTALLER_MAX_BYTES=8388608
 ZIP_MAX_BYTES=134217728
 CHECKSUM_MAX_BYTES=4096
 UPDATE_MANIFEST_MAX_BYTES=65536

@@ -658,6 +658,74 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testLiveSequenceEightValidatorAcceptsOnlyTheObservedCanaryModeAndHomebrewLink() throws {
+        try withLegacyInstallation { fixture in
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: fixture.paths.legacyFlatApplication.path
+            )
+            try FileManager.default.removeItem(at: fixture.command)
+            try Data("/opt/homebrew/opt/libpq/bin/raiders\n".utf8)
+                .write(to: fixture.commandRecord)
+
+            let root = fixture.home.appendingPathComponent("external-root", isDirectory: true)
+            let opt = root.appendingPathComponent("opt", isDirectory: true)
+            let homebrew = opt.appendingPathComponent("homebrew", isDirectory: true)
+            let homebrewOpt = homebrew.appendingPathComponent("opt", isDirectory: true)
+            let cellar = homebrew.appendingPathComponent("Cellar", isDirectory: true)
+            let libpq = cellar.appendingPathComponent("libpq", isDirectory: true)
+            let version = libpq.appendingPathComponent("18.4", isDirectory: true)
+            let bin = version.appendingPathComponent("bin", isDirectory: true)
+            try FileManager.default.createDirectory(at: homebrewOpt, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+            for (directory, mode) in [
+                (root, 0o700), (opt, 0o755), (homebrew, 0o755), (homebrewOpt, 0o775),
+                (cellar, 0o775), (libpq, 0o755), (version, 0o755), (bin, 0o755),
+            ] {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: mode],
+                    ofItemAtPath: directory.path
+                )
+            }
+            try FileManager.default.createSymbolicLink(
+                atPath: homebrewOpt.appendingPathComponent("libpq").path,
+                withDestinationPath: "../Cellar/libpq/18.4"
+            )
+            try FileManager.default.createSymbolicLink(
+                atPath: bin.appendingPathComponent("raiders").path,
+                withDestinationPath: fixture.shim.path
+            )
+
+            let commandLink = SequenceEightCanaryCommandLink(
+                filesystemRoot: root,
+                expectedRootUID: geteuid(),
+                expectedHomebrewUID: geteuid()
+            )
+            let validator = makeLegacyValidator(
+                fixture: fixture,
+                applicationMode: 0o700,
+                canaryCommandLink: commandLink
+            )
+            XCTAssertNoThrow(try validator.validate(
+                homeDirectory: fixture.home,
+                paths: fixture.paths,
+                expectedTeamIdentifier: "ABCDE12345",
+                pathEnvironment: "/usr/bin:/bin"
+            ))
+
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: fixture.paths.legacyFlatApplication.path
+            )
+            XCTAssertThrowsError(try validator.validate(
+                homeDirectory: fixture.home,
+                paths: fixture.paths,
+                expectedTeamIdentifier: "ABCDE12345",
+                pathEnvironment: "/usr/bin:/bin"
+            ))
+        }
+    }
+
     func testExactSequenceEightValidatorBindsRecordedCommandToStrictCurrentPATH() throws {
         try withLegacyInstallation { fixture in
             let validator = makeLegacyValidator(fixture: fixture)
@@ -925,7 +993,11 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
-    private func makeLegacyValidator(fixture: LegacyFixture) -> LegacySequenceEightInstallationValidator {
+    private func makeLegacyValidator(
+        fixture: LegacyFixture,
+        applicationMode: mode_t = 0o755,
+        canaryCommandLink: SequenceEightCanaryCommandLink? = nil
+    ) -> LegacySequenceEightInstallationValidator {
         LegacySequenceEightInstallationValidator(
             signatureInspector: { application, team in
                 XCTAssertEqual(application, fixture.paths.legacyFlatApplication)
@@ -940,7 +1012,9 @@ final class InstallerMigrationValidationTests: XCTestCase {
                     gatekeeperNotarized: true
                 )
             },
-            identityLoader: { _ in fixture.identity }
+            identityLoader: { _ in fixture.identity },
+            applicationMode: applicationMode,
+            canaryCommandLink: canaryCommandLink
         )
     }
 

@@ -1,5 +1,12 @@
 # Runtime Raiders Local Compatibility Preflight Implementation Plan
 
+> **Superseded 2026-08-14. Do not execute this plan.** The production aggregate
+> found no sequence-8 fleet beyond the single installed-off canary. Runtime
+> Raiders therefore uses the smaller bounded design in
+> `2026-08-14-runtime-raiders-sequence8-canary-migration.md`: a fresh-install-only
+> public installer, a one-time exact-layout canary migrator, and unsigned local
+> behavioral tests. Apple signing/notarization remains a final trust gate.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add one local, real-seed-derived compatibility command that finds installer, migration, launcher, and rollback defects before Developer ID signing, Apple notarization, or any Pi or installed-canary action.

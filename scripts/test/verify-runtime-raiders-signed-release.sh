@@ -14,6 +14,10 @@ esac
 [ -d "$1" ] && [ ! -L "$1" ] || usage
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+INSTALLER_MAX_BYTES="$(node "$ROOT/scripts/lib/runtime-raiders-artifact-contract.mjs" installer_max_bytes)" || {
+  echo "Gate 2 artifact contract is invalid" >&2
+  exit 64
+}
 QUARTET="$(cd "$1" && pwd -P)"
 OWNER="$(id -u)"
 : "${RUNTIME_RAIDERS_CODESIGN_IDENTITY:?Gate 2 requires an explicitly authorized Developer ID identity}"
@@ -71,7 +75,7 @@ for file in "$INSTALLER" "$ARCHIVE" "$CHECKSUM" "$MANIFEST"; do
   validate_local_regular "$file" || { echo "Gate 2 refuses unsafe quartet member: $file" >&2; exit 1; }
 done
 [ -x "$INSTALLER" ] || { echo "Gate 2 requires an executable rendered installer" >&2; exit 1; }
-[ "$(wc -c < "$INSTALLER" | tr -d ' ')" -le 8388608 ] || {
+[ "$(wc -c < "$INSTALLER" | tr -d ' ')" -le "$INSTALLER_MAX_BYTES" ] || {
   echo "Gate 2 refuses an installer above the public size limit" >&2
   exit 1
 }
@@ -115,7 +119,9 @@ NODE
 IFS=$'\t' read -r RELEASE_SEQUENCE RELEASE_SHA COMPANION_VERSION UPDATE_PROTOCOL_VERSION <<<"$manifest_fields"
 [ "$UPDATE_PROTOCOL_VERSION" = 2 ] || exit 1
 gate_verify_reviewed_source "$ROOT" "$RELEASE_SHA" \
+  config/runtime-raiders-artifact-contract.json \
   companion/packaging/install.sh \
+  scripts/lib/runtime-raiders-artifact-contract.mjs \
   scripts/release/build-runtime-raiders-release-validator.sh \
   scripts/release/runtime-raiders-macho-uuid.c \
   scripts/release/render-runtime-raiders-installer.sh \
@@ -438,155 +444,5 @@ gate_env "$fresh_home" /bin/sh "$INSTALLER"
 [ -f "$fresh_home/Library/Application Support/Runtime Raiders/installation/release-state.json" ] || exit 1
 [ -x "$fresh_home/Library/Application Support/Runtime Raiders/launcher/Runtime Raiders Launcher.app/Contents/MacOS/runtime-raiders-launcher" ] || exit 1
 gate_env "$fresh_home" "$fake_bin/launchctl" bootout "gui/$OWNER/com.redlattice.runtime-raiders-agent"
-
-legacy_seed="$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app"
-[ -d "$legacy_seed" ] && [ ! -L "$legacy_seed" ] || {
-  echo "Gate 2 requires the installed-off sequence-8 app as a read-only migration seed" >&2
-  exit 1
-}
-[ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSequence raw -o - "$legacy_seed/Contents/Info.plist")" = 8 ] || exit 1
-[ "$(/usr/bin/plutil -extract RuntimeRaidersReleaseSHA raw -o - "$legacy_seed/Contents/Info.plist")" = dec88d4f6ff600f2be92bed3b12dcfce85f84a51 ] || exit 1
-/usr/bin/codesign --verify --strict --all-architectures -R="$AGENT_REQUIREMENT" "$legacy_seed"
-
-write_legacy_fixture() {
-  local home="$1" support="$1/Library/Application Support/Runtime Raiders"
-  local legacy="$support/Runtime Raiders Agent.app" executable="$support/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
-  local plist="$home/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist"
-  local shim="$support/raiders" command="$home/.local/bin/raiders"
-  mkdir -p "$support/state" "$support/outbox" "$support/rollback" "$support/failed-candidates" \
-    "$support/diagnostics" "$support/update-workspace" "$home/Library/LaunchAgents" "$home/.local/bin"
-  chmod 700 "$home" "$home/Library" "$home/Library/Application Support" "$support" "$support/state" \
-    "$support/outbox" "$support/rollback" "$support/failed-candidates" "$support/diagnostics" \
-    "$support/update-workspace" "$home/Library/LaunchAgents" "$home/.local" "$home/.local/bin"
-  /usr/bin/ditto "$legacy_seed" "$legacy"
-  write_enrollment "$home"
-  printf '%s\n' rollback-evidence > "$support/rollback/sequence-8"
-  printf '%s\n' failed-candidate-evidence > "$support/failed-candidates/sequence-7"
-  printf '%s\n' diagnostics-evidence > "$support/diagnostics/sequence-3"
-  printf '%s\n' update-workspace-evidence > "$support/update-workspace/sequence-8"
-  chmod 600 "$support/rollback/sequence-8" "$support/failed-candidates/sequence-7" \
-    "$support/diagnostics/sequence-3" "$support/update-workspace/sequence-8"
-  /usr/bin/xattr -w com.redlattice.runtime-raiders-gate2 rollback "$support/rollback/sequence-8"
-  cat > "$plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.redlattice.runtime-raiders-agent</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$executable</string>
-    <string>daemon</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ProcessType</key>
-  <string>Background</string>
-</dict>
-</plist>
-EOF
-  chmod 600 "$plist"
-  cat > "$shim" <<EOF
-#!/bin/sh
-set -eu
-SUPPORT='$support'
-PLIST='$plist'
-SHIM='$shim'
-COMMAND_LINK_FILE='$support/state/command-link'
-MARKER_FLAG='$support/state/path-marker-owned'
-MARKER='export PATH="\$HOME/.local/bin:\$PATH" # runtime-raiders-path'
-LABEL='com.redlattice.runtime-raiders-agent'
-binary='$executable'
-job_absent() {
-  output="\$(mktemp /tmp/runtime-raiders-launchctl.XXXXXX)"
-  if launchctl print "gui/\$(id -u)/\$LABEL" >"\$output" 2>&1; then
-    rm -f "\$output"
-    return 1
-  else
-    print_status=\$?
-  fi
-  [ "\$print_status" -eq 113 ] || { rm -f "\$output"; return 1; }
-  grep -F 'Could not find service' "\$output" >/dev/null 2>&1
-  status=\$?
-  rm -f "\$output"
-  return \$status
-}
-if [ "\$#" -eq 0 ] || [ "\$1" != uninstall ]; then
-  exec "\$binary" "\$@"
-fi
-if "\$binary" uninstall; then
-  launchctl bootout "gui/\$(id -u)" "\$PLIST" || {
-    echo "Runtime Raiders bootout failed; refusing cleanup" >&2
-    exit 1
-  }
-  job_absent || {
-    echo "Runtime Raiders launchd job still present; refusing cleanup" >&2
-    exit 1
-  }
-elif [ ! -S "\$SUPPORT/agent.sock" ] && job_absent; then
-  :
-else
-  echo "Runtime Raiders daemon did not safely stop; refusing cleanup" >&2
-  exit 1
-fi
-if [ -f "\$COMMAND_LINK_FILE" ]; then
-  command_path="\$(cat "\$COMMAND_LINK_FILE")"
-  if [ -L "\$command_path" ] && [ "\$(readlink "\$command_path")" = "\$SHIM" ]; then
-    rm -f "\$command_path"
-  fi
-fi
-profile="\$HOME/.zprofile"
-if [ -f "\$MARKER_FLAG" ] && [ -f "\$profile" ]; then
-  temporary="\$(mktemp "\$profile.runtime-raiders.XXXXXX")"
-  awk -v marker="\$MARKER" 'seen == 0 && \$0 == marker { seen = 1; next } { print }' "\$profile" > "\$temporary"
-  mv "\$temporary" "\$profile"
-fi
-rm -f "\$PLIST"
-rm -rf "\$SUPPORT"
-EOF
-  chmod 700 "$shim"
-  printf '%s\n' "$command" > "$support/state/command-link"
-  chmod 600 "$support/state/command-link"
-  ln -s "$shim" "$command"
-}
-
-fingerprint_legacy() {
-  gate_fingerprint_migration_surface "$1" "$2"
-}
-
-injected_installer="$gate_root/install-with-failure-checkpoints.sh"
-awk 'BEGIN { found=0 } $0 == "failure_checkpoint() { :; }" { print "failure_checkpoint() { [ \"${RUNTIME_RAIDERS_GATE2_FAIL_AFTER:-}\" != \"$1\" ] || return 91; }"; found=1; next } { print } END { if (!found) exit 1 }' "$INSTALLER" > "$injected_installer"
-chmod 700 "$injected_installer"
-
-migration_index=0
-for boundary in archive-verification enrollment-decision prepare old-job-stop launcher-directory releases-directory installation-directory launcher-placement release-placement state-write plist-replacement shim-replacement command-link-replacement bootstrap prepared-health resume; do
-  echo "migration-failure-fingerprint $boundary"
-  migration_index=$((migration_index + 1))
-  case_home="$(gate2_migration_home "$gate_root" "$migration_index")"
-  case_root="$case_home"
-  mkdir -p "$case_home"
-  write_legacy_fixture "$case_home"
-  gate_env "$case_home" "$fake_bin/launchctl" bootstrap "gui/$OWNER" "$case_home/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist"
-  for _ in $(seq 1 80); do [ -S "$case_home/Library/Application Support/Runtime Raiders/agent.sock" ] && break; sleep 0.1; done
-  [ -S "$case_home/Library/Application Support/Runtime Raiders/agent.sock" ] || exit 1
-  fingerprint_legacy "$case_home" "$case_root/before.fingerprint"
-  if gate_env "$case_home" env RUNTIME_RAIDERS_GATE2_FAIL_AFTER="$boundary" \
-      /bin/sh "$injected_installer"; then
-    echo "migration failure checkpoint unexpectedly succeeded: $boundary" >&2
-    exit 1
-  fi
-  fingerprint_legacy "$case_home" "$case_root/after.fingerprint"
-  cmp -s "$case_root/before.fingerprint" "$case_root/after.fingerprint" || {
-    diff -u "$case_root/before.fingerprint" "$case_root/after.fingerprint" >&2 || true
-    exit 1
-  }
-  gate_env "$case_home" "$fake_bin/launchctl" print "gui/$OWNER/com.redlattice.runtime-raiders-agent" >/dev/null
-  legacy_executable="$case_home/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
-  gate_verify_legacy_runtime "$case_home" "$agent_executable" "$legacy_executable"
-  gate_env "$case_home" "$fake_bin/launchctl" bootout "gui/$OWNER/com.redlattice.runtime-raiders-agent"
-done
 
 echo "Runtime Raiders Gate 2 passed for local release $RELEASE_SEQUENCE-$RELEASE_SHA"

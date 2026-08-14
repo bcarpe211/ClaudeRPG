@@ -25,6 +25,7 @@ public enum CompanionCommandRoute: Equatable, Sendable {
     case legacyPrepare
     case installerResume(generation: Int64)
     case installerValidateLegacy
+    case installerRetireSequenceEightCommand
     case installerLegacyStatus(
         prepared: Bool,
         expectedEnabled: Bool?,
@@ -182,6 +183,8 @@ public enum CompanionCommandRouter {
             return .legacyPrepare
         case ["__runtime-raiders-installer-validate-legacy"]:
             return .installerValidateLegacy
+        case ["__runtime-raiders-installer-retire-sequence-eight-command"]:
+            return .installerRetireSequenceEightCommand
         case ["__runtime-raiders-installer-status", "legacy-running"]:
             return .installerLegacyStatus(
                 prepared: false,
@@ -291,6 +294,7 @@ public enum CompanionCommandRouter {
             "__runtime-raiders-installer-lease",
             "__runtime-raiders-legacy-prepare",
             "__runtime-raiders-installer-validate-legacy",
+            "__runtime-raiders-installer-retire-sequence-eight-command",
             "__runtime-raiders-installer-status",
             "__runtime-raiders-installer-protected-state",
             "__runtime-raiders-installer-sync-migration",

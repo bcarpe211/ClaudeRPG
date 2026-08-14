@@ -639,6 +639,8 @@ public struct LegacySequenceEightInstallationValidator {
 
     private let signatureInspector: SignatureInspector
     private let identityLoader: IdentityLoader
+    private let applicationMode: mode_t
+    private let canaryCommandLink: SequenceEightCanaryCommandLink?
 
     public init() {
         signatureInspector = { application, team in
@@ -653,14 +655,20 @@ public struct LegacySequenceEightInstallationValidator {
             }
             return try CompanionReleaseIdentity.load(from: bundle)
         }
+        applicationMode = 0o700
+        canaryCommandLink = SequenceEightCanaryCommandLink()
     }
 
     init(
         signatureInspector: @escaping SignatureInspector,
-        identityLoader: @escaping IdentityLoader
+        identityLoader: @escaping IdentityLoader,
+        applicationMode: mode_t = 0o755,
+        canaryCommandLink: SequenceEightCanaryCommandLink? = nil
     ) {
         self.signatureInspector = signatureInspector
         self.identityLoader = identityLoader
+        self.applicationMode = applicationMode
+        self.canaryCommandLink = canaryCommandLink
     }
 
     public func validate(
@@ -699,7 +707,7 @@ public struct LegacySequenceEightInstallationValidator {
                 isDirectory: false
             )
             let info = contents.appendingPathComponent("Info.plist", isDirectory: false)
-            try requireDirectory(application, mode: 0o755)
+            try requireDirectory(application, mode: applicationMode)
             try requireDirectory(contents, mode: 0o755)
             try requireDirectory(macOS, mode: 0o755)
             try requireRegularFile(executable, mode: 0o755)
@@ -775,14 +783,21 @@ public struct LegacySequenceEightInstallationValidator {
                   command.lastPathComponent == "raiders" else {
                 throw InstallerMigrationValidationError.invalidLegacyInstallation
             }
-            let commandDirectory = command.deletingLastPathComponent()
-            try requireCommandParentChain(commandDirectory)
-            try requireCommandDirectoryInCurrentPATH(
-                commandDirectory,
-                home: home,
-                pathEnvironment: pathEnvironment
-            )
-            try requireSymlink(command, target: shim.path)
+            if let canaryCommandLink {
+                _ = try canaryCommandLink.validate(
+                    recordedCommandPath: commandPath,
+                    expectedShim: shim
+                )
+            } else {
+                let commandDirectory = command.deletingLastPathComponent()
+                try requireCommandParentChain(commandDirectory)
+                try requireCommandDirectoryInCurrentPATH(
+                    commandDirectory,
+                    home: home,
+                    pathEnvironment: pathEnvironment
+                )
+                try requireSymlink(command, target: shim.path)
+            }
         } catch {
             throw InstallerMigrationValidationError.invalidLegacyInstallation
         }

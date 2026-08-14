@@ -23,12 +23,13 @@ LAUNCHER_REQUIREMENT='identifier "com.redlattice.runtime-raiders-launcher" and a
 PACKAGED_UPDATE_PROTOCOL_VERSION=2
 LAUNCHER_PROTOCOL_VERSION=1
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)"
-OUTPUT="$ROOT/dist"
+OUTPUT=''
 SCRATCH=''
 RELEASE_SHA=''
 SEEN_RELEASE_SHA=0
+SEEN_OUTPUT=0
 usage() {
-  echo "usage: $0 --release-sha 40-lowercase-hex [--output directory] [--scratch-path directory]" >&2
+  echo "usage: $0 --release-sha 40-lowercase-hex --output sequence-N-SHA [--scratch-path directory]" >&2
   exit 64
 }
 while [ "$#" -gt 0 ]; do
@@ -47,6 +48,11 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] && [ -n "$2" ] || {
         usage
       }
+      [ "$SEEN_OUTPUT" -eq 0 ] || {
+        echo "--output may be provided only once" >&2
+        exit 64
+      }
+      SEEN_OUTPUT=1
       OUTPUT="$2"
       shift 2
       ;;
@@ -67,6 +73,10 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$RELEASE_SHA" ] || {
   echo "--release-sha is required" >&2
+  exit 64
+}
+[ -n "$OUTPUT" ] || {
+  echo "--output is required" >&2
   exit 64
 }
 case "$RELEASE_SHA" in *[!0-9a-f]*) echo "--release-sha is invalid" >&2; exit 64 ;; esac
@@ -111,6 +121,11 @@ case "$RELEASE_SEQUENCE" in ''|0|0*|*[!0-9]*) echo "release_sequence is invalid"
   echo "update_protocol_version is invalid" >&2
   exit 64
 }
+EXPECTED_OUTPUT_NAME="sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"
+[ "$(basename "$OUTPUT")" = "$EXPECTED_OUTPUT_NAME" ] || {
+  echo "output directory must encode the release identity as $EXPECTED_OUTPUT_NAME" >&2
+  exit 64
+}
 /usr/bin/git -C "$ROOT" ls-files --error-unmatch -- companion/RELEASE >/dev/null 2>&1 || {
   echo "companion/RELEASE must be tracked by Git" >&2
   exit 64
@@ -129,6 +144,11 @@ GIT_HEAD="$(/usr/bin/git -C "$ROOT" rev-parse --verify HEAD)" || {
 }
 [ "$GIT_HEAD" = "$RELEASE_SHA" ] || {
   echo "release SHA does not match Git HEAD" >&2
+  exit 64
+}
+
+INSTALLER_MAX_BYTES="$(node "$ROOT/scripts/lib/runtime-raiders-artifact-contract.mjs" installer_max_bytes)" || {
+  echo "Runtime Raiders artifact contract is invalid" >&2
   exit 64
 }
 
@@ -320,7 +340,7 @@ printf '%s\n' "$MANIFEST_JSON" > "$STAGED_OUTPUT/runtime-raiders-agent.update.js
   "$RELEASE_SHA" \
   "$PACKAGED_UPDATE_PROTOCOL_VERSION" \
   "$STAGED_OUTPUT/install.sh"
-[ "$(wc -c < "$STAGED_OUTPUT/install.sh" | tr -d ' ')" -le 8388608 ] || {
+[ "$(wc -c < "$STAGED_OUTPUT/install.sh" | tr -d ' ')" -le "$INSTALLER_MAX_BYTES" ] || {
   echo "rendered installer exceeds public size limit" >&2
   exit 1
 }

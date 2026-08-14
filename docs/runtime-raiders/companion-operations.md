@@ -185,7 +185,7 @@ after all rollout gates and a separate office-activation approval, use this
 one-line fixed-origin command:
 
 ```sh
-curl --fail --silent --show-error https://raiders.redlattice.com/install.sh | /bin/sh
+(umask 077; installer="$(/usr/bin/mktemp)" || exit 1; cleanup() { /bin/rm -f "$installer"; }; trap cleanup EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; status="$('/usr/bin/curl' --fail --silent --show-error --proto '=https' --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 --max-filesize 8388608 --output "$installer" --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh' )" && [ "$status" = 200 ] && test -f "$installer" && test ! -L "$installer" && [ "$(/usr/bin/stat -f '%u' "$installer")" = "$(/usr/bin/id -u)" ] && [ "$(/usr/bin/stat -f '%Lp' "$installer")" = 600 ] && [ "$(/usr/bin/stat -f '%l' "$installer")" = 1 ] && test -s "$installer" && bytes="$(/usr/bin/wc -c < "$installer" | /usr/bin/tr -d ' ')" && [ "$bytes" -le 8388608 ] && /bin/sh -n "$installer" && /bin/sh "$installer")
 ```
 
 The installer prompts privately for its enrollment code. It does not authorize

@@ -8,18 +8,7 @@ gate2_root_matches() {
 }
 
 gate2_home_suffixes() {
-  printf '%s\n' l f A B C D E F G H I J K L M N O P
-}
-
-gate2_migration_home() {
-  local root="$1" index="$2" suffix
-  case "$index" in
-    1) suffix=A ;; 2) suffix=B ;; 3) suffix=C ;; 4) suffix=D ;; 5) suffix=E ;;
-    6) suffix=F ;; 7) suffix=G ;; 8) suffix=H ;; 9) suffix=I ;; 10) suffix=J ;;
-    11) suffix=K ;; 12) suffix=L ;; 13) suffix=M ;; 14) suffix=N ;; 15) suffix=O ;;
-    16) suffix=P ;; *) return 1 ;;
-  esac
-  printf '%s/%s\n' "$root" "$suffix"
+  printf '%s\n' l f
 }
 
 gate2_emit_unix_paths() {
@@ -47,7 +36,7 @@ gate2_verify_all_unix_paths() {
     gate2_verify_unix_path "$path" || return 1
     count=$((count + 1))
   done < <(gate2_emit_unix_paths "$root")
-  [ "$count" -eq 36 ]
+  [ "$count" -eq 4 ]
 }
 
 gate2_create_owned_root() {

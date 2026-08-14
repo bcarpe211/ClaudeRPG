@@ -253,11 +253,11 @@ After successful migration, the flat sequence-8 application remains untouched as
 
 ## 12. Fresh installation and packaging
 
-New office installations go directly to the protocol-2 layout through the existing public command:
-
-```sh
-curl -fsS https://raiders.redlattice.com/downloads/install.sh | sh
-```
+New office installations go directly to the protocol-2 layout through the
+canonical website-generated command in
+`docs/runtime-raiders/companion-operations.md`. That command completes a
+bounded HTTPS download into an owner-only temporary file, validates it, and
+then executes the local file; it never streams network bytes into a shell.
 
 The public signed quartet remains:
 

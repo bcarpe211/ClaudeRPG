@@ -216,13 +216,13 @@ describe('Runtime Raiders Gate 2 Unix paths', () => {
       expect(gateRoot).toMatch(/^\/Users\/Shared\/r2\.[A-Za-z0-9]{6}$/);
       expect(lines[1]).toBe('MODE 700');
       const paths = lines.slice(2);
-      const homes = ['l', 'f', ...'ABCDEFGHIJKLMNOP'];
+      const homes = ['l', 'f'];
       const expected = homes.flatMap((home) => [
         `${gateRoot}/${home}/Library/Application Support/Runtime Raiders/agent.sock`,
         `${gateRoot}/${home}/Library/Application Support/Runtime Raiders/.agent.sock.runtime-raiders.lock`,
       ]);
       expect(paths).toEqual(expected);
-      expect(new Set(paths).size).toBe(36);
+      expect(new Set(paths).size).toBe(4);
       expect(paths.every((path) => Buffer.byteLength(path) <= 103)).toBe(true);
 
       const fixtureHome = `${gateRoot}/l`;

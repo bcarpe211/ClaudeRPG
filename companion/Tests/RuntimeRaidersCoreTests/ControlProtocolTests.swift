@@ -752,6 +752,16 @@ final class ControlProtocolTests: XCTestCase {
             ),
             .installerValidateLegacy
         )
+        XCTAssertEqual(
+            CompanionCommandRouter.installerRoute(
+                arguments: ["__runtime-raiders-installer-retire-sequence-eight-command"],
+                executableURL: staged,
+                paths: paths,
+                releaseState: nil,
+                releaseIdentity: identity
+            ),
+            .installerRetireSequenceEightCommand
+        )
         for target in [
             InstallerMigrationSyncTarget.stagingTree,
             .stagingTombstoneTree,

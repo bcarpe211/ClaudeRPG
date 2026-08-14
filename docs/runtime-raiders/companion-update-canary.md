@@ -39,9 +39,16 @@ without approval.
   git diff --quiet
   git diff --cached --quiet
   RELEASE_SHA="$(git rev-parse HEAD)"
-  scripts/release/build-runtime-raiders-agent.sh --release-sha "$RELEASE_SHA"
-  shasum -a 256 dist/install.sh dist/runtime-raiders-agent.zip \
-    dist/runtime-raiders-agent.zip.sha256 dist/runtime-raiders-agent.update.json
+  RELEASE_SEQUENCE="$(sed -n 's/^release_sequence=//p' companion/RELEASE)"
+  RELEASE_OUTPUT="dist/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"
+  mkdir -p dist
+  test ! -e "$RELEASE_OUTPUT"
+  scripts/release/build-runtime-raiders-agent.sh \
+    --release-sha "$RELEASE_SHA" --output "$RELEASE_OUTPUT"
+  shasum -a 256 "$RELEASE_OUTPUT/install.sh" \
+    "$RELEASE_OUTPUT/runtime-raiders-agent.zip" \
+    "$RELEASE_OUTPUT/runtime-raiders-agent.zip.sha256" \
+    "$RELEASE_OUTPUT/runtime-raiders-agent.update.json"
 )
 ```
 

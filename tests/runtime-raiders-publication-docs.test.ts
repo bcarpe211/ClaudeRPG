@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { buildCompanionInstallCommand } from '../src/web/companion-install';
 
 const readDoc = (path: string): string => readFileSync(resolve(path), 'utf8');
 
@@ -192,7 +193,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     }
   });
 
-  it('keeps the routine pipe distinct from the verified local canary installer', () => {
+  it('uses the canonical safe downloader for routine and verified canary installation', () => {
     for (const document of [runbook, operations]) {
       expect(document).not.toMatch(/--code(?:\s|=)/);
       expect(document).toContain('--code-file "$CANARY_CODE_FILE"');
@@ -200,7 +201,8 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     }
     expect(operations).toMatch(/routine office installation[\s\S]*one-line/i);
     const routine = operations.slice(operations.indexOf('## Routine office installation'));
-    expect(routine).toContain('curl --fail --silent --show-error https://raiders.redlattice.com/install.sh | /bin/sh');
+    expect(routine).toContain(buildCompanionInstallCommand());
+    expect(routine).not.toMatch(/curl[^\n]*\|\s*(?:sh|\/bin\/sh)/);
     const installedOff = operations.slice(
       operations.indexOf('## Install the sequence-2 canary'),
       operations.indexOf('## Routine office installation'),
@@ -407,7 +409,10 @@ describe('Runtime Raiders artifact-publication documentation', () => {
 
   it('documents build, cadence, no-reselection, approval fields, and update recovery evidence', () => {
     expect(updateCanary).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
-    expect(updateCanary).toContain('scripts/release/build-runtime-raiders-agent.sh --release-sha "$RELEASE_SHA"');
+    expect(updateCanary).toContain('RELEASE_OUTPUT="dist/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"');
+    expect(updateCanary).toContain('scripts/release/build-runtime-raiders-agent.sh \\\n');
+    expect(updateCanary).toContain('--release-sha "$RELEASE_SHA" --output "$RELEASE_OUTPUT"');
+    expect(updateCanary).not.toContain('dist/install.sh');
     expect(updateCanary).toContain('launchctl kickstart -k "gui/$(id -u)/com.redlattice.runtime-raiders-agent"');
     expect(updateCanary).toContain('24-hour due boundary');
     expect(updateCanary).toContain('raiders status');

@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:player-copy": "node tools/runtime-raiders/check-player-copy.mjs",
+    "canary:migration-preflight": "bash scripts/test/runtime-raiders-sequence8-preflight.sh",
     "canary:upgrade-test": "sh -n companion/packaging/install.sh && vitest run tests/companion-installer.test.ts",
     "canary:lifecycle-test": "bash scripts/test/runtime-raiders-lifecycle.sh"
   },
