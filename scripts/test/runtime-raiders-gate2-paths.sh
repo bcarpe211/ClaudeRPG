@@ -2,7 +2,7 @@
 
 gate2_root_matches() {
   case "$1" in
-    /private/tmp/r2.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) return 0 ;;
+    /Users/Shared/r2.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -53,7 +53,7 @@ gate2_verify_all_unix_paths() {
 gate2_create_owned_root() {
   local root owner mode
   owner="$(id -u)" || return 1
-  root="$(/usr/bin/mktemp -d /tmp/r2.XXXXXX)" || return 1
+  root="$(/usr/bin/mktemp -d /Users/Shared/r2.XXXXXX)" || return 1
   root="$(cd "$root" && pwd -P)" || { /bin/rm -rf -- "$root"; return 1; }
   if ! gate2_root_matches "$root" || [ ! -d "$root" ] || [ -L "$root" ] ||
      [ "$(/usr/bin/stat -f '%u' "$root")" != "$owner" ]; then

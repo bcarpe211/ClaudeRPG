@@ -186,8 +186,8 @@ describe('Runtime Raiders Gate 1 isolation', () => {
 });
 
 describe('Runtime Raiders Gate 2 Unix paths', () => {
-  it('creates the exact short production homes and rejects an overlong temp-root candidate', () => {
-    // Catches reintroduction of ambient TMPDIR roots that alias Darwin Unix endpoints.
+  it('creates short Foundation-stable production homes and rejects an overlong temp-root candidate', () => {
+    // Catches a short root such as /private/tmp that Foundation aliases through the /tmp symlink.
     const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-gate2-paths-'));
     try {
       const resultFile = join(fixture, 'paths');
@@ -212,7 +212,7 @@ describe('Runtime Raiders Gate 2 Unix paths', () => {
       expect(result.status, result.stderr).toBe(0);
       const lines = readFileSync(resultFile, 'utf8').trim().split('\n');
       const gateRoot = lines[0].slice('ROOT '.length);
-      expect(gateRoot).toMatch(/^\/private\/tmp\/r2\.[A-Za-z0-9]{6}$/);
+      expect(gateRoot).toMatch(/^\/Users\/Shared\/r2\.[A-Za-z0-9]{6}$/);
       expect(lines[1]).toBe('MODE 700');
       const paths = lines.slice(2);
       const homes = ['l', 'f', ...'ABCDEFGHIJKLMNOP'];
@@ -223,6 +223,23 @@ describe('Runtime Raiders Gate 2 Unix paths', () => {
       expect(paths).toEqual(expected);
       expect(new Set(paths).size).toBe(36);
       expect(paths.every((path) => Buffer.byteLength(path) <= 103)).toBe(true);
+
+      const fixtureHome = `${gateRoot}/l`;
+      const foundation = spawnSync('/usr/bin/xcrun', [
+        'swift',
+        '-module-cache-path', join(fixture, 'swift-module-cache'),
+        '-e',
+        'import Foundation; print(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.path)',
+      ], {
+        env: {
+          ...process.env,
+          HOME: fixtureHome,
+          CFFIXED_USER_HOME: fixtureHome,
+        },
+        encoding: 'utf8',
+      });
+      expect(foundation.status, foundation.stderr).toBe(0);
+      expect(foundation.stdout.trim()).toBe(`${fixtureHome}/Library/Application Support`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
