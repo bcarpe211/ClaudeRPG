@@ -195,8 +195,8 @@ gate_verify_installer_binding \
 
 write_enrollment() {
   local home="$1" state="$1/Library/Application Support/Runtime Raiders/state"
-  mkdir -p "$state" "$1/Library/Application Support/Runtime Raiders/outbox"
-  chmod 700 "$1/Library" "$1/Library/Application Support" "$1/Library/Application Support/Runtime Raiders" "$state" "$1/Library/Application Support/Runtime Raiders/outbox"
+  mkdir -p "$state" "$1/Library/Application Support/Runtime Raiders/outbox" "$1/.codex/sessions"
+  chmod 700 "$1/.codex" "$1/.codex/sessions" "$1/Library" "$1/Library/Application Support" "$1/Library/Application Support/Runtime Raiders" "$state" "$1/Library/Application Support/Runtime Raiders/outbox"
   printf '%s\n' '{"version":1,"device_id":"00000000-0000-4000-8000-000000000001","device_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","dedupe_secret":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","server_url":"https://raiders.redlattice.com","cutover_at":1700000000000,"enabled_surfaces":["codex_desktop","codex_cli"]}' > "$state/enrollment.json"
   printf '%s\n' '{"enabled":false,"files":{},"version":1}' > "$state/collector-state.json"
   chmod 600 "$state/enrollment.json" "$state/collector-state.json"
@@ -311,24 +311,27 @@ write_state 1 "$mismatch_ref" null null
 expect_launcher_failure launcher-identity-mismatch status
 
 echo launcher-held-trial
-write_state 3 "$active_ref" "$older_ref" "$newer_ref"
+trial_generation=3
+trial_arguments="daemon __runtime-raiders-trial-generation $trial_generation"
+write_state "$trial_generation" "$active_ref" "$older_ref" "$newer_ref"
 lease_fifo="$launcher_work/lease.fifo"
 lease_ready="$launcher_work/lease.ready"
 mkfifo "$lease_fifo"
 exec 9<>"$lease_fifo"
 lease_fd_open=1
 current_agent="$support/releases/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
-gate_run_without_release_credentials env HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" \
-  "$current_agent" __runtime-raiders-installer-lease <"$lease_fifo" >"$lease_ready" &
-lease_pid=$!
-lease_record="$(gate_process_capture held-lease "$lease_pid" "$current_agent" __runtime-raiders-installer-lease)" || exit 1
+gate_start_without_release_credentials env HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" \
+  "$current_agent" __runtime-raiders-installer-lease <"$lease_fifo" >"$lease_ready"
+lease_pid="$GATE_STARTED_PID"
+lease_record="$(gate_process_capture_after_exec held-lease "$lease_pid" "$current_agent" __runtime-raiders-installer-lease)" || exit 1
 for _ in $(seq 1 40); do grep -F -x 'runtime-raiders-installer-lease-ready' "$lease_ready" >/dev/null 2>&1 && break; sleep 0.1; done
 grep -F -x 'runtime-raiders-installer-lease-ready' "$lease_ready" >/dev/null
-gate_run_without_release_credentials env HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" \
-  "$installed_launcher" daemon >"$launcher_work/trial.log" 2>&1 &
-trial_pid=$!
-trial_record="$(gate_process_capture held-trial "$trial_pid" "$installed_launcher" daemon \
-  "$support/releases/sequence-$NEWER_SEQUENCE-$NEWER_SHA/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent" daemon)" || exit 1
+gate_start_without_release_credentials env HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" \
+  "$installed_launcher" daemon >"$launcher_work/trial.log" 2>&1
+trial_pid="$GATE_STARTED_PID"
+trial_record="$(gate_process_capture_after_exec held-trial "$trial_pid" "$installed_launcher" daemon \
+  "$support/releases/sequence-$NEWER_SEQUENCE-$NEWER_SHA/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent" \
+  "$trial_arguments")" || exit 1
 for _ in $(seq 1 80); do
   [ -S "$support/agent.sock" ] && break
   gate_process_validate_record "$trial_record" || break
@@ -394,10 +397,10 @@ case "$1" in
         [ "$(printf '%s\n' "$transition" | awk 'NF { count += 1 } END { print count + 0 }')" -eq 1 ] || exit 97
         ;;
     esac
-    gate_run_without_release_credentials /usr/bin/nohup "$RUNTIME_RAIDERS_GATE2_NETWORK_SANDBOX" \
+    gate_start_without_release_credentials /usr/bin/nohup "$RUNTIME_RAIDERS_GATE2_NETWORK_SANDBOX" \
       -p '(version 1) (allow default) (deny network-outbound)' "$program" "$argument" \
-      >"$HOME/.runtime-raiders-gate2-daemon.log" 2>&1 </dev/null &
-    pid=$!
+      >"$HOME/.runtime-raiders-gate2-daemon.log" 2>&1 </dev/null
+    pid="$GATE_STARTED_PID"
     captured=0
     for _ in $(seq 1 40); do
       if gate_process_capture fake-launchd "$pid" "$transition" daemon >/dev/null; then

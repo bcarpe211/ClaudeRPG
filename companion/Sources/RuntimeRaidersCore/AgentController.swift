@@ -106,8 +106,23 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
 
     public var description: String {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return (try? String(decoding: encoder.encode(self), as: UTF8.self)) ?? "{}"
+        guard let encoded = try? encoder.encode(self),
+              var object = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        else { return "{}" }
+        for key in [
+            "availableCompanionVersion",
+            "availableReleaseSequence",
+            "lastSuccessfulUploadMS",
+            "preparedReleaseStateGeneration",
+            "updateCommand",
+        ] where object[key] == nil {
+            object[key] = NSNull()
+        }
+        guard let wire = try? JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        ) else { return "{}" }
+        return String(decoding: wire, as: UTF8.self)
     }
 }
 

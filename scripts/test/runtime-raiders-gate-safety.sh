@@ -150,6 +150,23 @@ gate_process_capture() {
   printf '%s\n' "$record"
 }
 
+gate_process_capture_after_exec() {
+  local attempt=0 record status
+  while [ "$attempt" -lt 40 ]; do
+    if record="$(gate_process_capture "$@")"; then
+      printf '%s\n' "$record"
+      return 0
+    else
+      status=$?
+    fi
+    [ "$status" -eq 4 ] || return "$status"
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 40 ] || break
+    gate_process_sleep
+  done
+  return 4
+}
+
 # Returns 0 for the exact captured process, 3 if it has exited, and 4 for any
 # malformed record, executable mismatch, start-identity mismatch, or PID reuse.
 gate_process_validate_record() {
@@ -276,6 +293,21 @@ gate_run_without_release_credentials() {
     -u APPLE_TEAM_ID \
     -u AC_PASSWORD \
     "$@"
+}
+
+gate_start_without_release_credentials() {
+  GATE_STARTED_PID=''
+  /usr/bin/env \
+    -u RUNTIME_RAIDERS_CODESIGN_IDENTITY \
+    -u RUNTIME_RAIDERS_NOTARY_PROFILE \
+    -u RUNTIME_RAIDERS_TEAM_ID \
+    -u APPLE_ID \
+    -u APPLE_APP_SPECIFIC_PASSWORD \
+    -u APPLE_TEAM_ID \
+    -u AC_PASSWORD \
+    "$@" <&0 >&1 2>&2 &
+  GATE_STARTED_PID=$!
+  gate_safe_pid "$GATE_STARTED_PID"
 }
 
 gate_verify_reviewed_source() {

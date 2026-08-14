@@ -47,20 +47,50 @@ int main(int argc, char **argv) {
     if (size <= sizeof(int)) { free(buffer); return 4; }
     int argument_count = 0;
     memcpy(&argument_count, buffer, sizeof(argument_count));
-    if (argument_count != 2) { free(buffer); return 4; }
+    if (argument_count < 1) { free(buffer); return 4; }
+    size_t expected_length = strlen(expected_argument);
+    size_t expected_argument_count = expected_length == 0 ? 0 : 1;
+    for (size_t index = 0; index < expected_length; index++) {
+        if (expected_argument[index] != ' ') continue;
+        if (index == 0 || index + 1 == expected_length || expected_argument[index - 1] == ' ') {
+            free(buffer);
+            return 4;
+        }
+        expected_argument_count++;
+    }
+    if ((size_t)argument_count != expected_argument_count + 1) { free(buffer); return 4; }
     char *cursor = buffer + sizeof(argument_count);
     char *limit = buffer + size;
     while (cursor < limit && *cursor != '\0') cursor++;
     while (cursor < limit && *cursor == '\0') cursor++;
     if (cursor >= limit || strcmp(cursor, expected_path) != 0) { free(buffer); return 4; }
     cursor += strlen(cursor) + 1;
-    if (cursor >= limit || strcmp(cursor, expected_argument) != 0) { free(buffer); return 4; }
+    const char *expected_cursor = expected_argument;
+    for (size_t index = 0; index < expected_argument_count; index++) {
+        if (cursor >= limit) { free(buffer); return 4; }
+        size_t available = (size_t)(limit - cursor);
+        size_t actual_length = strnlen(cursor, available);
+        if (actual_length == available) { free(buffer); return 4; }
+        const char *separator = strchr(expected_cursor, ' ');
+        size_t token_length = separator == NULL
+            ? strlen(expected_cursor)
+            : (size_t)(separator - expected_cursor);
+        if (actual_length != token_length || memcmp(cursor, expected_cursor, token_length) != 0) {
+            free(buffer);
+            return 4;
+        }
+        cursor += actual_length + 1;
+        expected_cursor += token_length;
+        if (separator != NULL) expected_cursor++;
+    }
+    if (*expected_cursor != '\0') { free(buffer); return 4; }
     free(buffer);
 
-    printf("start=%llu.%06llu\ncommand=%s %s\n",
+    printf("start=%llu.%06llu\ncommand=%s%s%s\n",
            (unsigned long long)info.pbi_start_tvsec,
            (unsigned long long)info.pbi_start_tvusec,
            expected_path,
+           expected_length == 0 ? "" : " ",
            expected_argument);
     return 0;
 }

@@ -247,6 +247,179 @@ describe('Runtime Raiders Gate 2 Unix paths', () => {
 });
 
 describe('Runtime Raiders Gate 2 process safety', () => {
+  it('waits through the bounded pre-exec image before recording the exact child', () => {
+    // Catches one-shot capture racing a background Bash function before it execs the agent.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-exec-race-'));
+    try {
+      const processRoot = join(fixture, 'processes');
+      const state = join(fixture, 'state');
+      let expected = join(fixture, 'home/agent');
+      mkdirSync(processRoot, { mode: 0o700 });
+      mkdirSync(state);
+      executable(expected, ['exit 0']);
+      expected = realpathSync(expected);
+      executable(join(fixture, 'probe'), [
+        'count=0',
+        '[ ! -f "$GATE_STATE/count" ] || count="$(cat "$GATE_STATE/count")"',
+        'count=$((count + 1))',
+        'printf "%s\\n" "$count" > "$GATE_STATE/count"',
+        '[ "$count" -ge 3 ] || exit 4',
+        'printf "start=400\\ncommand=%s daemon\\n" "$2"',
+      ]);
+      const result = bash(
+        'source "$GATE_SAFETY"; gate_process_capture_after_exec child 77 "$GATE_EXPECTED" daemon',
+        {
+          ...process.env,
+          GATE_PROCESS_ROOT: processRoot,
+          GATE_PROCESS_PROBE: join(fixture, 'probe'),
+          GATE_PROCESS_SLEEP: '/usr/bin/true',
+          GATE_STATE: state,
+          GATE_SAFETY: safety,
+          GATE_EXPECTED: expected,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(state, 'count'), 'utf8')).toBe('3\n');
+      expect(readFileSync(join(result.stdout.trim(), 'identity'), 'utf8')).toBe(
+        `start=400\ncommand=${expected} daemon\n`,
+      );
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('starts the scrubbed external child as the PID that process safety records', () => {
+    // Catches backgrounding the scrub function itself, which leaves $! bound to Bash forever.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-start-'));
+    try {
+      const processRoot = join(fixture, 'processes');
+      let expected = join(fixture, 'agent');
+      const identityHelper = join(fixture, 'process-identity');
+      mkdirSync(processRoot, { mode: 0o700 });
+      copyFileSync('/bin/sleep', expected);
+      chmodSync(expected, 0o700);
+      expected = realpathSync(expected);
+      const compile = spawnSync('/usr/bin/clang', [
+        '-Wall', '-Wextra', '-Werror',
+        join(root, 'scripts/test/runtime-raiders-process-identity.c'),
+        '-o', identityHelper,
+      ], { encoding: 'utf8' });
+      expect(compile.status, compile.stderr).toBe(0);
+
+      const result = bash([
+        'set -e',
+        'source "$GATE_SAFETY"',
+        'gate_start_without_release_credentials "$GATE_EXPECTED" 30',
+        'pid="$GATE_STARTED_PID"',
+        'record="$(gate_process_capture_after_exec child "$pid" "$GATE_EXPECTED" 30)"',
+        'gate_process_stop_record "$record"',
+        'printf "%s\\n" "$pid"',
+      ].join('; '), {
+        ...process.env,
+        GATE_PROCESS_ROOT: processRoot,
+        GATE_PROCESS_IDENTITY_HELPER: identityHelper,
+        GATE_SAFETY: safety,
+        GATE_EXPECTED: expected,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(Number(result.stdout.trim())).toBeGreaterThan(1);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('records and stops an exact child with multiple controlled arguments', () => {
+    // Catches the Gate 2 trial route being rejected solely because its exact argv has three values.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-arguments-'));
+    try {
+      const processRoot = join(fixture, 'processes');
+      let expected = join(fixture, 'tail');
+      const identityHelper = join(fixture, 'process-identity');
+      mkdirSync(processRoot, { mode: 0o700 });
+      copyFileSync('/usr/bin/tail', expected);
+      chmodSync(expected, 0o700);
+      expected = realpathSync(expected);
+      const compile = spawnSync('/usr/bin/clang', [
+        '-Wall', '-Wextra', '-Werror',
+        join(root, 'scripts/test/runtime-raiders-process-identity.c'),
+        '-o', identityHelper,
+      ], { encoding: 'utf8' });
+      expect(compile.status, compile.stderr).toBe(0);
+
+      const result = bash([
+        'set -e',
+        'source "$GATE_SAFETY"',
+        'pid=""',
+        'cleanup() { [ -z "$pid" ] || kill "$pid" 2>/dev/null || true; }',
+        'trap cleanup EXIT',
+        'gate_start_without_release_credentials "$GATE_EXPECTED" -f /dev/null >/dev/null 2>&1',
+        'pid="$GATE_STARTED_PID"',
+        'record="$(gate_process_capture_after_exec child "$pid" "$GATE_EXPECTED" "-f /dev/null")"',
+        'gate_process_stop_record "$record"',
+        'pid=""',
+        'trap - EXIT',
+      ].join('; '), {
+        ...process.env,
+        GATE_PROCESS_ROOT: processRoot,
+        GATE_PROCESS_IDENTITY_HELPER: identityHelper,
+        GATE_SAFETY: safety,
+        GATE_EXPECTED: expected,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves caller stdin for the scrubbed background child', () => {
+    // Catches Bash replacing an internally backgrounded command's redirected FIFO with /dev/null.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-stdin-'));
+    try {
+      const processRoot = join(fixture, 'processes');
+      const fifo = join(fixture, 'lease.fifo');
+      let expected = join(fixture, 'agent');
+      const identityHelper = join(fixture, 'process-identity');
+      mkdirSync(processRoot, { mode: 0o700 });
+      execFileSync('/usr/bin/mkfifo', [fifo]);
+      copyFileSync('/bin/cat', expected);
+      chmodSync(expected, 0o700);
+      expected = realpathSync(expected);
+      const compile = spawnSync('/usr/bin/clang', [
+        '-Wall', '-Wextra', '-Werror',
+        join(root, 'scripts/test/runtime-raiders-process-identity.c'),
+        '-o', identityHelper,
+      ], { encoding: 'utf8' });
+      expect(compile.status, compile.stderr).toBe(0);
+
+      const result = bash([
+        'set -e',
+        'source "$GATE_SAFETY"',
+        'exec 9<>"$GATE_FIFO"',
+        'gate_start_without_release_credentials "$GATE_EXPECTED" - <"$GATE_FIFO"',
+        'pid="$GATE_STARTED_PID"',
+        'record="$(gate_process_capture_after_exec child "$pid" "$GATE_EXPECTED" -)"',
+        'gate_process_stop_record "$record"',
+        'exec 9>&-',
+        'printf "%s\\n" "$pid"',
+      ].join('; '), {
+        ...process.env,
+        GATE_PROCESS_ROOT: processRoot,
+        GATE_PROCESS_IDENTITY_HELPER: identityHelper,
+        GATE_SAFETY: safety,
+        GATE_EXPECTED: expected,
+        GATE_FIFO: fifo,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(Number(result.stdout.trim())).toBeGreaterThan(1);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('binds a spaced executable image and exact argv while rejecting prefix and replaced images', async () => {
     // Catches ps command-prefix parsing and pathname-only checks that miss a replaced executable vnode.
     const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-image-'));
@@ -493,9 +666,15 @@ describe('Runtime Raiders Gate 2 process safety', () => {
         GATE_LAUNCHER: launcher,
         GATE_AGENT: agent,
       };
-      const capture = bash('source "$GATE_SAFETY"; gate_process_capture launcher 66 "$GATE_LAUNCHER" daemon "$GATE_AGENT" daemon', env);
+      const capture = bash(
+        'source "$GATE_SAFETY"; gate_process_capture launcher 66 "$GATE_LAUNCHER" daemon "$GATE_AGENT" "daemon __runtime-raiders-trial-generation 3"',
+        env,
+      );
       expect(capture.status, capture.stderr).toBe(0);
-      writeFileSync(join(state, '66.identity'), `start=300\ncommand=${agent} daemon\n`);
+      writeFileSync(
+        join(state, '66.identity'),
+        `start=300\ncommand=${agent} daemon __runtime-raiders-trial-generation 3\n`,
+      );
       const stop = bash('source "$GATE_SAFETY"; gate_process_stop_record "$GATE_RECORD"', {
         ...env,
         GATE_RECORD: capture.stdout.trim(),

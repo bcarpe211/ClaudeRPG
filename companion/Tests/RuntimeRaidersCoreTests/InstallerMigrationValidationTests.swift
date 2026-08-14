@@ -149,6 +149,45 @@ final class InstallerMigrationValidationTests: XCTestCase {
         }
     }
 
+    func testStrictCandidateStatusAcceptsTheLiveDescriptionWithExplicitNullOptionals() throws {
+        let identity = CompanionReleaseIdentity(
+            releaseSequence: 9,
+            releaseSHA: String(repeating: "a", count: 40),
+            companionVersion: "0.3.0",
+            updateProtocolVersion: 2
+        )
+        let status = AgentStatus(
+            enabled: false,
+            daemonRunning: true,
+            persistedState: .disabled,
+            serverEnabledSurfaces: [.codexCLI, .codexDesktop],
+            compiledAdapters: [
+                .claudeCode: .unavailable,
+                .omp: .unavailable,
+                .codexDesktop: .available,
+                .codexCLI: .available,
+            ],
+            queuedEventCount: 0,
+            lastSuccessfulUploadMS: nil,
+            activeRunCount: 0,
+            installedCompanionVersion: identity.companionVersion,
+            installedReleaseSequence: identity.releaseSequence,
+            availableCompanionVersion: nil,
+            availableReleaseSequence: nil,
+            updateCommand: nil,
+            preparedReleaseStateGeneration: 1
+        )
+        let liveWire = Data((status.description + "\n").utf8)
+
+        XCTAssertNoThrow(try InstallerStatusValidator.validateCandidate(
+            liveWire,
+            identity: identity,
+            generation: 1,
+            prepared: true,
+            expectedEnabled: false
+        ))
+    }
+
     func testAttestedStatusRequiresTheExactPeerExecutableAndSuccessfulDaemonResponse() throws {
         try withTemporaryHome { _, paths in
             let expected = paths.supportDirectory.appendingPathComponent("expected-agent")
