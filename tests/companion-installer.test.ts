@@ -2652,7 +2652,6 @@ describe('Runtime Raiders release gates', () => {
     expect(source).toMatch(/https?:\/\//);
     expect(source).toMatch(/-f .*install\.sh/);
     expect(source).toMatch(/-L .*install\.sh/);
-    expect(source).toMatch(/gate_env\(\) \{\s+local home="\$1"\s+shift\s+gate_run_without_release_credentials env HOME="\$home"/s);
     expect(source.indexOf('exec 9<>"$lease_fifo"')).toBeGreaterThan(0);
     expect(source.indexOf('exec 9<>"$lease_fifo"')).toBeLessThan(source.indexOf('"$current_agent" __runtime-raiders-installer-lease'));
     expect(source).not.toMatch(/kill[ \t]+-0|\bwait[ \t]+"?\$/);

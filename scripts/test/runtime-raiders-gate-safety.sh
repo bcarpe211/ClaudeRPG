@@ -25,6 +25,25 @@ gate_private_directory() {
   (( (8#$mode & 8#077) == 0 ))
 }
 
+gate_runtime_path_for_home() {
+  [ "$#" -eq 2 ] || return 1
+  local home="$1" gate_bin="$2" command_parent command_directory
+  case "$home" in /*) ;; *) return 1 ;; esac
+  case "$gate_bin" in /*) ;; *) return 1 ;; esac
+  case "$home:$gate_bin" in *$'\n'*|*:*:*) return 1 ;; esac
+  gate_private_directory "$home" || return 1
+  gate_private_directory "$gate_bin" || return 1
+  command_parent="$home/.local"
+  command_directory="$command_parent/bin"
+  if [ -e "$command_directory" ] || [ -L "$command_directory" ]; then
+    gate_private_directory "$command_parent" || return 1
+    gate_private_directory "$command_directory" || return 1
+    printf '%s:%s:/usr/bin:/bin\n' "$command_directory" "$gate_bin"
+  else
+    printf '%s:/usr/bin:/bin\n' "$gate_bin"
+  fi
+}
+
 gate_process_format_identity() {
   local start="$1" command="$2"
   [ -n "$start" ] && [ -n "$command" ] || return 1

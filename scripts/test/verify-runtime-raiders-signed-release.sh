@@ -418,9 +418,10 @@ FAKE_LAUNCHD
 chmod 700 "$fake_bin/launchctl"
 
 gate_env() {
-  local home="$1"
+  local home="$1" runtime_path
   shift
-  gate_run_without_release_credentials env HOME="$home" CFFIXED_USER_HOME="$home" PATH="$fake_bin:/usr/bin:/bin" \
+  runtime_path="$(gate_runtime_path_for_home "$home" "$fake_bin")" || return 1
+  gate_run_without_release_credentials env HOME="$home" CFFIXED_USER_HOME="$home" PATH="$runtime_path" \
     RUNTIME_RAIDERS_GATE2_FAKE_NETWORK=1 RUNTIME_RAIDERS_GATE2_FAKE_LAUNCHD=1 \
     RUNTIME_RAIDERS_GATE2_ARCHIVE="$ARCHIVE" RUNTIME_RAIDERS_GATE2_CHECKSUM="$CHECKSUM" \
     RUNTIME_RAIDERS_GATE2_SAFETY_LIBRARY="$ROOT/scripts/test/runtime-raiders-gate-safety.sh" \

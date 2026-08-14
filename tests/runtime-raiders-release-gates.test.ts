@@ -11,6 +11,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -812,6 +813,90 @@ describe('Runtime Raiders Gate 2 installer binding', () => {
         GATE_EXPECTED: join(fixture, 'expected-accepted'),
       });
       expect(accepted.status, accepted.stderr).toBe(0);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('includes an existing private legacy command directory in the installer PATH', () => {
+    // Catches the migration fixture being rejected before its intended failure checkpoint.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-legacy-path-'));
+    const home = join(fixture, 'home');
+    const fakeBin = join(fixture, 'fake-bin');
+    try {
+      mkdirSync(join(home, '.local/bin'), { recursive: true });
+      mkdirSync(fakeBin);
+      chmodSync(home, 0o700);
+      chmodSync(join(home, '.local'), 0o700);
+      chmodSync(join(home, '.local/bin'), 0o700);
+      chmodSync(fakeBin, 0o700);
+      const result = bash(
+        'source "$GATE_SAFETY"; gate_runtime_path_for_home "$GATE_HOME" "$GATE_BIN"',
+        {
+          ...process.env,
+          GATE_SAFETY: safety,
+          GATE_HOME: home,
+          GATE_BIN: fakeBin,
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`${join(home, '.local/bin')}:${fakeBin}:/usr/bin:/bin\n`);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('omits a nonexistent command directory from a fresh-install PATH', () => {
+    // Catches fresh installs receiving a PATH entry that the installer must reject as nonexistent.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-fresh-path-'));
+    const home = join(fixture, 'home');
+    const fakeBin = join(fixture, 'fake-bin');
+    try {
+      mkdirSync(home);
+      mkdirSync(fakeBin);
+      chmodSync(home, 0o700);
+      chmodSync(fakeBin, 0o700);
+      const result = bash(
+        'source "$GATE_SAFETY"; gate_runtime_path_for_home "$GATE_HOME" "$GATE_BIN"',
+        {
+          ...process.env,
+          GATE_SAFETY: safety,
+          GATE_HOME: home,
+          GATE_BIN: fakeBin,
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`${fakeBin}:/usr/bin:/bin\n`);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a legacy command directory reached through a symlinked parent', () => {
+    // Catches Gate 2 admitting a command path whose ownership can be redirected after review.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-symlinked-path-'));
+    const home = join(fixture, 'home');
+    const fakeBin = join(fixture, 'fake-bin');
+    const external = join(fixture, 'external-local');
+    try {
+      mkdirSync(home);
+      mkdirSync(fakeBin);
+      mkdirSync(join(external, 'bin'), { recursive: true });
+      chmodSync(home, 0o700);
+      chmodSync(fakeBin, 0o700);
+      chmodSync(external, 0o700);
+      chmodSync(join(external, 'bin'), 0o700);
+      symlinkSync(external, join(home, '.local'));
+      const result = bash(
+        'source "$GATE_SAFETY"; gate_runtime_path_for_home "$GATE_HOME" "$GATE_BIN"',
+        {
+          ...process.env,
+          GATE_SAFETY: safety,
+          GATE_HOME: home,
+          GATE_BIN: fakeBin,
+        },
+      );
+      expect(result.status).not.toBe(0);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
