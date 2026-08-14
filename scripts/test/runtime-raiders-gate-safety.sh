@@ -305,7 +305,7 @@ gate_start_without_release_credentials() {
     -u APPLE_APP_SPECIFIC_PASSWORD \
     -u APPLE_TEAM_ID \
     -u AC_PASSWORD \
-    "$@" <&0 >&1 2>&2 &
+    "$@" <&0 >&1 2>&2 9>&- &
   GATE_STARTED_PID=$!
   gate_safe_pid "$GATE_STARTED_PID"
 }

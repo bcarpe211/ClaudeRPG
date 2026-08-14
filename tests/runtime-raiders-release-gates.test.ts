@@ -420,6 +420,38 @@ describe('Runtime Raiders Gate 2 process safety', () => {
     }
   });
 
+  it('does not inherit the installer lease descriptor into a scrubbed child', () => {
+    // Catches fake launchd keeping the installer FIFO writer open and deadlocking lease shutdown.
+    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-fd9-'));
+    try {
+      const child = join(fixture, 'child');
+      const marker = join(fixture, 'inherited-fd9');
+      executable(child, [
+        'if (printf inherited >&9) 2>/dev/null; then exit 81; fi',
+      ]);
+      const result = bash([
+        'set -e',
+        'source "$GATE_SAFETY"',
+        'exec 9>"$GATE_MARKER"',
+        'gate_start_without_release_credentials "$GATE_CHILD"',
+        'pid="$GATE_STARTED_PID"',
+        'if wait "$pid"; then child_status=0; else child_status=$?; fi',
+        'exec 9>&-',
+        '[ "$child_status" -eq 0 ]',
+      ].join('; '), {
+        ...process.env,
+        GATE_SAFETY: safety,
+        GATE_CHILD: child,
+        GATE_MARKER: marker,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(marker, 'utf8')).toBe('');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('binds a spaced executable image and exact argv while rejecting prefix and replaced images', async () => {
     // Catches ps command-prefix parsing and pathname-only checks that miss a replaced executable vnode.
     const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-process-image-'));
