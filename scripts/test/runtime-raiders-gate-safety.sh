@@ -295,6 +295,28 @@ gate_run_without_release_credentials() {
     "$@"
 }
 
+gate_verify_legacy_runtime() {
+  [ "$#" -eq 3 ] || return 1
+  local home="$1" helper="$2" legacy="$3" support socket lock mode
+  local helper_identity legacy_identity
+  support="$home/Library/Application Support/Runtime Raiders"
+  socket="$support/agent.sock"
+  lock="$support/.agent.sock.runtime-raiders.lock"
+  [ -f "$helper" ] && [ ! -L "$helper" ] && [ -x "$helper" ] || return 1
+  [ -f "$legacy" ] && [ ! -L "$legacy" ] && [ -x "$legacy" ] || return 1
+  helper_identity="$(/usr/bin/stat -f '%d:%i' "$helper")" || return 1
+  legacy_identity="$(/usr/bin/stat -f '%d:%i' "$legacy")" || return 1
+  [ "$helper_identity" != "$legacy_identity" ] || return 1
+  [ -S "$socket" ] && [ ! -L "$socket" ] || return 1
+  [ "$(/usr/bin/stat -f '%u' "$socket")" = "$(id -u)" ] || return 1
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+  [ "$(/usr/bin/stat -f '%u:%l' "$lock")" = "$(id -u):1" ] || return 1
+  mode="$(/usr/bin/stat -f '%Lp' "$lock")"
+  (( (8#$mode & 8#077) == 0 )) || return 1
+  gate_run_without_release_credentials env HOME="$home" CFFIXED_USER_HOME="$home" \
+    "$helper" __runtime-raiders-installer-status legacy-running >/dev/null
+}
+
 gate_start_without_release_credentials() {
   GATE_STARTED_PID=''
   /usr/bin/env \

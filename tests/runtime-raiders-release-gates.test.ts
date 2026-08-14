@@ -844,6 +844,67 @@ describe('Runtime Raiders Gate 2 installer binding', () => {
 });
 
 describe('Runtime Raiders Gate 2 rollback fingerprint', () => {
+  it('queries a restored protocol-one daemon through the signed protocol-two helper', async () => {
+    // Catches Gate 2 asking the sequence-8 binary to implement a private command added after sequence 8.
+    const fixture = mkdtempSync('/tmp/rrlh-');
+    const home = join(fixture, 'home');
+    const support = join(home, 'Library/Application Support/Runtime Raiders');
+    const socketPath = join(support, 'agent.sock');
+    const lockPath = join(support, '.agent.sock.runtime-raiders.lock');
+    const helper = join(fixture, 'signed-protocol-two-helper');
+    const legacy = join(fixture, 'sequence-eight-agent');
+    const marker = join(fixture, 'status-helper');
+    const server = createServer((client) => client.end());
+    try {
+      mkdirSync(support, { recursive: true });
+      writeFileSync(lockPath, '', { mode: 0o600 });
+      executable(helper, [
+        '[ "$#" -eq 2 ]',
+        '[ "$1" = __runtime-raiders-installer-status ]',
+        '[ "$2" = legacy-running ]',
+        'printf "protocol-two-helper\\n" > "$GATE_MARKER"',
+      ]);
+      executable(legacy, [
+        'printf "legacy-agent\\n" > "$GATE_MARKER"',
+        'exit 64',
+      ]);
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, resolve);
+      });
+
+      const accepted = bash(
+        'source "$GATE_SAFETY"; gate_verify_legacy_runtime "$GATE_HOME" "$GATE_HELPER" "$GATE_LEGACY"',
+        {
+          ...process.env,
+          GATE_SAFETY: safety,
+          GATE_HOME: home,
+          GATE_HELPER: helper,
+          GATE_LEGACY: legacy,
+          GATE_MARKER: marker,
+        },
+      );
+      expect(accepted.status, accepted.stderr).toBe(0);
+      expect(readFileSync(marker, 'utf8')).toBe('protocol-two-helper\n');
+
+      const rejected = bash(
+        'source "$GATE_SAFETY"; gate_verify_legacy_runtime "$GATE_HOME" "$GATE_LEGACY" "$GATE_LEGACY"',
+        {
+          ...process.env,
+          GATE_SAFETY: safety,
+          GATE_HOME: home,
+          GATE_LEGACY: legacy,
+          GATE_MARKER: marker,
+        },
+      );
+      expect(rejected.status, rejected.stderr).not.toBe(0);
+      expect(readFileSync(marker, 'utf8')).toBe('protocol-two-helper\n');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('ignores only recreated runtime socket and lifetime-lock nodes while retaining other special residue', async () => {
     // Catches both false rollback failures on daemon restart and broad special-node exclusions.
     // Darwin's sockaddr_un.sun_path is 104 bytes including its terminator. Keep

@@ -2631,7 +2631,6 @@ describe('Runtime Raiders release gates', () => {
       'gate_process_capture',
       'gate_process_stop_all',
       'gate_fingerprint_migration_surface',
-      '__runtime-raiders-installer-status legacy-running false',
       'RUNTIME_RAIDERS_GATE2_FAKE_NETWORK',
       'RUNTIME_RAIDERS_GATE2_FAKE_LAUNCHD',
       'launcher-active',

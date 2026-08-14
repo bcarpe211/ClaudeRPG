@@ -556,21 +556,6 @@ fingerprint_legacy() {
   gate_fingerprint_migration_surface "$1" "$2"
 }
 
-verify_legacy_runtime() {
-  local home="$1" executable="$2" support socket lock mode
-  support="$home/Library/Application Support/Runtime Raiders"
-  socket="$support/agent.sock"
-  lock="$support/.agent.sock.runtime-raiders.lock"
-  [ -S "$socket" ] && [ ! -L "$socket" ] || return 1
-  [ "$(/usr/bin/stat -f '%u' "$socket")" = "$OWNER" ] || return 1
-  [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
-  [ "$(/usr/bin/stat -f '%u:%l' "$lock")" = "$OWNER:1" ] || return 1
-  mode="$(/usr/bin/stat -f '%Lp' "$lock")"
-  (( (8#$mode & 8#077) == 0 )) || return 1
-  gate_run_without_release_credentials env HOME="$home" CFFIXED_USER_HOME="$home" \
-    "$executable" __runtime-raiders-installer-status legacy-running false >/dev/null
-}
-
 injected_installer="$gate_root/install-with-failure-checkpoints.sh"
 awk 'BEGIN { found=0 } $0 == "failure_checkpoint() { :; }" { print "failure_checkpoint() { [ \"${RUNTIME_RAIDERS_GATE2_FAIL_AFTER:-}\" != \"$1\" ] || return 91; }"; found=1; next } { print } END { if (!found) exit 1 }' "$INSTALLER" > "$injected_installer"
 chmod 700 "$injected_installer"
@@ -599,7 +584,7 @@ for boundary in archive-verification enrollment-decision prepare old-job-stop la
   }
   gate_env "$case_home" "$fake_bin/launchctl" print "gui/$OWNER/com.redlattice.runtime-raiders-agent" >/dev/null
   legacy_executable="$case_home/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
-  verify_legacy_runtime "$case_home" "$legacy_executable"
+  gate_verify_legacy_runtime "$case_home" "$agent_executable" "$legacy_executable"
   gate_env "$case_home" "$fake_bin/launchctl" bootout "gui/$OWNER/com.redlattice.runtime-raiders-agent"
 done
 
