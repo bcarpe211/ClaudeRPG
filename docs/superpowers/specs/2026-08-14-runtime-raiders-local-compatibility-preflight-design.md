@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-14
 
-**Status:** Approved in conversation; pending written-spec review
+**Status:** Approved
 
 **Scope:** Move sequence-8 migration compatibility and transaction testing ahead
 of Developer ID signing, Apple notarization, artifact publication, Pi access, and
