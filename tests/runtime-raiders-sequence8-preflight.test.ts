@@ -38,4 +38,36 @@ describe('Runtime Raiders unsigned sequence-eight preflight', () => {
       /codesign|notary|stapler|spctl|ssh|scp|rsync|raiders[ \t]+on|\/var\/lib\/runtime-raiders/i,
     );
   });
+
+  it('keeps sequence-eight migration testing before Apple trust and records the private migrator separately', () => {
+    const packageJSON = JSON.parse(
+      readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> };
+    const runbook = readFileSync(
+      join(process.cwd(), 'docs/runtime-raiders-companion-release-gates.md'),
+      'utf8',
+    );
+    const gate1Start = runbook.indexOf('## Gate 1:');
+    const gate2Start = runbook.indexOf('## Gate 2:');
+    const gate3Start = runbook.indexOf('## Gate 3:');
+    const gate1 = runbook.slice(gate1Start, gate2Start);
+    const gate2 = runbook.slice(gate2Start, gate3Start);
+
+    expect(gate1Start).toBeGreaterThan(-1);
+    expect(gate2Start).toBeGreaterThan(gate1Start);
+    expect(gate3Start).toBeGreaterThan(gate2Start);
+    expect(gate1).toContain('npm run canary:migration-preflight');
+    expect(packageJSON.scripts?.['canary:migration-preflight']).toBe(
+      'bash scripts/test/runtime-raiders-sequence8-preflight.sh',
+    );
+    expect(gate1).toMatch(/success, near-match, rollback, and crash/i);
+    expect(gate2).toMatch(/fresh-install(?:ation)? smoke/i);
+    expect(gate2).toMatch(/does not read or copy the\s+installed canary/i);
+    expect(gate2).not.toMatch(/copies only the installed-off sequence-8|migration failure checkpoint/i);
+    expect(gate2).toContain('companion/legacy-sequence8/migrate.sh');
+    expect(gate2).toContain('scripts/release/render-runtime-raiders-installer.sh');
+    expect(gate2).toContain('private-sequence-8-');
+    expect(gate2).toContain('shasum -a 256');
+    expect(gate2).toMatch(/must remain\s+local and unpublished/i);
+  });
 });

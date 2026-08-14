@@ -34,6 +34,10 @@ mode in the public installer.
    installation smoke test.
 6. Release output is always an absent immutable directory named
    `dist/sequence-<n>-<sha>`. Generic `dist/install.sh` is not release evidence.
+7. After Gate 2, the reviewed deterministic renderer creates the private
+   migrator in a separate owner-only directory. Its validator must match the
+   public installer's embedded-validator digest, and both private digests are
+   recorded without adding either file to the public quartet.
 
 ## Checkpoints
 
@@ -44,9 +48,9 @@ mode in the public installer.
   execute only after a complete successful download.
 - [x] Add strict native sequence-8 layout and command-link validation.
 - [x] Separate the one-time migrator from the public installer.
-- [ ] Pass the complete sequence-8 success, near-match, rollback, and crash matrix.
-- [ ] Pass fresh-install, onboarding, immutable-output, and documentation tests.
-- [ ] Pass the full Swift and JavaScript suites twice where the local preflight
+- [x] Pass the complete sequence-8 success, near-match, rollback, and crash matrix.
+- [x] Pass fresh-install, onboarding, immutable-output, and documentation tests.
+- [x] Pass the full Swift and JavaScript suites twice where the local preflight
   requires repeatability.
 - [ ] With separate authorization, migrate the installed-off canary and verify it.
 - [ ] In the next release after successful canary migration, delete the private

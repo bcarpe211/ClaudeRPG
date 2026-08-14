@@ -1,64 +1,192 @@
 # Runtime Raiders companion release gates
 
-This runbook keeps failures on the cheapest, safest side of the release boundary. Passing a gate permits review of the next gate; it never grants that gate's authority automatically.
+This runbook keeps behavioral failures before Apple trust work and keeps every
+external change behind a separate approval. Passing a gate permits review of
+the next gate; it never authorizes that gate automatically.
 
-## Gate 1: isolated local lifecycle
+Run release commands only from a clean, frozen commit whose four-line
+`companion/RELEASE` record has been reviewed. Release evidence belongs in an
+absent immutable directory named `dist/sequence-<n>-<sha>`. A generic
+`dist/install.sh` is never release evidence. Collection remains off throughout
+these gates unless it receives its own later authorization.
 
-Run from the repository root:
+## Gate 1: unsigned local behavior
 
-```sh
-npm run canary:lifecycle-test
-```
-
-This is the routine development gate. It checks installer and release-builder shell syntax, then runs the complete Swift companion package and disposable release-gate suites in that exact fail-fast order. The gate owns a private temporary home, support/config/cache directories, Swift scratch tree, npm cache, and temporary directory. Swift automatic dependency resolution is disabled, npm is offline, and `npx --no-install` may use only the already installed local Vitest. A macOS sandbox denies outbound connections, absolute `launchctl` execution, and writes to the real companion support directory; behavioral probes prove each denial while retaining loopback, local Unix-socket, FSEvents, repository, and private temporary-tree coverage. Synthetic content-free state and injected trust facts keep the installed companion and provider records outside the gate. The gate does not sign, notarize, contact the Pi or Caddy, publish files, enable collection, or activate players.
-
-Gate 1 also builds the production release validator in two independent clean scratch roots with the shared deterministic build path used by release packaging and Gate 2. Each stripped architecture slice receives a content-derived deterministic Mach-O UUID and deterministic ad-hoc signature before the universal binary is assembled. Both outputs must have arm64 and x86_64 slices with valid signatures and UUIDs, execute the harmless usage path on the host, and be byte-for-byte and SHA-256 identical. This makes the validator embedded in a future quartet reproducible and runnable from the reviewed source instead of merely trusting one local build.
-
-Run it twice before advancing. The second clean pass proves that a previous workspace, journal, or old release is not required.
-
-## Gate 2: real signed quartet while unpublished
-
-Gate 2 requires separate approval for real Developer ID signing and local trust validation. Keep the signed quartet in a local owner-controlled directory and keep it unpublished. Then run:
+Run from the repository root before using any Apple credentials:
 
 ```sh
-RUNTIME_RAIDERS_CODESIGN_IDENTITY='Developer ID Application: …' \
-  bash scripts/test/verify-runtime-raiders-signed-release.sh /absolute/path/to/quartet
+npm run typecheck
+npm test
+npm run canary:migration-preflight
+npm run canary:migration-preflight
 ```
 
-The harness creates its owned workspace from the fixed short `/tmp/r2.XXXXXX` template rather than ambient `TMPDIR`, canonicalizes and verifies the owner-only root, and validates every configured launcher, fresh-install, and migration control-socket and lifetime-lock pathname against Darwin's 103-byte usable Unix-path limit before any process starts. An overlong candidate fails closed.
+The migration preflight owns a temporary home and scratch directories, keeps
+npm offline, checks the public installer, private one-time migrator, builder,
+and Gate 2 shell syntax, runs the complete Swift package, and runs the focused
+installer, onboarding, publication, and preflight suites. Its sequence-eight
+fixtures reproduce the observed `0700` application root, recorded Homebrew
+command path and symlinked parent, and exact Runtime Raiders shim target. The
+success, near-match, rollback, and crash matrices prove both the one-time
+migration and the fresh-install `$HOME/.local/bin/raiders` behavior.
 
-The harness refuses URLs, symlinks, unsafe files, extra files, checksum or manifest mismatches, and anything other than the four expected local artifacts. It validates the archive and both application bundles with the production validator, `codesign`, Gatekeeper, required universal slices, and stapled notarization tickets. It rebuilds the universal validator from the reviewed local source through the same deterministic builder used by release packaging and Gate 1, derives release facts from the signed bundle, uses the same deterministic renderer as the release builder, and requires `install.sh` to match that rendering byte-for-byte before any installer execution. Appended comments, dead code, command substitutions, or embedded-validator changes therefore fail closed.
+This gate does not read or modify the installed canary. It does not sign,
+notarize, contact the Pi or Caddy, publish artifacts, run `raiders on`, enable
+collection, or activate players. Run the migration preflight twice from the
+same clean SHA; the second pass proves no prior workspace, journal, or partial
+transaction is required.
 
-Inside one owner-only temporary home it then:
+## Gate 2: Apple trust and unpublished signed quartet
 
-- signs disposable older/current/newer agent fixtures with the separately approved identity while removing signing and notarization credentials from every installer, launcher, and daemon environment;
-- runs the real signed launcher against active, fallback-bearing, held-trial, missing, malformed, unsafe-mode, symlink, and identity-mismatch states;
-- runs the exact rendered installer with only network and launchd replaced by local fakes; and
-- copies only the installed-off sequence-8 application bundle as read-only migration input, injects every migration failure checkpoint into a temporary installer copy, and compares no-follow pre/post fingerprints of the complete persistent support, legacy, rollback, diagnostic, failed-candidate, update-workspace, plist, profile, command, inode, and extended-attribute surfaces. The two fixed runtime nodes (`agent.sock` and its lifetime-lock file) are represented by fixed transient markers because a correct daemon restart recreates them; the live peer is separately authenticated through the owner-only socket and exact executable status route. Every other special node and every wrong daemon fails closed. Protocol-2 launcher, release, and installation residue must remain absent.
+Gate 2 requires separate approval because it uses a real Developer ID identity
+and Apple notarization. It creates exactly four local artifacts and leaves them
+unpublished. With the three release variables already stored outside Git, run:
 
-Every temporary daemon record binds a decimal PID greater than one to its exact executable path, executable device and inode, exact argument vector, and captured process-start identity. A small reviewed macOS process helper and `lsof` text-vnode inspection avoid command-prefix matching. Cleanup treats every missing or uncertain identity as unsafe and sends no signal; exact validated records receive bounded TERM and then bounded KILL polling. It never uses PID zero, a process group, `kill -0`, or an unbounded wait. Open lease descriptors, FIFOs, children, and the verified owner-only temporary tree are cleaned on normal exit and signals. The harness never reads the canary's enrollment or state and never changes its installed bundle, job, shim, or collection setting. A Gate 2 pass does not authorize publication or installation.
+```sh
+(
+  set -eu
+  : "${RUNTIME_RAIDERS_CODESIGN_IDENTITY:?}"
+  : "${RUNTIME_RAIDERS_NOTARY_PROFILE:?}"
+  : "${RUNTIME_RAIDERS_TEAM_ID:?}"
+  test -z "$(git status --porcelain --untracked-files=all)"
 
-## Gate 3: installed-off migration canary
+  RELEASE_SHA="$(git rev-parse HEAD)"
+  COMPANION_VERSION="$(sed -n 's/^companion_version=//p' companion/RELEASE)"
+  RELEASE_SEQUENCE="$(sed -n 's/^release_sequence=//p' companion/RELEASE)"
+  UPDATE_PROTOCOL_VERSION="$(sed -n 's/^update_protocol_version=//p' companion/RELEASE)"
+  RELEASE_OUTPUT="$PWD/dist/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"
 
-Gate 3 requires separate approvals for artifact publication and for migration of the current sequence-8 canary. Collection must remain persistently off.
+  mkdir -p dist
+  test ! -e "$RELEASE_OUTPUT"
+  scripts/release/build-runtime-raiders-agent.sh \
+    --release-sha "$RELEASE_SHA" \
+    --output "$RELEASE_OUTPUT"
+  RUNTIME_RAIDERS_CODESIGN_IDENTITY="$RUNTIME_RAIDERS_CODESIGN_IDENTITY" \
+    bash scripts/test/verify-runtime-raiders-signed-release.sh "$RELEASE_OUTPUT"
+  shasum -a 256 \
+    "$RELEASE_OUTPUT/install.sh" \
+    "$RELEASE_OUTPUT/runtime-raiders-agent.zip" \
+    "$RELEASE_OUTPUT/runtime-raiders-agent.zip.sha256" \
+    "$RELEASE_OUTPUT/runtime-raiders-agent.update.json"
+)
+```
 
-Before migration, record the exact enrollment and protected-state fingerprints. After migration, verify:
+The builder signs, notarizes, staples, validates, and atomically creates the
+immutable quartet. The reviewer then requires exactly those four safe local
+files, enforces the shared installer-size contract, checks the canonical
+checksum and update manifest, binds the quartet to the clean reviewed SHA,
+rebuilds the deterministic validator, and requires `install.sh` to match the
+reviewed rendering byte-for-byte. It verifies Developer ID requirements, Team
+ID, bundle identities, universal architectures, Gatekeeper assessments, and
+stapled tickets.
 
-- launcher and agent signatures and identities;
+The bounded behavioral portion checks the real signed launcher against active,
+fallback, held-trial, missing, malformed, unsafe-mode, symlink, and
+identity-mismatch release states, then performs one fresh-install smoke test
+with local fake network and launchd boundaries. Gate 2 does not read or copy the
+installed canary and does not rerun the sequence-eight migration failure
+matrix; that matrix belongs to Gate 1. It does not contact or change the Pi,
+publish artifacts, install the canary, enable collection, or activate players.
+
+### Prepare the private sequence-eight migrator record
+
+After Gate 2 passes, prepare—but do not execute—the one-time canary migrator.
+This file is not a fifth release artifact. It and its validator must remain
+local and unpublished in a separate owner-only directory. Rebuilding and
+matching the validator digest proves the private rendering uses the same
+deterministic validator embedded in the reviewed public installer:
+
+```sh
+(
+  set -eu
+  : "${RUNTIME_RAIDERS_TEAM_ID:?}"
+  RELEASE_SHA="$(git rev-parse HEAD)"
+  COMPANION_VERSION="$(sed -n 's/^companion_version=//p' companion/RELEASE)"
+  RELEASE_SEQUENCE="$(sed -n 's/^release_sequence=//p' companion/RELEASE)"
+  UPDATE_PROTOCOL_VERSION="$(sed -n 's/^update_protocol_version=//p' companion/RELEASE)"
+  RELEASE_OUTPUT="$PWD/dist/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"
+  PRIVATE_OUTPUT="$PWD/dist/private-sequence-8-$RELEASE_SEQUENCE-$RELEASE_SHA"
+
+  test -d "$RELEASE_OUTPUT"
+  test ! -e "$PRIVATE_OUTPUT"
+  umask 077
+  mkdir "$PRIVATE_OUTPUT"
+  scripts/release/build-runtime-raiders-release-validator.sh \
+    "$PWD/companion" \
+    "$PRIVATE_OUTPUT/validator-scratch" \
+    "$PRIVATE_OUTPUT/runtime-raiders-release-validator"
+
+  PUBLIC_VALIDATOR_SHA="$(sed -n \
+    "s/^RELEASE_VALIDATOR_SHA256='\\([0-9a-f]*\\)'$/\\1/p" \
+    "$RELEASE_OUTPUT/install.sh")"
+  PRIVATE_VALIDATOR_SHA="$(shasum -a 256 \
+    "$PRIVATE_OUTPUT/runtime-raiders-release-validator" | awk 'NR == 1 { print $1 }')"
+  case "$PUBLIC_VALIDATOR_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
+  test "${#PUBLIC_VALIDATOR_SHA}" -eq 64
+  test "$PRIVATE_VALIDATOR_SHA" = "$PUBLIC_VALIDATOR_SHA"
+
+  scripts/release/render-runtime-raiders-installer.sh \
+    "$PWD/companion/legacy-sequence8/migrate.sh" \
+    "$PRIVATE_OUTPUT/runtime-raiders-release-validator" \
+    "$RUNTIME_RAIDERS_TEAM_ID" \
+    "$COMPANION_VERSION" \
+    "$RELEASE_SEQUENCE" \
+    "$RELEASE_SHA" \
+    "$UPDATE_PROTOCOL_VERSION" \
+    "$PRIVATE_OUTPUT/migrate-sequence-8.sh"
+  sh -n "$PRIVATE_OUTPUT/migrate-sequence-8.sh"
+  shasum -a 256 \
+    "$PRIVATE_OUTPUT/runtime-raiders-release-validator" \
+    "$PRIVATE_OUTPUT/migrate-sequence-8.sh"
+)
+```
+
+Record the two private SHA-256 values beside the four quartet digests. The
+rendered migrator digest, exact release identity, and separate execution
+approval become the Gate 3 boundary. Gate 2 acceptance alone does not authorize
+its execution.
+
+## Gate 3: installed-off one-time migration canary
+
+Gate 3 requires separate approvals for publication of the reviewed quartet and
+execution of the exact private migrator digest. Collection must remain
+persistently off. Before migration, record only the approved aggregate health,
+release identity, enrollment presence, enabled/disabled intent, queue counts,
+and protected-state fingerprints.
+
+Execute only the reviewed private script whose SHA-256 matches the Gate 3
+approval. A near-match legacy layout must fail without mutation. After a
+successful migration, verify:
+
+- the launcher and active agent signatures and exact release identities;
 - generation 1 with the new release active and `fallback` and `trial` null;
-- the flat sequence-8 application remains unchanged as evidence;
+- `$HOME/.local/bin/raiders` is the canonical command;
+- only the proven legacy `/opt/homebrew/opt/libpq/bin/raiders` leaf is gone;
+- the flat sequence-eight application remains unchanged as rollback evidence;
 - enrollment and protected local state are preserved;
-- the daemon is healthy; and
+- collection intent remains disabled and the daemon is healthy; and
 - there are zero active Runs and zero unexpected queued events.
 
-A Gate 3 pass does not authorize a normal update, `raiders on`, or another canary.
+If the migrator reports recovery rather than success, stop and preserve its
+diagnostic evidence; do not improvise cleanup. A Gate 3 pass does not authorize
+a normal update, `raiders on`, another canary, or deletion of sequence-eight
+support.
 
-## Gate 4: normal protocol-2 update canary
+## Gate 4: normal protocol-two update canary
 
-Gate 4 requires separate approval to build and publish one subsequent reviewed release and another approval to run `raiders update` on the installed-off canary.
+Gate 4 requires separate approval to build and publish one subsequent reviewed
+release and another approval to run `raiders update` on the installed-off
+canary.
 
-Verify the prepared trial, atomic commit, exact active and fallback identities, release-state generations, protected-state preservation, daemon health, zero active Runs, queued-event expectations, and preserved collection intent. The update must retain older releases and remain successful even if cleanup or journal residue is present.
+Verify the prepared trial, atomic commit, exact active and fallback identities,
+release-state generations, protected-state preservation, daemon health, zero
+active Runs, queued-event expectations, and preserved collection intent. The
+update must retain older releases and remain successful even if cleanup or
+journal residue is present.
 
 ## Later decisions
 
-Collection remains off through all four release gates unless it receives its own explicit authorization. `raiders on` and office-wide activation are later, independent decisions. No test result, commit, merge, signature, notarization, publication, migration, or update implicitly authorizes either one.
+Collection remains off through all four release gates unless it receives its
+own explicit authorization. `raiders on` and office-wide activation are later,
+independent decisions. No test result, commit, merge, signature, notarization,
+publication, migration, or update implicitly authorizes either one.
