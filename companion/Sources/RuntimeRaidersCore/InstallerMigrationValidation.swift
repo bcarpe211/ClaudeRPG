@@ -39,6 +39,11 @@ public enum InstallerStatusValidator {
         "installedReleaseSequence", "lastSuccessfulUploadMS", "persistedState",
         "preparedForUpdate", "queuedEventCount", "serverEnabledSurfaces", "updateCommand",
     ]
+    private static let legacyOptionalKeys: Set<String> = [
+        "availableCompanionVersion", "availableReleaseSequence",
+        "lastSuccessfulUploadMS", "updateCommand",
+    ]
+    private static let legacyRequiredKeys = legacyKeys.subtracting(legacyOptionalKeys)
     private static let candidateKeys = legacyKeys.union(["preparedReleaseStateGeneration"])
     private static let expectedSurfaces: [RunSurface] = [.codexCLI, .codexDesktop]
     private static let expectedAdapters: Set<RunSurface> = [
@@ -63,7 +68,11 @@ public enum InstallerStatusValidator {
         prepared: Bool,
         expectedEnabled: Bool?
     ) throws -> InstallerLegacyStatusSnapshot {
-        let body = try strictBody(data, keys: legacyKeys)
+        let body = try strictBody(
+            data,
+            requiredKeys: legacyRequiredKeys,
+            optionalKeys: legacyOptionalKeys
+        )
         guard let status = try? JSONDecoder().decode(LegacyStatus.self, from: body),
               validCommon(
                 enabled: status.enabled,
@@ -99,7 +108,7 @@ public enum InstallerStatusValidator {
         expectedEnabled: Bool,
         expectedQueuedEventCount: Int = 0
     ) throws {
-        let body = try strictBody(data, keys: candidateKeys)
+        let body = try strictBody(data, requiredKeys: candidateKeys)
         guard (try? identity.releaseReference()) != nil,
               identity.updateProtocolVersion == 2,
               (1...ReleaseContractValidation.maximumSafeInteger).contains(generation),
@@ -130,7 +139,11 @@ public enum InstallerStatusValidator {
         }
     }
 
-    private static func strictBody(_ data: Data, keys: Set<String>) throws -> Data {
+    private static func strictBody(
+        _ data: Data,
+        requiredKeys: Set<String>,
+        optionalKeys: Set<String> = []
+    ) throws -> Data {
         guard !data.isEmpty,
               data.count <= maximumStatusBytes,
               data.last == 0x0A else {
@@ -140,10 +153,11 @@ public enum InstallerStatusValidator {
         guard !body.isEmpty,
               !body.contains(0x0A),
               let text = String(data: body, encoding: .utf8),
-              compactAndUniqueTopLevelFields(text, keys: keys),
               let object = try? JSONSerialization.jsonObject(with: body),
               let dictionary = object as? [String: Any],
-              Set(dictionary.keys) == keys else {
+              requiredKeys.isSubset(of: Set(dictionary.keys)),
+              Set(dictionary.keys).isSubset(of: requiredKeys.union(optionalKeys)),
+              compactAndUniqueTopLevelFields(text, keys: Set(dictionary.keys)) else {
             throw InstallerMigrationValidationError.invalidStatus
         }
         return body

@@ -4,6 +4,20 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class InstallerMigrationValidationTests: XCTestCase {
+    func testStrictLegacyStatusAcceptsExactSequenceEightWireWithOmittedNilOptionals() throws {
+        // Catches protocol-two migration validation requiring nullable keys that sequence eight omits.
+        let wire = Data((
+            #"{"activeRunCount":0,"compiledAdapters":["omp","unavailable","codex_cli","available","claude_code","unavailable","codex_desktop","available"],"daemonRunning":true,"enabled":false,"installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"persistedState":"disabled","preparedForUpdate":false,"queuedEventCount":0,"serverEnabledSurfaces":["codex_cli","codex_desktop"]}"# +
+            "\n"
+        ).utf8)
+
+        XCTAssertNoThrow(try InstallerStatusValidator.inspectLegacy(
+            wire,
+            prepared: false,
+            expectedEnabled: false
+        ))
+    }
+
     func testStrictLegacyStatusAcceptsOnlyExactSchemaAndConsistentIntent() throws {
         XCTAssertTrue(try InstallerStatusValidator.validateLegacy(
             legacyStatus(enabled: true, prepared: false),
@@ -18,6 +32,8 @@ final class InstallerMigrationValidationTests: XCTestCase {
 
         for invalid in [
             legacyStatus(enabled: true, prepared: false) + Data("x".utf8),
+            replacing(legacyStatus(enabled: true, prepared: false),
+                      #""activeRunCount":0,"#, with: ""),
             replacing(legacyStatus(enabled: true, prepared: false),
                       #""activeRunCount":0"#, with: #""activeRunCount":1"#),
             replacing(legacyStatus(enabled: true, prepared: false),
@@ -137,6 +153,8 @@ final class InstallerMigrationValidationTests: XCTestCase {
             replacing(candidateStatus(enabled: false, preparedGeneration: 1),
                       #""enabled":false"#,
                       with: #""enabled":false,"\u0065nabled":true"#),
+            replacing(candidateStatus(enabled: false, preparedGeneration: 1),
+                      #""availableCompanionVersion":null,"#, with: ""),
             insertingExtraKey(into: candidateStatus(enabled: false, preparedGeneration: 1)),
         ] {
             XCTAssertThrowsError(try InstallerStatusValidator.validateCandidate(
@@ -773,13 +791,13 @@ final class InstallerMigrationValidationTests: XCTestCase {
         let persisted = enabled ? "enabled" : "disabled"
         let preparedValue = prepared ? "true" : "false"
         return Data((
-            #"{"activeRunCount":0,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":true,"enabled":"# +
+            #"{"activeRunCount":0,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":true,"enabled":"# +
             enabledValue +
-            #", "installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"lastSuccessfulUploadMS":null,"persistedState":""# +
+            #", "installedCompanionVersion":"0.2.6","installedReleaseSequence":8,"persistedState":""# +
             persisted +
             #"","preparedForUpdate":"# + preparedValue +
             #", "queuedEventCount":"# + String(queuedEventCount) +
-            #", "serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}"# +
+            #", "serverEnabledSurfaces":["codex_cli","codex_desktop"]}"# +
             "\n"
         ).replacingOccurrences(of: ", ", with: ",").utf8)
     }
