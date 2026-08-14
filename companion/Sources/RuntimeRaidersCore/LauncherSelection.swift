@@ -196,8 +196,8 @@ public struct LauncherSelector {
                 ? try operations.preparedStartupLeaseIsHeld()
                 : false
             guard finalState == state,
-                  finalLauncher == launcher,
-                  finalAgent == agent,
+                  equivalent(finalLauncher, launcher),
+                  equivalent(finalAgent, agent),
                   validLauncher(finalLauncher),
                   validAgent(
                       finalAgent,
@@ -254,6 +254,20 @@ public struct LauncherSelector {
         lhs.isFileURL &&
             rhs.isFileURL &&
             lhs.standardizedFileURL.path == rhs.standardizedFileURL.path
+    }
+
+    private func equivalent(
+        _ lhs: LauncherBundleValidation,
+        _ rhs: LauncherBundleValidation
+    ) -> Bool {
+        exact(lhs.bundle, rhs.bundle) &&
+            exact(lhs.executable, rhs.executable) &&
+            lhs.bundleIdentifier == rhs.bundleIdentifier &&
+            lhs.teamIdentifier == rhs.teamIdentifier &&
+            lhs.hardenedRuntime == rhs.hardenedRuntime &&
+            lhs.allArchitecturesValid == rhs.allArchitecturesValid &&
+            lhs.launcherProtocolVersion == rhs.launcherProtocolVersion &&
+            lhs.releaseIdentity == rhs.releaseIdentity
     }
 }
 

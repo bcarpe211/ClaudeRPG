@@ -140,6 +140,37 @@ final class LauncherSelectionTests: XCTestCase {
         XCTAssertThrowsError(try bundleFixture.selector.select(invocation: .status))
     }
 
+    func testFinalRevalidationAcceptsEquivalentFileURLsWithDifferentBaseRepresentations() throws {
+        let original = Fixture()
+        let representedLauncher = original.launcherFacts.replacing(
+            bundle: fileURLWithBaseRepresentation(original.launcherFacts.bundle),
+            executable: fileURLWithBaseRepresentation(original.launcherFacts.executable)
+        )
+        let representedAgent = original.agentFacts.replacing(
+            bundle: fileURLWithBaseRepresentation(original.agentFacts.bundle),
+            executable: fileURLWithBaseRepresentation(original.agentFacts.executable)
+        )
+        XCTAssertNotEqual(representedLauncher.executable, original.launcherFacts.executable)
+        XCTAssertEqual(
+            representedLauncher.executable.standardizedFileURL.path,
+            original.launcherFacts.executable.standardizedFileURL.path
+        )
+        XCTAssertNotEqual(representedAgent.executable, original.agentFacts.executable)
+        XCTAssertEqual(
+            representedAgent.executable.standardizedFileURL.path,
+            original.agentFacts.executable.standardizedFileURL.path
+        )
+        let fixture = Fixture(
+            launcherFactsSequence: [representedLauncher, original.launcherFacts],
+            agentFactsSequence: [representedAgent, original.agentFacts]
+        )
+
+        let selection = try fixture.selector.select(invocation: .status)
+
+        XCTAssertEqual(selection.release, fixture.active)
+        XCTAssertEqual(selection.arguments, ["status"])
+    }
+
     func testDaemonRejectsLeaseSubstitutionAtFinalBoundary() {
         let fixture = Fixture(
             trial: reference(sequence: 10, sha: "b"),
@@ -333,6 +364,7 @@ final class LauncherSelectionTests: XCTestCase {
             leaseError: Error? = nil,
             leaseValues suppliedLeaseValues: [Bool]? = nil,
             launcherFacts suppliedLauncherFacts: LauncherBundleValidation? = nil,
+            launcherFactsSequence suppliedLauncherFactsSequence: [LauncherBundleValidation]? = nil,
             states suppliedStates: [ReleaseStateV1]? = nil,
             agentFacts suppliedAgentFacts: LauncherBundleValidation? = nil,
             agentFactsSequence suppliedAgentFactsSequence: [LauncherBundleValidation]? = nil
@@ -369,6 +401,7 @@ final class LauncherSelectionTests: XCTestCase {
 
             var states = suppliedStates ?? []
             var leaseValues = suppliedLeaseValues ?? []
+            var launcherFactsSequence = suppliedLauncherFactsSequence ?? []
             var agentFactsSequence = suppliedAgentFactsSequence ?? []
             let launcherFacts = self.launcherFacts
             let stableState = state
@@ -396,7 +429,11 @@ final class LauncherSelectionTests: XCTestCase {
                         ? leaseHeld
                         : try leaseValues.removeRequiredFirst()
                 },
-                inspectLauncher: { launcherFacts },
+                inspectLauncher: {
+                    suppliedLauncherFactsSequence == nil
+                        ? launcherFacts
+                        : try launcherFactsSequence.removeRequiredFirst()
+                },
                 inspectAgent: { application in
                     if suppliedAgentFactsSequence != nil {
                         return try agentFactsSequence.removeRequiredFirst()
@@ -429,6 +466,13 @@ final class LauncherSelectionTests: XCTestCase {
 
     private func reference(sequence: Int64, sha: Character) -> ReleaseReference {
         Self.reference(sequence: sequence, sha: sha)
+    }
+
+    private func fileURLWithBaseRepresentation(_ url: URL) -> URL {
+        URL(
+            fileURLWithPath: url.lastPathComponent,
+            relativeTo: url.deletingLastPathComponent()
+        )
     }
 
     private func temporaryDirectory() -> URL {
