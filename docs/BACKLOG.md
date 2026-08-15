@@ -501,45 +501,49 @@ not modify or rebuild them for this repair. Sequence 10 may still be published
 solely for an installed-off canary migration. This repair is mandatory before
 routine fresh onboarding or office activation.
 
-Confirmed defect:
+Original confirmed defect:
 
 - zsh defines `status` as a read-only special parameter;
-- `src/web/companion-install.ts` assigns the generated command's HTTP result to
-  `status`;
+- `src/web/companion-install.ts` assigned the generated command's HTTP result
+  to `status`;
 - registration and Player Hub render that command directly for the user to
   paste into their interactive shell, without selecting Bash; and
-- `tests/runtime-raiders-onboarding.test.ts` executes the complete generated
+- `tests/runtime-raiders-onboarding.test.ts` executed the complete generated
   command only with `/bin/sh`.
+
+Implementation is complete in the sequence-12 source boundary. Release and
+independent verification remain pending, so fresh onboarding and office
+activation are still blocked.
 
 Next-release requirements:
 
-- [ ] Rename only the user-facing command variable to a portable, specific name
+- [x] Rename only the user-facing command variable to a portable, specific name
       such as `download_http_code`. Do not require users to invoke Bash to run
       the onboarding command.
-- [ ] Parameterize full generated-command execution tests across both
+- [x] Parameterize full generated-command execution tests across both
       `/bin/zsh -f -c` and `/bin/sh -c`. Each shell must prove the successful
       download-and-execute path and fail-closed download paths, including a curl
       failure or non-200 response and a completed download that fails local
       validation. A failed case must not execute the installer and must clean up
       its owner-only temporary file.
-- [ ] Update route, snapshot, and documentation assertions that currently bind
+- [x] Update route, snapshot, and documentation assertions that currently bind
       the generated command to `[ "$status" = 200 ]`. Keep the website output,
       canonical command documentation, and tests byte-consistent.
-- [ ] Move substantial operational runbook blocks that require Bash syntax into
+- [x] Move substantial operational runbook blocks that require Bash syntax into
       checked-in Bash scripts where practical. Otherwise invoke the block
       explicitly with `/bin/bash`; a Markdown `bash` fence is not execution.
-- [ ] Audit every command intended for direct copy/paste for zsh special or
+- [x] Audit every command intended for direct copy/paste for zsh special or
       read-only parameter names and for an implicit shell assumption.
-- [ ] Do not mechanically rename `status` inside scripts already unambiguously
+- [x] Do not mechanically rename `status` inside scripts already unambiguously
       executed by a `#!/bin/bash`, `#!/bin/sh`, `/bin/bash`, or `/bin/sh`
       boundary. Change only code whose actual execution shell is ambiguous or
       incompatible.
 
 Acceptance gate:
 
-- [ ] The exact website-generated command passes its complete success and
+- [x] The exact website-generated command passes its complete success and
       fail-closed matrix under clean zsh and POSIX sh processes.
-- [ ] Website, route, runbook, and documentation drift tests agree on one
+- [x] Website, route, runbook, and documentation drift tests agree on one
       canonical onboarding behavior.
 - [ ] No fresh-player onboarding or office activation occurs until the repair
       is merged, released, and independently verified. Installed-off canary

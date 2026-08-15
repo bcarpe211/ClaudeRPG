@@ -1879,6 +1879,16 @@ describe('Runtime Raiders protocol-two installer', () => {
 });
 
 describe('Runtime Raiders release build', () => {
+  it('advances the zsh onboarding release beyond the accepted sequence-eleven artifacts', () => {
+    // Catches a later source commit accidentally reusing the immutable sequence-11 identity.
+    expect(releaseContract).toEqual({
+      version: '1',
+      companion_version: '0.3.3',
+      release_sequence: '12',
+      update_protocol_version: '2',
+    });
+  });
+
   it('makes the validator builder own and remove an initially absent scratch path', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-validator-scratch-'));
     try {
