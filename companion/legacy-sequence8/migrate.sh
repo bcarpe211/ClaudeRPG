@@ -1207,6 +1207,26 @@ if [ "$migration" -eq 1 ]; then
   failure_checkpoint state-write
   install_launchd_plist stable
   durable_checkpoint stable-plist
+  launchctl bootout "gui/$(id -u)/$LABEL"
+  job_absent || {
+    echo "Runtime Raiders could not prove the migration job stopped" >&2
+    exit 1
+  }
+  durable_checkpoint stable-job-stopped
+  failure_checkpoint stable-job-stopped
+  launchctl bootstrap "gui/$(id -u)" "$PLIST"
+  durable_checkpoint stable-job-bootstrapped
+  failure_checkpoint stable-job-bootstrapped
+  wait_for_candidate_status candidate-prepared "$prior_intent" "$prior_queued_event_count" || {
+    echo "Runtime Raiders stable job did not reach prepared health" >&2
+    exit 1
+  }
+  assert_protected_state "$RELEASE_EXECUTABLE" "$WORK/protected-before" || {
+    echo "Runtime Raiders protected local state changed during stable job reload" >&2
+    exit 1
+  }
+  durable_checkpoint stable-job-prepared
+  failure_checkpoint stable-job-prepared
 fi
 "$RELEASE_EXECUTABLE" __runtime-raiders-installer-resume 1 >/dev/null
 if [ "$migration" -eq 1 ]; then durable_checkpoint after-candidate-resume; fi

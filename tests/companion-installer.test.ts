@@ -404,8 +404,9 @@ function fakes(root: string): string {
     'exec /bin/chmod "$@"',
   ]);
   executable(join(bin, 'launchctl'), [
-      'running="$HOME/.runtime-raiders-test-running"',
+    'running="$HOME/.runtime-raiders-test-running"',
     'job="$HOME/.runtime-raiders-test-job"',
+    'loaded="$HOME/.runtime-raiders-test-loaded-job"',
     'lease="$HOME/.runtime-raiders-test-lease"',
     'prepared="$HOME/.runtime-raiders-test-prepared"',
     'polls="$HOME/.runtime-raiders-test-polls"',
@@ -416,17 +417,18 @@ function fakes(root: string): string {
     '  [ -f "$job" ] && exit 0',
     '  printf "Could not find service\\n" >&2; exit 113',
     'fi',
-    'if [ "$1" = bootout ] && [ "$FAKE_BOOTOUT_STOPS_THEN_FAIL" = 1 ]; then rm -f "$job" "$running" "$polls"; printf "bootout stopped then failed\\n" >&2; exit 77; fi',
+    'if [ "$1" = bootout ] && [ "$FAKE_BOOTOUT_STOPS_THEN_FAIL" = 1 ]; then rm -f "$job" "$running" "$polls" "$loaded"; printf "bootout stopped then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootout ] && [ "$FAKE_LAUNCH_BOOTOUT_FAIL" = 1 ]; then printf "bootout ambiguous failure\\n" >&2; exit 77; fi',
-    'if [ "$1" = bootstrap ] && [ "$FAKE_BOOTSTRAP_STARTS_THEN_FAIL" = 1 ]; then : > "$job"; : > "$running"; printf "bootstrap started then failed\\n" >&2; exit 77; fi',
+    'if [ "$1" = bootstrap ] && [ "$FAKE_BOOTSTRAP_STARTS_THEN_FAIL" = 1 ]; then /usr/bin/plutil -extract ProgramArguments json -o - "$3" > "$loaded" || exit 64; : > "$job"; : > "$running"; printf "bootstrap started then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_LAUNCH_BOOTSTRAP_FAIL" = 1 ]; then printf "bootstrap failure\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_LAUNCH_REQUIRE_OFF" = 1 ]; then',
     '  collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
     '  grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1 || { printf "bootstrap observed collection enabled\\n" >&2; exit 78; }',
     'fi',
-    'if [ "$1" = bootout ]; then rm -f "$job" "$running" "$polls"; fi',
+    'if [ "$1" = bootout ]; then rm -f "$job" "$running" "$polls" "$loaded"; fi',
     'if [ "$1" = bootstrap ]; then',
     '  collector_state="$HOME/Library/Application Support/Runtime Raiders/state/collector-state.json"',
+    '  /usr/bin/plutil -extract ProgramArguments json -o - "$3" > "$loaded" || exit 64',
     '  bootstrap_count_file="$HOME/.runtime-raiders-test-bootstrap-count"; bootstrap_count=0; [ ! -f "$bootstrap_count_file" ] || bootstrap_count="$(cat "$bootstrap_count_file")"; bootstrap_count=$((bootstrap_count + 1)); printf "%s\\n" "$bootstrap_count" > "$bootstrap_count_file"',
     '  if [ "$FAKE_MUTATE_PROTECTED_DURING_ROLLBACK" = 1 ] && [ "$bootstrap_count" -gt 1 ]; then mkdir -p "$HOME/Library/Application Support/Runtime Raiders/outbox/rollback-mutation"; chmod 700 "$HOME/Library/Application Support/Runtime Raiders/outbox/rollback-mutation"; fi',
     '  if [ -f "$lease" ]; then : > "$prepared"; elif ! grep -F \'"enabled":false\' "$collector_state" >/dev/null 2>&1; then',
@@ -889,6 +891,10 @@ function legacySequenceEightFixture(
     writeFileSync(path, `legacy:${evidence}\n`);
   }
   writeFileSync(join(home, '.runtime-raiders-test-job'), 'old-job\n');
+  writeFileSync(
+    join(home, '.runtime-raiders-test-loaded-job'),
+    JSON.stringify([executablePath, 'daemon']) + '\n',
+  );
   writeFileSync(join(home, '.runtime-raiders-test-running'), 'old-daemon\n');
   const fake = fakes(root);
   const files = protocolTwoArtifact(root);
@@ -905,6 +911,10 @@ function legacySequenceEightFixture(
 
 function releaseStatePath(support: string): string {
   return join(support, 'installation/release-state.json');
+}
+
+function loadedLaunchdArguments(home: string): string[] {
+  return JSON.parse(readFileSync(join(home, '.runtime-raiders-test-loaded-job'), 'utf8'));
 }
 
 describe('Runtime Raiders protocol-two installer', () => {
@@ -1044,6 +1054,13 @@ describe('Runtime Raiders protocol-two installer', () => {
       expect(JSON.parse(readFileSync(releaseStatePath(fixture.support), 'utf8')).fallback).toBeNull();
       expect(readFileSync(fixture.plist, 'utf8')).toContain('/launcher/Runtime Raiders Launcher.app/');
       expect(readFileSync(fixture.shim, 'utf8')).toContain('/launcher/Runtime Raiders Launcher.app/');
+      expect(loadedLaunchdArguments(fixture.home)).toEqual([
+        join(
+          fixture.support,
+          'launcher/Runtime Raiders Launcher.app/Contents/MacOS/runtime-raiders-launcher',
+        ),
+        'daemon',
+      ]);
       const binaryLog = readFileSync(join(fixture.home, 'binary.log'), 'utf8');
       expect(binaryLog.indexOf('__runtime-raiders-legacy-prepare')).toBeLessThan(binaryLog.indexOf('__runtime-raiders-installer-resume 1'));
       expect(readFileSync(fixture.collectorState, 'utf8')).toContain(`"enabled":${enabled}`);
