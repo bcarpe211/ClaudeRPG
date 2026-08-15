@@ -28,8 +28,9 @@ SCRATCH=''
 RELEASE_SHA=''
 SEEN_RELEASE_SHA=0
 SEEN_OUTPUT=0
+SEEN_SCRATCH=0
 usage() {
-  echo "usage: $0 --release-sha 40-lowercase-hex --output sequence-N-SHA [--scratch-path directory]" >&2
+  echo "usage: $0 --release-sha 40-lowercase-hex --output sequence-N-SHA [--scratch-path initially-absent-builder-owned-directory]" >&2
   exit 64
 }
 while [ "$#" -gt 0 ]; do
@@ -60,6 +61,11 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] && [ -n "$2" ] || {
         usage
       }
+      [ "$SEEN_SCRATCH" -eq 0 ] || {
+        echo "--scratch-path may be provided only once" >&2
+        exit 64
+      }
+      SEEN_SCRATCH=1
       case "$2" in
         /*) SCRATCH="$2" ;;
         *) SCRATCH="$(pwd -P)/$2" ;;
@@ -79,6 +85,8 @@ done
   echo "--output is required" >&2
   exit 64
 }
+case "$SCRATCH" in *'
+'*) echo "--scratch-path is invalid" >&2; exit 64 ;; esac
 case "$RELEASE_SHA" in *[!0-9a-f]*) echo "--release-sha is invalid" >&2; exit 64 ;; esac
 [ "$(printf '%s' "$RELEASE_SHA" | wc -c | tr -d ' ')" -eq 40 ] || {
   echo "--release-sha is invalid" >&2
@@ -170,33 +178,70 @@ OUTPUT="$OUTPUT_PARENT/$OUTPUT_NAME"
   exit 1
 }
 
+validate_owned_scratch() {
+  scratch_parent_input="$(dirname "$SCRATCH")"
+  SCRATCH_NAME="$(basename "$SCRATCH")"
+  case "$SCRATCH_NAME" in ''|.|..|*/*) return 1 ;; esac
+  [ -d "$scratch_parent_input" ] && [ ! -L "$scratch_parent_input" ] || return 1
+  SCRATCH_PARENT="$(CDPATH= cd -- "$scratch_parent_input" && pwd -P)" || return 1
+  [ "$(/usr/bin/stat -f '%u' "$SCRATCH_PARENT")" = "$(/usr/bin/id -u)" ] || return 1
+  scratch_parent_mode="$(/usr/bin/stat -f '%Lp' "$SCRATCH_PARENT")"
+  case "$scratch_parent_mode" in ''|*[!0-7]*) return 1 ;; esac
+  [ "$((0$scratch_parent_mode & 022))" -eq 0 ] || return 1
+  SCRATCH="$SCRATCH_PARENT/$SCRATCH_NAME"
+  [ ! -e "$SCRATCH" ] && [ ! -L "$SCRATCH" ]
+}
+
+remove_owned_scratch() {
+  [ "$SCRATCH" = "$SCRATCH_PARENT/$SCRATCH_NAME" ] || return 1
+  [ -d "$SCRATCH_PARENT" ] && [ ! -L "$SCRATCH_PARENT" ] || return 1
+  [ "$(CDPATH= cd -- "$SCRATCH_PARENT" && pwd -P)" = "$SCRATCH_PARENT" ] || return 1
+  if [ -e "$SCRATCH" ] || [ -L "$SCRATCH" ]; then
+    /bin/rm -rf -- "$SCRATCH" || return 1
+  fi
+  [ ! -e "$SCRATCH" ] && [ ! -L "$SCRATCH" ]
+}
+
+if [ -n "$SCRATCH" ]; then
+  validate_owned_scratch || {
+    echo "scratch path must be initially absent beneath an owned nonsymlink parent" >&2
+    exit 64
+  }
+fi
+
 TEMP_ROOT=/tmp
 [ -n "$TMPDIR" ] && TEMP_ROOT="$TMPDIR"
 WORK="$(mktemp -d "$TEMP_ROOT/runtime-raiders-release.XXXXXX")"
+WORK="$(CDPATH= cd -- "$WORK" && pwd -P)"
+if [ -z "$SCRATCH" ]; then
+  SCRATCH_PARENT="$WORK"
+  SCRATCH_NAME=swift-scratch
+  SCRATCH="$SCRATCH_PARENT/$SCRATCH_NAME"
+fi
 UNPUBLISHED_STAGE=''
 cleanup() {
   status=$?
-  rm -rf "$WORK"
-  [ -z "$UNPUBLISHED_STAGE" ] || rm -rf "$UNPUBLISHED_STAGE"
+  remove_owned_scratch || status=1
+  /bin/rm -rf -- "$WORK" || status=1
+  [ -z "$UNPUBLISHED_STAGE" ] || /bin/rm -rf -- "$UNPUBLISHED_STAGE" || status=1
   trap - EXIT HUP INT TERM
   exit "$status"
 }
 trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 STAGED_OUTPUT="$(mktemp -d "$WORK/output.XXXXXX")"
 for arch in arm64 x86_64; do
-  if [ -n "$SCRATCH" ]; then
-    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product raiders)
-    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product runtime-raiders-launcher)
-    cp "$SCRATCH/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
-    cp "$SCRATCH/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
-  else
-    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product raiders)
-    (cd "$ROOT/companion" && swift build -c release --arch "$arch" --product runtime-raiders-launcher)
-    cp "$ROOT/companion/.build/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
-    cp "$ROOT/companion/.build/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
-  fi
+  (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product raiders)
+  (cd "$ROOT/companion" && swift build -c release --arch "$arch" --scratch-path "$SCRATCH" --product runtime-raiders-launcher)
+  cp "$SCRATCH/$arch-apple-macosx/release/raiders" "$WORK/raiders-$arch"
+  cp "$SCRATCH/$arch-apple-macosx/release/runtime-raiders-launcher" "$WORK/runtime-raiders-launcher-$arch"
 done
+remove_owned_scratch || {
+  echo "unable to remove builder-owned Swift scratch" >&2
+  exit 1
+}
 lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$WORK/runtime-raiders-agent"
 lipo -create "$WORK/runtime-raiders-launcher-arm64" "$WORK/runtime-raiders-launcher-x86_64" -output "$WORK/runtime-raiders-launcher"
 lipo "$WORK/runtime-raiders-agent" -verify_arch arm64 x86_64

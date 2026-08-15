@@ -78,7 +78,10 @@ checksum and update manifest, binds the quartet to the clean reviewed SHA,
 rebuilds the deterministic validator, and requires `install.sh` to match the
 reviewed rendering byte-for-byte. It verifies Developer ID requirements, Team
 ID, bundle identities, universal architectures, Gatekeeper assessments, and
-stapled tickets.
+stapled tickets. The builder owns an initially absent Swift scratch path and
+removes it on success, failure, or interruption. Omitting `--scratch-path` is
+the cleanup-safe release behavior: scratch stays beneath the builder's private
+temporary root and `companion/.build` is never used.
 
 The bounded behavioral portion checks the real signed launcher against active,
 fallback, held-trial, missing, malformed, unsafe-mode, symlink, and
@@ -106,35 +109,69 @@ deterministic validator embedded in the reviewed public installer:
   UPDATE_PROTOCOL_VERSION="$(sed -n 's/^update_protocol_version=//p' companion/RELEASE)"
   RELEASE_OUTPUT="$PWD/dist/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"
   PRIVATE_OUTPUT="$PWD/dist/private-sequence-8-$RELEASE_SEQUENCE-$RELEASE_SHA"
+  PRIVATE_WORK=''
+
+  cleanup_private_work() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    if test -n "$PRIVATE_WORK"; then
+      case "$PRIVATE_WORK" in "$PRIVATE_WORK_PARENT"/.private-sequence-8-work.*) ;; *) exit 1 ;; esac
+      test -d "$PRIVATE_WORK" && test ! -L "$PRIVATE_WORK" || exit 1
+      test "$(/usr/bin/stat -f '%u' "$PRIVATE_WORK")" = "$(/usr/bin/id -u)" || exit 1
+      /bin/rm -rf -- "$PRIVATE_WORK" || exit 1
+    fi
+    exit "$status"
+  }
+  trap cleanup_private_work EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   test -d "$RELEASE_OUTPUT"
-  test ! -e "$PRIVATE_OUTPUT"
+  test ! -e "$PRIVATE_OUTPUT" && test ! -L "$PRIVATE_OUTPUT"
   umask 077
-  mkdir "$PRIVATE_OUTPUT"
+  PRIVATE_WORK_PARENT="$(cd "$PWD/dist" && pwd -P)"
+  PRIVATE_WORK="$(mktemp -d "$PRIVATE_WORK_PARENT/.private-sequence-8-work.XXXXXX")"
+  PRIVATE_STAGE="$PRIVATE_WORK/private-record"
+  mkdir "$PRIVATE_STAGE"
   scripts/release/build-runtime-raiders-release-validator.sh \
     "$PWD/companion" \
-    "$PRIVATE_OUTPUT/validator-scratch" \
-    "$PRIVATE_OUTPUT/runtime-raiders-release-validator"
+    "$PRIVATE_WORK/validator-scratch" \
+    "$PRIVATE_STAGE/runtime-raiders-release-validator"
 
   PUBLIC_VALIDATOR_SHA="$(sed -n \
     "s/^RELEASE_VALIDATOR_SHA256='\\([0-9a-f]*\\)'$/\\1/p" \
     "$RELEASE_OUTPUT/install.sh")"
   PRIVATE_VALIDATOR_SHA="$(shasum -a 256 \
-    "$PRIVATE_OUTPUT/runtime-raiders-release-validator" | awk 'NR == 1 { print $1 }')"
+    "$PRIVATE_STAGE/runtime-raiders-release-validator" | awk 'NR == 1 { print $1 }')"
   case "$PUBLIC_VALIDATOR_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
   test "${#PUBLIC_VALIDATOR_SHA}" -eq 64
   test "$PRIVATE_VALIDATOR_SHA" = "$PUBLIC_VALIDATOR_SHA"
 
   scripts/release/render-runtime-raiders-installer.sh \
     "$PWD/companion/legacy-sequence8/migrate.sh" \
-    "$PRIVATE_OUTPUT/runtime-raiders-release-validator" \
+    "$PRIVATE_STAGE/runtime-raiders-release-validator" \
     "$RUNTIME_RAIDERS_TEAM_ID" \
     "$COMPANION_VERSION" \
     "$RELEASE_SEQUENCE" \
     "$RELEASE_SHA" \
     "$UPDATE_PROTOCOL_VERSION" \
-    "$PRIVATE_OUTPUT/migrate-sequence-8.sh"
-  sh -n "$PRIVATE_OUTPUT/migrate-sequence-8.sh"
+    "$PRIVATE_STAGE/migrate-sequence-8.sh"
+  sh -n "$PRIVATE_STAGE/migrate-sequence-8.sh"
+  EXPECTED_PRIVATE_FILES="$(printf '%s\n' \
+    migrate-sequence-8.sh \
+    runtime-raiders-release-validator)"
+  ACTUAL_PRIVATE_FILES="$(find "$PRIVATE_STAGE" -mindepth 1 -maxdepth 1 \
+    -exec basename {} \; | LC_ALL=C sort)"
+  test "$ACTUAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"
+  test -f "$PRIVATE_STAGE/runtime-raiders-release-validator" \
+    && test ! -L "$PRIVATE_STAGE/runtime-raiders-release-validator"
+  test -f "$PRIVATE_STAGE/migrate-sequence-8.sh" \
+    && test ! -L "$PRIVATE_STAGE/migrate-sequence-8.sh"
+  /bin/mv "$PRIVATE_STAGE" "$PRIVATE_OUTPUT"
+  FINAL_PRIVATE_FILES="$(find "$PRIVATE_OUTPUT" -mindepth 1 -maxdepth 1 \
+    -exec basename {} \; | LC_ALL=C sort)"
+  test "$FINAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"
   shasum -a 256 \
     "$PRIVATE_OUTPUT/runtime-raiders-release-validator" \
     "$PRIVATE_OUTPUT/migrate-sequence-8.sh"

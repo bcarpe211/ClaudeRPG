@@ -17,6 +17,17 @@ case "$SCRATCH" in /*) ;; *) exit 64 ;; esac
 case "$OUTPUT" in /*) ;; *) exit 64 ;; esac
 [ ! -e "$SCRATCH" ] && [ ! -L "$SCRATCH" ] || exit 64
 [ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || exit 64
+SCRATCH_PARENT_INPUT="$(dirname "$SCRATCH")"
+SCRATCH_NAME="$(basename "$SCRATCH")"
+case "$SCRATCH_NAME" in ''|.|..|*/*) exit 64 ;; esac
+[ -d "$SCRATCH_PARENT_INPUT" ] && [ ! -L "$SCRATCH_PARENT_INPUT" ] || exit 64
+SCRATCH_PARENT="$(cd "$SCRATCH_PARENT_INPUT" && pwd -P)" || exit 64
+[ "$(/usr/bin/stat -f '%u' "$SCRATCH_PARENT")" = "$(/usr/bin/id -u)" ] || exit 64
+SCRATCH_PARENT_MODE="$(/usr/bin/stat -f '%Lp' "$SCRATCH_PARENT")"
+case "$SCRATCH_PARENT_MODE" in ''|*[!0-7]*) exit 64 ;; esac
+[ "$((0$SCRATCH_PARENT_MODE & 022))" -eq 0 ] || exit 64
+SCRATCH="$SCRATCH_PARENT/$SCRATCH_NAME"
+[ ! -e "$SCRATCH" ] && [ ! -L "$SCRATCH" ] || exit 64
 OUTPUT_PARENT="$(dirname "$OUTPUT")"
 [ -d "$OUTPUT_PARENT" ] && [ ! -L "$OUTPUT_PARENT" ] || exit 64
 OUTPUT_PARENT="$(cd "$OUTPUT_PARENT" && pwd -P)"
@@ -26,13 +37,23 @@ UUID_SOURCE="$BUILDER_DIRECTORY/runtime-raiders-macho-uuid.c"
 [ -f "$UUID_SOURCE" ] && [ ! -L "$UUID_SOURCE" ] || exit 64
 
 temporary_paths=()
+remove_owned_scratch() {
+  [ "$SCRATCH" = "$SCRATCH_PARENT/$SCRATCH_NAME" ] || return 1
+  [ -d "$SCRATCH_PARENT" ] && [ ! -L "$SCRATCH_PARENT" ] || return 1
+  [ "$(cd "$SCRATCH_PARENT" && pwd -P)" = "$SCRATCH_PARENT" ] || return 1
+  if [ -e "$SCRATCH" ] || [ -L "$SCRATCH" ]; then
+    /bin/rm -rf -- "$SCRATCH" || return 1
+  fi
+  [ ! -e "$SCRATCH" ] && [ ! -L "$SCRATCH" ]
+}
+
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
   for ((index=0; index < ${#temporary_paths[@]}; index++)); do
     /bin/rm -f -- "${temporary_paths[$index]}"
   done
-  [ ! -e "$SCRATCH" ] || /bin/rm -rf -- "$SCRATCH"
+  remove_owned_scratch || status=1
   exit "$status"
 }
 trap cleanup EXIT
@@ -91,5 +112,6 @@ temporary_paths+=("$OUTPUT")
 chmod 755 "$OUTPUT"
 
 /bin/rm -f -- "$OUTPUT-arm64" "$OUTPUT-x86_64" "$uuid_tool"
+remove_owned_scratch
 temporary_paths=()
 trap - EXIT HUP INT TERM

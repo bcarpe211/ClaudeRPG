@@ -29,6 +29,10 @@ for run in one two; do
     "$ROOT/companion" \
     "$probe_root/$run-scratch" \
     "$probe_root/$run-output/runtime-raiders-release-validator"
+  [ ! -e "$probe_root/$run-scratch" ] && [ ! -L "$probe_root/$run-scratch" ] || {
+    echo "release-validator builder retained its owned scratch for $run" >&2
+    exit 1
+  }
 done
 
 cmp -s \

@@ -1,6 +1,6 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -17,6 +17,11 @@ const machoUUIDSource = join(process.cwd(), 'scripts/release/runtime-raiders-mac
 const lifecycleGate = join(process.cwd(), 'scripts/test/runtime-raiders-lifecycle.sh');
 const signedReleaseGate = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
 const signedReleasePaths = join(process.cwd(), 'scripts/test/runtime-raiders-gate2-paths.sh');
+const validatorReproducibility = join(
+  process.cwd(),
+  'scripts/test/runtime-raiders-validator-reproducibility.sh',
+);
+const releaseRunbook = join(process.cwd(), 'docs/runtime-raiders-companion-release-gates.md');
 const artifactContract = join(process.cwd(), 'config/runtime-raiders-artifact-contract.json');
 const artifactContractTool = join(process.cwd(), 'scripts/lib/runtime-raiders-artifact-contract.mjs');
 const label = 'com.redlattice.runtime-raiders-agent';
@@ -59,6 +64,12 @@ function fakeReleaseSwift(fake: string, log = false): void {
     'while [ "$#" -gt 0 ]; do case "$1" in --arch) arch="$2"; shift 2;; --scratch-path) scratch="$2"; shift 2;; --product) product="$2"; shift 2;; *) shift;; esac; done',
     '[ -n "$scratch" ] || scratch="$PWD/.build"',
     'output="$scratch/$arch-apple-macosx/release"; mkdir -p "$output"',
+    '[ -z "${RUNTIME_RAIDERS_TEST_SWIFT_SCRATCH_LOG:-}" ] || printf "%s\\n" "$scratch" >> "$RUNTIME_RAIDERS_TEST_SWIFT_SCRATCH_LOG"',
+    'if [ -n "${RUNTIME_RAIDERS_TEST_SWIFT_READY:-}" ]; then',
+    '  printf "ready\\n" > "$RUNTIME_RAIDERS_TEST_SWIFT_READY"',
+    "  trap 'exit 143' HUP INT TERM",
+    '  while :; do /bin/sleep 1; done',
+    'fi',
     'if [ "$product" = runtime-raiders-release-validator ]; then',
     '  if [ -n "${RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR:-}" ]; then',
     '    cp "$RUNTIME_RAIDERS_TEST_RELEASE_VALIDATOR" "$output/runtime-raiders-release-validator"',
@@ -493,6 +504,40 @@ function invoke(file: string, args: string[], environment: NodeJS.ProcessEnv) {
   return spawnSync('bash', [file, ...args], { env: environment, encoding: 'utf8' });
 }
 
+async function waitForFile(path: string, timeoutMilliseconds = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+async function interruptProcessGroup(
+  file: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv,
+  readyFile: string,
+): Promise<{ status: number | null; stderr: string }> {
+  const child = spawn('/bin/bash', [file, ...args], {
+    detached: true,
+    env: environment,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+  try {
+    await waitForFile(readyFile);
+    process.kill(-child.pid!, 'SIGTERM');
+    const status = await new Promise<number | null>((resolve) => child.once('close', resolve));
+    return { status, stderr };
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already exited */ }
+    }
+  }
+}
+
 function oneTimeCodeFile(root: string, code = enrollmentCode, fileMode = 0o600): string {
   const path = join(root, 'one-time-code');
   writeFileSync(path, `${code}\n`);
@@ -517,7 +562,12 @@ function buildCacheIdentity(path: string): string[] {
   return entries;
 }
 
-type ReleaseBuilderFixture = { build: string; repository: string; releaseSHA: string };
+type ReleaseBuilderFixture = {
+  build: string;
+  releaseValidatorBuild: string;
+  repository: string;
+  releaseSHA: string;
+};
 
 type ReleaseBuilderFixtureOptions = {
   interceptAbsoluteDitto?: boolean;
@@ -601,7 +651,12 @@ function disposableReleaseBuilder(
   execFileSync('/usr/bin/git', ['add', 'scripts/release/build-runtime-raiders-agent.sh', 'scripts/release/build-runtime-raiders-release-validator.sh', 'scripts/release/runtime-raiders-macho-uuid.c', 'scripts/release/render-runtime-raiders-installer.sh', 'scripts/lib/runtime-raiders-artifact-contract.mjs', 'config/runtime-raiders-artifact-contract.json', 'companion/packaging/install.sh', 'companion/RELEASE'], { cwd: repository });
   execFileSync('/usr/bin/git', ['commit', '-qm', 'release fixture'], { cwd: repository });
   const fixtureSHA = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
-  return { build: fixtureBuild, repository, releaseSHA: fixtureSHA };
+  return {
+    build: fixtureBuild,
+    releaseValidatorBuild: fixtureValidatorBuilder,
+    repository,
+    releaseSHA: fixtureSHA,
+  };
 }
 
 function releaseBuildArgs(sha: string, ...args: string[]): string[] {
@@ -1820,6 +1875,308 @@ describe('Runtime Raiders protocol-two installer', () => {
 });
 
 describe('Runtime Raiders release build', () => {
+  it('makes the validator builder own and remove an initially absent scratch path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-validator-scratch-'));
+    try {
+      const fake = join(root, 'fakes');
+      const outputParent = join(root, 'output');
+      const scratch = join(root, 'validator-scratch');
+      const output = join(outputParent, 'runtime-raiders-release-validator');
+      mkdirSync(fake);
+      mkdirSync(outputParent);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      const fixture = disposableReleaseBuilder(root);
+
+      const result = invoke(
+        fixture.releaseValidatorBuild,
+        [join(fixture.repository, 'companion'), scratch, output],
+        { ...process.env, PATH: `${fake}:/usr/bin:/bin` },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(output)).toBe(true);
+      expect(existsSync(scratch)).toBe(false);
+      expect(lstatSync(output).isFile()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes validator scratch and incomplete output after failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-validator-failure-'));
+    try {
+      const fake = join(root, 'fakes');
+      const outputParent = join(root, 'output');
+      const scratch = join(root, 'validator-scratch');
+      const output = join(outputParent, 'runtime-raiders-release-validator');
+      mkdirSync(fake);
+      mkdirSync(outputParent);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      const fixture = disposableReleaseBuilder(root);
+
+      const result = invoke(
+        fixture.releaseValidatorBuild,
+        [join(fixture.repository, 'companion'), scratch, output],
+        {
+          ...process.env,
+          PATH: `${fake}:/usr/bin:/bin`,
+          FAKE_LIPO_VERIFY_FAIL_TARGET: 'runtime-raiders-release-validator',
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(existsSync(scratch)).toBe(false);
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes validator scratch after interruption', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-validator-interrupt-'));
+    try {
+      const fake = join(root, 'fakes');
+      const outputParent = join(root, 'output');
+      const scratch = join(root, 'validator-scratch');
+      const output = join(outputParent, 'runtime-raiders-release-validator');
+      const ready = join(root, 'swift-ready');
+      mkdirSync(fake);
+      mkdirSync(outputParent);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      const fixture = disposableReleaseBuilder(root);
+
+      const result = await interruptProcessGroup(
+        fixture.releaseValidatorBuild,
+        [join(fixture.repository, 'companion'), scratch, output],
+        {
+          ...process.env,
+          PATH: `${fake}:/usr/bin:/bin`,
+          RUNTIME_RAIDERS_TEST_SWIFT_READY: ready,
+        },
+        ready,
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(existsSync(scratch)).toBe(false);
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a validator scratch path through a symlinked parent without mutation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-validator-escape-'));
+    try {
+      const fake = join(root, 'fakes');
+      const outputParent = join(root, 'output');
+      const external = join(root, 'external');
+      const alias = join(root, 'alias');
+      const scratch = join(alias, 'validator-scratch');
+      const output = join(outputParent, 'runtime-raiders-release-validator');
+      mkdirSync(fake);
+      mkdirSync(outputParent);
+      mkdirSync(external);
+      writeFileSync(join(external, 'sentinel'), 'preserve');
+      symlinkSync(external, alias);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      const fixture = disposableReleaseBuilder(root);
+
+      const result = invoke(
+        fixture.releaseValidatorBuild,
+        [join(fixture.repository, 'companion'), scratch, output],
+        { ...process.env, PATH: `${fake}:/usr/bin:/bin` },
+      );
+
+      expect(result.status).toBe(64);
+      expect(readdirSync(external)).toEqual(['sentinel']);
+      expect(readFileSync(join(external, 'sentinel'), 'utf8')).toBe('preserve');
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a private default scratch and leaves the source repository clean', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-default-scratch-'));
+    try {
+      const fake = join(root, 'fakes');
+      mkdirSync(fake);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      executable(join(fake, 'codesign'), ['exit 0']);
+      executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
+      executable(join(fake, 'xcrun'), ['exit 0']);
+      executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+      const fixture = disposableReleaseBuilder(root);
+      const output = immutableReleaseOutput(root, fixture);
+
+      const result = invoke(
+        fixture.build,
+        releaseBuildArgs(fixture.releaseSHA, '--output', output),
+        {
+          ...process.env,
+          PATH: `${fake}:/usr/bin:/bin`,
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(join(fixture.repository, 'companion/.build'))).toBe(false);
+      expect(execFileSync('/usr/bin/git', [
+        'status', '--porcelain', '--untracked-files=all',
+      ], { cwd: fixture.repository, encoding: 'utf8' })).toBe('');
+      expect(readdirSync(output).sort()).toEqual([
+        'install.sh',
+        'runtime-raiders-agent.update.json',
+        'runtime-raiders-agent.zip',
+        'runtime-raiders-agent.zip.sha256',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes explicit agent scratch after failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-agent-failure-'));
+    try {
+      const fake = join(root, 'fakes');
+      const scratch = join(root, 'scratch');
+      mkdirSync(fake);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      executable(join(fake, 'codesign'), ['exit 0']);
+      executable(join(fake, 'ditto'), ['exec /usr/bin/ditto "$@"']);
+      executable(join(fake, 'xcrun'), ['exit 0']);
+      executable(join(fake, 'shasum'), ['printf "' + 'c'.repeat(64) + '  runtime-raiders-agent.zip\\n"']);
+      const fixture = disposableReleaseBuilder(root, { rendererFailure: true });
+      const output = immutableReleaseOutput(root, fixture);
+
+      const result = invoke(
+        fixture.build,
+        releaseBuildArgs(fixture.releaseSHA, '--output', output, '--scratch-path', scratch),
+        {
+          ...process.env,
+          PATH: `${fake}:/usr/bin:/bin`,
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+      );
+
+      expect(result.status).toBe(89);
+      expect(existsSync(scratch)).toBe(false);
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an existing scratch path without deleting caller contents', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-existing-scratch-'));
+    try {
+      const scratch = join(root, 'scratch');
+      mkdirSync(scratch);
+      writeFileSync(join(scratch, 'sentinel'), 'caller-owned');
+      const fixture = disposableReleaseBuilder(root);
+      const output = immutableReleaseOutput(root, fixture);
+
+      const result = invoke(
+        fixture.build,
+        releaseBuildArgs(fixture.releaseSHA, '--output', output, '--scratch-path', scratch),
+        {
+          ...process.env,
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+      );
+
+      expect(result.status).toBe(64);
+      expect(readdirSync(scratch)).toEqual(['sentinel']);
+      expect(readFileSync(join(scratch, 'sentinel'), 'utf8')).toBe('caller-owned');
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes explicit agent scratch after interruption', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-agent-interrupt-'));
+    try {
+      const fake = join(root, 'fakes');
+      const scratch = join(root, 'scratch');
+      const ready = join(root, 'swift-ready');
+      mkdirSync(fake);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      const fixture = disposableReleaseBuilder(root);
+      const output = immutableReleaseOutput(root, fixture);
+
+      const result = await interruptProcessGroup(
+        fixture.build,
+        releaseBuildArgs(fixture.releaseSHA, '--output', output, '--scratch-path', scratch),
+        {
+          ...process.env,
+          PATH: `${fake}:/usr/bin:/bin`,
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+          RUNTIME_RAIDERS_TEST_SWIFT_READY: ready,
+        },
+        ready,
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(existsSync(scratch)).toBe(false);
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects agent scratch through a symlinked parent without mutation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-agent-escape-'));
+    try {
+      const fake = join(root, 'fakes');
+      const external = join(root, 'external');
+      const alias = join(root, 'alias');
+      const scratch = join(alias, 'scratch');
+      mkdirSync(fake);
+      mkdirSync(external);
+      writeFileSync(join(external, 'sentinel'), 'preserve');
+      symlinkSync(external, alias);
+      fakeReleaseSwift(fake);
+      fakeReleaseLipo(fake);
+      const fixture = disposableReleaseBuilder(root, { rendererFailure: true });
+      const output = immutableReleaseOutput(root, fixture);
+
+      const result = invoke(
+        fixture.build,
+        releaseBuildArgs(fixture.releaseSHA, '--output', output, '--scratch-path', scratch),
+        {
+          ...process.env,
+          PATH: `${fake}:/usr/bin:/bin`,
+          RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
+          RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
+          RUNTIME_RAIDERS_TEAM_ID: teamId,
+        },
+      );
+
+      expect(result.status).toBe(64);
+      expect(readdirSync(external)).toEqual(['sentinel']);
+      expect(readFileSync(join(external, 'sentinel'), 'utf8')).toBe('preserve');
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('requires an explicit immutable output directory instead of generic dist evidence', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-explicit-output-'));
     try {
@@ -2126,17 +2483,14 @@ describe('Runtime Raiders release build', () => {
         const fixture = disposableReleaseBuilder(root);
         let requestedSHA = fixture.releaseSHA;
         if (state === 'mismatched HEAD') requestedSHA = 'e'.repeat(40);
-        if (state === 'dirty tracked') writeFileSync(join(fixture.repository, 'companion/RELEASE'), [
-          'version=1',
-          'companion_version=0.3.2',
-          'release_sequence=11',
-          'update_protocol_version=2',
-          '',
-        ].join('\n'));
+        if (state === 'dirty tracked') writeFileSync(
+          join(fixture.repository, 'scripts/release/runtime-raiders-macho-uuid.c'),
+          'int deliberately_dirty_for_release_test;\n',
+        );
         if (state === 'dirty untracked') writeFileSync(join(fixture.repository, 'untracked-release-note'), 'dirty\n');
         const output = join(
           root,
-          `sequence-${state === 'dirty tracked' ? '11' : releaseSequence}-${requestedSHA}`,
+          `sequence-${releaseSequence}-${requestedSHA}`,
         );
 
         const result = invoke(
@@ -2176,12 +2530,13 @@ describe('Runtime Raiders release build', () => {
     }
   });
 
-  it('resolves a relative scratch path against the caller before building', () => {
-    // Catches resolving one scratch argument from two different working directories.
+  it('resolves, owns, and removes a relative scratch path against the caller', () => {
+    // Catches resolving one scratch argument from two different working directories or retaining it.
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-relative-scratch-'));
     try {
       const fake = join(root, 'fakes');
       mkdirSync(fake, { recursive: true });
+      const scratchLog = join(root, 'scratch.log');
       fakeReleaseSwift(fake);
       fakeReleaseLipo(fake);
       executable(join(fake, 'codesign'), ['exit 0']);
@@ -2200,15 +2555,16 @@ describe('Runtime Raiders release build', () => {
           RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Test',
           RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-notary',
           RUNTIME_RAIDERS_TEAM_ID: teamId,
+          RUNTIME_RAIDERS_TEST_SWIFT_SCRATCH_LOG: scratchLog,
         },
         encoding: 'utf8',
       });
 
       expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(join(root, 'relative-scratch/arm64-apple-macosx/release/raiders'), 'utf8')).toBe('arm64');
-      expect(readFileSync(join(root, 'relative-scratch/x86_64-apple-macosx/release/raiders'), 'utf8')).toBe('x86_64');
-      expect(readFileSync(join(root, 'relative-scratch/arm64-apple-macosx/release/runtime-raiders-launcher'), 'utf8')).toBe('arm64');
-      expect(readFileSync(join(root, 'relative-scratch/x86_64-apple-macosx/release/runtime-raiders-launcher'), 'utf8')).toBe('x86_64');
+      expect(readFileSync(scratchLog, 'utf8').trim().split('\n').filter(
+        (path) => path === join(realpathSync(root), 'relative-scratch'),
+      )).toHaveLength(4);
+      expect(existsSync(join(root, 'relative-scratch'))).toBe(false);
       expect(existsSync(join(root, 'companion/relative-scratch'))).toBe(false);
       expect(existsSync(join(output, 'runtime-raiders-agent.zip'))).toBe(true);
     } finally {
@@ -2362,10 +2718,7 @@ describe('Runtime Raiders release build', () => {
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain('Built unpublished signed quartet');
       expect(buildCacheIdentity(join(process.cwd(), 'companion/.build'))).toEqual(repositoryCacheBefore);
-      expect(readFileSync(join(scratch, 'arm64-apple-macosx/release/raiders'), 'utf8')).toBe('arm64');
-      expect(readFileSync(join(scratch, 'x86_64-apple-macosx/release/raiders'), 'utf8')).toBe('x86_64');
-      expect(readFileSync(join(scratch, 'arm64-apple-macosx/release/runtime-raiders-launcher'), 'utf8')).toBe('arm64');
-      expect(readFileSync(join(scratch, 'x86_64-apple-macosx/release/runtime-raiders-launcher'), 'utf8')).toBe('x86_64');
+      expect(existsSync(scratch)).toBe(false);
       expect(existsSync(join(output, 'runtime-raiders-agent.zip'))).toBe(true);
       expect(existsSync(join(output, 'runtime-raiders-agent.zip.sha256'))).toBe(true);
       expect(readdirSync(output).sort()).toEqual([
@@ -2782,6 +3135,32 @@ describe('Runtime Raiders release build', () => {
 });
 
 describe('Runtime Raiders release gates', () => {
+  it('keeps validator scratch out of the exact two-file private migrator record', () => {
+    const runbook = readFileSync(releaseRunbook, 'utf8');
+    const privateStart = runbook.indexOf('### Prepare the private sequence-eight migrator record');
+    const privateEnd = runbook.indexOf('## Gate 3:', privateStart);
+    expect(privateStart).toBeGreaterThanOrEqual(0);
+    expect(privateEnd).toBeGreaterThan(privateStart);
+    const privateSection = runbook.slice(privateStart, privateEnd);
+
+    expect(privateSection).toContain('PRIVATE_WORK="$(mktemp -d');
+    expect(privateSection).toContain('"$PRIVATE_WORK/validator-scratch"');
+    expect(privateSection).not.toContain('"$PRIVATE_OUTPUT/validator-scratch"');
+    expect(privateSection).toContain('EXPECTED_PRIVATE_FILES=');
+    expect(privateSection).toContain('ACTUAL_PRIVATE_FILES=');
+    expect(privateSection).toContain('test "$ACTUAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"');
+    expect(privateSection).toContain('PRIVATE_STAGE="$PRIVATE_WORK/private-record"');
+    expect(privateSection).toContain('/bin/mv "$PRIVATE_STAGE" "$PRIVATE_OUTPUT"');
+    expect(privateSection).toContain('FINAL_PRIVATE_FILES=');
+    expect(privateSection).toContain('test "$FINAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"');
+  });
+
+  it('requires reproducible validator builds to remove both scratch directories', () => {
+    const source = readFileSync(validatorReproducibility, 'utf8');
+    expect(source).toContain('[ ! -e "$probe_root/$run-scratch" ]');
+    expect(source).toContain('[ ! -L "$probe_root/$run-scratch" ]');
+  });
+
   it('runs Gate 1 in the exact fail-fast order with disposable fake boundaries only', () => {
     const packageJSON = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as {
       scripts?: Record<string, string>;
