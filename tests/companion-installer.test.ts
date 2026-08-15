@@ -13,6 +13,10 @@ const sequenceEightMigrator = join(
 const build = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
 const installerRenderer = join(process.cwd(), 'scripts/release/render-runtime-raiders-installer.sh');
 const releaseValidatorBuilder = join(process.cwd(), 'scripts/release/build-runtime-raiders-release-validator.sh');
+const privateRecordRunner = join(
+  process.cwd(),
+  'scripts/release/prepare-runtime-raiders-sequence8-private-record.sh',
+);
 const machoUUIDSource = join(process.cwd(), 'scripts/release/runtime-raiders-macho-uuid.c');
 const lifecycleGate = join(process.cwd(), 'scripts/test/runtime-raiders-lifecycle.sh');
 const signedReleaseGate = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
@@ -3142,17 +3146,22 @@ describe('Runtime Raiders release gates', () => {
     expect(privateStart).toBeGreaterThanOrEqual(0);
     expect(privateEnd).toBeGreaterThan(privateStart);
     const privateSection = runbook.slice(privateStart, privateEnd);
+    const runner = readFileSync(privateRecordRunner, 'utf8');
 
-    expect(privateSection).toContain('PRIVATE_WORK="$(mktemp -d');
-    expect(privateSection).toContain('"$PRIVATE_WORK/validator-scratch"');
-    expect(privateSection).not.toContain('"$PRIVATE_OUTPUT/validator-scratch"');
-    expect(privateSection).toContain('EXPECTED_PRIVATE_FILES=');
-    expect(privateSection).toContain('ACTUAL_PRIVATE_FILES=');
-    expect(privateSection).toContain('test "$ACTUAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"');
-    expect(privateSection).toContain('PRIVATE_STAGE="$PRIVATE_WORK/private-record"');
-    expect(privateSection).toContain('/bin/mv "$PRIVATE_STAGE" "$PRIVATE_OUTPUT"');
-    expect(privateSection).toContain('FINAL_PRIVATE_FILES=');
-    expect(privateSection).toContain('test "$FINAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"');
+    expect(privateSection).toContain(
+      '/bin/bash scripts/release/prepare-runtime-raiders-sequence8-private-record.sh',
+    );
+    expect(privateSection).not.toContain('cleanup_private_work()');
+    expect(runner).toContain('PRIVATE_WORK="$(/usr/bin/mktemp -d');
+    expect(runner).toContain('"$PRIVATE_WORK/validator-scratch"');
+    expect(runner).not.toContain('"$PRIVATE_OUTPUT/validator-scratch"');
+    expect(runner).toContain('EXPECTED_PRIVATE_FILES=');
+    expect(runner).toContain('ACTUAL_PRIVATE_FILES=');
+    expect(runner).toContain('[ "$ACTUAL_PRIVATE_FILES" != "$EXPECTED_PRIVATE_FILES" ]');
+    expect(runner).toContain('PRIVATE_STAGE="$PRIVATE_WORK/private-record"');
+    expect(runner).toContain('/bin/mv "$PRIVATE_STAGE" "$PRIVATE_OUTPUT"');
+    expect(runner).toContain('FINAL_PRIVATE_FILES=');
+    expect(runner).toContain('[ "$FINAL_PRIVATE_FILES" != "$EXPECTED_PRIVATE_FILES" ]');
   });
 
   it('requires reproducible validator builds to remove both scratch directories', () => {
