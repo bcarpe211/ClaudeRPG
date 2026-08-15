@@ -352,7 +352,8 @@ describe('Raider enrollment routes', () => {
     expect(created.body.install_command).toContain('--proto-redir');
     expect(created.body.install_command).toContain('--output "$installer"');
     expect(created.body.install_command).toContain("--write-out '%{http_code}'");
-    expect(created.body.install_command).toContain('[ "$status" = 200 ]');
+    expect(created.body.install_command).toContain('[ "$download_http_code" = 200 ]');
+    expect(created.body.install_command).not.toContain('[ "$status" = 200 ]');
     expect(created.body.install_command).toContain('test -s "$installer"');
     expect(created.body.install_command).toContain('sh "$installer"');
     expect(created.body.install_command).not.toContain('| sh');

@@ -143,7 +143,8 @@ describe('registration', () => {
     expect(installCommand).not.toContain(oneTimeCode);
     expect(installCommand).toContain("'https://raiders.redlattice.com/install.sh'");
     expect(installCommand).toContain('--output "$installer"');
-    expect(installCommand).toContain('[ "$status" = 200 ]');
+    expect(installCommand).toContain('[ "$download_http_code" = 200 ]');
+    expect(installCommand).not.toContain('[ "$status" = 200 ]');
     expect(installCommand).toContain('sh "$installer"');
     expect(installCommand).not.toContain('| sh');
     expect(res.text).not.toContain('--code');
