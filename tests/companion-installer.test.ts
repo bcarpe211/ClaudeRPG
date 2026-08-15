@@ -1959,12 +1959,12 @@ describe('Runtime Raiders protocol-two installer', () => {
 });
 
 describe('Runtime Raiders release build', () => {
-  it('advances the zsh onboarding release beyond the accepted sequence-eleven artifacts', () => {
-    // Catches a later source commit accidentally reusing the immutable sequence-11 identity.
+  it('advances the stable launchd reload beyond the accepted sequence-twelve artifacts', () => {
+    // Catches a later source commit accidentally reusing the immutable sequence-12 identity.
     expect(releaseContract).toEqual({
       version: '1',
-      companion_version: '0.3.3',
-      release_sequence: '12',
+      companion_version: '0.3.4',
+      release_sequence: '13',
       update_protocol_version: '2',
     });
   });
