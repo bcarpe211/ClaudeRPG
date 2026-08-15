@@ -492,3 +492,56 @@ not commit the internal IP.
       while preserving HTTP `404`, the three exact artifact matchers,
       `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and the
       unpublished-state tests. This is not an asset dependency for this release.
+
+## 29. Next-release zsh-compatible onboarding and pasted-command audit — HARD BLOCKER
+
+The accepted sequence-10 release at
+`c04214c6ead5d6bcffc06ab6bbbbf4af407360ae` and its quartet remain frozen; do
+not modify or rebuild them for this repair. Sequence 10 may still be published
+solely for an installed-off canary migration. This repair is mandatory before
+routine fresh onboarding or office activation.
+
+Confirmed defect:
+
+- zsh defines `status` as a read-only special parameter;
+- `src/web/companion-install.ts` assigns the generated command's HTTP result to
+  `status`;
+- registration and Player Hub render that command directly for the user to
+  paste into their interactive shell, without selecting Bash; and
+- `tests/runtime-raiders-onboarding.test.ts` executes the complete generated
+  command only with `/bin/sh`.
+
+Next-release requirements:
+
+- [ ] Rename only the user-facing command variable to a portable, specific name
+      such as `download_http_code`. Do not require users to invoke Bash to run
+      the onboarding command.
+- [ ] Parameterize full generated-command execution tests across both
+      `/bin/zsh -f -c` and `/bin/sh -c`. Each shell must prove the successful
+      download-and-execute path and fail-closed download paths, including a curl
+      failure or non-200 response and a completed download that fails local
+      validation. A failed case must not execute the installer and must clean up
+      its owner-only temporary file.
+- [ ] Update route, snapshot, and documentation assertions that currently bind
+      the generated command to `[ "$status" = 200 ]`. Keep the website output,
+      canonical command documentation, and tests byte-consistent.
+- [ ] Move substantial operational runbook blocks that require Bash syntax into
+      checked-in Bash scripts where practical. Otherwise invoke the block
+      explicitly with `/bin/bash`; a Markdown `bash` fence is not execution.
+- [ ] Audit every command intended for direct copy/paste for zsh special or
+      read-only parameter names and for an implicit shell assumption.
+- [ ] Do not mechanically rename `status` inside scripts already unambiguously
+      executed by a `#!/bin/bash`, `#!/bin/sh`, `/bin/bash`, or `/bin/sh`
+      boundary. Change only code whose actual execution shell is ambiguous or
+      incompatible.
+
+Acceptance gate:
+
+- [ ] The exact website-generated command passes its complete success and
+      fail-closed matrix under clean zsh and POSIX sh processes.
+- [ ] Website, route, runbook, and documentation drift tests agree on one
+      canonical onboarding behavior.
+- [ ] No fresh-player onboarding or office activation occurs until the repair
+      is merged, released, and independently verified. Installed-off canary
+      migration remains a separate allowed boundary and does not waive this
+      blocker.
