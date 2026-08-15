@@ -23,6 +23,14 @@ const artifactUrls = [
   'https://raiders.redlattice.com/downloads/runtime-raiders-agent.update.json',
 ];
 
+function canonicalInstallCommandFromOperations(): string {
+  const match = operations.match(
+    /<!-- runtime-raiders-canonical-install-command:start -->\s*```sh\s*([^\n]+)\s*```\s*<!-- runtime-raiders-canonical-install-command:end -->/,
+  );
+  expect(match).not.toBeNull();
+  return match?.[1] ?? '';
+}
+
 function secondaryHeaderStatus(
   headerLines: string[],
   name = 'Cache-Control',
@@ -58,6 +66,13 @@ function secondaryHeaderStatus(
 }
 
 describe('Runtime Raiders artifact-publication documentation', () => {
+  it('keeps the marked office-onboarding command byte-identical to the website generator', () => {
+    const documentedCommand = canonicalInstallCommandFromOperations();
+
+    expect(documentedCommand).toBe(buildCompanionInstallCommand());
+    expect(documentedCommand).not.toMatch(/(?:^|[ ;])status=/);
+  });
+
   it('binds every operational document to the fixed artifact root', () => {
     for (const document of [runbook, checklist, operations, packet]) {
       expect(document).toContain(artifactRoot);
