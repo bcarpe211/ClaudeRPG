@@ -410,6 +410,7 @@ function fakes(root: string): string {
     'lease="$HOME/.runtime-raiders-test-lease"',
     'prepared="$HOME/.runtime-raiders-test-prepared"',
     'polls="$HOME/.runtime-raiders-test-polls"',
+    'release_state="$HOME/Library/Application Support/Runtime Raiders/installation/release-state.json"',
     'if [ "$1" = print ]; then',
     '  [ "$FAKE_LAUNCH_PRINT_PRESENT" = 1 ] && exit 0',
     '  [ "$FAKE_LAUNCH_PRINT_ABSENT" = 1 ] && { printf "Could not find service\\n" >&2; exit 113; }',
@@ -417,8 +418,10 @@ function fakes(root: string): string {
     '  [ -f "$job" ] && exit 0',
     '  printf "Could not find service\\n" >&2; exit 113',
     'fi',
+    'if [ "$1" = bootout ] && [ "$FAKE_POSTCOMMIT_BOOTOUT_STOPS_THEN_FAIL" = 1 ] && [ -f "$release_state" ]; then rm -f "$job" "$running" "$polls" "$loaded"; printf "postcommit bootout stopped then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootout ] && [ "$FAKE_BOOTOUT_STOPS_THEN_FAIL" = 1 ]; then rm -f "$job" "$running" "$polls" "$loaded"; printf "bootout stopped then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootout ] && [ "$FAKE_LAUNCH_BOOTOUT_FAIL" = 1 ]; then printf "bootout ambiguous failure\\n" >&2; exit 77; fi',
+    'if [ "$1" = bootstrap ] && [ "$FAKE_POSTCOMMIT_BOOTSTRAP_STARTS_THEN_FAIL" = 1 ] && [ -f "$release_state" ]; then /usr/bin/plutil -extract ProgramArguments json -o - "$3" > "$loaded" || exit 64; : > "$job"; : > "$running"; printf "postcommit bootstrap started then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_BOOTSTRAP_STARTS_THEN_FAIL" = 1 ]; then /usr/bin/plutil -extract ProgramArguments json -o - "$3" > "$loaded" || exit 64; : > "$job"; : > "$running"; printf "bootstrap started then failed\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_LAUNCH_BOOTSTRAP_FAIL" = 1 ]; then printf "bootstrap failure\\n" >&2; exit 77; fi',
     'if [ "$1" = bootstrap ] && [ "$FAKE_LAUNCH_REQUIRE_OFF" = 1 ]; then',
@@ -479,6 +482,8 @@ function env(home: string, fake: string, files: { zip: string; checksum: string 
     FAKE_LAUNCH_BOOTSTRAP_FAIL: '0',
     FAKE_BOOTOUT_STOPS_THEN_FAIL: '0',
     FAKE_BOOTSTRAP_STARTS_THEN_FAIL: '0',
+    FAKE_POSTCOMMIT_BOOTOUT_STOPS_THEN_FAIL: '0',
+    FAKE_POSTCOMMIT_BOOTSTRAP_STARTS_THEN_FAIL: '0',
     FAKE_LAUNCH_REQUIRE_OFF: '0',
     FAKE_DAEMON_READY_AFTER: '1',
     FAKE_DAEMON_NEVER_READY: '0',
@@ -1067,6 +1072,45 @@ describe('Runtime Raiders protocol-two installer', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it.each([
+    ['bootout stops then fails', 'FAKE_POSTCOMMIT_BOOTOUT_STOPS_THEN_FAIL'],
+    ['bootstrap starts then fails', 'FAKE_POSTCOMMIT_BOOTSTRAP_STARTS_THEN_FAIL'],
+  ] as const)('recovers a committed migration when stable-job %s', (_, key) => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-stable-reload-failure-'));
+    try {
+      const fixture = legacySequenceEightFixture(root, true, 3);
+      const enrollmentBefore = readFileSync(fixture.enrollment);
+      const collectorBefore = readFileSync(fixture.collectorState);
+      const outboxBefore = buildCacheIdentity(join(fixture.support, 'outbox'));
+      const failed = invoke(renderedProtocolTwoInstaller(root), [], {
+        ...fixture.environment,
+        [key]: '1',
+      });
+      expect(failed.status).not.toBe(0);
+      expect(
+        JSON.parse(readFileSync(releaseStatePath(fixture.support), 'utf8')).active
+          .release_sequence,
+      ).toBe(9);
+      expect(readFileSync(join(fixture.home, 'binary.log'), 'utf8'))
+        .not.toContain('__runtime-raiders-legacy-resume');
+
+      const retry = invoke(renderedProtocolTwoInstaller(root), [], fixture.environment);
+      expect(retry.status, retry.stderr + retry.stdout).toBe(0);
+      expect(loadedLaunchdArguments(fixture.home)).toEqual([
+        join(
+          fixture.support,
+          'launcher/Runtime Raiders Launcher.app/Contents/MacOS/runtime-raiders-launcher',
+        ),
+        'daemon',
+      ]);
+      expect(readFileSync(fixture.enrollment)).toEqual(enrollmentBefore);
+      expect(readFileSync(fixture.collectorState)).toEqual(collectorBefore);
+      expect(buildCacheIdentity(join(fixture.support, 'outbox'))).toEqual(outboxBefore);
+      expect(readFileSync(join(fixture.home, 'commands.log'), 'utf8'))
+        .not.toContain('endpoint /api/');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 120_000);
+
   it('restores the legacy plist after its replacement fails durability sync and permits retry', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-plist-sync-rollback-'));
     try {
@@ -1213,6 +1257,7 @@ describe('Runtime Raiders protocol-two installer', () => {
       'releases-directory', 'installation-directory', 'launcher-placement',
       'release-placement', 'state-write', 'plist-replacement', 'shim-replacement',
       'command-link-replacement', 'bootstrap', 'prepared-health', 'stable-plist',
+      'stable-job-stopped', 'stable-job-bootstrapped', 'stable-job-prepared',
       'acceptance-mark',
     ];
     for (const boundary of boundaries) {
@@ -1237,6 +1282,13 @@ describe('Runtime Raiders protocol-two installer', () => {
         expect(buildCacheIdentity(join(fixture.support, 'outbox')), boundary).toEqual(outboxBefore);
         expect(existsSync(join(fixture.support, '.migration-v1')), boundary).toBe(false);
         expect(existsSync(releaseStatePath(fixture.support)), boundary).toBe(true);
+        expect(loadedLaunchdArguments(fixture.home), boundary).toEqual([
+          join(
+            fixture.support,
+            'launcher/Runtime Raiders Launcher.app/Contents/MacOS/runtime-raiders-launcher',
+          ),
+          'daemon',
+        ]);
       } finally { rmSync(root, { recursive: true, force: true }); }
     }
   }, 180_000);
@@ -1319,6 +1371,9 @@ describe('Runtime Raiders protocol-two installer', () => {
     'after-commit-marker',
     'state-write',
     'stable-plist',
+    'stable-job-stopped',
+    'stable-job-bootstrapped',
+    'stable-job-prepared',
     'after-candidate-resume',
     'accepted-cleanup-before-rename',
     'accepted-cleanup-after-rename',
@@ -1341,7 +1396,15 @@ describe('Runtime Raiders protocol-two installer', () => {
       expect(existsSync(join(fixture.support, '.migration-v1.staging'))).toBe(false);
       expect(existsSync(join(fixture.support, '.migration-v1.tombstone'))).toBe(false);
       expect(readFileSync(join(fixture.home, 'commands.log'), 'utf8')).not.toContain('endpoint /api/');
-      if (['after-commit-marker', 'state-write', 'stable-plist', 'after-candidate-resume',
+      expect(loadedLaunchdArguments(fixture.home)).toEqual([
+        join(
+          fixture.support,
+          'launcher/Runtime Raiders Launcher.app/Contents/MacOS/runtime-raiders-launcher',
+        ),
+        'daemon',
+      ]);
+      if (['after-commit-marker', 'state-write', 'stable-plist', 'stable-job-stopped',
+        'stable-job-bootstrapped', 'stable-job-prepared', 'after-candidate-resume',
         'accepted-cleanup-before-rename', 'accepted-cleanup-after-rename',
         'accepted-cleanup-before-delete'].includes(boundary)) {
         expect(readFileSync(join(fixture.home, 'binary.log'), 'utf8'))
