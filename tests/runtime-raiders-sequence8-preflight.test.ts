@@ -20,6 +20,8 @@ describe('Runtime Raiders unsigned sequence-eight preflight', () => {
       'sh -n companion/packaging/install.sh',
       'sh -n companion/legacy-sequence8/migrate.sh',
       'bash -n scripts/release/build-runtime-raiders-agent.sh',
+      'bash -n scripts/release/run-runtime-raiders-gate2.sh',
+      'bash -n scripts/release/prepare-runtime-raiders-sequence8-private-record.sh',
       'bash -n scripts/test/verify-runtime-raiders-signed-release.sh',
       'swift test --disable-sandbox --package-path companion',
       'tests/companion-installer.test.ts',
@@ -64,10 +66,12 @@ describe('Runtime Raiders unsigned sequence-eight preflight', () => {
     expect(gate2).toMatch(/fresh-install(?:ation)? smoke/i);
     expect(gate2).toMatch(/does not read or copy the\s+installed canary/i);
     expect(gate2).not.toMatch(/copies only the installed-off sequence-8|migration failure checkpoint/i);
-    expect(gate2).toContain('companion/legacy-sequence8/migrate.sh');
-    expect(gate2).toContain('scripts/release/render-runtime-raiders-installer.sh');
-    expect(gate2).toContain('private-sequence-8-');
-    expect(gate2).toContain('shasum -a 256');
+    expect(gate2).toContain('/bin/bash scripts/release/run-runtime-raiders-gate2.sh');
+    expect(gate2).toContain(
+      '/bin/bash scripts/release/prepare-runtime-raiders-sequence8-private-record.sh',
+    );
+    expect(gate2).not.toContain('cleanup_private_work()');
+    expect(gate2).not.toContain('scripts/release/build-runtime-raiders-agent.sh \\\n');
     expect(gate2).toMatch(/must remain\s+local and unpublished/i);
   });
 });

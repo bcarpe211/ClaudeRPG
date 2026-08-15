@@ -986,11 +986,11 @@ download_exact_https() {
   output=$2
   headers=$3
   url=$4
-  status="$(curl --silent --show-error --suppress-connect-headers --proto '=https' \
+  download_http_code="$(curl --silent --show-error --suppress-connect-headers --proto '=https' \
     --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 120 \
     --max-filesize "$max_bytes" --dump-header "$headers" --output "$output" \
     --write-out '%{http_code}' "$url")" || return 1
-  test "$status" = 200
+  test "$download_http_code" = 200
 }
 download_exact_https 8388608 \
   "$VERIFY_DIR/install.sh" "$VERIFY_DIR/install.headers" \

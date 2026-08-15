@@ -47,6 +47,8 @@ export GIT_CONFIG_NOSYSTEM=1
 sh -n companion/packaging/install.sh
 sh -n companion/legacy-sequence8/migrate.sh
 bash -n scripts/release/build-runtime-raiders-agent.sh
+bash -n scripts/release/run-runtime-raiders-gate2.sh
+bash -n scripts/release/prepare-runtime-raiders-sequence8-private-record.sh
 bash -n scripts/test/verify-runtime-raiders-signed-release.sh
 
 /usr/bin/swift test --disable-sandbox --package-path companion \

@@ -73,6 +73,21 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(documentedCommand).not.toMatch(/(?:^|[ ;])status=/);
   });
 
+  it('keeps the directly pasted publication downloader portable to zsh', () => {
+    const publication = runbook.slice(
+      runbook.indexOf('### 5.3 Publish the exact signed quartet'),
+      runbook.indexOf('### 5.4 Install one verified-off canary'),
+    );
+    const downloader = publication.slice(
+      publication.indexOf('download_exact_https() {'),
+      publication.indexOf('\ndownload_exact_https 8388608'),
+    );
+
+    expect(downloader).toContain('download_http_code="$(curl');
+    expect(downloader).toContain('test "$download_http_code" = 200');
+    expect(downloader).not.toMatch(/(?:^|[ ;])status=/);
+  });
+
   it('binds every operational document to the fixed artifact root', () => {
     for (const document of [runbook, checklist, operations, packet]) {
       expect(document).toContain(artifactRoot);

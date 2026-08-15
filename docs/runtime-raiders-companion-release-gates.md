@@ -43,33 +43,11 @@ and Apple notarization. It creates exactly four local artifacts and leaves them
 unpublished. With the three release variables already stored outside Git, run:
 
 ```sh
-(
-  set -eu
-  : "${RUNTIME_RAIDERS_CODESIGN_IDENTITY:?}"
-  : "${RUNTIME_RAIDERS_NOTARY_PROFILE:?}"
-  : "${RUNTIME_RAIDERS_TEAM_ID:?}"
-  test -z "$(git status --porcelain --untracked-files=all)"
-
-  RELEASE_SHA="$(git rev-parse HEAD)"
-  COMPANION_VERSION="$(sed -n 's/^companion_version=//p' companion/RELEASE)"
-  RELEASE_SEQUENCE="$(sed -n 's/^release_sequence=//p' companion/RELEASE)"
-  UPDATE_PROTOCOL_VERSION="$(sed -n 's/^update_protocol_version=//p' companion/RELEASE)"
-  RELEASE_OUTPUT="$PWD/dist/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"
-
-  mkdir -p dist
-  test ! -e "$RELEASE_OUTPUT"
-  scripts/release/build-runtime-raiders-agent.sh \
-    --release-sha "$RELEASE_SHA" \
-    --output "$RELEASE_OUTPUT"
-  RUNTIME_RAIDERS_CODESIGN_IDENTITY="$RUNTIME_RAIDERS_CODESIGN_IDENTITY" \
-    bash scripts/test/verify-runtime-raiders-signed-release.sh "$RELEASE_OUTPUT"
-  shasum -a 256 \
-    "$RELEASE_OUTPUT/install.sh" \
-    "$RELEASE_OUTPUT/runtime-raiders-agent.zip" \
-    "$RELEASE_OUTPUT/runtime-raiders-agent.zip.sha256" \
-    "$RELEASE_OUTPUT/runtime-raiders-agent.update.json"
-)
+/bin/bash scripts/release/run-runtime-raiders-gate2.sh
 ```
+
+The explicit /bin/bash invocation selects the checked-in script's interpreter;
+the Markdown language fence only controls highlighting.
 
 The builder signs, notarizes, staples, validates, and atomically creates the
 immutable quartet. The reviewer then requires exactly those four safe local
@@ -100,83 +78,12 @@ matching the validator digest proves the private rendering uses the same
 deterministic validator embedded in the reviewed public installer:
 
 ```sh
-(
-  set -eu
-  : "${RUNTIME_RAIDERS_TEAM_ID:?}"
-  RELEASE_SHA="$(git rev-parse HEAD)"
-  COMPANION_VERSION="$(sed -n 's/^companion_version=//p' companion/RELEASE)"
-  RELEASE_SEQUENCE="$(sed -n 's/^release_sequence=//p' companion/RELEASE)"
-  UPDATE_PROTOCOL_VERSION="$(sed -n 's/^update_protocol_version=//p' companion/RELEASE)"
-  RELEASE_OUTPUT="$PWD/dist/sequence-$RELEASE_SEQUENCE-$RELEASE_SHA"
-  PRIVATE_OUTPUT="$PWD/dist/private-sequence-8-$RELEASE_SEQUENCE-$RELEASE_SHA"
-  PRIVATE_WORK=''
-
-  cleanup_private_work() {
-    status=$?
-    trap - EXIT HUP INT TERM
-    if test -n "$PRIVATE_WORK"; then
-      case "$PRIVATE_WORK" in "$PRIVATE_WORK_PARENT"/.private-sequence-8-work.*) ;; *) exit 1 ;; esac
-      test -d "$PRIVATE_WORK" && test ! -L "$PRIVATE_WORK" || exit 1
-      test "$(/usr/bin/stat -f '%u' "$PRIVATE_WORK")" = "$(/usr/bin/id -u)" || exit 1
-      /bin/rm -rf -- "$PRIVATE_WORK" || exit 1
-    fi
-    exit "$status"
-  }
-  trap cleanup_private_work EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-
-  test -d "$RELEASE_OUTPUT"
-  test ! -e "$PRIVATE_OUTPUT" && test ! -L "$PRIVATE_OUTPUT"
-  umask 077
-  PRIVATE_WORK_PARENT="$(cd "$PWD/dist" && pwd -P)"
-  PRIVATE_WORK="$(mktemp -d "$PRIVATE_WORK_PARENT/.private-sequence-8-work.XXXXXX")"
-  PRIVATE_STAGE="$PRIVATE_WORK/private-record"
-  mkdir "$PRIVATE_STAGE"
-  scripts/release/build-runtime-raiders-release-validator.sh \
-    "$PWD/companion" \
-    "$PRIVATE_WORK/validator-scratch" \
-    "$PRIVATE_STAGE/runtime-raiders-release-validator"
-
-  PUBLIC_VALIDATOR_SHA="$(sed -n \
-    "s/^RELEASE_VALIDATOR_SHA256='\\([0-9a-f]*\\)'$/\\1/p" \
-    "$RELEASE_OUTPUT/install.sh")"
-  PRIVATE_VALIDATOR_SHA="$(shasum -a 256 \
-    "$PRIVATE_STAGE/runtime-raiders-release-validator" | awk 'NR == 1 { print $1 }')"
-  case "$PUBLIC_VALIDATOR_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
-  test "${#PUBLIC_VALIDATOR_SHA}" -eq 64
-  test "$PRIVATE_VALIDATOR_SHA" = "$PUBLIC_VALIDATOR_SHA"
-
-  scripts/release/render-runtime-raiders-installer.sh \
-    "$PWD/companion/legacy-sequence8/migrate.sh" \
-    "$PRIVATE_STAGE/runtime-raiders-release-validator" \
-    "$RUNTIME_RAIDERS_TEAM_ID" \
-    "$COMPANION_VERSION" \
-    "$RELEASE_SEQUENCE" \
-    "$RELEASE_SHA" \
-    "$UPDATE_PROTOCOL_VERSION" \
-    "$PRIVATE_STAGE/migrate-sequence-8.sh"
-  sh -n "$PRIVATE_STAGE/migrate-sequence-8.sh"
-  EXPECTED_PRIVATE_FILES="$(printf '%s\n' \
-    migrate-sequence-8.sh \
-    runtime-raiders-release-validator)"
-  ACTUAL_PRIVATE_FILES="$(find "$PRIVATE_STAGE" -mindepth 1 -maxdepth 1 \
-    -exec basename {} \; | LC_ALL=C sort)"
-  test "$ACTUAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"
-  test -f "$PRIVATE_STAGE/runtime-raiders-release-validator" \
-    && test ! -L "$PRIVATE_STAGE/runtime-raiders-release-validator"
-  test -f "$PRIVATE_STAGE/migrate-sequence-8.sh" \
-    && test ! -L "$PRIVATE_STAGE/migrate-sequence-8.sh"
-  /bin/mv "$PRIVATE_STAGE" "$PRIVATE_OUTPUT"
-  FINAL_PRIVATE_FILES="$(find "$PRIVATE_OUTPUT" -mindepth 1 -maxdepth 1 \
-    -exec basename {} \; | LC_ALL=C sort)"
-  test "$FINAL_PRIVATE_FILES" = "$EXPECTED_PRIVATE_FILES"
-  shasum -a 256 \
-    "$PRIVATE_OUTPUT/runtime-raiders-release-validator" \
-    "$PRIVATE_OUTPUT/migrate-sequence-8.sh"
-)
+/bin/bash scripts/release/prepare-runtime-raiders-sequence8-private-record.sh
 ```
+
+This explicit Bash boundary executes the reviewed transaction in the repository,
+not shell text copied from Markdown. The script prepares and hashes the record;
+it never executes the validator or migrator.
 
 Record the two private SHA-256 values beside the four quartet digests. The
 rendered migrator digest, exact release identity, and separate execution
