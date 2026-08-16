@@ -287,6 +287,7 @@ final class CodexAdapterTests: XCTestCase {
         var oldSnapshot = try XCTUnwrap(
             JSONSerialization.jsonObject(with: adapter.snapshot()) as? [String: Any]
         )
+        oldSnapshot["version"] = 1
         oldSnapshot.removeValue(forKey: "sessionTotalUsage")
         oldSnapshot.removeValue(forKey: "usesSessionTotalUsage")
         oldSnapshot.removeValue(forKey: "sessionMetadataFingerprint")
@@ -489,6 +490,94 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertNil(adapter.compatibilityIssue)
         XCTAssertEqual(observations.last?.state, .completed)
         XCTAssertEqual(observations.last?.usage.input, 15)
+    }
+
+    func testRepeatedDesktopSessionMetadataPreservesActiveRunWhenOnlyOptionalFieldsChange() {
+        let initialMetadata = #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","session_id":"session","source":"vscode","cli_version":"0.146.0-alpha.3.1"}}"#
+        let liveLines = [
+            #"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"turn","model":"gpt-test","effort":"high"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:03Z","type":"session_meta","payload":{"id":"session","originator":"originator","session_id":"session","source":"vscode","cli_version":"0.146.0-alpha.3.1","memory_mode":"enabled"}}"#,
+            #"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1936042047,"cached_input_tokens":1899579648,"cache_write_input_tokens":0,"output_tokens":4588601,"reasoning_output_tokens":1605483},"last_token_usage":{"input_tokens":142085,"cached_input_tokens":141056,"cache_write_input_tokens":0,"output_tokens":39,"reasoning_output_tokens":14}}}}"#,
+            #"{"timestamp":"2026-01-01T00:00:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn"}}"#,
+        ]
+        var adapter = CodexAdapter(expectedSurface: .codexDesktop)
+        adapter.consumeDuringSeeding(
+            line: Data(initialMetadata.utf8),
+            source: .init(ordinal: 0),
+            observedAt: observedAt
+        )
+        let observations = liveLines.enumerated().flatMap { index, line in
+            adapter.consume(
+                line: Data(line.utf8),
+                source: .init(ordinal: Int64(index + 1)),
+                observedAt: observedAt
+            )
+        }
+
+        XCTAssertNil(adapter.compatibilityIssue)
+        XCTAssertEqual(observations.map(\.state), [.open, .open, .completed])
+        XCTAssertEqual(observations.last?.usage.input, 0)
+        XCTAssertEqual(observations.last?.nativeID, "turn")
+    }
+
+    func testRepeatedSessionMetadataFailsClosedWhenStableIdentityChanges() throws {
+        let initial: [String: Any] = [
+            "id": "session",
+            "originator": "originator",
+            "session_id": "session",
+            "source": "vscode",
+            "cli_version": "0.146.0-alpha.3.1",
+        ]
+        let changes: [(String, Any)] = [
+            ("id", "other-session"),
+            ("originator", "other-originator"),
+            ("session_id", "other-session"),
+            ("source", "exec"),
+            ("cli_version", "0.147.0"),
+        ]
+
+        for (key, value) in changes {
+            var adapter = CodexAdapter(expectedSurface: .codexDesktop)
+            _ = adapter.consume(
+                line: try sessionMetadata(payload: initial, timestampSecond: 0),
+                source: .init(ordinal: 0),
+                observedAt: observedAt
+            )
+            var changed = initial
+            changed[key] = value
+            XCTAssertTrue(adapter.consume(
+                line: try sessionMetadata(payload: changed, timestampSecond: 1),
+                source: .init(ordinal: 1),
+                observedAt: observedAt
+            ).isEmpty, "accepted changed session identity field \(key)")
+            XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
+        }
+    }
+
+    func testVersionTwoMetadataFingerprintSnapshotRequiresReseeding() throws {
+        var adapter = CodexAdapter(expectedSurface: .codexDesktop)
+        _ = adapter.consume(
+            line: try sessionMetadata(
+                payload: validSessionPayload(for: .codexDesktop),
+                timestampSecond: 0
+            ),
+            source: .init(ordinal: 0),
+            observedAt: observedAt
+        )
+        var legacy = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: adapter.snapshot()) as? [String: Any]
+        )
+        legacy["version"] = 2
+        let restored = try CodexAdapter(
+            snapshot: JSONSerialization.data(withJSONObject: legacy, options: [.sortedKeys])
+        )
+
+        XCTAssertTrue(restored.requiresReseeding)
+        let current = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: adapter.snapshot()) as? [String: Any]
+        )
+        XCTAssertEqual(current["version"] as? Int, 3)
     }
 
     func testDifferentSecondSessionMetadataFailsClosed() {

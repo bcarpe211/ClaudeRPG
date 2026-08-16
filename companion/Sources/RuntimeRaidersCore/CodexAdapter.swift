@@ -62,7 +62,7 @@ public struct CodexAdapter: ProviderAdapter {
     public init(snapshot: Data) throws {
         guard snapshot.count <= 65_536,
               let state = try? JSONDecoder().decode(PersistedState.self, from: snapshot),
-              state.version == 1 || state.version == 2,
+              (1...3).contains(state.version),
               state.expectedSurface == .codexCLI || state.expectedSurface == .codexDesktop,
               state.verifiedSurface == nil || state.verifiedSurface == state.expectedSurface,
               Self.validOptionalIdentity(state.activeNativeID),
@@ -90,7 +90,7 @@ public struct CodexAdapter: ProviderAdapter {
             throw CodexAdapterSnapshotError.invalidSnapshot
         }
         expectedSurface = state.expectedSurface
-        requiresReseeding = state.version == 1
+        requiresReseeding = state.version < 3
         verifiedSurface = state.verifiedSurface
         rejectedSurface = state.rejectedSurface
         storedCompatibilityIssue = state.compatibilityIssue
@@ -114,7 +114,7 @@ public struct CodexAdapter: ProviderAdapter {
 
     public func snapshot() throws -> Data {
         let state = PersistedState(
-            version: requiresReseeding ? 1 : 2,
+            version: requiresReseeding ? 2 : 3,
             expectedSurface: expectedSurface,
             verifiedSurface: verifiedSurface,
             rejectedSurface: rejectedSurface,
@@ -188,7 +188,8 @@ public struct CodexAdapter: ProviderAdapter {
                   Self.timestampMS(record["timestamp"] as? String) != nil,
                   Self.validRecordVersion(payload["cli_version"]),
                   Self.validRequiredMarker(payload["id"]),
-                  Self.validRequiredMarker(payload["originator"]) else {
+                  Self.validRequiredMarker(payload["originator"]),
+                  let fingerprint = Self.sessionIdentityFingerprint(payload) else {
                 reject(.unsupportedContract)
                 return []
             }
@@ -197,7 +198,6 @@ public struct CodexAdapter: ProviderAdapter {
                     ? .unsupportedSource : .unsupportedContract)
                 return []
             }
-            let fingerprint = Self.fingerprint(line)
             if let sessionMetadataFingerprint {
                 guard sessionMetadataFingerprint == fingerprint else {
                     reject(.unsupportedContract)
@@ -643,6 +643,33 @@ public struct CodexAdapter: ProviderAdapter {
 
     private static func fingerprint(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func sessionIdentityFingerprint(_ payload: [String: Any]) -> String? {
+        // Optional session metadata evolves independently of Run provenance.
+        // Pin only the fields that prove the session and surface identity; the
+        // raw source value remains part of the digest so a same-surface source
+        // substitution still fails closed.
+        guard let id = payload["id"] as? String,
+              let originator = payload["originator"] as? String,
+              let version = payload["cli_version"] as? String,
+              let source = payload["source"] else { return nil }
+        var identity: [String: Any] = [
+            "id": id,
+            "originator": originator,
+            "source": source,
+            "cli_version": version,
+        ]
+        if let sessionID = payload["session_id"] {
+            guard validRequiredMarker(sessionID) else { return nil }
+            identity["session_id"] = sessionID
+        }
+        guard JSONSerialization.isValidJSONObject(identity),
+              let data = try? JSONSerialization.data(
+                withJSONObject: identity,
+                options: [.sortedKeys]
+              ) else { return nil }
+        return fingerprint(data)
     }
 
     private static func validFingerprint(_ value: String?) -> Bool {

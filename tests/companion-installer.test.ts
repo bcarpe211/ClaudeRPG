@@ -2925,7 +2925,20 @@ describe('Runtime Raiders release build', () => {
       expect(archiveValidator).toBeLessThan(checksum);
       expect(commandLines[archiveValidator]).toContain('/archive-validation.');
       expect(zipFacts).toContain('extended local header:                          yes');
-      expect(commands).not.toMatch(/upload|publish|aws|s3|rsync|scp/i);
+      const invokedTools = commandLines.map((line) => line.split(' ', 1)[0]);
+      expect(new Set(invokedTools)).toEqual(new Set([
+        'swift',
+        'lipo',
+        'codesign',
+        'xcrun',
+        'ditto',
+        'release-validator',
+        'shasum',
+      ]));
+      expect(commandLines
+        .filter((line) => line.startsWith('xcrun '))
+        .every((line) => /^xcrun (?:notarytool submit|stapler (?:staple|validate)) /.test(line)))
+        .toBe(true);
       const publicationHelper = readFileSync(
         join(process.cwd(), 'scripts/pi/runtime-raiders-artifacts.sh'),
         'utf8',
