@@ -1959,12 +1959,12 @@ describe('Runtime Raiders protocol-two installer', () => {
 });
 
 describe('Runtime Raiders release build', () => {
-  it('advances the stable launchd reload beyond the accepted sequence-twelve artifacts', () => {
-    // Catches a later source commit accidentally reusing the immutable sequence-12 identity.
+  it('advances the Codex Desktop metadata fix beyond the accepted sequence-thirteen artifacts', () => {
+    // Catches a later source commit accidentally reusing the immutable sequence-13 identity.
     expect(releaseContract).toEqual({
       version: '1',
-      companion_version: '0.3.4',
-      release_sequence: '13',
+      companion_version: '0.3.5',
+      release_sequence: '14',
       update_protocol_version: '2',
     });
   });
