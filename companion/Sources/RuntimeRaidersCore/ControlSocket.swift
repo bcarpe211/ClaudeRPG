@@ -576,6 +576,7 @@ public enum ControlSocketError: Error, Equatable {
     case unsafeSocketPath
     case connectionClosed
     case liveSocket
+    case enableCompletionUnverified
 }
 
 public enum ControlSocketProtocol {
@@ -923,6 +924,9 @@ public final class ControlSocketServer: @unchecked Sendable {
 }
 
 public enum ControlSocketClient {
+    private static let enableCompletionTimeoutSeconds = 5 * 60
+    private static let maximumInjectedTimeoutSeconds = 60 * 60
+
     struct PeerIdentity: Equatable, Sendable {
         let executableURL: URL
         let auditToken: Data
@@ -957,12 +961,42 @@ public enum ControlSocketClient {
         to socketURL: URL,
         maximumFrameBytes: Int = 4_096
     ) throws -> ControlResponse {
-        try exchange(
+        try send(
             request: request,
             to: socketURL,
             maximumFrameBytes: maximumFrameBytes,
-            attestPeer: false
-        ).response
+            initialTimeoutSeconds: timeoutSeconds(for: request.command),
+            enableCompletionTimeoutSeconds: enableCompletionTimeoutSeconds
+        )
+    }
+
+    static func send(
+        request: ControlRequest,
+        to socketURL: URL,
+        maximumFrameBytes: Int = 4_096,
+        initialTimeoutSeconds: Int,
+        enableCompletionTimeoutSeconds: Int
+    ) throws -> ControlResponse {
+        guard (1...maximumInjectedTimeoutSeconds).contains(initialTimeoutSeconds),
+              (1...maximumInjectedTimeoutSeconds).contains(enableCompletionTimeoutSeconds) else {
+            throw ControlSocketError.invalidFrame
+        }
+        do {
+            return try exchange(
+                request: request,
+                to: socketURL,
+                maximumFrameBytes: maximumFrameBytes,
+                attestPeer: false,
+                timeoutSeconds: initialTimeoutSeconds
+            ).response
+        } catch {
+            guard request.command == .on, isSocketTimeout(error) else { throw error }
+            return try completeTimedOutEnable(
+                socketURL: socketURL,
+                maximumFrameBytes: maximumFrameBytes,
+                timeoutSeconds: enableCompletionTimeoutSeconds
+            )
+        }
     }
 
     static func sendAttested(
@@ -974,7 +1008,8 @@ public enum ControlSocketClient {
             request: request,
             to: socketURL,
             maximumFrameBytes: maximumFrameBytes,
-            attestPeer: true
+            attestPeer: true,
+            timeoutSeconds: timeoutSeconds(for: request.command)
         )
         guard let peerIdentity = result.peerIdentity else {
             throw ControlSocketError.unsafeSocketPath
@@ -986,14 +1021,15 @@ public enum ControlSocketClient {
         request: ControlRequest,
         to socketURL: URL,
         maximumFrameBytes: Int,
-        attestPeer: Bool
+        attestPeer: Bool,
+        timeoutSeconds: Int
     ) throws -> (response: ControlResponse, peerIdentity: PeerIdentity?) {
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ControlSocketServer.currentPOSIXError() }
         try ControlSocketServer.disableSIGPIPE(descriptor)
         try ControlSocketServer.setClientTimeouts(
             descriptor,
-            seconds: timeoutSeconds(for: request.command)
+            seconds: timeoutSeconds
         )
         defer { Darwin.close(descriptor) }
         try ControlSocketServer.withAddress(socketURL.standardizedFileURL.path) { address, length in
@@ -1014,6 +1050,76 @@ public enum ControlSocketClient {
             try JSONDecoder().decode(ControlResponse.self, from: data.dropLast()),
             peerIdentity
         )
+    }
+
+    private static func completeTimedOutEnable(
+        socketURL: URL,
+        maximumFrameBytes: Int,
+        timeoutSeconds: Int
+    ) throws -> ControlResponse {
+        // The daemon handles one control client at a time. A status response therefore
+        // proves that the timed-out enable handler has returned before readiness is read.
+        let statusResponse: ControlResponse
+        do {
+            statusResponse = try exchange(
+                request: ControlRequest(command: .status),
+                to: socketURL,
+                maximumFrameBytes: maximumFrameBytes,
+                attestPeer: false,
+                timeoutSeconds: timeoutSeconds
+            ).response
+        } catch {
+            return try failClosedAfterTimedOutEnable(
+                socketURL: socketURL,
+                maximumFrameBytes: maximumFrameBytes,
+                timeoutSeconds: timeoutSeconds
+            )
+        }
+        guard statusResponse.ok,
+              let statusData = statusResponse.message.data(using: .utf8),
+              let status = try? JSONDecoder().decode(AgentStatus.self, from: statusData),
+              status.daemonRunning,
+              status.enabled,
+              status.persistedState == .enabled,
+              !status.preparedForUpdate else {
+            return try failClosedAfterTimedOutEnable(
+                socketURL: socketURL,
+                maximumFrameBytes: maximumFrameBytes,
+                timeoutSeconds: timeoutSeconds
+            )
+        }
+        return ControlResponse(ok: true, message: "enabled")
+    }
+
+    private static func failClosedAfterTimedOutEnable(
+        socketURL: URL,
+        maximumFrameBytes: Int,
+        timeoutSeconds: Int
+    ) throws -> ControlResponse {
+        // This request is serialized after the uncertain enable/status work. An OK
+        // response proves the persisted collector state was turned back off.
+        let offResponse: ControlResponse
+        do {
+            offResponse = try exchange(
+                request: ControlRequest(command: .off),
+                to: socketURL,
+                maximumFrameBytes: maximumFrameBytes,
+                attestPeer: false,
+                timeoutSeconds: timeoutSeconds
+            ).response
+        } catch {
+            throw ControlSocketError.enableCompletionUnverified
+        }
+        guard offResponse.ok else {
+            throw ControlSocketError.enableCompletionUnverified
+        }
+        return ControlResponse(ok: false, message: "unable to enable")
+    }
+
+    private static func isSocketTimeout(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSPOSIXErrorDomain &&
+            (nsError.code == Int(EAGAIN) || nsError.code == Int(EWOULDBLOCK))
     }
 
     private static func peerIdentity(_ descriptor: Int32) throws -> PeerIdentity {

@@ -1959,12 +1959,12 @@ describe('Runtime Raiders protocol-two installer', () => {
 });
 
 describe('Runtime Raiders release build', () => {
-  it('advances the collection-readiness fix beyond the accepted sequence-fourteen artifacts', () => {
-    // Catches this source fix accidentally reusing the immutable sequence-14 identity.
+  it('advances the bounded collection-readiness fix beyond the accepted sequence-fifteen artifacts', () => {
+    // Catches this source fix accidentally reusing the immutable sequence-15 identity.
     expect(releaseContract).toEqual({
       version: '1',
-      companion_version: '0.3.6',
-      release_sequence: '15',
+      companion_version: '0.3.7',
+      release_sequence: '16',
       update_protocol_version: '2',
     });
   });

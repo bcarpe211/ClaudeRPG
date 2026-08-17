@@ -1477,30 +1477,114 @@ final class ControlProtocolTests: XCTestCase {
         ))
     }
 
-    func testOnWaitsForSafeInitializationBeyondFastControlTimeout() throws {
+    func testOnCrossesInitialTimeoutThroughSerializedReadinessBarrier() throws {
         let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-slow-on-control-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: parent) }
         let socketURL = parent.appendingPathComponent("agent.sock")
-        let handlerFinished = DispatchSemaphore(value: 0)
+        let commands = PreparedStartupActionLog()
+        let enabledStatus = AgentStatus(
+            enabled: true,
+            daemonRunning: true,
+            persistedState: .enabled,
+            serverEnabledSurfaces: [.codexDesktop, .codexCLI],
+            compiledAdapters: [.codexDesktop: .available, .codexCLI: .available],
+            queuedEventCount: 0,
+            lastSuccessfulUploadMS: nil,
+            activeRunCount: 0
+        )
         let server = ControlSocketServer(socketURL: socketURL)
         try server.start { command in
-            defer { handlerFinished.signal() }
-            XCTAssertEqual(command, .on)
-            Thread.sleep(forTimeInterval: 2.25)
-            return ControlResponse(ok: true, message: "enabled")
+            commands.append(command.rawValue)
+            switch command {
+            case .on:
+                Thread.sleep(forTimeInterval: 1.25)
+                return ControlResponse(ok: true, message: "enabled")
+            case .status:
+                return ControlResponse(ok: true, message: enabledStatus.description)
+            default:
+                return ControlResponse(ok: false, message: "unexpected command")
+            }
         }
         defer { server.stop() }
 
-        let result = Result {
-            try ControlSocketClient.send(.on, to: socketURL)
-        }
-
-        XCTAssertEqual(handlerFinished.wait(timeout: .now() + 1), .success)
-        XCTAssertEqual(
-            try result.get(),
-            ControlResponse(ok: true, message: "enabled")
+        let response = try ControlSocketClient.send(
+            request: ControlRequest(command: .on),
+            to: socketURL,
+            initialTimeoutSeconds: 1,
+            enableCompletionTimeoutSeconds: 3
         )
+
+        XCTAssertEqual(response, ControlResponse(ok: true, message: "enabled"))
+        XCTAssertEqual(commands.values, ["on", "status"])
+    }
+
+    func testTimedOutOnFailsClosedWhenReadinessBarrierIsInconclusive() throws {
+        let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-inconclusive-on-control-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let socketURL = parent.appendingPathComponent("agent.sock")
+        let commands = PreparedStartupActionLog()
+        let server = ControlSocketServer(socketURL: socketURL)
+        try server.start { command in
+            commands.append(command.rawValue)
+            switch command {
+            case .on:
+                Thread.sleep(forTimeInterval: 1.25)
+                return ControlResponse(ok: true, message: "enabled")
+            case .status:
+                return ControlResponse(ok: true, message: "not-agent-status")
+            case .off:
+                return ControlResponse(ok: true, message: "off")
+            default:
+                return ControlResponse(ok: false, message: "unexpected command")
+            }
+        }
+        defer { server.stop() }
+
+        let response = try ControlSocketClient.send(
+            request: ControlRequest(command: .on),
+            to: socketURL,
+            initialTimeoutSeconds: 1,
+            enableCompletionTimeoutSeconds: 3
+        )
+
+        XCTAssertEqual(response, ControlResponse(ok: false, message: "unable to enable"))
+        XCTAssertEqual(commands.values, ["on", "status", "off"])
+    }
+
+    func testTimedOutOnNeverReportsFailureAsSafeWhenOffCannotBeVerified() throws {
+        let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-unverified-off-control-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let socketURL = parent.appendingPathComponent("agent.sock")
+        let commands = PreparedStartupActionLog()
+        let server = ControlSocketServer(socketURL: socketURL)
+        try server.start { command in
+            commands.append(command.rawValue)
+            switch command {
+            case .on:
+                Thread.sleep(forTimeInterval: 1.25)
+                return ControlResponse(ok: true, message: "enabled")
+            case .status:
+                return ControlResponse(ok: true, message: "not-agent-status")
+            case .off:
+                return ControlResponse(ok: false, message: "unable to turn off")
+            default:
+                return ControlResponse(ok: false, message: "unexpected command")
+            }
+        }
+        defer { server.stop() }
+
+        XCTAssertThrowsError(try ControlSocketClient.send(
+            request: ControlRequest(command: .on),
+            to: socketURL,
+            initialTimeoutSeconds: 1,
+            enableCompletionTimeoutSeconds: 3
+        )) { error in
+            XCTAssertEqual(error as? ControlSocketError, .enableCompletionUnverified)
+        }
+        XCTAssertEqual(commands.values, ["on", "status", "off"])
     }
 
     private func makeRecoveryPaths(_ suffix: String) throws -> AgentPaths {
