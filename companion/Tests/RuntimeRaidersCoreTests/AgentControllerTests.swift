@@ -950,6 +950,41 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testFileCreatedAfterTurnOnReturnsIsCollected() throws {
+        try withHarness(readLimitBytes: 64) { harness in
+            try harness.controller.turnOff()
+            var history = lines([
+                #"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"session","originator":"originator","source":"exec","cli_version":"0.146.0-alpha.3.1"}}"#,
+            ])
+            while history.count <= 1_024 {
+                history.append(lines([
+                    #"{"timestamp":"2026-01-01T00:00:00Z","type":"response_item","payload":{}}"#,
+                ]))
+            }
+            let existing = try harness.makeFile("history-before-on.jsonl", contents: history)
+
+            try harness.controller.turnOn(existingFiles: [existing])
+
+            XCTAssertTrue(harness.controller.isAcceptingCollection)
+            XCTAssertFalse(harness.controller.hasPendingSeedWork)
+
+            let created = try harness.makeFile(
+                "created-after-on.jsonl",
+                contents: completedRun(nativeID: "created-after-on")
+            )
+            try harness.controller.processChangedFiles([created])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+        }
+    }
+
     func testDisappearingCapturedFileCannotBlockBoundaryActivation() throws {
         try withHarness(readLimitBytes: 64) { harness in
             let metadata = lines([

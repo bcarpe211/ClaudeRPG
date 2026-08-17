@@ -669,6 +669,11 @@ public final class AgentController: @unchecked Sendable {
             try process(files: files, bypassAcceptance: true, boundaryOnly: true)
             finishBoundarySetupIfReady()
         }
+        while hasPendingSeedWork {
+            guard hasPendingReadWork else { throw AgentControllerError.invalidState }
+            try continuePendingWork()
+        }
+        guard isAcceptingCollection else { throw AgentControllerError.invalidState }
     }
 
     public func processChangedFiles(_ files: [URL]) throws {
