@@ -461,12 +461,17 @@ INSTALLED_EXECUTABLE="$SMOKE_HOME/Library/Application Support/Runtime Raiders/Ru
   echo "fake-HOME install did not preserve the verified disabled app" >&2
   exit 1
 }
-STATUS_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_USER_HOME="$SMOKE_HOME" "$INSTALLED_COMMAND" status)"
+STATUS_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_USER_HOME="$SMOKE_HOME" \
+  RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS=1 \
+  RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY="$SMOKE_HOME/Library/Application Support" \
+  "$INSTALLED_COMMAND" status)"
 printf '%s\n' "$STATUS_OUTPUT" | /usr/bin/grep -F '"activationState":"disabled"' >/dev/null || {
   echo "fake-HOME status smoke was not disabled" >&2
   exit 1
 }
 UPDATE_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_USER_HOME="$SMOKE_HOME" \
+  RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS=1 \
+  RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY="$SMOKE_HOME/Library/Application Support" \
   RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE="$LOCAL_VERSION" "$INSTALLED_COMMAND" update)"
 [ "$UPDATE_OUTPUT" = "Runtime Raiders $COMPANION_VERSION is current." ] &&
   [ "$(/usr/bin/grep -c '^LOCAL_ARCHIVE$' "$SMOKE_LOG")" -eq 1 ] &&

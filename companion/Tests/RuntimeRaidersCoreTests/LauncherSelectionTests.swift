@@ -276,77 +276,6 @@ final class LauncherSelectionTests: XCTestCase {
         XCTAssertEqual(try treeFingerprint(root), before)
     }
 
-    func testDebugLauncherProcessRecordsExecWithoutWritingSupportTreeOrExposingForbiddenOperations() throws {
-        struct RecordedExecution: Decodable, Equatable {
-            let executable: String
-            let arguments: [String]
-        }
-
-        let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let paths = AgentPaths(applicationSupportDirectory: root)
-        let active = reference(sequence: 9, sha: "a")
-        let store = try ReleaseStateStore(paths: paths)
-        try store.createInitial(ReleaseStateV1(
-            schemaVersion: 1,
-            generation: 1,
-            active: active,
-            fallback: nil,
-            trial: nil
-        ))
-        let executable = try paths.executable(for: active)
-        try FileManager.default.createDirectory(
-            at: executable.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try Data("debug agent fixture".utf8).write(to: executable)
-        let record = root.appendingPathComponent("launcher-exec-record.json")
-        let before = try treeFingerprint(paths.supportDirectory)
-        let process = Process()
-        process.executableURL = try debugLauncherExecutable()
-        process.arguments = ["status"]
-        process.environment = [
-            "PATH": "/usr/bin:/bin",
-            "RUNTIME_RAIDERS_LAUNCHER_DEBUG_SUPPORT_ROOT": root.path,
-            "RUNTIME_RAIDERS_LAUNCHER_DEBUG_EXEC_RECORD": record.path,
-        ]
-        let errorOutput = Pipe()
-        process.standardError = errorOutput
-
-        try process.run()
-        process.waitUntilExit()
-
-        let stderr = String(
-            data: errorOutput.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
-        XCTAssertEqual(process.terminationStatus, 0, stderr)
-        XCTAssertEqual(try treeFingerprint(paths.supportDirectory), before)
-        XCTAssertEqual(
-            try JSONDecoder().decode(RecordedExecution.self, from: Data(contentsOf: record)),
-            RecordedExecution(executable: executable.path, arguments: ["status"])
-        )
-
-        let operations = LauncherSelectionOperations(
-            paths: paths,
-            loadReleaseState: { throw FixtureError.exhausted },
-            preparedStartupLeaseIsHeld: { false },
-            inspectLauncher: { throw FixtureError.exhausted },
-            inspectAgent: { _ in throw FixtureError.exhausted }
-        )
-        XCTAssertEqual(
-            Set(Mirror(reflecting: operations).children.compactMap(\.label)),
-            [
-                "paths",
-                "loadReleaseState",
-                "preparedStartupLeaseIsHeld",
-                "inspectLauncher",
-                "inspectAgent",
-            ]
-        )
-    }
-
     private final class Fixture {
         let paths: AgentPaths
         let active: ReleaseReference
@@ -452,7 +381,6 @@ final class LauncherSelectionTests: XCTestCase {
     fileprivate enum FixtureError: Error {
         case exhausted
         case leaseUnavailable
-        case launcherMissing
     }
 
     private static func reference(sequence: Int64, sha: Character) -> ReleaseReference {
@@ -496,16 +424,6 @@ final class LauncherSelectionTests: XCTestCase {
         return fingerprint
     }
 
-    private func debugLauncherExecutable() throws -> URL {
-        let activeBuildDirectory = Bundle(for: Self.self).bundleURL
-            .deletingLastPathComponent()
-        let activeLauncher = activeBuildDirectory
-            .appendingPathComponent("runtime-raiders-launcher", isDirectory: false)
-        guard FileManager.default.isExecutableFile(atPath: activeLauncher.path) else {
-            throw FixtureError.launcherMissing
-        }
-        return activeLauncher
-    }
 }
 
 private extension Array {

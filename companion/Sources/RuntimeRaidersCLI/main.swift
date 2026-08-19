@@ -3,6 +3,11 @@ import Foundation
 import RuntimeRaidersCore
 import Security
 
+private let runtimeInputsVerificationArgument = "__runtime-raiders-verify-runtime-inputs"
+private let runtimeInputsVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS"
+private let applicationSupportVerificationEnvironment =
+    "RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY"
+
 private struct RuntimeInputs {
     let codexRoot: URL
     let surfaces: [RunSurface]
@@ -329,8 +334,19 @@ private func runUpdateCheck(paths: AgentPaths) throws {
 }
 
 private func run() throws {
-    let paths = AgentPaths()
+    let environment = ProcessInfo.processInfo.environment
+    let paths = try runtimePaths(environment: environment)
     let arguments = Array(CommandLine.arguments.dropFirst())
+    if arguments == [runtimeInputsVerificationArgument] {
+        guard environment[runtimeInputsVerificationEnvironment] == "1" else {
+            throw CLIError.usage
+        }
+        let enrollment = try EnrollmentConfiguration.load(
+            from: paths.stateDirectory.appendingPathComponent("enrollment.json")
+        )
+        print(try RuntimeInputs(enrollment: enrollment).companionVersion)
+        return
+    }
     guard let executableURL = Bundle.main.executableURL,
           let route = CompanionCommandRouter.route(
               arguments: arguments,
@@ -353,6 +369,21 @@ private func run() throws {
     case let .control(command):
         try runUserControlCommand(command, paths: paths)
     }
+}
+
+private func runtimePaths(environment: [String: String]) throws -> AgentPaths {
+    guard let path = environment[applicationSupportVerificationEnvironment] else {
+        return AgentPaths()
+    }
+    guard environment[runtimeInputsVerificationEnvironment] == "1",
+          path.hasPrefix("/"),
+          !path.contains("\n") else {
+        throw CLIError.usage
+    }
+    return AgentPaths(applicationSupportDirectory: URL(
+        fileURLWithPath: path,
+        isDirectory: true
+    ))
 }
 
 private func runUserControlCommand(_ command: ControlCommand, paths: AgentPaths) throws {
