@@ -814,7 +814,10 @@ private func localStatus(paths: AgentPaths) throws -> AgentStatus {
         inExistingDirectory: paths.outboxDirectory
     )) ?? 0
     let installed = try CompanionReleaseIdentity.load(from: .main)
-    let updateAvailability = (try? UpdateStateStore(paths: paths).load())?.availableVersion
+    let updateAvailability = ReleaseChecker.availableVersion(
+        installedVersion: installed.companionVersion,
+        cachedVersion: (try? UpdateStateStore(paths: paths).load())?.availableVersion
+    )
     let adapterFacts = (try? AgentController.persistedAdapterFacts(
         paths: paths,
         surfaces: surfaces

@@ -87,6 +87,21 @@ final class ReleaseCheckerTests: XCTestCase {
         }
     }
 
+    func testOfflineAvailabilitySuppressesCachedEqualAndOlderVersions() {
+        XCTAssertNil(ReleaseChecker.availableVersion(
+            installedVersion: "0.4.1",
+            cachedVersion: "0.4.1"
+        ))
+        XCTAssertNil(ReleaseChecker.availableVersion(
+            installedVersion: "0.4.1",
+            cachedVersion: "0.4.0"
+        ))
+        XCTAssertEqual(
+            ReleaseChecker.availableVersion(installedVersion: "0.4.1", cachedVersion: "0.4.2"),
+            "0.4.2"
+        )
+    }
+
     private func makeChecker(
         paths: AgentPaths,
         clock: @escaping ReleaseChecker.Clock = { 1_800_000_000_000 },

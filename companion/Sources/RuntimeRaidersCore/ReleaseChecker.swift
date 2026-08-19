@@ -266,11 +266,25 @@ public final class ReleaseChecker: @unchecked Sendable {
 
     public func availability() -> String? {
         lock.withLock {
-            guard let version = try? store.load().availableVersion,
-                  let available = try? SemanticVersion(version),
-                  installedVersion < available else { return nil }
-            return version
+            guard let cachedVersion = try? store.load().availableVersion else { return nil }
+            return Self.availableVersion(
+                installedVersion: installedVersion.rawValue,
+                cachedVersion: cachedVersion
+            )
         }
+    }
+
+    public static func availableVersion(
+        installedVersion: String,
+        cachedVersion: String?
+    ) -> String? {
+        guard let cachedVersion,
+              let installed = try? SemanticVersion(installedVersion),
+              let available = try? SemanticVersion(cachedVersion),
+              installed < available else {
+            return nil
+        }
+        return cachedVersion
     }
 
     public static func liveTransport(_ request: URLRequest) throws -> UploadHTTPResponse {
@@ -337,10 +351,10 @@ public final class ReleaseChecker: @unchecked Sendable {
     }
 
     private func availableVersion(from document: VersionDocument) -> String? {
-        guard let version = try? SemanticVersion(document.version), installedVersion < version else {
-            return nil
-        }
-        return document.version
+        Self.availableVersion(
+            installedVersion: installedVersion.rawValue,
+            cachedVersion: document.version
+        )
     }
 }
 
