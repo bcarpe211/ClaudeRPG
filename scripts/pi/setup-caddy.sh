@@ -227,11 +227,14 @@ rollback() {
   rollback_target sudoers "$SUDOERS_TARGET" "$SUDOERS_EXISTED" || rollback_status=1
   rollback_target publisher "$PUBLISHER_TARGET" "$PUBLISHER_EXISTED" || rollback_status=1
   if [ -f "$CADDY_TARGET" ] && [ ! -L "$CADDY_TARGET" ]; then
-    "$CADDY_TOOL" validate --config "$CADDY_TARGET" || rollback_status=1
+    as_root "$CADDY_TOOL" validate --config "$CADDY_TARGET" \
+      --adapter caddyfile --envfile "$CADDY_ENV" || rollback_status=1
     if manager_unit_is_exact; then
       as_root "$SYSTEMCTL_TOOL" reload caddy || rollback_status=1
     else
-      as_root "$CADDY_TOOL" reload --config "$CADDY_TARGET" --force || rollback_status=1
+      as_root "$CADDY_TOOL" adapt --config "$CADDY_TARGET" \
+        --adapter caddyfile --envfile "$CADDY_ENV" |
+        as_root "$CADDY_TOOL" reload --config - --force || rollback_status=1
     fi
   else
     rollback_status=1

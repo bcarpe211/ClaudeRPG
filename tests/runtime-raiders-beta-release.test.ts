@@ -597,6 +597,7 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
 
   const caddyLog = join(target, 'caddy.log');
   const caddyCount = join(target, 'caddy-count');
+  const rollbackStreamAccepted = join(target, 'rollback-stream-accepted');
   const systemctlLog = join(target, 'systemctl.log');
   const reloadCount = join(target, 'reload-count');
   const curlLog = join(target, 'curl.log');
@@ -614,6 +615,30 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
   executable(fakeCaddy, [
     `printf '%s\\n' "$*" >> '${caddyLog}'`,
     '[ "${1:-}" != list-modules ] || { printf "dns.providers.cloudflare\\n"; exit 0; }',
+    `if [ "${'$'}{UNIT_DRIFT_PHASE:-}" = post ] && [ -f '${reloadCount}' ]; then`,
+    `  expected_config='${join(target, 'etc/caddy/Caddyfile')}'`,
+    `  expected_env='${join(target, 'etc/caddy/cloudflare.env')}'`,
+    '  case "${1:-}" in',
+    '    validate)',
+    '      [ "$*" = "validate --config $expected_config --adapter caddyfile --envfile $expected_env" ] || exit 86',
+    '      ;;',
+    '    adapt)',
+    '      [ "$*" = "adapt --config $expected_config --adapter caddyfile --envfile $expected_env" ] || exit 87',
+    '      case "${CORRUPT_CADDY_ADAPT_STREAM:-}" in',
+    `        missing-final-newline) printf '{"rollback":"adapted"}' ;;`,
+    `        extra-trailing-blank) printf '{"rollback":"adapted"}\\n\\n' ;;`,
+    `        *) printf '{"rollback":"adapted"}\\n' ;;`,
+    '      esac',
+    '      exit 0',
+    '      ;;',
+    '    reload)',
+    '      [ "$*" = "reload --config - --force" ] || exit 88',
+    `      /usr/bin/cmp -s - <(/usr/bin/printf '%s\\n' '{"rollback":"adapted"}') || exit 89`,
+    `      /usr/bin/touch '${rollbackStreamAccepted}'`,
+    '      exit 0',
+    '      ;;',
+    '  esac',
+    'fi',
     '[ "${1:-}" != validate ] || {',
     `  count=0; [ ! -f '${caddyCount}' ] || count="$(/bin/cat '${caddyCount}')"`,
     `  count=$((count + 1)); printf '%s' "$count" > '${caddyCount}'`,
@@ -691,6 +716,7 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
   return {
     target,
     caddyLog,
+    rollbackStreamAccepted,
     systemctlLog,
     curlLog,
     installLog,
@@ -830,10 +856,31 @@ describe('Runtime Raiders one-time Caddy bootstrap', () => {
     expect(readFileSync(value.systemctlLog, 'utf8').trim().split('\n').filter((line) => line === 'reload caddy'))
       .toHaveLength(1);
     expect(readFileSync(value.caddyLog, 'utf8')).toContain(
-      `reload --config ${join(value.target, 'etc/caddy/Caddyfile')} --force`,
+      `validate --config ${join(value.target, 'etc/caddy/Caddyfile')} --adapter caddyfile `
+        + `--envfile ${join(value.target, 'etc/caddy/cloudflare.env')}`,
     );
+    expect(readFileSync(value.caddyLog, 'utf8')).toContain(
+      `adapt --config ${join(value.target, 'etc/caddy/Caddyfile')} --adapter caddyfile `
+        + `--envfile ${join(value.target, 'etc/caddy/cloudflare.env')}`,
+    );
+    expect(readFileSync(value.caddyLog, 'utf8')).toContain('reload --config - --force');
+    expect(existsSync(value.rollbackStreamAccepted)).toBe(true);
     expect(result.stdout).not.toContain('bootstrap installed');
   });
+
+  it.each(['missing-final-newline', 'extra-trailing-blank'])(
+    'rejects a non-exact adapted rollback stream: %s',
+    (streamMutation) => {
+      const value = makeBootstrapFixture();
+      const result = runBootstrap(value, {
+        UNIT_DRIFT_PHASE: 'post',
+        UNIT_DRIFT_KIND: 'reload-wrong',
+        CORRUPT_CADDY_ADAPT_STREAM: streamMutation,
+      });
+      expect(result.status).not.toBe(0);
+      expect(existsSync(value.rollbackStreamAccepted)).toBe(false);
+    },
+  );
 
   it('requires exact protected Cloudflare environment metadata before mutation', () => {
     for (const kind of ['mode-0644', 'mode-0640', 'wrong-owner', 'wrong-group', 'symlink', 'hardlink']) {
