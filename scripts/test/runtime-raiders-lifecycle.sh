@@ -110,7 +110,6 @@ swift test --disable-sandbox --package-path companion \
   --scratch-path "$gate_root/swift-scratch" \
   --disable-automatic-resolution \
   --skip-update
-bash scripts/test/runtime-raiders-validator-reproducibility.sh
 npx --no-install vitest run --no-file-parallelism \
   tests/companion-installer.test.ts \
   tests/runtime-raiders-release-gates.test.ts

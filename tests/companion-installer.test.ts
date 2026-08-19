@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -17,6 +18,8 @@ import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const installerTemplate = join(process.cwd(), 'companion/packaging/install.sh');
+const releaseBuilder = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
+const signedReleaseVerifier = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
 const label = 'com.redlattice.runtime-raiders-agent';
 const version = '1.2.3';
 const teamId = 'ABCDE12345';
@@ -28,6 +31,110 @@ const roots: string[] = [];
 function executable(path: string, lines: string[]): void {
   writeFileSync(path, ['#!/bin/sh', 'set -eu', ...lines, ''].join('\n'));
   chmodSync(path, 0o700);
+}
+
+type BuildFixture = ReturnType<typeof buildFixture>;
+
+function buildFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-beta-build-'));
+  roots.push(root);
+  const repository = join(root, 'repository');
+  const bin = join(root, 'fake-bin');
+  const log = join(root, 'tools.log');
+  mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
+  mkdirSync(join(repository, 'scripts/release'), { recursive: true });
+  mkdirSync(join(repository, 'scripts/test'), { recursive: true });
+  mkdirSync(bin);
+  cpSync(installerTemplate, join(repository, 'companion/packaging/install.sh'));
+  cpSync(releaseBuilder, join(repository, 'scripts/release/build-runtime-raiders-agent.sh'));
+  cpSync(signedReleaseVerifier, join(repository, 'scripts/test/verify-runtime-raiders-signed-release.sh'));
+  writeFileSync(join(repository, 'companion/RELEASE'), 'format=1\ncompanion_version=0.4.0\n');
+  writeFileSync(log, '');
+
+  executable(join(bin, 'swift'), [
+    'printf "swift" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
+    'arch=""; scratch=""; product=""',
+    'while [ "$#" -gt 0 ]; do',
+    '  case "$1" in',
+    '    --arch) arch=$2; shift 2;;',
+    '    --scratch-path) scratch=$2; shift 2;;',
+    '    --product) product=$2; shift 2;;',
+    '    *) shift;;',
+    '  esac',
+    'done',
+    '[ "$product" = raiders ] && { [ "$arch" = arm64 ] || [ "$arch" = x86_64 ]; } || exit 64',
+    'output="$scratch/$arch-apple-macosx/release/raiders"',
+    'mkdir -p "${output%/*}"',
+    'printf "#!/bin/sh\\nexit 0\\n" > "$output"',
+    'chmod 700 "$output"',
+  ]);
+  executable(join(bin, 'lipo'), [
+    'printf "lipo" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
+    'if [ "$1" = -create ]; then',
+    '  first=$2; output=""',
+    '  while [ "$#" -gt 0 ]; do [ "$1" != -output ] || { output=$2; break; }; shift; done',
+    '  [ -n "$output" ] || exit 64; cp "$first" "$output"; chmod 700 "$output"',
+    'else',
+    '  [ "$2" = -verify_arch ] && [ "$3" = arm64 ] && [ "$4" = x86_64 ] || exit 64',
+    'fi',
+  ]);
+  executable(join(bin, 'codesign'), [
+    'printf "codesign" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
+    'if [ "${1:-}" = -dv ]; then',
+    '  printf "Executable=fake\\nIdentifier=com.redlattice.runtime-raiders-agent\\nFormat=app bundle with Mach-O universal (arm64 x86_64)\\nCodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+0 location=embedded\\nSignature size=1\\nAuthority=Developer ID Application: Runtime Raiders (ABCDE12345)\\nTeamIdentifier=ABCDE12345\\nRuntime Version=26.0.0\\nTimestamp=Aug 18, 2026 at 12:00:00\\n" >&2',
+    '  exit 0',
+    'fi',
+    'case " $* " in',
+    '  *" --sign "*)',
+    '    if [ "${RR_BUILD_MUTATE_BUNDLE:-0}" = 1 ]; then',
+    '      last=""; for last in "$@"; do :; done',
+    '      /usr/bin/plutil -replace CFBundleVersion -string 9.9.9 "$last/Contents/Info.plist"',
+    '    fi;;',
+    'esac',
+  ]);
+  executable(join(bin, 'spctl'), [
+    'printf "spctl" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
+    'last=""; for last in "$@"; do :; done',
+    'printf "%s: accepted\\nsource=Notarized Developer ID\\n" "$last" >&2',
+  ]);
+  executable(join(bin, 'xcrun'), [
+    'printf "xcrun" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
+    'case " $* " in *" notarytool submit "*) printf "id: 00000000-0000-4000-8000-000000000001\\nstatus: Accepted\\n";; esac',
+  ]);
+
+  for (const args of [
+    ['init', '-q'],
+    ['config', 'user.email', 'runtime-raiders-test@example.invalid'],
+    ['config', 'user.name', 'Runtime Raiders Test'],
+    ['add', '.'],
+    ['commit', '-qm', 'fixture'],
+  ]) {
+    const result = spawnSync('/usr/bin/git', args, { cwd: repository, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  }
+
+  return {
+    root,
+    repository,
+    log,
+    output: join(repository, 'dist/runtime-raiders-beta-0.4.0'),
+    environment: {
+      ...process.env,
+      PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+      RR_BUILD_LOG: log,
+      RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Runtime Raiders (ABCDE12345)',
+      RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-test-profile',
+      RUNTIME_RAIDERS_TEAM_ID: 'ABCDE12345',
+    } as NodeJS.ProcessEnv,
+  };
+}
+
+function runBuild(value: BuildFixture, environment: NodeJS.ProcessEnv = value.environment) {
+  return spawnSync('/bin/bash', ['scripts/release/build-runtime-raiders-agent.sh'], {
+    cwd: value.repository,
+    env: environment,
+    encoding: 'utf8',
+  });
 }
 
 function plist(bundleVersion = version, bundleId = label): string {
@@ -352,6 +459,120 @@ function recoveryDirectories(value: Fixture): string[] {
 
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true });
+});
+
+describe('Runtime Raiders release build', () => {
+  it.each([
+    ['RUNTIME_RAIDERS_CODESIGN_IDENTITY'],
+    ['RUNTIME_RAIDERS_NOTARY_PROFILE'],
+    ['RUNTIME_RAIDERS_TEAM_ID'],
+  ])('release build requires %s before invoking any build tool', (missing) => {
+    const value = buildFixture();
+    const environment = { ...value.environment };
+    delete environment[missing];
+    const result = runBuild(value, environment);
+    expect(result.status).toBe(64);
+    expect(result.stderr).toContain(`${missing} is required`);
+    expect(readFileSync(value.log, 'utf8')).toBe('');
+  });
+
+  it('release build refuses dirty tracked source before invoking any build tool', () => {
+    const value = buildFixture();
+    writeFileSync(join(value.repository, 'companion/packaging/install.sh'), '\n# dirty tracked source\n', { flag: 'a' });
+    const result = runBuild(value);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('tracked worktree is not clean');
+    expect(readFileSync(value.log, 'utf8')).toBe('');
+  });
+
+  it('release build produces one universal signed notarized app and only the beta release files', () => {
+    const value = buildFixture();
+    const result = runBuild(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+
+    expect(readdirSync(value.output).sort()).toEqual([
+      'install.sh',
+      'release-summary.txt',
+      'runtime-raiders-agent.zip',
+      'version',
+    ]);
+    expect(readFileSync(join(value.output, 'version'), 'utf8')).toBe('{"version":"0.4.0"}\n');
+
+    const installer = readFileSync(join(value.output, 'install.sh'), 'utf8');
+    expect(installer).toContain("COMPANION_VERSION='0.4.0'");
+    expect(installer).toContain("TEAM_ID='ABCDE12345'");
+    expect(installer).not.toContain('__RUNTIME_RAIDERS_');
+    expect(installer).not.toMatch(/release.validator|public.checksum|update.manifest/i);
+
+    const extracted = join(value.root, 'extracted');
+    mkdirSync(extracted);
+    const unpacked = spawnSync('/usr/bin/ditto', [
+      '-x', '-k', join(value.output, 'runtime-raiders-agent.zip'), extracted,
+    ], { encoding: 'utf8' });
+    expect(unpacked.status, unpacked.stderr).toBe(0);
+    expect(readdirSync(extracted)).toEqual(['Runtime Raiders Agent.app']);
+    const info = join(extracted, 'Runtime Raiders Agent.app/Contents/Info.plist');
+    for (const [key, expected] of [
+      ['CFBundleIdentifier', 'com.redlattice.runtime-raiders-agent'],
+      ['CFBundleExecutable', 'runtime-raiders-agent'],
+      ['CFBundleShortVersionString', '0.4.0'],
+      ['CFBundleVersion', '0.4.0'],
+    ]) {
+      const checked = spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', info], { encoding: 'utf8' });
+      expect(checked.status, checked.stderr).toBe(0);
+      expect(checked.stdout.trim()).toBe(expected);
+    }
+
+    const commands = readFileSync(value.log, 'utf8');
+    expect(commands.match(/^swift .*<--arch> <arm64>.*<--product> <raiders>$/gm)).toHaveLength(1);
+    expect(commands.match(/^swift .*<--arch> <x86_64>.*<--product> <raiders>$/gm)).toHaveLength(1);
+    expect(commands).not.toMatch(/launcher|validator/);
+    expect(commands).toMatch(/^lipo <-create> .*<-output> /m);
+    expect(commands).toMatch(/^lipo <.*runtime-raiders-agent> <-verify_arch> <arm64> <x86_64>$/m);
+    expect(commands).toMatch(/^codesign <--force> <--options> <runtime> <--timestamp> <--sign> /m);
+    expect(commands).toMatch(/^codesign <--verify> <--deep> <--strict> <--verbose=2> /m);
+    expect(commands).toMatch(/^xcrun <notarytool> <submit> .*<--keychain-profile> <runtime-raiders-test-profile> <--wait>$/m);
+    expect(commands).toMatch(/^xcrun <stapler> <staple> /m);
+    expect(commands).toMatch(/^xcrun <stapler> <validate> /m);
+    expect(commands).toMatch(/^spctl <--assess> <--type> <execute> <--verbose=2> /m);
+
+    const summary = readFileSync(join(value.output, 'release-summary.txt'), 'utf8');
+    const head = spawnSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: value.repository, encoding: 'utf8' }).stdout.trim();
+    expect(summary).toContain(`git_sha=${head}`);
+    expect(summary).toContain('companion_version=0.4.0');
+    expect(summary).toContain('team_id=ABCDE12345');
+    expect(summary).toContain('notarization=Accepted');
+    expect(summary).toContain('hardened_runtime=true');
+    expect(summary).toContain('secure_timestamp=true');
+    expect(summary).toMatch(/runtime-raiders-agent\.zip_sha256=[0-9a-f]{64}/);
+    expect(summary).toMatch(/install\.sh_bytes=[1-9][0-9]*/);
+    expect(summary).not.toMatch(/sequence|generation|launcher|validator|public.checksum|update.manifest/i);
+  });
+
+  it('release build rejects any installer placeholder left after the two allowed substitutions', () => {
+    const value = buildFixture();
+    writeFileSync(
+      join(value.repository, 'companion/packaging/install.sh'),
+      '\n__RUNTIME_RAIDERS_RETIRED_PLACEHOLDER__\n',
+      { flag: 'a' },
+    );
+    const committed = spawnSync('/usr/bin/git', ['add', 'companion/packaging/install.sh'], { cwd: value.repository });
+    expect(committed.status).toBe(0);
+    const commit = spawnSync('/usr/bin/git', ['commit', '-qm', 'placeholder fixture'], { cwd: value.repository });
+    expect(commit.status).toBe(0);
+    const result = runBuild(value);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('unrendered installer placeholder');
+    expect(existsSync(value.output)).toBe(false);
+  });
+
+  it('release build rejects a signed bundle whose embedded version drifts', () => {
+    const value = buildFixture();
+    const result = runBuild(value, { ...value.environment, RR_BUILD_MUTATE_BUNDLE: '1' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('bundle version does not match companion/RELEASE');
+    expect(existsSync(value.output)).toBe(false);
+  });
 });
 
 describe('Runtime Raiders reinstall-safe installer', () => {

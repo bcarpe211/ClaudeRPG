@@ -151,29 +151,6 @@ describe('Runtime Raiders canonical onboarding command', () => {
     expect(output).toBe('8388608\n');
   });
 
-  it('makes Gate 2 and publication consume the same installer-size contract', () => {
-    const helper = 'runtime-raiders-artifact-contract.mjs';
-    const gate2 = readFileSync(
-      join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh'),
-      'utf8',
-    );
-    const publication = readFileSync(
-      join(process.cwd(), 'scripts/pi/runtime-raiders-artifacts.sh'),
-      'utf8',
-    );
-
-    expect(gate2).toContain(helper);
-    expect(publication).toContain(helper);
-    const reviewedSources = gate2.slice(
-      gate2.indexOf('gate_verify_reviewed_source'),
-      gate2.indexOf(' || {', gate2.indexOf('gate_verify_reviewed_source')),
-    );
-    expect(reviewedSources).toContain('scripts/lib/runtime-raiders-artifact-contract.mjs');
-    expect(reviewedSources).toContain('config/runtime-raiders-artifact-contract.json');
-    expect(gate2).not.toMatch(/-le 8388608/);
-    expect(publication).not.toMatch(/INSTALLER_MAX_BYTES=8388608/);
-  });
-
   it('displays the exact employee-facing installer command', () => {
     const command = buildCompanionInstallCommand();
 

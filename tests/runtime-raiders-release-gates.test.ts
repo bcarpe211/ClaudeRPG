@@ -24,8 +24,6 @@ const gate1 = join(root, 'scripts/test/runtime-raiders-lifecycle.sh');
 const gate1Sandbox = join(root, 'scripts/test/runtime-raiders-gate1.sb');
 const gate2Paths = join(root, 'scripts/test/runtime-raiders-gate2-paths.sh');
 const safety = join(root, 'scripts/test/runtime-raiders-gate-safety.sh');
-const renderer = join(root, 'scripts/release/render-runtime-raiders-installer.sh');
-const installerTemplate = join(root, 'companion/packaging/install.sh');
 
 function executable(path: string, lines: string[]): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -122,20 +120,6 @@ describe('Runtime Raiders Gate 1 isolation', () => {
       copyFileSync(gate1, join(repository, 'scripts/test/runtime-raiders-lifecycle.sh'));
       chmodSync(join(repository, 'scripts/test/runtime-raiders-lifecycle.sh'), 0o700);
       copyFileSync(gate1Sandbox, join(repository, 'scripts/test/runtime-raiders-gate1.sb'));
-      executable(join(repository, 'scripts/test/runtime-raiders-validator-reproducibility.sh'), [
-        'probe="$(mktemp -d "$TMPDIR/gate1-wrapper-repro.XXXXXX")"',
-        'trap \'rm -rf -- "$probe"\' EXIT HUP INT TERM',
-        'mkdir -m 700 "$probe/one" "$probe/two"',
-        'scripts/release/build-runtime-raiders-release-validator.sh companion "$probe/one-scratch" "$probe/one/validator"',
-        'scripts/release/build-runtime-raiders-release-validator.sh companion "$probe/two-scratch" "$probe/two/validator"',
-        'cmp -s "$probe/one/validator" "$probe/two/validator"',
-      ]);
-      executable(join(repository, 'scripts/release/build-runtime-raiders-release-validator.sh'), [
-        'mkdir -p "$2"',
-        'printf "reproducible-validator\\n" > "$3"',
-        'chmod 755 "$3"',
-        'rm -rf "$2"',
-      ]);
       writeFileSync(join(repository, 'companion/packaging/install.sh'), '#!/bin/sh\nexit 0\n');
       writeFileSync(join(repository, 'scripts/release/build-runtime-raiders-agent.sh'), '#!/bin/bash\nexit 0\n');
       executable(join(fakeBin, 'swift'), [
@@ -722,14 +706,16 @@ describe('Runtime Raiders Gate 2 process safety', () => {
 
 describe('Runtime Raiders Gate 2 installer binding', () => {
   it('requires the reviewed local source tree to be clean and at the signed release SHA', () => {
-    // Catches content binding against locally modified or wrong-commit renderer/template bytes.
+    // Catches content binding against locally modified or wrong-commit release source.
     const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-reviewed-source-'));
     try {
       const repository = join(fixture, 'repository');
       mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
       mkdirSync(join(repository, 'scripts/release'), { recursive: true });
+      mkdirSync(join(repository, 'scripts/test'), { recursive: true });
       writeFileSync(join(repository, 'companion/packaging/install.sh'), 'template\n');
-      writeFileSync(join(repository, 'scripts/release/render-runtime-raiders-installer.sh'), 'renderer\n');
+      writeFileSync(join(repository, 'scripts/release/build-runtime-raiders-agent.sh'), 'builder\n');
+      writeFileSync(join(repository, 'scripts/test/verify-runtime-raiders-signed-release.sh'), 'verifier\n');
       execFileSync('/usr/bin/git', ['init', '-q'], { cwd: repository });
       execFileSync('/usr/bin/git', ['config', 'user.email', 'gate@example.invalid'], { cwd: repository });
       execFileSync('/usr/bin/git', ['config', 'user.name', 'Gate Test'], { cwd: repository });
@@ -737,7 +723,7 @@ describe('Runtime Raiders Gate 2 installer binding', () => {
       execFileSync('/usr/bin/git', ['commit', '-qm', 'fixture'], { cwd: repository });
       const sha = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
       const verify = (expectedSHA: string) => bash(
-        'source "$GATE_SAFETY"; gate_verify_reviewed_source "$GATE_REPOSITORY" "$GATE_SHA" companion/packaging/install.sh scripts/release/render-runtime-raiders-installer.sh',
+        'source "$GATE_SAFETY"; gate_verify_reviewed_source "$GATE_REPOSITORY" "$GATE_SHA" companion/packaging/install.sh scripts/release/build-runtime-raiders-agent.sh scripts/test/verify-runtime-raiders-signed-release.sh',
         {
           ...process.env,
           GATE_SAFETY: safety,
@@ -752,67 +738,6 @@ describe('Runtime Raiders Gate 2 installer binding', () => {
       writeFileSync(join(repository, 'companion/packaging/install.sh'), 'template\n');
       writeFileSync(join(repository, 'untracked'), 'untracked\n');
       expect(verify(sha).status).not.toBe(0);
-    } finally {
-      rmSync(fixture, { recursive: true, force: true });
-    }
-  });
-
-  it('byte-binds the installer to reviewed source, signed facts, and validator bytes', () => {
-    // Catches appended comments/dead code, substituted commands, or validator payload replacement.
-    const fixture = mkdtempSync(join(tmpdir(), 'runtime-raiders-installer-binding-'));
-    try {
-      const validator = join(fixture, 'validator');
-      const expected = join(fixture, 'install.sh');
-      executable(validator, ['exit 0']);
-      const facts = ['ABCDEFGHIJ', '0.3.0', '9', 'd'.repeat(40), '2'];
-      const render = spawnSync('/bin/sh', [
-        renderer,
-        installerTemplate,
-        validator,
-        ...facts,
-        expected,
-      ], { encoding: 'utf8' });
-      expect(render.status, render.stderr).toBe(0);
-      expect(readFileSync(expected, 'utf8')).not.toContain('__RUNTIME_RAIDERS_');
-
-      const variants = [
-        ['comment', `${readFileSync(expected, 'utf8')}# reviewed?\n`],
-        ['dead-code', `${readFileSync(expected, 'utf8')}\nif false; then /tmp/untrusted; fi\n`],
-        ['substitution', readFileSync(expected, 'utf8').replace('/usr/bin/curl --fail', '/tmp/untrusted --fail')],
-      ] as const;
-      for (const [name, contents] of variants) {
-        const actual = join(fixture, `${name}.sh`);
-        writeFileSync(actual, contents, { mode: 0o700 });
-        const check = bash([
-          'source "$GATE_SAFETY"',
-          'gate_verify_installer_binding "$GATE_ACTUAL" "$GATE_TEMPLATE" "$GATE_RENDERER" "$GATE_VALIDATOR" ABCDEFGHIJ 0.3.0 9 "$GATE_SHA" 2 "$GATE_EXPECTED"',
-        ].join('; '), {
-          ...process.env,
-          GATE_SAFETY: safety,
-          GATE_ACTUAL: actual,
-          GATE_TEMPLATE: installerTemplate,
-          GATE_RENDERER: renderer,
-          GATE_VALIDATOR: validator,
-          GATE_SHA: 'd'.repeat(40),
-          GATE_EXPECTED: join(fixture, `expected-${name}`),
-        });
-        expect(check.status, `${name}: ${check.stderr}`).not.toBe(0);
-      }
-
-      const accepted = bash([
-        'source "$GATE_SAFETY"',
-        'gate_verify_installer_binding "$GATE_ACTUAL" "$GATE_TEMPLATE" "$GATE_RENDERER" "$GATE_VALIDATOR" ABCDEFGHIJ 0.3.0 9 "$GATE_SHA" 2 "$GATE_EXPECTED"',
-      ].join('; '), {
-        ...process.env,
-        GATE_SAFETY: safety,
-        GATE_ACTUAL: expected,
-        GATE_TEMPLATE: installerTemplate,
-        GATE_RENDERER: renderer,
-        GATE_VALIDATOR: validator,
-        GATE_SHA: 'd'.repeat(40),
-        GATE_EXPECTED: join(fixture, 'expected-accepted'),
-      });
-      expect(accepted.status, accepted.stderr).toBe(0);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
