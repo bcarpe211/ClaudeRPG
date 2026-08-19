@@ -380,7 +380,7 @@ private func run() throws {
                 verificationReadOnly: true
             )
         case [runtimeInputsVerificationArgument]:
-            let enrollment = try EnrollmentConfiguration.load(
+            let enrollment = try EnrollmentConfiguration.loadExisting(
                 from: verificationPaths.stateDirectory.appendingPathComponent("enrollment.json")
             )
             print(try RuntimeInputs(enrollment: enrollment).companionVersion)

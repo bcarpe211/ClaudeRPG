@@ -84,6 +84,63 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         }
     }
 
+    func testVerificationRuntimeInputsDoesNotMutateAStateDirectorySwappedAfterValidation() throws {
+        try withActualVersionOnlyApp { fixture in
+            let swappedState = fixture.paths.supportDirectory.appendingPathComponent(
+                "state-swap",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: swappedState,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o755]
+            )
+            let enrollmentName = "enrollment.json"
+            try FileManager.default.copyItem(
+                at: fixture.paths.stateDirectory.appendingPathComponent(enrollmentName),
+                to: swappedState.appendingPathComponent(enrollmentName)
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: swappedState.appendingPathComponent(enrollmentName).path
+            )
+
+            let swappedDescriptor = Darwin.open(
+                swappedState.path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            XCTAssertGreaterThanOrEqual(swappedDescriptor, 0)
+            guard swappedDescriptor >= 0 else { return }
+            defer { Darwin.close(swappedDescriptor) }
+            let originalStateInode = try directoryInode(fixture.paths.stateDirectory)
+            let before = try metadataFingerprint(fixture.paths.supportDirectory)
+            let racer = DirectorySwapRacer(
+                first: fixture.paths.stateDirectory.path,
+                second: swappedState.path
+            )
+            racer.start()
+            var mutated = false
+            for _ in 0..<128 {
+                _ = try runCLI(
+                    fixture,
+                    arguments: ["__runtime-raiders-verify-runtime-inputs"]
+                )
+                if try directoryPermissions(swappedDescriptor) == 0o700 {
+                    mutated = true
+                    break
+                }
+            }
+            XCTAssertTrue(racer.stop(), "directory swap racer did not stop within its bound")
+            XCTAssertNil(racer.failure)
+            if try directoryInode(fixture.paths.stateDirectory) != originalStateInode {
+                try swapDirectories(fixture.paths.stateDirectory.path, swappedState.path)
+            }
+
+            XCTAssertFalse(mutated, "verification self-check changed the swapped directory mode")
+            XCTAssertEqual(try metadataFingerprint(fixture.paths.supportDirectory), before)
+        }
+    }
+
     func testVerificationModeRejectsUpdateWithoutAValidOfflineResponse() throws {
         try withActualVersionOnlyApp { fixture in
             let result = try runCLI(
@@ -220,6 +277,66 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             storage.append(command)
             lock.unlock()
         }
+    }
+
+    private final class DirectorySwapRacer: @unchecked Sendable {
+        private let first: String
+        private let second: String
+        private let lock = NSLock()
+        private let finished = DispatchSemaphore(value: 0)
+        private var stopping = false
+        private var failureStorage: Int32?
+
+        init(first: String, second: String) {
+            self.first = first
+            self.second = second
+        }
+
+        var failure: Int32? {
+            lock.lock()
+            defer { lock.unlock() }
+            return failureStorage
+        }
+
+        func start() {
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                defer { finished.signal() }
+                while !lock.withLock({ stopping }) {
+                    let result = first.withCString { firstPath in
+                        second.withCString { secondPath in
+                            Darwin.renameatx_np(
+                                AT_FDCWD,
+                                firstPath,
+                                AT_FDCWD,
+                                secondPath,
+                                UInt32(RENAME_SWAP)
+                            )
+                        }
+                    }
+                    if result != 0 {
+                        lock.lock()
+                        failureStorage = errno
+                        lock.unlock()
+                        return
+                    }
+                    Darwin.sched_yield()
+                }
+            }
+        }
+
+        func stop() -> Bool {
+            lock.lock()
+            stopping = true
+            lock.unlock()
+            return finished.wait(timeout: .now() + 2) == .success
+        }
+    }
+
+    private struct MetadataFingerprint: Equatable {
+        let device: UInt64
+        let inode: UInt64
+        let mode: UInt16
+        let contents: Data?
     }
 
     private func withActualVersionOnlyApp(_ body: (Fixture) throws -> Void) throws {
@@ -376,6 +493,63 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             fingerprint[relative] = values.isRegularFile == true ? try Data(contentsOf: url) : Data()
         }
         return fingerprint
+    }
+
+    private func metadataFingerprint(_ root: URL) throws -> [String: MetadataFingerprint] {
+        let manager = FileManager.default
+        guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            return [:]
+        }
+        var urls = [root]
+        for case let url as URL in enumerator { urls.append(url) }
+        var fingerprint: [String: MetadataFingerprint] = [:]
+        for url in urls {
+            var metadata = stat()
+            guard Darwin.lstat(url.path, &metadata) == 0 else { throw POSIXError(.EIO) }
+            let relative = String(url.path.dropFirst(root.path.count))
+            fingerprint[relative] = MetadataFingerprint(
+                device: UInt64(metadata.st_dev),
+                inode: UInt64(metadata.st_ino),
+                mode: UInt16(metadata.st_mode & (S_IFMT | 0o777)),
+                contents: metadata.st_mode & S_IFMT == S_IFREG ? try Data(contentsOf: url) : nil
+            )
+        }
+        return fingerprint
+    }
+
+    private func directoryInode(_ directory: URL) throws -> UInt64 {
+        var metadata = stat()
+        guard Darwin.lstat(directory.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR else {
+            throw POSIXError(.EIO)
+        }
+        return UInt64(metadata.st_ino)
+    }
+
+    private func directoryPermissions(_ descriptor: Int32) throws -> UInt16 {
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR else {
+            throw POSIXError(.EIO)
+        }
+        return UInt16(metadata.st_mode & 0o777)
+    }
+
+    private func swapDirectories(_ first: String, _ second: String) throws {
+        let result = first.withCString { firstPath in
+            second.withCString { secondPath in
+                Darwin.renameatx_np(
+                    AT_FDCWD,
+                    firstPath,
+                    AT_FDCWD,
+                    secondPath,
+                    UInt32(RENAME_SWAP)
+                )
+            }
+        }
+        guard result == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     private func versionInfo() -> [String: Any] {
