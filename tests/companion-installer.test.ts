@@ -44,6 +44,7 @@ function buildFixture() {
   const bin = join(root, 'fake-bin');
   const log = join(root, 'tools.log');
   const agentLog = join(root, 'agent.log');
+  const copyHook = join(root, 'copy-hook');
   mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
   mkdirSync(join(repository, 'scripts/release'), { recursive: true });
   mkdirSync(join(repository, 'scripts/test'), { recursive: true });
@@ -74,6 +75,10 @@ function buildFixture() {
   writeFileSync(join(repository, 'concurrent-source.txt'), 'reviewed\n');
   writeFileSync(log, '');
   writeFileSync(agentLog, '');
+  executable(copyHook, [
+    '[ "$1" = release-summary.txt ] || exit 0',
+    'printf "X" | /bin/dd of="$2/install.sh" bs=1 count=1 conv=notrunc 2>/dev/null',
+  ]);
 
   executable(join(bin, 'swift'), [
     'printf "swift" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
@@ -167,6 +172,7 @@ function buildFixture() {
     repository,
     log,
     agentLog,
+    copyHook,
     output: join(repository, 'dist/runtime-raiders-beta-0.4.0'),
     environment: {
       ...process.env,
@@ -729,6 +735,26 @@ describe('Runtime Raiders release build', () => {
     expect(readFileSync(value.log, 'utf8')).toBe('');
   });
 
+  it('signed verifier refuses the copy hook outside explicit test mode', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    const environment: NodeJS.ProcessEnv = {
+      ...value.environment,
+      RUNTIME_RAIDERS_TEST_COPY_HOOK: value.copyHook,
+    };
+    for (const key of [
+      'RUNTIME_RAIDERS_TEST_MODE',
+      'RUNTIME_RAIDERS_TEST_ROOT',
+      'RUNTIME_RAIDERS_TEST_LIPO',
+      'RUNTIME_RAIDERS_TEST_CODESIGN',
+      'RUNTIME_RAIDERS_TEST_SPCTL',
+      'RUNTIME_RAIDERS_TEST_XCRUN',
+    ]) delete environment[key];
+    const result = runSignedVerifier(value, environment);
+    expect(result.status).toBe(64);
+    expect(result.stderr).toContain('signed verifier test tool configuration is invalid');
+  });
+
   it('signed verifier refuses a group-writable release directory', () => {
     const value = buildFixture();
     expect(runBuild(value).status).toBe(0);
@@ -785,6 +811,20 @@ describe('Runtime Raiders release build', () => {
       expect(readFileSync(value.agentLog, 'utf8')).toMatch(/agent:status[\s\S]*agent:update/);
     },
   );
+
+  it('signed verifier rejects an early member changed while later members are copied', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    writeFileSync(value.agentLog, '');
+    const result = runSignedVerifier(value, {
+      ...value.environment,
+      RUNTIME_RAIDERS_TEST_COPY_HOOK: value.copyHook,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('release directory changed while making private copies');
+    expect(result.stdout).not.toContain('Verified local Runtime Raiders beta');
+    expect(readFileSync(value.agentLog, 'utf8')).toBe('');
+  });
 });
 
 describe('Runtime Raiders reinstall-safe installer', () => {

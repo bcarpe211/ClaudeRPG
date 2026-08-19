@@ -39,15 +39,18 @@ if [ -n "${RUNTIME_RAIDERS_TEST_MODE:-}" ]; then
   CODESIGN_TOOL="${RUNTIME_RAIDERS_TEST_CODESIGN:-}"
   SPCTL_TOOL="${RUNTIME_RAIDERS_TEST_SPCTL:-}"
   XCRUN_TOOL="${RUNTIME_RAIDERS_TEST_XCRUN:-}"
+  COPY_HOOK="${RUNTIME_RAIDERS_TEST_COPY_HOOK:-}"
   for test_tool in "$LIPO_TOOL" "$CODESIGN_TOOL" "$SPCTL_TOOL" "$XCRUN_TOOL"; do
     validate_test_tool "$test_tool"
   done
+  [ -z "$COPY_HOOK" ] || validate_test_tool "$COPY_HOOK"
 else
   for injected_name in \
     RUNTIME_RAIDERS_TEST_ROOT RUNTIME_RAIDERS_TEST_LIPO RUNTIME_RAIDERS_TEST_CODESIGN \
-    RUNTIME_RAIDERS_TEST_SPCTL RUNTIME_RAIDERS_TEST_XCRUN; do
+    RUNTIME_RAIDERS_TEST_SPCTL RUNTIME_RAIDERS_TEST_XCRUN RUNTIME_RAIDERS_TEST_COPY_HOOK; do
     [ -z "${!injected_name:-}" ] || invalid_test_tools
   done
+  COPY_HOOK=''
   LIPO_TOOL=/usr/bin/lipo
   CODESIGN_TOOL=/usr/bin/codesign
   SPCTL_TOOL=/usr/sbin/spctl
@@ -123,8 +126,6 @@ release_mode="$(/usr/bin/stat -f '%Lp' "$SOURCE_RELEASE_DIR")"
   exit 1
 }
 
-INPUT="$WORK/input"
-/bin/mkdir -m 700 "$INPUT"
 release_directory_snapshot() {
   local directory="$1" name member mode
   [ -d "$directory" ] && [ ! -L "$directory" ] &&
@@ -144,6 +145,13 @@ release_directory_snapshot() {
     /usr/bin/shasum -a 256 "$member" | /usr/bin/awk 'NR == 1 { print $1 }'
   done
 }
+SOURCE_RELEASE_SNAPSHOT="$(release_directory_snapshot "$SOURCE_RELEASE_DIR")" || {
+  echo "signed verifier could not snapshot the release directory" >&2
+  exit 1
+}
+
+INPUT="$WORK/input"
+/bin/mkdir -m 700 "$INPUT"
 copy_release_member() {
   local name="$1" destination_mode="$2" source="$SOURCE_RELEASE_DIR/$1"
   local before after mode copied="$INPUT/$1"
@@ -172,13 +180,18 @@ copy_release_member() {
     echo "signed verifier could not isolate a release member" >&2
     exit 1
   }
+  [ -z "$COPY_HOOK" ] || "$COPY_HOOK" "$name" "$SOURCE_RELEASE_DIR"
 }
 copy_release_member install.sh 700
 copy_release_member runtime-raiders-agent.zip 600
 copy_release_member version 600
 copy_release_member release-summary.txt 600
-SOURCE_RELEASE_SNAPSHOT="$(release_directory_snapshot "$SOURCE_RELEASE_DIR")" || {
-  echo "release directory changed during signed verification" >&2
+COPIED_SOURCE_RELEASE_SNAPSHOT="$(release_directory_snapshot "$SOURCE_RELEASE_DIR")" || {
+  echo "release directory changed while making private copies" >&2
+  exit 1
+}
+[ "$COPIED_SOURCE_RELEASE_SNAPSHOT" = "$SOURCE_RELEASE_SNAPSHOT" ] || {
+  echo "release directory changed while making private copies" >&2
   exit 1
 }
 
