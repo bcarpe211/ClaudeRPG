@@ -30,10 +30,33 @@ the repository or this document:
 - `RUNTIME_RAIDERS_TEAM_ID`
 
 The Pi target defaults to `rluser@raiders.local`. If necessary, set
-`RUNTIME_RAIDERS_RELEASE_HOST` to another `user@host` value. The SSH account
-must use key authentication and be allowed to run the root publisher with
-non-interactive sudo. This keeps publication to one SSH/sudo authorization and
-one session.
+`RUNTIME_RAIDERS_RELEASE_HOST` to another `user@host` value.
+
+### One-time Pi bootstrap
+
+Before the first 0.4.0 publication, Task 7 requires a separate authorization to
+run this once on the Pi checkout:
+
+```sh
+/bin/bash scripts/pi/setup-caddy.sh runtime-raiders-beta-bootstrap
+```
+
+That command validates and installs the new Caddy configuration, installs the
+reviewed publisher as the root-owned fixed program
+`/usr/local/sbin/runtime-raiders-publish`, validates and installs this narrow
+sudo rule, validates the installed Caddy file, and reloads Caddy:
+
+```text
+rluser ALL=(root) NOPASSWD: /usr/local/sbin/runtime-raiders-publish /var/lib/runtime-raiders/staging/release-*
+```
+
+This is a separately approved one-time migration; do not combine it with normal
+publication authorization. If it has not happened, `publish` fails closed when
+the fixed program or `sudo -n` permission is unavailable. The SSH account uses
+key authentication. After bootstrap, every repeat release uses one SSH session
+and one non-interactive invocation of only that fixed publisher. Normal
+`publish` never installs code or configuration and never validates, reloads, or
+restarts Caddy.
 
 First build, sign, notarize, staple, and verify locally:
 
@@ -57,8 +80,9 @@ After publication is separately approved, run:
 ```
 
 `publish` repeats local verification, builds if the matching local output is
-missing, opens one SSH session, publishes the ZIP and installer, publishes
-`version` last, and reads the four public endpoints. Its final summary shows
+missing, seals one bounded transmission with embedded expected hashes, opens
+one SSH session to the fixed publisher, publishes the ZIP and installer,
+publishes `version` last, and reads the four public endpoints. Its final summary shows
 the version, Git SHA, three public release URLs, and `Employee collection
 remains off.` It does not install on a Mac, enable collection, reload Caddy,
 restart Node, deploy the game, change scoring, change the pause state, or touch

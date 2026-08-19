@@ -17,7 +17,7 @@ VERIFIER="$ROOT/scripts/test/verify-runtime-raiders-signed-release.sh"
 SSH_TOOL=/usr/bin/ssh
 CURL_TOOL=/usr/bin/curl
 PUBLISH_ROOT=/var/lib/runtime-raiders
-TEST_REMOTE_ENV=''
+BEFORE_TRANSMISSION_HOOK=''
 
 unsafe_test_configuration() {
   echo "release test configuration is invalid" >&2
@@ -42,14 +42,16 @@ if [ -n "${RUNTIME_RAIDERS_TEST_MODE:-}" ]; then
   SSH_TOOL="${RUNTIME_RAIDERS_TEST_SSH:-}"
   CURL_TOOL="${RUNTIME_RAIDERS_TEST_CURL:-}"
   PUBLISH_ROOT="${RUNTIME_RAIDERS_TEST_PUBLISH_ROOT:-}"
+  BEFORE_TRANSMISSION_HOOK="${RUNTIME_RAIDERS_TEST_BEFORE_TRANSMISSION:-}"
   case "$PUBLISH_ROOT" in /*) ;; *) unsafe_test_configuration ;; esac
   [ -d "$PUBLISH_ROOT" ] && [ ! -L "$PUBLISH_ROOT" ] || unsafe_test_configuration
   for tool in "$BUILDER" "$VERIFIER" "$SSH_TOOL" "$CURL_TOOL"; do validate_test_tool "$tool"; done
-  TEST_REMOTE_ENV="export RUNTIME_RAIDERS_TEST_MODE=1 RUNTIME_RAIDERS_TEST_ROOT='$ROOT' RUNTIME_RAIDERS_TEST_PUBLISH_ROOT='$PUBLISH_ROOT'"
+  [ -z "$BEFORE_TRANSMISSION_HOOK" ] || validate_test_tool "$BEFORE_TRANSMISSION_HOOK"
 else
   for injected_name in \
     RUNTIME_RAIDERS_TEST_ROOT RUNTIME_RAIDERS_TEST_BUILDER RUNTIME_RAIDERS_TEST_VERIFIER \
-    RUNTIME_RAIDERS_TEST_SSH RUNTIME_RAIDERS_TEST_CURL RUNTIME_RAIDERS_TEST_PUBLISH_ROOT; do
+    RUNTIME_RAIDERS_TEST_SSH RUNTIME_RAIDERS_TEST_CURL RUNTIME_RAIDERS_TEST_PUBLISH_ROOT \
+    RUNTIME_RAIDERS_TEST_BEFORE_TRANSMISSION; do
     [ -z "${!injected_name:-}" ] || unsafe_test_configuration
   done
 fi
@@ -186,13 +188,64 @@ PRIVATE_AFTER_VERIFY="$(release_snapshot "$PUBLISH_RELEASE")" || {
   echo "private publication copy changed during verification" >&2
   exit 1
 }
-PUBLISHER_COPY="$PUBLISH_WORK/publish-runtime-raiders-beta.sh"
-/usr/bin/git -C "$ROOT" show "$GIT_SHA:scripts/pi/publish-runtime-raiders-beta.sh" > "$PUBLISHER_COPY"
-/bin/chmod 0700 "$PUBLISHER_COPY"
 [ "$(clean_head)" = "$GIT_SHA" ] || {
   echo "reviewed source changed while sealing publication input" >&2
   exit 1
 }
+
+[ -z "$BEFORE_TRANSMISSION_HOOK" ] || "$BEFORE_TRANSMISSION_HOOK" "$PUBLISH_RELEASE"
+PRIVATE_BEFORE_TRANSMISSION="$(release_snapshot "$PUBLISH_RELEASE")" || {
+  echo "private release changed before transmission was sealed" >&2
+  exit 1
+}
+[ "$PRIVATE_BEFORE_TRANSMISSION" = "$PRIVATE_AFTER_VERIFY" ] || {
+  echo "private release changed before transmission was sealed" >&2
+  exit 1
+}
+
+file_sha256() {
+  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk 'NR == 1 { print $1 }'
+}
+TRANSMISSION_DIR="$PUBLISH_WORK/transmission"
+/bin/mkdir -m 0700 "$TRANSMISSION_DIR"
+for name in install.sh runtime-raiders-agent.zip version; do
+  /bin/cp "$PUBLISH_RELEASE/$name" "$TRANSMISSION_DIR/$name"
+done
+/bin/chmod 0700 "$TRANSMISSION_DIR/install.sh"
+/bin/chmod 0600 "$TRANSMISSION_DIR/runtime-raiders-agent.zip" "$TRANSMISSION_DIR/version"
+cat > "$TRANSMISSION_DIR/expected-sha256" <<EOF
+install.sh=$(file_sha256 "$PUBLISH_RELEASE/install.sh")
+runtime-raiders-agent.zip=$(file_sha256 "$PUBLISH_RELEASE/runtime-raiders-agent.zip")
+version=$(file_sha256 "$PUBLISH_RELEASE/version")
+EOF
+/bin/chmod 0600 "$TRANSMISSION_DIR/expected-sha256"
+for name in install.sh runtime-raiders-agent.zip version; do
+  /usr/bin/cmp -s "$TRANSMISSION_DIR/$name" "$PUBLISH_RELEASE/$name" || {
+    echo "transmission input does not match the approved release" >&2
+    exit 1
+  }
+done
+
+TRANSMISSION_TAR="$PUBLISH_WORK/transmission.tar"
+/usr/bin/tar -cf "$TRANSMISSION_TAR" -C "$TRANSMISSION_DIR" \
+  install.sh runtime-raiders-agent.zip version expected-sha256
+TRANSMISSION_CHECK="$PUBLISH_WORK/transmission-check"
+/bin/mkdir -m 0700 "$TRANSMISSION_CHECK"
+/usr/bin/tar -tf "$TRANSMISSION_TAR" > "$PUBLISH_WORK/transmission-members"
+/usr/bin/cmp -s "$PUBLISH_WORK/transmission-members" \
+  <(printf 'install.sh\nruntime-raiders-agent.zip\nversion\nexpected-sha256\n') || {
+  echo "sealed transmission member set is invalid" >&2
+  exit 1
+}
+/usr/bin/tar --no-same-owner -xf "$TRANSMISSION_TAR" -C "$TRANSMISSION_CHECK"
+for name in install.sh runtime-raiders-agent.zip version expected-sha256; do
+  /usr/bin/cmp -s "$TRANSMISSION_CHECK/$name" "$TRANSMISSION_DIR/$name" || {
+    echo "sealed transmission bytes are invalid" >&2
+    exit 1
+  }
+done
+/bin/chmod 0400 "$TRANSMISSION_TAR"
+TRANSMISSION_SNAPSHOT="$(/usr/bin/stat -f '%u:%l:%Lp:%d:%i:%z:%m:%c' "$TRANSMISSION_TAR"):$(file_sha256 "$TRANSMISSION_TAR")"
 
 RELEASE_HOST="${RUNTIME_RAIDERS_RELEASE_HOST:-rluser@raiders.local}"
 [[ "$RELEASE_HOST" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || {
@@ -206,49 +259,47 @@ RELEASE_ID="$(/usr/bin/uuidgen | /usr/bin/tr -d '-' | /usr/bin/tr 'A-F' 'a-f')"
 }
 REMOTE_STAGE="$PUBLISH_ROOT/staging/release-$RELEASE_ID"
 case "$ROOT$PUBLISH_ROOT" in *[!A-Za-z0-9_./-]*) unsafe_test_configuration ;; esac
-
-encode_file() {
-  /usr/bin/base64 < "$1"
+[ "$(/usr/bin/stat -f '%u:%l:%Lp:%d:%i:%z:%m:%c' "$TRANSMISSION_TAR"):$(file_sha256 "$TRANSMISSION_TAR")" = "$TRANSMISSION_SNAPSHOT" ] || {
+  echo "sealed transmission changed before SSH" >&2
+  exit 1
 }
-
-{
-  echo '#!/bin/bash'
-  echo 'set -euo pipefail'
-  echo 'umask 077'
-  [ -z "$TEST_REMOTE_ENV" ] || echo "$TEST_REMOTE_ENV"
-  printf "publish_root='%s'\n" "$PUBLISH_ROOT"
-  printf "stage='%s'\n" "$REMOTE_STAGE"
-  echo '/usr/bin/install -d -m 0700 "$publish_root/staging"'
-  echo '[ ! -e "$stage" ] && [ ! -L "$stage" ] || { echo "remote staging already exists" >&2; exit 1; }'
-  echo '/bin/mkdir -m 0700 "$stage"'
-  echo 'publisher="$(/usr/bin/mktemp "$publish_root/staging/.publisher.XXXXXX")"'
-  echo "cleanup() { status=\$?; /bin/rm -f -- \"\$publisher\"; [ \$status -eq 0 ] || /bin/rm -rf -- \"\$stage\"; exit \$status; }"
-  echo 'trap cleanup EXIT HUP INT TERM'
-  echo 'decode() { if /usr/bin/base64 --help 2>&1 | /usr/bin/grep -q -- --decode; then /usr/bin/base64 --decode; else /usr/bin/base64 -D; fi; }'
-  for name in install.sh runtime-raiders-agent.zip version; do
-    printf "decode > \"\$stage/%s\" <<'RUNTIME_RAIDERS_%s'\n" "$name" "${name//[^A-Za-z0-9]/_}"
-    encode_file "$PUBLISH_RELEASE/$name"
-    printf 'RUNTIME_RAIDERS_%s\n' "${name//[^A-Za-z0-9]/_}"
-  done
-  echo '/bin/chmod 0700 "$stage/install.sh"'
-  echo '/bin/chmod 0600 "$stage/runtime-raiders-agent.zip" "$stage/version"'
-  echo "decode > \"\$publisher\" <<'RUNTIME_RAIDERS_PUBLISHER'"
-  encode_file "$PUBLISHER_COPY"
-  echo 'RUNTIME_RAIDERS_PUBLISHER'
-  echo '/bin/chmod 0700 "$publisher"'
-  echo '/bin/bash "$publisher" "$stage"'
-} | "$SSH_TOOL" "$RELEASE_HOST" /usr/bin/sudo /bin/bash -s
+"$SSH_TOOL" "$RELEASE_HOST" /usr/bin/sudo -n \
+  /usr/local/sbin/runtime-raiders-publish "$REMOTE_STAGE" < "$TRANSMISSION_TAR"
 
 VERIFY_WORK="$PUBLISH_WORK/public-verification"
 /bin/mkdir -m 0700 "$VERIFY_WORK"
 
+header_has_exact_value() {
+  local file="$1" header="$2" expected="$3"
+  /usr/bin/awk -v header="$header" -v expected="$expected" '
+    BEGIN { target = tolower(header) }
+    { sub(/\r$/, "") }
+    index($0, ":") > 0 {
+      name = substr($0, 1, index($0, ":") - 1)
+      value = substr($0, index($0, ":") + 1)
+      sub(/^[[:space:]]+/, "", value); sub(/[[:space:]]+$/, "", value)
+      if (tolower(name) == target) { count += 1; found = value }
+    }
+    END { exit !(count == 1 && found == expected) }
+  ' "$file"
+}
+verify_release_headers() {
+  local file="$1" content_type="$2"
+  header_has_exact_value "$file" Content-Type "$content_type" &&
+    header_has_exact_value "$file" Cache-Control no-store &&
+    header_has_exact_value "$file" X-Content-Type-Options nosniff
+}
+
 PUBLIC_BASE=https://raiders.redlattice.com
-"$CURL_TOOL" -fsS "$PUBLIC_BASE/install.sh" > "$VERIFY_WORK/install.sh"
+"$CURL_TOOL" -fsS -D "$VERIFY_WORK/install.headers" -o "$VERIFY_WORK/install.sh" "$PUBLIC_BASE/install.sh"
 /usr/bin/cmp -s "$VERIFY_WORK/install.sh" "$PUBLISH_RELEASE/install.sh" || { echo "public install.sh mismatch" >&2; exit 1; }
-"$CURL_TOOL" -fsS -o "$VERIFY_WORK/runtime-raiders-agent.zip" "$PUBLIC_BASE/downloads/runtime-raiders-agent.zip"
+verify_release_headers "$VERIFY_WORK/install.headers" 'text/x-shellscript; charset=utf-8' || { echo "public release headers are invalid: install.sh" >&2; exit 1; }
+"$CURL_TOOL" -fsS -D "$VERIFY_WORK/archive.headers" -o "$VERIFY_WORK/runtime-raiders-agent.zip" "$PUBLIC_BASE/downloads/runtime-raiders-agent.zip"
 /usr/bin/cmp -s "$VERIFY_WORK/runtime-raiders-agent.zip" "$PUBLISH_RELEASE/runtime-raiders-agent.zip" || { echo "public archive mismatch" >&2; exit 1; }
-"$CURL_TOOL" -fsS "$PUBLIC_BASE/version" > "$VERIFY_WORK/version"
+verify_release_headers "$VERIFY_WORK/archive.headers" 'application/zip' || { echo "public release headers are invalid: archive" >&2; exit 1; }
+"$CURL_TOOL" -fsS -D "$VERIFY_WORK/version.headers" -o "$VERIFY_WORK/version" "$PUBLIC_BASE/version"
 /usr/bin/cmp -s "$VERIFY_WORK/version" "$PUBLISH_RELEASE/version" || { echo "public version mismatch" >&2; exit 1; }
+verify_release_headers "$VERIFY_WORK/version.headers" 'application/json; charset=utf-8' || { echo "public release headers are invalid: version" >&2; exit 1; }
 "$CURL_TOOL" -fsS "$PUBLIC_BASE/health" > "$VERIFY_WORK/health"
 /usr/bin/cmp -s "$VERIFY_WORK/health" <(printf '{"ok":true}\n') || { echo "public health check failed" >&2; exit 1; }
 

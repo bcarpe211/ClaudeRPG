@@ -9,11 +9,13 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const releaseScript = resolve('scripts/release/release-runtime-raiders-beta.sh');
@@ -31,7 +33,7 @@ function executable(path: string, lines: string[]): void {
   writeFileSync(path, `#!/bin/bash\nset -euo pipefail\n${lines.join('\n')}\n`, { mode: 0o700 });
 }
 
-function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {}) {
+function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string | Buffer } = {}) {
   return spawnSync(command, args, {
     cwd: options.cwd,
     env: options.env,
@@ -53,6 +55,7 @@ function makeReleaseFixture(): {
   verifierLog: string;
   sshLog: string;
   curlLog: string;
+  mutationHook: string;
 } {
   const repository = temporaryRoot('runtime-raiders-release-');
   const remoteRoot = temporaryRoot('runtime-raiders-remote-');
@@ -61,6 +64,8 @@ function makeReleaseFixture(): {
   const verifierLog = join(repository, '.verifier-log');
   const sshLog = join(repository, '.ssh-log');
   const curlLog = join(repository, '.curl-log');
+  const mutationHook = join(tools, 'mutate-before-transmission');
+  mkdirSync(join(remoteRoot, 'staging'), { mode: 0o700 });
 
   for (const path of [
     'scripts/release/release-runtime-raiders-beta.sh',
@@ -93,8 +98,12 @@ function makeReleaseFixture(): {
   ]);
   executable(join(tools, 'ssh'), [
     `printf '%s\\n' "$*" >> '${sshLog}'`,
-    '/bin/bash -s',
+    '[ "${BOOTSTRAP_MISSING:-0}" = 0 ] || { echo "fixed publisher unavailable" >&2; exit 127; }',
+    `/bin/bash '${repository}/scripts/pi/publish-runtime-raiders-beta.sh' "${'$'}{@: -1}"`,
     `[ "${'$'}{CORRUPT_PUBLIC_ARCHIVE:-0}" = 0 ] || printf 'corrupt\\n' > '${remoteRoot}/public/runtime-raiders-agent.zip'`,
+  ]);
+  executable(mutationHook, [
+    'printf "changed after private verification\\n" >> "$1/runtime-raiders-agent.zip"',
   ]);
   executable(join(tools, 'curl'), [
     `printf '%s\\n' "${'$'}{@: -1}" >> '${curlLog}'`,
@@ -108,9 +117,18 @@ function makeReleaseFixture(): {
     `esac`,
     '[ -s "$file" ]',
     'output=""',
+    'headers=""',
     'while [ "$#" -gt 0 ]; do',
-    '  if [ "$1" = -o ]; then output="$2"; shift 2; else shift; fi',
+    '  if [ "$1" = -o ]; then output="$2"; shift 2',
+    '  elif [ "$1" = -D ]; then headers="$2"; shift 2',
+    '  else shift; fi',
     'done',
+    'if [ -n "$headers" ]; then',
+    '  content_type="application/octet-stream"',
+    '  case "$url" in *install.sh) content_type="text/x-shellscript; charset=utf-8" ;; *agent.zip) content_type="application/zip" ;; *version) content_type="application/json; charset=utf-8" ;; esac',
+    '  cache_control="no-store"; [ "${BAD_PUBLIC_HEADERS:-0}" = 0 ] || cache_control="public, max-age=3600"',
+    '  printf "HTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: %s\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\n" "$content_type" "$cache_control" > "$headers"',
+    'fi',
     'if [ -n "$output" ]; then /bin/cp "$file" "$output"; else /bin/cat "$file"; fi',
   ]);
 
@@ -127,6 +145,7 @@ function makeReleaseFixture(): {
     verifierLog,
     sshLog,
     curlLog,
+    mutationHook,
     env: {
       ...process.env,
       RUNTIME_RAIDERS_TEST_MODE: '1',
@@ -141,28 +160,51 @@ function makeReleaseFixture(): {
   };
 }
 
-function makeStagingFixture(): {
+function sha256(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function makeTransmissionFixture(options: { wrongHash?: boolean; symlinkInstaller?: boolean } = {}): {
   repository: string;
   publishRoot: string;
   staging: string;
+  transmission: Buffer;
   env: NodeJS.ProcessEnv;
 } {
-  const repository = temporaryRoot('runtime-raiders-publisher-');
-  const publishRoot = temporaryRoot('runtime-raiders-public-root-');
+  const repository = temporaryRoot('runtime-raiders-transmission-publisher-');
+  const publishRoot = temporaryRoot('runtime-raiders-transmission-root-');
+  const payload = temporaryRoot('runtime-raiders-transmission-payload-');
   const staging = join(publishRoot, 'staging', 'release-0123456789abcdef');
-  mkdirSync(staging, { recursive: true, mode: 0o700 });
-  chmodSync(join(publishRoot, 'staging'), 0o700);
-  chmodSync(staging, 0o700);
+  mkdirSync(join(publishRoot, 'staging'), { mode: 0o700 });
   mkdirSync(join(repository, 'scripts/pi'), { recursive: true });
   cpSync(publisherScript, join(repository, 'scripts/pi/publish-runtime-raiders-beta.sh'));
   chmodSync(join(repository, 'scripts/pi/publish-runtime-raiders-beta.sh'), 0o700);
-  writeFileSync(join(staging, 'install.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-  writeFileSync(join(staging, 'runtime-raiders-agent.zip'), 'signed zip\n', { mode: 0o600 });
-  writeFileSync(join(staging, 'version'), '{"version":"0.4.0"}\n', { mode: 0o600 });
+  if (options.symlinkInstaller) {
+    writeFileSync(join(publishRoot, 'outside-sentinel'), '#!/bin/sh\nexit 0\n', { mode: 0o600 });
+    symlinkSync(join(publishRoot, 'outside-sentinel'), join(payload, 'install.sh'));
+  } else {
+    writeFileSync(join(payload, 'install.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
+  writeFileSync(join(payload, 'runtime-raiders-agent.zip'), 'signed zip\n', { mode: 0o600 });
+  writeFileSync(join(payload, 'version'), '{"version":"0.4.0"}\n', { mode: 0o600 });
+  const archiveHash = options.wrongHash ? '0'.repeat(64) : sha256(join(payload, 'runtime-raiders-agent.zip'));
+  writeFileSync(join(payload, 'expected-sha256'), [
+    `install.sh=${sha256(join(payload, 'install.sh'))}`,
+    `runtime-raiders-agent.zip=${archiveHash}`,
+    `version=${sha256(join(payload, 'version'))}`,
+    '',
+  ].join('\n'), { mode: 0o600 });
+  const tarPath = join(repository, 'transmission.tar');
+  const tar = run('/usr/bin/tar', [
+    '-cf', tarPath, '-C', payload,
+    'install.sh', 'runtime-raiders-agent.zip', 'version', 'expected-sha256',
+  ]);
+  expect(tar.status, tar.stderr).toBe(0);
   return {
     repository,
     publishRoot,
     staging,
+    transmission: readFileSync(tarPath),
     env: {
       ...process.env,
       RUNTIME_RAIDERS_TEST_MODE: '1',
@@ -254,9 +296,12 @@ describe('Runtime Raiders beta release entry point', () => {
     });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(value.sshLog, 'utf8').trim().split('\n')).toEqual([
-      'release-user@raiders.test /usr/bin/sudo /bin/bash -s',
-    ]);
+    const sshCalls = readFileSync(value.sshLog, 'utf8').trim().split('\n');
+    expect(sshCalls).toHaveLength(1);
+    expect(sshCalls[0]).toBe(
+      `release-user@raiders.test /usr/bin/sudo -n /usr/local/sbin/runtime-raiders-publish ${value.remoteRoot}/staging/${sshCalls[0].split('/').at(-1)}`,
+    );
+    expect(sshCalls[0].split('/').at(-1)).toMatch(/^release-[0-9a-f]{32}$/);
     expect(readFileSync(value.curlLog, 'utf8').trim().split('\n')).toEqual([
       'https://raiders.redlattice.com/install.sh',
       'https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip',
@@ -276,6 +321,45 @@ describe('Runtime Raiders beta release entry point', () => {
     expect(result.stdout).toContain('Employee collection remains off.');
   });
 
+  it('refuses mutation after private verification before opening SSH', () => {
+    const value = makeReleaseFixture();
+    const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: value.repository,
+      env: {
+        ...value.env,
+        RUNTIME_RAIDERS_TEST_BEFORE_TRANSMISSION: value.mutationHook,
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('changed before transmission was sealed');
+    expect(existsSync(value.sshLog)).toBe(false);
+  });
+
+  it('fails closed when the one-time Pi bootstrap is absent', () => {
+    const value = makeReleaseFixture();
+    const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: value.repository,
+      env: { ...value.env, BOOTSTRAP_MISSING: '1' },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('fixed publisher unavailable');
+    expect(readFileSync(value.sshLog, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(existsSync(join(value.remoteRoot, 'public/version'))).toBe(false);
+  });
+
+  it('rejects incorrect live release headers after publication', () => {
+    const value = makeReleaseFixture();
+    const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: value.repository,
+      env: { ...value.env, BAD_PUBLIC_HEADERS: '1' },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('public release headers are invalid');
+  });
+
   it('rejects a public archive that differs from the verified local release', () => {
     const value = makeReleaseFixture();
     const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
@@ -289,11 +373,57 @@ describe('Runtime Raiders beta release entry point', () => {
 });
 
 describe('Runtime Raiders root publisher', () => {
-  it('publishes exactly three safe files and consumes the private staging directory', () => {
-    const value = makeStagingFixture();
+  it('publishes only a sealed transmission whose embedded hashes match', () => {
+    const value = makeTransmissionFixture();
     const result = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', value.staging], {
       cwd: value.repository,
       env: value.env,
+      input: value.transmission,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readdirSync(join(value.publishRoot, 'public')).sort()).toEqual([
+      'install.sh',
+      'runtime-raiders-agent.zip',
+      'version',
+    ]);
+  });
+
+  it('rejects an embedded expected hash mismatch before publishing version', () => {
+    const value = makeTransmissionFixture({ wrongHash: true });
+    mkdirSync(join(value.publishRoot, 'public'), { mode: 0o755 });
+    writeFileSync(join(value.publishRoot, 'public/version'), '{"version":"0.3.7"}\n');
+    const result = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', value.staging], {
+      cwd: value.repository,
+      env: value.env,
+      input: value.transmission,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('transmission hash mismatch');
+    expect(readFileSync(join(value.publishRoot, 'public/version'), 'utf8')).toBe('{"version":"0.3.7"}\n');
+  });
+
+  it('rejects archive links without mutating their targets outside staging', () => {
+    const value = makeTransmissionFixture({ symlinkInstaller: true });
+    const sentinel = join(value.publishRoot, 'outside-sentinel');
+    const result = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', value.staging], {
+      cwd: value.repository,
+      env: value.env,
+      input: value.transmission,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(statSync(sentinel).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(value.publishRoot, 'public/version'))).toBe(false);
+  });
+
+  it('publishes exactly three safe files and consumes the private staging directory', () => {
+    const value = makeTransmissionFixture();
+    const result = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', value.staging], {
+      cwd: value.repository,
+      env: value.env,
+      input: value.transmission,
     });
 
     expect(result.status, result.stderr).toBe(0);
@@ -306,35 +436,37 @@ describe('Runtime Raiders root publisher', () => {
     expect(statSync(join(value.publishRoot, 'public')).mode & 0o022).toBe(0);
   });
 
-  it('refuses staging outside the exact private root or with extra and unsafe members', () => {
-    const outside = makeStagingFixture();
+  it('refuses staging outside the exact private root, already present, or writable by others', () => {
+    const outside = makeTransmissionFixture();
     const outsidePath = join(outside.publishRoot, 'elsewhere');
-    cpSync(outside.staging, outsidePath, { recursive: true });
     const outsideResult = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', outsidePath], {
       cwd: outside.repository,
       env: outside.env,
+      input: outside.transmission,
     });
     expect(outsideResult.status).not.toBe(0);
 
-    const extra = makeStagingFixture();
-    writeFileSync(join(extra.staging, 'extra'), 'no\n');
-    const extraResult = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', extra.staging], {
-      cwd: extra.repository,
-      env: extra.env,
+    const present = makeTransmissionFixture();
+    mkdirSync(present.staging, { mode: 0o700 });
+    const presentResult = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', present.staging], {
+      cwd: present.repository,
+      env: present.env,
+      input: present.transmission,
     });
-    expect(extraResult.status).not.toBe(0);
+    expect(presentResult.status).not.toBe(0);
 
-    const writable = makeStagingFixture();
-    chmodSync(writable.staging, 0o777);
+    const writable = makeTransmissionFixture();
+    chmodSync(join(writable.publishRoot, 'staging'), 0o777);
     const writableResult = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', writable.staging], {
       cwd: writable.repository,
       env: writable.env,
+      input: writable.transmission,
     });
     expect(writableResult.status).not.toBe(0);
   });
 
   it('keeps the old public version visible when installation fails before version', () => {
-    const value = makeStagingFixture();
+    const value = makeTransmissionFixture();
     mkdirSync(join(value.publishRoot, 'public'), { mode: 0o755 });
     writeFileSync(join(value.publishRoot, 'public/version'), '{"version":"0.3.7"}\n');
     const failMv = join(value.repository, 'fail-mv');
@@ -348,9 +480,59 @@ describe('Runtime Raiders root publisher', () => {
     const result = run('/bin/bash', ['scripts/pi/publish-runtime-raiders-beta.sh', value.staging], {
       cwd: value.repository,
       env: { ...value.env, RUNTIME_RAIDERS_TEST_MV: failMv },
+      input: value.transmission,
     });
 
     expect(result.status).not.toBe(0);
     expect(readFileSync(join(value.publishRoot, 'public/version'), 'utf8')).toBe('{"version":"0.3.7"}\n');
+  });
+});
+
+describe('Runtime Raiders one-time Caddy bootstrap', () => {
+  it('installs and validates fixed root-owned release machinery before reloading Caddy', () => {
+    const target = temporaryRoot('runtime-raiders-caddy-bootstrap-');
+    const tools = temporaryRoot('runtime-raiders-caddy-tools-');
+    const caddyLog = join(target, 'caddy.log');
+    const systemctlLog = join(target, 'systemctl.log');
+    const fakeCaddy = join(tools, 'caddy');
+    const fakeSystemctl = join(tools, 'systemctl');
+    const fakeVisudo = join(tools, 'visudo');
+    executable(fakeCaddy, [
+      `printf '%s\\n' "$*" >> '${caddyLog}'`,
+      '[ "${1:-}" != list-modules ] || printf "dns.providers.cloudflare\\n"',
+    ]);
+    executable(fakeSystemctl, [`printf '%s\\n' "$*" >> '${systemctlLog}'`]);
+    executable(fakeVisudo, ['[ "$1" = -cf ]', '[ -s "$2" ]']);
+    executable(join(tools, 'sudo'), ['exit 0']);
+
+    const result = run('/bin/bash', ['scripts/pi/setup-caddy.sh', 'runtime-raiders-beta-bootstrap'], {
+      cwd: resolve('.'),
+      env: {
+        ...process.env,
+        PATH: `${tools}:${process.env.PATH ?? ''}`,
+        RUNTIME_RAIDERS_CADDY_TEST_MODE: '1',
+        RUNTIME_RAIDERS_CADDY_TEST_ROOT: target,
+        RUNTIME_RAIDERS_CADDY_TEST_CADDY: fakeCaddy,
+        RUNTIME_RAIDERS_CADDY_TEST_SYSTEMCTL: fakeSystemctl,
+        RUNTIME_RAIDERS_CADDY_TEST_VISUDO: fakeVisudo,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(target, 'etc/caddy/Caddyfile'), 'utf8'))
+      .toBe(readFileSync(resolve('deploy/Caddyfile'), 'utf8'));
+    expect(readFileSync(join(target, 'usr/local/sbin/runtime-raiders-publish'), 'utf8'))
+      .toBe(readFileSync(publisherScript, 'utf8'));
+    expect(statSync(join(target, 'usr/local/sbin/runtime-raiders-publish')).mode & 0o777).toBe(0o755);
+    expect(statSync(join(target, 'etc/sudoers.d/runtime-raiders-publish')).mode & 0o777).toBe(0o440);
+    expect(readFileSync(join(target, 'etc/sudoers.d/runtime-raiders-publish'), 'utf8')).toBe(
+      'rluser ALL=(root) NOPASSWD: /usr/local/sbin/runtime-raiders-publish /var/lib/runtime-raiders/staging/release-*\n',
+    );
+    expect(readFileSync(caddyLog, 'utf8')).toContain(`validate --config ${resolve('deploy/Caddyfile')}`);
+    expect(readFileSync(caddyLog, 'utf8')).toContain(`validate --config ${join(target, 'etc/caddy/Caddyfile')}`);
+    expect(readFileSync(systemctlLog, 'utf8').trim().split('\n')).toEqual([
+      'daemon-reload',
+      'reload caddy',
+    ]);
   });
 });

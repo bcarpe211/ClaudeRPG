@@ -12,6 +12,16 @@ const labwcAutostart = readFileSync(resolve('deploy/labwc-autostart'), 'utf8');
 const kiosk = readFileSync(resolve('scripts/pi/kiosk.sh'), 'utf8');
 const validatorPath = resolve('scripts/pi/validate-runtime-raiders-env.sh');
 
+function resolveCaddyFileServerPath(uri: string): string {
+  const escaped = uri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const block = caddy.match(new RegExp(`handle ${escaped} \\{([\\s\\S]*?)\\n\\t\\}`))?.[1];
+  if (!block) throw new Error(`missing exact Caddy handler for ${uri}`);
+  const root = block.match(/^\s*root \* (\S+)$/m)?.[1];
+  if (!root) throw new Error(`missing file root for ${uri}`);
+  const rewritten = block.match(/^\s*rewrite \* (\/\S+)$/m)?.[1] ?? uri;
+  return join(root, rewritten);
+}
+
 function assignments(key: string): string[] {
   return [...env.matchAll(new RegExp(`^${key}=(.*)$`, 'gm'))]
     .map(([, value]) => value);
@@ -66,6 +76,15 @@ describe('Runtime Raiders internal deployment configuration', () => {
     expect(caddy.match(/\bfile_server\b/g)).toHaveLength(3);
     expect(caddy).not.toMatch(/handle(?:_path)?\s+\/downloads\/\*/);
     expect(caddy).not.toMatch(/\bfile_server\s+browse\b/);
+  });
+
+  it('maps every public URI to the flat file written by the publisher', () => {
+    expect(resolveCaddyFileServerPath('/install.sh'))
+      .toBe('/var/lib/runtime-raiders/public/install.sh');
+    expect(resolveCaddyFileServerPath('/downloads/runtime-raiders-agent.zip'))
+      .toBe('/var/lib/runtime-raiders/public/runtime-raiders-agent.zip');
+    expect(resolveCaddyFileServerPath('/version'))
+      .toBe('/var/lib/runtime-raiders/public/version');
   });
 
   it('marks every companion response non-cacheable and non-sniffable', () => {
