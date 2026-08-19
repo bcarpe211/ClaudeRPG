@@ -41,6 +41,22 @@ private enum CLIError: Error, CustomStringConvertible {
     }
 }
 
+private final class CancellableDispatchTimer: @unchecked Sendable {
+    private let workItem: DispatchWorkItem
+
+    init(action: @escaping @Sendable () -> Void) {
+        workItem = DispatchWorkItem(block: action)
+    }
+
+    func schedule(on queue: DispatchQueue, after delay: TimeInterval) {
+        queue.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func cancel() {
+        workItem.cancel()
+    }
+}
+
 private final class DaemonRuntime: @unchecked Sendable {
     private let inputs: RuntimeInputs
     private let paths = AgentPaths()
@@ -92,6 +108,24 @@ private final class DaemonRuntime: @unchecked Sendable {
         )
     )
     private lazy var control = ControlSocketServer(socketURL: paths.controlSocket)
+    private lazy var versionCheckScheduler = RecurringVersionCheckScheduler(
+        operations: VersionCheckScheduleOperations(
+            checkIfDue: { [weak self] in
+                _ = self?.releaseChecker?.checkIfDue()
+            },
+            scheduleAfter: { [weak self] delay, action in
+                let timer = CancellableDispatchTimer(action: action)
+                if let self {
+                    timer.schedule(on: updateQueue, after: delay)
+                } else {
+                    timer.cancel()
+                }
+                return ScheduledVersionCheck {
+                    timer.cancel()
+                }
+            }
+        )
+    )
     private lazy var startup = NormalDaemonStartupCoordinator(
         operations: DaemonStartupOperations(
             startControl: { [weak self] in
@@ -116,9 +150,7 @@ private final class DaemonRuntime: @unchecked Sendable {
                 _ = try activation.turnOn()
             },
             scheduleVersionCheck: { [weak self] in
-                self?.updateQueue.async { [weak self] in
-                    _ = self?.releaseChecker?.checkIfDue()
-                }
+                self?.versionCheckScheduler.start()
             }
         )
     )
@@ -164,12 +196,14 @@ private final class DaemonRuntime: @unchecked Sendable {
             while !stopLock.withLock({ stopping }) {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
             }
+            versionCheckScheduler.stop()
             controller.pauseCollection()
             uploader.setEnabled(false)
             watcher.stop()
             heartbeat.setEnabled(false)
             control.stop()
         } catch {
+            versionCheckScheduler.stop()
             controller.pauseCollection()
             uploader.setEnabled(false)
             watcher.stop()

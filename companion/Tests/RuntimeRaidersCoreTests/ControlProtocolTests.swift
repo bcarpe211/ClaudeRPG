@@ -142,6 +142,37 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(actions, ["control", "local-state", "version-check"])
     }
 
+    func testVersionCheckSchedulerChecksImmediatelyRepeatsHourlyAndCancelsShutdownTimer() throws {
+        let harness = VersionCheckScheduleHarness()
+        let scheduler = RecurringVersionCheckScheduler(
+            operations: VersionCheckScheduleOperations(
+                checkIfDue: { harness.check() },
+                scheduleAfter: { delay, action in
+                    harness.schedule(after: delay, action: action)
+                }
+            )
+        )
+
+        scheduler.start()
+
+        XCTAssertEqual(harness.checkCount, 1)
+        XCTAssertEqual(harness.delays, [60 * 60])
+
+        let firstOpportunity = try harness.action(at: 0)
+        firstOpportunity()
+
+        XCTAssertEqual(harness.checkCount, 2)
+        XCTAssertEqual(harness.delays, [60 * 60, 60 * 60])
+
+        let shutdownTimer = try harness.action(at: 1)
+        scheduler.stop()
+
+        XCTAssertEqual(harness.cancelledTimerIDs, [1])
+        shutdownTimer()
+        XCTAssertEqual(harness.checkCount, 2)
+        XCTAssertEqual(harness.delays, [60 * 60, 60 * 60])
+    }
+
     func testAgentStatusWireIncludesActivationStateWithoutRemovingEnabled() throws {
         let status = AgentStatus(
             enabled: true,
@@ -1361,5 +1392,45 @@ private final class ReleaseAbandonmentHarness {
     func cleanup() {
         lease.unlock()
         try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private final class VersionCheckScheduleHarness: @unchecked Sendable {
+    private let lock = NSLock()
+    private var checkCountStorage = 0
+    private var delaysStorage: [TimeInterval] = []
+    private var actionsStorage: [@Sendable () -> Void] = []
+    private var cancelledTimerIDsStorage: [Int] = []
+
+    var checkCount: Int { lock.withLock { checkCountStorage } }
+    var delays: [TimeInterval] { lock.withLock { delaysStorage } }
+    var cancelledTimerIDs: [Int] { lock.withLock { cancelledTimerIDsStorage } }
+
+    func check() {
+        lock.withLock { checkCountStorage += 1 }
+    }
+
+    func schedule(
+        after delay: TimeInterval,
+        action: @escaping @Sendable () -> Void
+    ) -> ScheduledVersionCheck {
+        let timerID = lock.withLock { () -> Int in
+            let timerID = actionsStorage.count
+            delaysStorage.append(delay)
+            actionsStorage.append(action)
+            return timerID
+        }
+        return ScheduledVersionCheck { [weak self] in
+            self?.lock.withLock { self?.cancelledTimerIDsStorage.append(timerID) }
+        }
+    }
+
+    func action(at index: Int) throws -> @Sendable () -> Void {
+        try lock.withLock {
+            guard actionsStorage.indices.contains(index) else {
+                throw POSIXError(.EINVAL)
+            }
+            return actionsStorage[index]
+        }
     }
 }
