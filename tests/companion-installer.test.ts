@@ -305,9 +305,9 @@ function fakeTools(root: string): string {
     'if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --deep ] && [ "$3" = --strict ] && [ "$4" = --verbose=2 ]; then',
     '  printf "codesign:deep\\n" >> "$RR_EVENT_LOG"; exit 0',
     'fi',
-    'if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --strict ] && [ "$3" = -R ]; then',
-    '  printf "%s" "$4" | grep -F "identifier \\"com.redlattice.runtime-raiders-agent\\"" >/dev/null',
-    '  printf "%s" "$4" | grep -F "certificate leaf[subject.OU] = \\"$RR_TEAM_ID\\"" >/dev/null',
+    'if [ "$#" -eq 4 ] && [ "$1" = --verify ] && [ "$2" = --strict ]; then',
+    `  expected_requirement='-R=identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RR_TEAM_ID"'"'`,
+    '  [ "$3" = "$expected_requirement" ] || exit 65',
     '  printf "codesign:requirement\\n" >> "$RR_EVENT_LOG"; exit 0',
     'fi',
     'exit 64',
@@ -854,6 +854,15 @@ describe('Runtime Raiders release build', () => {
 });
 
 describe('Runtime Raiders reinstall-safe installer', () => {
+  it('passes one exact inline designated requirement to codesign', () => {
+    const value = fixture();
+    const result = run(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(readFileSync(value.argvLog, 'utf8')).toContain(
+      'codesign-argv <--verify> <--strict> <-R=identifier "com.redlattice.runtime-raiders-agent"',
+    );
+  });
+
   it('fresh install starts off through absent state and enrolls once', () => {
     const value = fixture();
     const result = run(value);

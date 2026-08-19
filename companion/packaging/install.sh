@@ -346,7 +346,7 @@ candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CA
   exit 1
 }
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$CANDIDATE_APP"
-/usr/bin/codesign --verify --strict -R "$AGENT_REQUIREMENT" "$CANDIDATE_APP"
+/usr/bin/codesign --verify --strict "-R=$AGENT_REQUIREMENT" "$CANDIDATE_APP"
 /usr/sbin/spctl --assess --type execute --verbose=2 "$CANDIDATE_APP"
 
 if [ "$has_enrollment" -eq 0 ]; then

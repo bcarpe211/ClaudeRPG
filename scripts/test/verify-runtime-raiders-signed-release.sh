@@ -373,7 +373,21 @@ cat > "$SMOKE_BIN/codesign" <<'EOF'
 #!/bin/sh
 set -eu
 last=''; for last in "$@"; do :; done
-case "$last" in *'/unpacked/Runtime Raiders Agent.app') : ;; *) exit 65 ;; esac
+case "$last" in
+  "$RR_VERIFY_SMOKE_HOME"'/Library/Application Support/Runtime Raiders/.runtime-raiders-install.'*'/unpacked/Runtime Raiders Agent.app') : ;;
+  *) exit 65 ;;
+esac
+if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --deep ] && [ "$3" = --strict ] && [ "$4" = --verbose=2 ]; then
+  printf 'codesign:deep\n' >> "$RR_VERIFY_SMOKE_LOG"
+  exit 0
+fi
+if [ "$#" -eq 4 ] && [ "$1" = --verify ] && [ "$2" = --strict ]; then
+  expected_requirement='-R=identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RR_VERIFY_TEAM_ID"'"'
+  [ "$3" = "$expected_requirement" ] || exit 65
+  printf 'codesign:requirement\n' >> "$RR_VERIFY_SMOKE_LOG"
+  exit 0
+fi
+exit 64
 EOF
 cat > "$SMOKE_BIN/spctl" <<'EOF'
 #!/bin/sh
@@ -407,6 +421,8 @@ SMOKE_ENV=(
   CFFIXED_USER_HOME="$SMOKE_HOME"
   RR_VERIFY_SMOKE_LOG="$SMOKE_LOG"
   RR_VERIFY_ARCHIVE="$ARCHIVE"
+  RR_VERIFY_SMOKE_HOME="$SMOKE_HOME"
+  RR_VERIFY_TEAM_ID="$TEAM_ID"
 )
 /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "${SMOKE_ENV[@]}" /bin/sh "$SMOKE_INSTALLER" >/dev/null
 INSTALLED_COMMAND="$SMOKE_HOME/.local/bin/raiders"
@@ -425,7 +441,9 @@ printf '%s\n' "$STATUS_OUTPUT" | /usr/bin/grep -F '"activationState":"disabled"'
 UPDATE_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_USER_HOME="$SMOKE_HOME" \
   RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE="$LOCAL_VERSION" "$INSTALLED_COMMAND" update)"
 [ "$UPDATE_OUTPUT" = "Runtime Raiders $COMPANION_VERSION is current." ] &&
-  [ "$(/usr/bin/grep -c '^LOCAL_ARCHIVE$' "$SMOKE_LOG")" -eq 1 ] || {
+  [ "$(/usr/bin/grep -c '^LOCAL_ARCHIVE$' "$SMOKE_LOG")" -eq 1 ] &&
+  [ "$(/usr/bin/grep -c '^codesign:deep$' "$SMOKE_LOG")" -eq 1 ] &&
+  [ "$(/usr/bin/grep -c '^codesign:requirement$' "$SMOKE_LOG")" -eq 1 ] || {
   echo "fake-HOME local update-check smoke failed" >&2
   exit 1
 }
