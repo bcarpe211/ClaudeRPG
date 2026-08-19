@@ -63,6 +63,12 @@ function buildFixture() {
     '    /usr/bin/git -C "${RR_BUILD_CONCURRENT_FILE%/*}" add concurrent-source.txt',
     '    /usr/bin/git -C "${RR_BUILD_CONCURRENT_FILE%/*}" commit -qm concurrent-drift;;',
     'esac',
+    'case "${RR_BUILD_STAGED_DRIFT:-}" in',
+    '  member-set) printf "unexpected\\n" > "$1/unexpected";;',
+    '  metadata) /bin/chmod 600 "$1/install.sh";;',
+    '  size) printf "x" >> "$1/version";;',
+    '  hash) printf "X" | /bin/dd of="$1/install.sh" bs=1 count=1 conv=notrunc 2>/dev/null;;',
+    'esac',
   ]);
   writeFileSync(join(repository, 'companion/RELEASE'), 'format=1\ncompanion_version=0.4.0\n');
   writeFileSync(join(repository, 'concurrent-source.txt'), 'reviewed\n');
@@ -103,9 +109,15 @@ function buildFixture() {
   ]);
   executable(join(bin, 'lipo'), [
     'printf "lipo" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
-    'if [ -n "${RR_VERIFY_MUTATE_RELEASE:-}" ] && [ ! -e "$RR_VERIFY_MUTATE_RELEASE/.mutated" ]; then',
-    '  for name in install.sh runtime-raiders-agent.zip version release-summary.txt; do printf "swapped\\n" > "$RR_VERIFY_MUTATE_RELEASE/$name"; done',
-    '  : > "$RR_VERIFY_MUTATE_RELEASE/.mutated"',
+    'if [ -n "${RR_VERIFY_MUTATE_RELEASE:-}" ] && [ ! -e "$RR_VERIFY_MUTATION_MARKER" ]; then',
+    '  case "${RR_VERIFY_MUTATION:-}" in',
+    '    member-set) printf "unexpected\\n" > "$RR_VERIFY_MUTATE_RELEASE/unexpected";;',
+    '    metadata) /bin/chmod 600 "$RR_VERIFY_MUTATE_RELEASE/install.sh";;',
+    '    size) printf "x" >> "$RR_VERIFY_MUTATE_RELEASE/version";;',
+    '    hash) printf "X" | /bin/dd of="$RR_VERIFY_MUTATE_RELEASE/install.sh" bs=1 count=1 conv=notrunc 2>/dev/null;;',
+    '    *) exit 64;;',
+    '  esac',
+    '  : > "$RR_VERIFY_MUTATION_MARKER"',
     'fi',
     'if [ "$1" = -create ]; then',
     '  first=$2; output=""',
@@ -161,6 +173,7 @@ function buildFixture() {
       PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
       RR_BUILD_LOG: log,
       RR_BUILD_CONCURRENT_FILE: join(repository, 'concurrent-source.txt'),
+      RR_VERIFY_MUTATION_MARKER: join(root, 'verify-mutation.done'),
       RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Runtime Raiders (ABCDE12345)',
       RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-test-profile',
       RUNTIME_RAIDERS_TEAM_ID: 'ABCDE12345',
@@ -652,6 +665,18 @@ describe('Runtime Raiders release build', () => {
     expect(existsSync(value.output)).toBe(false);
   });
 
+  it.each(['member-set', 'metadata', 'size', 'hash'])(
+    'release build refuses staged %s drift after signed verification',
+    (drift) => {
+      const value = buildFixture();
+      const result = runBuild(value, { ...value.environment, RR_BUILD_STAGED_DRIFT: drift });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('staged release changed after signed verification');
+      expect(existsSync(value.output)).toBe(false);
+      expect(readFileSync(value.agentLog, 'utf8')).toMatch(/agent:status[\s\S]*agent:update/);
+    },
+  );
+
   it('release build rejects an archive larger than the installer 8 MiB limit', () => {
     const value = buildFixture();
     const result = runBuild(value, { ...value.environment, RR_BUILD_OVERSIZED_BINARY: '1' });
@@ -744,16 +769,22 @@ describe('Runtime Raiders release build', () => {
     expect(result.stderr).toContain('release summary does not match reviewed HEAD');
   });
 
-  it('signed verifier uses private copies after validating release members', () => {
-    const value = buildFixture();
-    expect(runBuild(value).status).toBe(0);
-    const result = runSignedVerifier(value, {
-      ...value.environment,
-      RR_VERIFY_MUTATE_RELEASE: value.output,
-    });
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    expect(readFileSync(join(value.output, 'install.sh'), 'utf8')).toBe('swapped\n');
-  });
+  it.each(['member-set', 'metadata', 'size', 'hash'])(
+    'signed verifier rejects source release %s drift after using private copies',
+    (mutation) => {
+      const value = buildFixture();
+      expect(runBuild(value).status).toBe(0);
+      writeFileSync(value.agentLog, '');
+      const result = runSignedVerifier(value, {
+        ...value.environment,
+        RR_VERIFY_MUTATE_RELEASE: value.output,
+        RR_VERIFY_MUTATION: mutation,
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('release directory changed during signed verification');
+      expect(readFileSync(value.agentLog, 'utf8')).toMatch(/agent:status[\s\S]*agent:update/);
+    },
+  );
 });
 
 describe('Runtime Raiders reinstall-safe installer', () => {

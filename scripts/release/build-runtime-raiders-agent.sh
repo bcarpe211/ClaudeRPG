@@ -318,8 +318,28 @@ version_sha256=$VERSION_SHA256
 EOF
 /bin/chmod 644 "$STAGED_OUTPUT/runtime-raiders-agent.zip" "$STAGED_OUTPUT/version" "$STAGED_OUTPUT/release-summary.txt"
 
-[ "$(/usr/bin/find "$STAGED_OUTPUT" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 4 ] || {
-  echo "local release output must contain exactly four files" >&2
+staged_release_snapshot() {
+  local directory="$1" name member mode owner
+  owner="$(/usr/bin/id -u)"
+  [ -d "$directory" ] && [ ! -L "$directory" ] &&
+    [ "$(/usr/bin/stat -f '%u' "$directory")" = "$owner" ] || return 1
+  mode="$(/usr/bin/stat -f '%Lp' "$directory")"
+  (( (8#$mode & 8#022) == 0 )) || return 1
+  [ "$(/usr/bin/find "$directory" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 4 ] || return 1
+  printf 'directory:%s\n' "$(/usr/bin/stat -f '%u:%g:%l:%Lp:%d:%i:%z:%m:%c' "$directory")"
+  for name in install.sh runtime-raiders-agent.zip version release-summary.txt; do
+    member="$directory/$name"
+    [ -f "$member" ] && [ ! -L "$member" ] &&
+      [ "$(/usr/bin/stat -f '%u' "$member")" = "$owner" ] &&
+      [ "$(/usr/bin/stat -f '%l' "$member")" = 1 ] || return 1
+    mode="$(/usr/bin/stat -f '%Lp' "$member")"
+    (( (8#$mode & 8#022) == 0 )) || return 1
+    printf '%s:%s:' "$name" "$(/usr/bin/stat -f '%u:%g:%l:%Lp:%d:%i:%z:%m:%c' "$member")"
+    /usr/bin/shasum -a 256 "$member" | /usr/bin/awk 'NR == 1 { print $1 }'
+  done
+}
+STAGED_RELEASE_SNAPSHOT="$(staged_release_snapshot "$STAGED_OUTPUT")" || {
+  echo "local release output must contain exactly four safe files" >&2
   exit 1
 }
 "$ROOT/scripts/test/verify-runtime-raiders-signed-release.sh" "$STAGED_OUTPUT"
@@ -339,6 +359,14 @@ FINAL_GIT_SHA="$(/usr/bin/git -C "$ROOT" rev-parse --verify HEAD)" || {
 
 [ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
   echo "release output appeared during build" >&2
+  exit 1
+}
+FINAL_STAGED_RELEASE_SNAPSHOT="$(staged_release_snapshot "$STAGED_OUTPUT")" || {
+  echo "staged release changed after signed verification" >&2
+  exit 1
+}
+[ "$FINAL_STAGED_RELEASE_SNAPSHOT" = "$STAGED_RELEASE_SNAPSHOT" ] || {
+  echo "staged release changed after signed verification" >&2
   exit 1
 }
 /bin/mv "$STAGED_OUTPUT" "$OUTPUT"

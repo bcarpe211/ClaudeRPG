@@ -125,6 +125,25 @@ release_mode="$(/usr/bin/stat -f '%Lp' "$SOURCE_RELEASE_DIR")"
 
 INPUT="$WORK/input"
 /bin/mkdir -m 700 "$INPUT"
+release_directory_snapshot() {
+  local directory="$1" name member mode
+  [ -d "$directory" ] && [ ! -L "$directory" ] &&
+    [ "$(/usr/bin/stat -f '%u' "$directory")" = "$OWNER" ] || return 1
+  mode="$(/usr/bin/stat -f '%Lp' "$directory")"
+  (( (8#$mode & 8#022) == 0 )) || return 1
+  [ "$(/usr/bin/find "$directory" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 4 ] || return 1
+  printf 'directory:%s\n' "$(/usr/bin/stat -f '%u:%g:%l:%Lp:%d:%i:%z:%m:%c' "$directory")"
+  for name in install.sh runtime-raiders-agent.zip version release-summary.txt; do
+    member="$directory/$name"
+    [ -f "$member" ] && [ ! -L "$member" ] &&
+      [ "$(/usr/bin/stat -f '%u' "$member")" = "$OWNER" ] &&
+      [ "$(/usr/bin/stat -f '%l' "$member")" = 1 ] || return 1
+    mode="$(/usr/bin/stat -f '%Lp' "$member")"
+    (( (8#$mode & 8#022) == 0 )) || return 1
+    printf '%s:%s:' "$name" "$(/usr/bin/stat -f '%u:%g:%l:%Lp:%d:%i:%z:%m:%c' "$member")"
+    /usr/bin/shasum -a 256 "$member" | /usr/bin/awk 'NR == 1 { print $1 }'
+  done
+}
 copy_release_member() {
   local name="$1" destination_mode="$2" source="$SOURCE_RELEASE_DIR/$1"
   local before after mode copied="$INPUT/$1"
@@ -158,6 +177,10 @@ copy_release_member install.sh 700
 copy_release_member runtime-raiders-agent.zip 600
 copy_release_member version 600
 copy_release_member release-summary.txt 600
+SOURCE_RELEASE_SNAPSHOT="$(release_directory_snapshot "$SOURCE_RELEASE_DIR")" || {
+  echo "release directory changed during signed verification" >&2
+  exit 1
+}
 
 INSTALLER="$INPUT/install.sh"
 ARCHIVE="$INPUT/runtime-raiders-agent.zip"
@@ -396,6 +419,15 @@ UPDATE_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_U
 [ "$(/usr/bin/shasum -a 256 "$AGENT_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')" = "$VERIFIED_EXECUTABLE_SHA256" ] &&
   [ "$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { print $1 }')" = "$ARCHIVE_SHA256" ] || {
   echo "signed verifier modified verified release bytes" >&2
+  exit 1
+}
+
+FINAL_SOURCE_RELEASE_SNAPSHOT="$(release_directory_snapshot "$SOURCE_RELEASE_DIR")" || {
+  echo "release directory changed during signed verification" >&2
+  exit 1
+}
+[ "$FINAL_SOURCE_RELEASE_SNAPSHOT" = "$SOURCE_RELEASE_SNAPSHOT" ] || {
+  echo "release directory changed during signed verification" >&2
   exit 1
 }
 
