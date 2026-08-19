@@ -5,34 +5,26 @@ import Foundation
 private func updateStateFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 
 public struct UpdateStateV1: Codable, Equatable, Sendable {
-    public let version: Int
+    public var version = 1
     public var lastCheckAttemptMS: Int64?
-    public var lastObservedReleaseSequence: Int64?
-    public var lastNotifiedReleaseSequence: Int64?
-    public var cachedManifest: ReleaseManifestV1?
+    public var lastNotifiedVersion: String?
+    public var availableVersion: String?
 
     public init(
         lastCheckAttemptMS: Int64? = nil,
-        lastObservedReleaseSequence: Int64? = nil,
-        lastNotifiedReleaseSequence: Int64? = nil,
-        cachedManifest: ReleaseManifestV1? = nil
+        lastNotifiedVersion: String? = nil,
+        availableVersion: String? = nil
     ) {
-        version = 1
         self.lastCheckAttemptMS = lastCheckAttemptMS
-        self.lastObservedReleaseSequence = lastObservedReleaseSequence
-        self.lastNotifiedReleaseSequence = lastNotifiedReleaseSequence
-        self.cachedManifest = cachedManifest
+        self.lastNotifiedVersion = lastNotifiedVersion
+        self.availableVersion = availableVersion
     }
 }
 
 public final class UpdateStateStore: @unchecked Sendable {
     private static let maximumBytes = 16 * 1_024
     private static let allowedKeys: Set<String> = [
-        "version",
-        "lastCheckAttemptMS",
-        "lastObservedReleaseSequence",
-        "lastNotifiedReleaseSequence",
-        "cachedManifest",
+        "version", "lastCheckAttemptMS", "lastNotifiedVersion", "availableVersion",
     ]
 
     private let file: URL
@@ -45,21 +37,19 @@ public final class UpdateStateStore: @unchecked Sendable {
         file = paths.updateState
         directoryDescriptor = try OwnerOnlyDirectory.openOrCreate(paths.stateDirectory)
         lockDescriptor = Darwin.openat(
-            directoryDescriptor,
-            "update-state.lock",
-            O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
+            directoryDescriptor, "update-state.lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
             mode_t(0o600)
         )
         guard lockDescriptor >= 0 else {
             Darwin.close(directoryDescriptor)
             throw AgentControllerError.invalidState
         }
-        var lockMetadata = stat()
-        guard Darwin.fstat(lockDescriptor, &lockMetadata) == 0,
-              lockMetadata.st_mode & S_IFMT == S_IFREG,
-              lockMetadata.st_uid == Darwin.geteuid(),
-              lockMetadata.st_mode & 0o777 == 0o600,
-              lockMetadata.st_nlink == 1 else {
+        var metadata = stat()
+        guard Darwin.fstat(lockDescriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o777 == 0o600,
+              metadata.st_nlink == 1 else {
             Darwin.close(lockDescriptor)
             Darwin.close(directoryDescriptor)
             throw AgentControllerError.invalidState
@@ -72,16 +62,10 @@ public final class UpdateStateStore: @unchecked Sendable {
         Darwin.close(directoryDescriptor)
     }
 
-    public func load() throws -> UpdateStateV1 {
-        try withFileLock {
-            try loadUnlocked()
-        }
-    }
+    public func load() throws -> UpdateStateV1 { try withFileLock { try loadUnlocked() } }
 
     public func save(_ state: UpdateStateV1) throws {
-        try withFileLock {
-            try saveUnlocked(state)
-        }
+        try withFileLock { try saveUnlocked(state) }
     }
 
     func withExclusiveState<Result>(
@@ -126,14 +110,8 @@ public final class UpdateStateStore: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(state)
-        guard data.count <= Self.maximumBytes else {
-            throw AgentControllerError.invalidState
-        }
-        try atomicStore.write(
-            data,
-            directoryDescriptor: directoryDescriptor,
-            name: file.lastPathComponent
-        )
+        guard data.count <= Self.maximumBytes else { throw AgentControllerError.invalidState }
+        try atomicStore.write(data, directoryDescriptor: directoryDescriptor, name: file.lastPathComponent)
     }
 
     private func replaceMalformedStateUnlocked() throws -> UpdateStateV1 {
@@ -144,16 +122,13 @@ public final class UpdateStateStore: @unchecked Sendable {
 
     private func read() throws -> Data? {
         let descriptor = Darwin.openat(
-            directoryDescriptor,
-            file.lastPathComponent,
-            O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+            directoryDescriptor, file.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_CLOEXEC
         )
         guard descriptor >= 0 else {
             if errno == ENOENT { return nil }
             throw AgentControllerError.invalidState
         }
         defer { Darwin.close(descriptor) }
-
         var metadata = stat()
         guard Darwin.fstat(descriptor, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG,
@@ -164,17 +139,12 @@ public final class UpdateStateStore: @unchecked Sendable {
               metadata.st_size <= Self.maximumBytes else {
             throw AgentControllerError.invalidState
         }
-
         var data = Data(count: Int(metadata.st_size))
         var offset = 0
         try data.withUnsafeMutableBytes { bytes in
             guard let base = bytes.baseAddress else { return }
             while offset < bytes.count {
-                let count = Darwin.read(
-                    descriptor,
-                    base.advanced(by: offset),
-                    bytes.count - offset
-                )
+                let count = Darwin.read(descriptor, base.advanced(by: offset), bytes.count - offset)
                 if count > 0 { offset += count }
                 else if count < 0, errno == EINTR { continue }
                 else { throw AgentControllerError.invalidState }
@@ -192,60 +162,22 @@ public final class UpdateStateStore: @unchecked Sendable {
 
     private static func valid(_ state: UpdateStateV1) -> Bool {
         guard state.version == 1,
-              validAttempt(state.lastCheckAttemptMS),
-              validSequence(state.lastObservedReleaseSequence),
-              validSequence(state.lastNotifiedReleaseSequence) else {
-            return false
-        }
-        if let notified = state.lastNotifiedReleaseSequence,
-           let observed = state.lastObservedReleaseSequence,
-           notified > observed {
-            return false
-        }
-        if state.lastNotifiedReleaseSequence != nil,
-           state.lastObservedReleaseSequence == nil {
-            return false
-        }
-        guard let cached = state.cachedManifest else {
-            return state.lastObservedReleaseSequence == nil
-        }
-        guard validated(cached) == cached,
-              state.lastObservedReleaseSequence == cached.releaseSequence else {
+              state.lastCheckAttemptMS.map({ (0...ReleaseContractValidation.maximumSafeInteger).contains($0) }) ?? true,
+              state.lastNotifiedVersion.map(validVersion) ?? true,
+              state.availableVersion.map(validVersion) ?? true else {
             return false
         }
         return true
     }
 
-    private static func validAttempt(_ value: Int64?) -> Bool {
-        guard let value else { return true }
-        return (0...ReleaseContractValidation.maximumSafeInteger).contains(value)
-    }
-
-    private static func validSequence(_ value: Int64?) -> Bool {
-        guard let value else { return true }
-        return (1...ReleaseContractValidation.maximumSafeInteger).contains(value)
-    }
-
-    private static func validated(_ manifest: ReleaseManifestV1) -> ReleaseManifestV1? {
-        let object: [String: Any] = [
-            "manifest_version": manifest.manifestVersion,
-            "companion_version": manifest.companionVersion,
-            "release_sequence": manifest.releaseSequence,
-            "release_sha": manifest.releaseSHA,
-            "update_protocol_version": manifest.updateProtocolVersion,
-            "zip_sha256": manifest.zipSHA256,
-            "zip_url": manifest.zipURL.absoluteString,
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
-            return nil
-        }
-        return try? ReleaseManifestV1.decode(data)
+    private static func validVersion(_ value: String) -> Bool {
+        (try? SemanticVersion(value)) != nil
     }
 }
 
-public enum ReleaseCheckResult: Equatable, Sendable {
+public enum VersionCheckResult: Equatable, Sendable {
     case notDue
-    case checked(CompanionUpdateAvailability?)
+    case checked(availableVersion: String?)
     case failed
 }
 
@@ -257,7 +189,7 @@ public final class ReleaseChecker: @unchecked Sendable {
     private static let checkIntervalMS: Int64 = 24 * 60 * 60 * 1_000
     private static let maximumResponseBytes = 64 * 1_024
 
-    private let installed: CompanionReleaseIdentity
+    private let installedVersion: SemanticVersion
     private let store: UpdateStateStore
     private let transport: Transport
     private let notifier: Notifier
@@ -266,25 +198,23 @@ public final class ReleaseChecker: @unchecked Sendable {
 
     public init(
         paths: AgentPaths,
-        installed: CompanionReleaseIdentity,
+        installedVersion: String,
         transport: @escaping Transport = ReleaseChecker.liveTransport,
         notifier: @escaping Notifier = ReleaseChecker.liveNotifier,
-        clockMS: @escaping Clock = {
-            Int64(Date().timeIntervalSince1970 * 1_000)
-        }
+        clockMS: @escaping Clock = { Int64(Date().timeIntervalSince1970 * 1_000) }
     ) throws {
-        self.installed = installed
+        self.installedVersion = try SemanticVersion(installedVersion)
         store = try UpdateStateStore(paths: paths)
         self.transport = transport
         self.notifier = notifier
         self.clockMS = clockMS
     }
 
-    public func checkIfDue() -> ReleaseCheckResult {
+    public func checkIfDue() -> VersionCheckResult {
         lock.withLock {
             do {
                 let now = clockMS()
-                let isDue = try store.withExclusiveState { state -> Bool in
+                let due = try store.withExclusiveState { state -> Bool in
                     if let lastAttempt = state.lastCheckAttemptMS,
                        now < lastAttempt || now - lastAttempt < Self.checkIntervalMS {
                         return false
@@ -292,72 +222,68 @@ public final class ReleaseChecker: @unchecked Sendable {
                     state.lastCheckAttemptMS = max(state.lastCheckAttemptMS ?? 0, now)
                     return true
                 }
-                guard isDue else {
-                    return .notDue
-                }
+                guard due else { return .notDue }
 
-                let manifest = try fetchNowUnlocked()
+                let fetched = try fetchDocument()
                 var shouldNotify = false
-                let availability = try store.withExclusiveState { state in
-                    _ = merge(manifest, into: &state)
-                    if let cachedManifest = state.cachedManifest,
-                       cachedManifest.availability(from: installed) != nil,
-                       cachedManifest.releaseSequence > (state.lastNotifiedReleaseSequence ?? 0) {
-                        state.lastNotifiedReleaseSequence = max(
-                            state.lastNotifiedReleaseSequence ?? 0,
-                            cachedManifest.releaseSequence
-                        )
-                        shouldNotify = true
+                let available = try store.withExclusiveState { state -> String? in
+                    let available = availableVersion(from: fetched)
+                    state.availableVersion = available
+                    if let available, let availableSemantic = try? SemanticVersion(available) {
+                        let lastNotified = state.lastNotifiedVersion.flatMap {
+                            try? SemanticVersion($0)
+                        }
+                        if lastNotified == nil || lastNotified! < availableSemantic {
+                            state.lastNotifiedVersion = available
+                            shouldNotify = true
+                        }
                     }
-                    return Self.availability(state: state, installed: installed)
+                    return available
                 }
                 if shouldNotify { _ = notifier() }
-                return .checked(availability)
+                return .checked(availableVersion: available)
             } catch {
                 return .failed
             }
         }
     }
 
-    public func fetchNow() throws -> ReleaseManifestV1 {
+    public func fetchNow() throws -> String {
         try lock.withLock {
             let now = clockMS()
             guard now >= 0 else { throw URLError(.badServerResponse) }
             try store.withExclusiveState { state in
                 state.lastCheckAttemptMS = max(state.lastCheckAttemptMS ?? 0, now)
             }
-            let fetched = try fetchNowUnlocked()
+            let fetched = try fetchDocument()
             return try store.withExclusiveState { state in
-                merge(fetched, into: &state)
+                let available = availableVersion(from: fetched)
+                state.availableVersion = available
+                return fetched.version
             }
         }
     }
 
-    public func availability() -> CompanionUpdateAvailability? {
+    public func availability() -> String? {
         lock.withLock {
-            guard let state = try? store.load() else { return nil }
-            return Self.availability(state: state, installed: installed)
+            guard let version = try? store.load().availableVersion,
+                  let available = try? SemanticVersion(version),
+                  installedVersion < available else { return nil }
+            return version
         }
     }
 
     public static func liveTransport(_ request: URLRequest) throws -> UploadHTTPResponse {
-        try liveTransport(request, allowedURL: ReleaseManifestV1.manifestURL)
+        try liveTransport(request, allowedURL: VersionDocument.url)
     }
 
-    static func liveTransport(
-        _ request: URLRequest,
-        allowedURL: URL
-    ) throws -> UploadHTTPResponse {
+    static func liveTransport(_ request: URLRequest, allowedURL: URL) throws -> UploadHTTPResponse {
         guard request.url == allowedURL,
               request.httpMethod == "GET",
               request.httpBody == nil,
               request.allHTTPHeaderFields?.isEmpty ?? true else {
             throw URLError(.unsupportedURL)
         }
-
-        var anonymousRequest = request
-        anonymousRequest.setValue("anonymous", forHTTPHeaderField: "User-Agent")
-        anonymousRequest.setValue("*", forHTTPHeaderField: "Accept-Language")
         let collector = ReleaseResponseCollector(maximumBytes: maximumResponseBytes)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -368,16 +294,8 @@ public final class ReleaseChecker: @unchecked Sendable {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.httpMaximumConnectionsPerHost = 1
-        configuration.httpAdditionalHeaders = [
-            "User-Agent": "anonymous",
-            "Accept-Language": "*",
-        ]
-        let session = URLSession(
-            configuration: configuration,
-            delegate: collector,
-            delegateQueue: nil
-        )
-        let task = session.dataTask(with: anonymousRequest)
+        let session = URLSession(configuration: configuration, delegate: collector, delegateQueue: nil)
+        let task = session.dataTask(with: request)
         task.resume()
         guard collector.wait(timeout: 2) else {
             task.cancel()
@@ -392,18 +310,13 @@ public final class ReleaseChecker: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = [
-            "-e",
-            "display notification \"Run raiders update.\" with title \"Runtime Raiders update available\"",
+            "-e", "display notification \"Run raiders update.\" with title \"Runtime Raiders update available\"",
         ]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         let completed = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in completed.signal() }
-        do {
-            try process.run()
-        } catch {
-            return false
-        }
+        do { try process.run() } catch { return false }
         guard completed.wait(timeout: .now() + 2) == .success else {
             process.terminate()
             return false
@@ -411,41 +324,23 @@ public final class ReleaseChecker: @unchecked Sendable {
         return process.terminationStatus == 0
     }
 
-    private func fetchNowUnlocked() throws -> ReleaseManifestV1 {
-        var request = URLRequest(url: ReleaseManifestV1.manifestURL)
+    private func fetchDocument() throws -> VersionDocument {
+        var request = URLRequest(url: VersionDocument.url)
         request.httpMethod = "GET"
         request.timeoutInterval = 2
         request.httpBody = nil
         let response = try transport(request)
-        guard response.statusCode == 200,
-              response.body.count <= Self.maximumResponseBytes else {
+        guard response.statusCode == 200, response.body.count <= Self.maximumResponseBytes else {
             throw URLError(.badServerResponse)
         }
-        return try ReleaseManifestV1.decode(response.body)
+        return try VersionDocument.decode(response.body)
     }
 
-    private func merge(
-        _ fetched: ReleaseManifestV1,
-        into state: inout UpdateStateV1
-    ) -> ReleaseManifestV1 {
-        if let cached = state.cachedManifest,
-           cached.releaseSequence >= fetched.releaseSequence {
-            return cached
+    private func availableVersion(from document: VersionDocument) -> String? {
+        guard let version = try? SemanticVersion(document.version), installedVersion < version else {
+            return nil
         }
-        guard fetched.releaseSequence > installed.releaseSequence,
-              fetched.availability(from: installed) != nil else {
-            return fetched
-        }
-        state.cachedManifest = fetched
-        state.lastObservedReleaseSequence = fetched.releaseSequence
-        return fetched
-    }
-
-    private static func availability(
-        state: UpdateStateV1,
-        installed: CompanionReleaseIdentity
-    ) -> CompanionUpdateAvailability? {
-        state.cachedManifest?.availability(from: installed)
+        return document.version
     }
 }
 
@@ -469,8 +364,7 @@ private final class ReleaseResponseCollector: NSObject, URLSessionDataDelegate,
     ) {
         let shouldCancel = lock.withLock { () -> Bool in
             self.response = response as? HTTPURLResponse
-            let length = response.expectedContentLength
-            if length > maximumBytes {
+            if response.expectedContentLength > maximumBytes {
                 error = URLError(.dataLengthExceedsMaximum)
                 return true
             }
@@ -497,9 +391,7 @@ private final class ReleaseResponseCollector: NSObject, URLSessionDataDelegate,
         willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
-    }
+    ) { completionHandler(nil) }
 
     func urlSession(
         _ session: URLSession,
@@ -515,9 +407,7 @@ private final class ReleaseResponseCollector: NSObject, URLSessionDataDelegate,
         if shouldSignal { semaphore.signal() }
     }
 
-    func wait(timeout: TimeInterval) -> Bool {
-        semaphore.wait(timeout: .now() + timeout) == .success
-    }
+    func wait(timeout: TimeInterval) -> Bool { semaphore.wait(timeout: .now() + timeout) == .success }
 
     func value() throws -> UploadHTTPResponse {
         try lock.withLock {

@@ -33,6 +33,7 @@ private enum CLIError: Error, CustomStringConvertible {
     case invalidRuntimeConfiguration
     case invalidUpdateState
     case updateOperationFailed
+    case updateCheckUnavailable
 
     var description: String {
         switch self {
@@ -41,6 +42,7 @@ private enum CLIError: Error, CustomStringConvertible {
         case .invalidRuntimeConfiguration: "Runtime Raiders enrollment configuration is invalid"
         case .invalidUpdateState: "Runtime Raiders update state is invalid"
         case .updateOperationFailed: "Runtime Raiders update operation failed"
+        case .updateCheckUnavailable: "Unable to check for a Runtime Raiders update."
         }
     }
 }
@@ -202,7 +204,7 @@ private final class DaemonRuntime: @unchecked Sendable {
             if controller.enabled { try watcher.start() }
             releaseChecker = try? ReleaseChecker(
                 paths: paths,
-                installed: inputs.releaseIdentity
+                installedVersion: inputs.companionVersion
             )
             updateQueue.async { [weak self] in
                 _ = self?.releaseChecker?.checkIfDue()
@@ -344,8 +346,7 @@ private final class DaemonRuntime: @unchecked Sendable {
             serverEnabledSurfaces: inputs.surfaces,
             lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS,
             installedRelease: inputs.releaseIdentity,
-            updateAvailability: releaseChecker?.availability(),
-            preparedReleaseStateGeneration: updatePreparation.preparedGeneration
+            availableCompanionVersion: releaseChecker?.availability()
         )
     }
 
@@ -564,7 +565,7 @@ private struct LiveUpdateStatusProvider {
               status.enabled == (persistedState == .enabled),
               status.activeRunCount >= 0,
               status.queuedEventCount >= 0,
-              status.preparedReleaseStateGeneration == expectedPreparedGeneration else {
+              expectedPreparedGeneration == nil || expectedPreparedGeneration == expectedGeneration else {
             throw CLIError.invalidUpdateState
         }
         return CompanionUpdateStatus(
@@ -575,7 +576,7 @@ private struct LiveUpdateStatusProvider {
             collectorStateValid: true,
             activeRunCount: status.activeRunCount,
             queuedEventCount: status.queuedEventCount,
-            preparedReleaseStateGeneration: status.preparedReleaseStateGeneration
+            preparedReleaseStateGeneration: expectedPreparedGeneration
         )
     }
 }
@@ -609,98 +610,20 @@ private func availableCapacity(at directory: URL) throws -> Int64 {
     return capacity
 }
 
-private func runForegroundUpdate(paths: AgentPaths) throws {
-    let releaseState = try ReleaseStateStore.loadExisting(paths: paths)
-    let enrollment = try EnrollmentConfiguration.loadExisting(
-        from: paths.stateDirectory.appendingPathComponent("enrollment.json")
-    )
-    let trustRoot = try InstalledTrustRoot(expectedBundleURL: paths.application(for: releaseState.active))
-    let statusProvider = LiveUpdateStatusProvider(
-        paths: paths,
-        surfaces: enrollment.enabledSurfaces,
-        enrollment: enrollment,
-        trustRoot: trustRoot
-    )
-    let releaseChecker = try ReleaseChecker(
-        paths: paths,
-        installed: trustRoot.verifiedSelf.identity
-    )
-    let downloader = ArtifactDownloader()
-    let commandRunner = SystemCommandRunner()
-    let releaseArchiveVerifier = ReleaseArchiveVerifier()
-    try releaseArchiveVerifier.verifyPackagedLauncher(
-        paths.launcherApplication,
-        installedTeamIdentifier: trustRoot.verifiedSelf.teamIdentifier
-    )
-    let launchd = LaunchdJobController(
-        runCommand: commandRunner.run
-    )
-    let updater = CompanionUpdater(
-        paths: paths,
-        surfaces: enrollment.enabledSurfaces,
-        operations: CompanionUpdaterOperations(
-            status: { release, generation in
-                try statusProvider.status(
-                    command: .status,
-                    expectedRelease: release,
-                    expectedGeneration: generation,
-                    expectedPreparedGeneration: nil
-                )
-            },
-            fetchManifest: { try releaseChecker.fetchNow() },
-            downloadArchive: { source, destination, digest in
-                try downloadSynchronously(
-                    downloader: downloader,
-                    source: source,
-                    destination: destination,
-                    expectedSHA256: digest
-                )
-            },
-            runCommand: commandRunner.run,
-            verifyArchive: { extractedRoot, manifest, installed in
-                try releaseArchiveVerifier.verify(
-                    extractedRoot: extractedRoot,
-                    manifest: manifest,
-                    installed: installed.identity,
-                    installedTeamIdentifier: installed.teamIdentifier
-                )
-            },
-            availableCapacity: availableCapacity,
-            acquirePreparedLease: { try CompanionPreparedStartupLease(paths: paths) },
-            prepareDaemon: { generation in
-                let current = try ReleaseStateStore.loadExisting(paths: paths)
-                return try statusProvider.prepareForUpdate(
-                    expectedRelease: current.active,
-                    generation: generation
-                )
-            },
-            kickstartDaemon: launchd.restart,
-            resumePreparedDaemon: { generation in
-                let response = try ControlSocketClient.send(
-                    request: ControlRequest(
-                        command: .resumeUpdate,
-                        releaseStateGeneration: generation
-                    ),
-                    to: paths.controlSocket
-                )
-                guard response.ok else { throw CLIError.updateOperationFailed }
-            },
-            healthStatus: { release, generation in
-                try statusProvider.status(
-                    command: .status,
-                    expectedRelease: release,
-                    expectedGeneration: generation,
-                    expectedPreparedGeneration: generation
-                )
-            }
-        )
-    )
-
-    switch try updater.run() {
-    case .alreadyCurrent:
-        print("Runtime Raiders is already current.")
-    case let .updated(from, to):
-        print("Runtime Raiders updated from \(from.companionVersion) to \(to.companionVersion).")
+private func runUpdateCheck(paths: AgentPaths) throws {
+    let installed = try CompanionReleaseIdentity.load(from: .main).companionVersion
+    let checker = try ReleaseChecker(paths: paths, installedVersion: installed)
+    do {
+        _ = try checker.fetchNow()
+    } catch {
+        throw CLIError.updateCheckUnavailable
+    }
+    if let available = checker.availability() {
+        print("Runtime Raiders \(available) is available.")
+        print("Run:")
+        print("curl -fsSL https://raiders.redlattice.com/install.sh | sh")
+    } else {
+        print("Runtime Raiders \(installed) is current.")
     }
 }
 
@@ -739,7 +662,7 @@ private func run() throws {
         ).run()
         return
     case .foregroundUpdate:
-        try runForegroundUpdate(paths: paths)
+        try runUpdateCheck(paths: paths)
         return
     case .selfCheck:
         FileHandle.standardOutput.write(
@@ -891,8 +814,7 @@ private func localStatus(paths: AgentPaths) throws -> AgentStatus {
         inExistingDirectory: paths.outboxDirectory
     )) ?? 0
     let installed = try CompanionReleaseIdentity.load(from: .main)
-    let updateAvailability = (try? UpdateStateStore(paths: paths).load())?
-        .cachedManifest?.availability(from: installed)
+    let updateAvailability = (try? UpdateStateStore(paths: paths).load())?.availableVersion
     let adapterFacts = (try? AgentController.persistedAdapterFacts(
         paths: paths,
         surfaces: surfaces
@@ -908,9 +830,8 @@ private func localStatus(paths: AgentPaths) throws -> AgentStatus {
         activeRunCount: adapterFacts.activeRunCount,
         installedCompanionVersion: installed.companionVersion,
         installedReleaseSequence: installed.releaseSequence,
-        availableCompanionVersion: updateAvailability?.availableVersion,
-        availableReleaseSequence: updateAvailability?.availableSequence,
-        updateCommand: updateAvailability?.updateCommand
+        availableCompanionVersion: updateAvailability,
+        updateCommand: updateAvailability == nil ? nil : "raiders update"
     )
 }
 

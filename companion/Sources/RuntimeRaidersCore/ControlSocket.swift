@@ -1080,8 +1080,7 @@ public enum ControlSocketClient {
               let status = try? JSONDecoder().decode(AgentStatus.self, from: statusData),
               status.daemonRunning,
               status.enabled,
-              status.persistedState == .enabled,
-              !status.preparedForUpdate else {
+              status.persistedState == .enabled else {
             return try failClosedAfterTimedOutEnable(
                 socketURL: socketURL,
                 maximumFrameBytes: maximumFrameBytes,

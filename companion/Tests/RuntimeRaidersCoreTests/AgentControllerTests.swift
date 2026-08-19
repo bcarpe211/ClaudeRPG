@@ -273,26 +273,17 @@ final class AgentControllerTests: XCTestCase {
                 companionVersion: "0.2.0",
                 updateProtocolVersion: 1
             )
-            let available = CompanionUpdateAvailability(
-                installedVersion: "0.2.0",
-                installedSequence: 1,
-                availableVersion: "0.2.1",
-                availableSequence: 2,
-                updateCommand: "raiders update"
-            )
-
             let status = try harness.controller.status(
                 daemonRunning: true,
                 serverEnabledSurfaces: [.codexCLI],
                 lastSuccessfulUploadMS: nil,
                 installedRelease: installed,
-                updateAvailability: available
+                availableCompanionVersion: "0.2.1"
             )
 
             XCTAssertEqual(status.installedCompanionVersion, "0.2.0")
             XCTAssertEqual(status.installedReleaseSequence, 1)
             XCTAssertEqual(status.availableCompanionVersion, "0.2.1")
-            XCTAssertEqual(status.availableReleaseSequence, 2)
             XCTAssertEqual(status.updateCommand, "raiders update")
         }
     }
@@ -327,7 +318,7 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
-    func testStatusReportsExactPreparedReleaseGenerationOnlyWhilePrepared() throws {
+    func testStatusOmitsLegacyPreparationAndReleaseAvailabilityFields() throws {
         try withHarness { harness in
             let installed = CompanionReleaseIdentity(
                 releaseSequence: 9,
@@ -336,32 +327,21 @@ final class AgentControllerTests: XCTestCase {
                 updateProtocolVersion: 2
             )
 
-            let ordinary = try harness.controller.status(
+            let status = try harness.controller.status(
                 daemonRunning: true,
                 serverEnabledSurfaces: [.codexCLI],
                 lastSuccessfulUploadMS: nil,
                 installedRelease: installed,
-                updateAvailability: nil,
-                preparedReleaseStateGeneration: nil
-            )
-            let prepared = try harness.controller.status(
-                daemonRunning: true,
-                serverEnabledSurfaces: [.codexCLI],
-                lastSuccessfulUploadMS: nil,
-                installedRelease: installed,
-                updateAvailability: nil,
-                preparedReleaseStateGeneration: 7
+                availableCompanionVersion: nil
             )
 
-            XCTAssertFalse(ordinary.preparedForUpdate)
-            XCTAssertNil(ordinary.preparedReleaseStateGeneration)
-            XCTAssertTrue(prepared.preparedForUpdate)
-            XCTAssertEqual(prepared.preparedReleaseStateGeneration, 7)
             let encoded = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: Data(prepared.description.utf8))
+                JSONSerialization.jsonObject(with: Data(status.description.utf8))
                     as? [String: Any]
             )
-            XCTAssertEqual(encoded["preparedReleaseStateGeneration"] as? Int64, 7)
+            XCTAssertNil(encoded["availableReleaseSequence"])
+            XCTAssertNil(encoded["preparedForUpdate"])
+            XCTAssertNil(encoded["preparedReleaseStateGeneration"])
         }
     }
 

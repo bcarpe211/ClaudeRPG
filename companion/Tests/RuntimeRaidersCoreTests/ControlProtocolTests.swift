@@ -23,6 +23,9 @@ final class ControlProtocolTests: XCTestCase {
 
         XCTAssertEqual(object["enabled"] as? Bool, true)
         XCTAssertEqual(object["activationState"] as? String, "preparing")
+        XCTAssertNil(object["availableReleaseSequence"])
+        XCTAssertNil(object["preparedForUpdate"])
+        XCTAssertNil(object["preparedReleaseStateGeneration"])
     }
 
     func testPrepareUpdateUsesLongTimeoutAndCarriesExactReleaseGeneration() throws {

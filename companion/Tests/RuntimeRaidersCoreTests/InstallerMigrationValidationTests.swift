@@ -104,7 +104,7 @@ final class InstallerMigrationValidationTests: XCTestCase {
         ))
     }
 
-    func testStrictCandidateStatusBindsIdentityGenerationPreparedStateAndIntent() throws {
+    func testStrictCandidateStatusBindsIdentityAndIntentWithoutPreparationFields() throws {
         let identity = CompanionReleaseIdentity(
             releaseSequence: 9,
             releaseSHA: String(repeating: "a", count: 40),
@@ -140,10 +140,6 @@ final class InstallerMigrationValidationTests: XCTestCase {
             expectedEnabled: false
         ))
         for invalid in [
-            candidateStatus(enabled: false, preparedGeneration: 2),
-            replacing(candidateStatus(enabled: false, preparedGeneration: 1),
-                      #""preparedForUpdate":true"#,
-                      with: #""preparedForUpdate":false"#),
             replacing(candidateStatus(enabled: false, preparedGeneration: 1),
                       #""installedReleaseSequence":9"#,
                       with: #""installedReleaseSequence":8"#),
@@ -194,9 +190,7 @@ final class InstallerMigrationValidationTests: XCTestCase {
             installedCompanionVersion: identity.companionVersion,
             installedReleaseSequence: identity.releaseSequence,
             availableCompanionVersion: nil,
-            availableReleaseSequence: nil,
-            updateCommand: nil,
-            preparedReleaseStateGeneration: 1
+            updateCommand: nil
         )
         let liveWire = Data((status.description + "\n").utf8)
 
@@ -204,7 +198,7 @@ final class InstallerMigrationValidationTests: XCTestCase {
             liveWire,
             identity: identity,
             generation: 1,
-            prepared: true,
+            prepared: false,
             expectedEnabled: false
         ))
     }
@@ -878,20 +872,16 @@ final class InstallerMigrationValidationTests: XCTestCase {
         preparedGeneration: Int64?,
         queuedEventCount: Int = 0
     ) -> Data {
-        let generation = preparedGeneration.map(String.init) ?? "null"
         let enabledValue = enabled ? "true" : "false"
         let activationState = enabled ? "ready" : "disabled"
         let persisted = enabled ? "enabled" : "disabled"
-        let preparedValue = preparedGeneration == nil ? "false" : "true"
         return Data((
             #"{"activationState":""# + activationState +
-            #"","activeRunCount":0,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":true,"enabled":"# +
+            #"","activeRunCount":0,"availableCompanionVersion":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":true,"enabled":"# +
             enabledValue +
             #", "installedCompanionVersion":"0.3.0","installedReleaseSequence":9,"lastSuccessfulUploadMS":null,"persistedState":""# +
             persisted +
-            #"","preparedForUpdate":"# + preparedValue +
-            #", "preparedReleaseStateGeneration":"# + generation +
-            #", "queuedEventCount":"# + String(queuedEventCount) +
+            #"","queuedEventCount":"# + String(queuedEventCount) +
             #", "serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}"# +
             "\n"
         ).replacingOccurrences(of: ", ", with: ",").utf8)

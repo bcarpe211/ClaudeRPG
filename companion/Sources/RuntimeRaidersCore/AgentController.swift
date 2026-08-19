@@ -45,10 +45,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     public let installedCompanionVersion: String
     public let installedReleaseSequence: Int64
     public let availableCompanionVersion: String?
-    public let availableReleaseSequence: Int64?
     public let updateCommand: String?
-    public let preparedForUpdate: Bool
-    public let preparedReleaseStateGeneration: Int64?
 
     public init(
         enabled: Bool,
@@ -63,9 +60,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         installedCompanionVersion: String,
         installedReleaseSequence: Int64,
         availableCompanionVersion: String?,
-        availableReleaseSequence: Int64?,
-        updateCommand: String?,
-        preparedReleaseStateGeneration: Int64? = nil
+        updateCommand: String?
     ) {
         self.enabled = enabled
         self.activationState = activationState ?? (enabled ? .ready : .disabled)
@@ -79,10 +74,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         self.installedCompanionVersion = installedCompanionVersion
         self.installedReleaseSequence = installedReleaseSequence
         self.availableCompanionVersion = availableCompanionVersion
-        self.availableReleaseSequence = availableReleaseSequence
         self.updateCommand = updateCommand
-        self.preparedForUpdate = preparedReleaseStateGeneration != nil
-        self.preparedReleaseStateGeneration = preparedReleaseStateGeneration
     }
 
     public init(
@@ -109,9 +101,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
             installedCompanionVersion: "unknown",
             installedReleaseSequence: 0,
             availableCompanionVersion: nil,
-            availableReleaseSequence: nil,
-            updateCommand: nil,
-            preparedReleaseStateGeneration: nil
+            updateCommand: nil
         )
     }
 
@@ -122,9 +112,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         else { return "{}" }
         for key in [
             "availableCompanionVersion",
-            "availableReleaseSequence",
             "lastSuccessfulUploadMS",
-            "preparedReleaseStateGeneration",
             "updateCommand",
         ] where object[key] == nil {
             object[key] = NSNull()
@@ -752,7 +740,7 @@ public final class AgentController: @unchecked Sendable {
                 companionVersion: configuration.companionVersion,
                 updateProtocolVersion: 1
             ),
-            updateAvailability: nil
+            availableCompanionVersion: nil
         )
     }
 
@@ -761,8 +749,7 @@ public final class AgentController: @unchecked Sendable {
         serverEnabledSurfaces: [RunSurface],
         lastSuccessfulUploadMS: Int64?,
         installedRelease: CompanionReleaseIdentity,
-        updateAvailability: CompanionUpdateAvailability?,
-        preparedReleaseStateGeneration: Int64? = nil
+        availableCompanionVersion: String?
     ) throws -> AgentStatus {
         try lock.withLock {
             var health: [RunSurface: AdapterHealth] = [
@@ -785,10 +772,8 @@ public final class AgentController: @unchecked Sendable {
                 activeRunCount: max(runRegistry.activeRunCount, persistedActiveRunCount),
                 installedCompanionVersion: installedRelease.companionVersion,
                 installedReleaseSequence: installedRelease.releaseSequence,
-                availableCompanionVersion: updateAvailability?.availableVersion,
-                availableReleaseSequence: updateAvailability?.availableSequence,
-                updateCommand: updateAvailability?.updateCommand,
-                preparedReleaseStateGeneration: preparedReleaseStateGeneration
+                availableCompanionVersion: availableCompanionVersion,
+                updateCommand: availableCompanionVersion == nil ? nil : "raiders update"
             )
         }
     }

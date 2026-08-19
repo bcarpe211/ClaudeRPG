@@ -44,9 +44,12 @@ public enum InstallerStatusValidator {
         "lastSuccessfulUploadMS", "updateCommand",
     ]
     private static let legacyRequiredKeys = legacyKeys.subtracting(legacyOptionalKeys)
-    private static let candidateKeys = legacyKeys.union([
-        "activationState", "preparedReleaseStateGeneration",
-    ])
+    private static let candidateKeys: Set<String> = [
+        "activeRunCount", "activationState", "availableCompanionVersion", "compiledAdapters",
+        "daemonRunning", "enabled", "installedCompanionVersion", "installedReleaseSequence",
+        "lastSuccessfulUploadMS", "persistedState", "queuedEventCount",
+        "serverEnabledSurfaces", "updateCommand",
+    ]
     private static let expectedSurfaces: [RunSurface] = [.codexCLI, .codexDesktop]
     private static let expectedAdapters: Set<RunSurface> = [
         .claudeCode, .omp, .codexDesktop, .codexCLI,
@@ -76,7 +79,7 @@ public enum InstallerStatusValidator {
             optionalKeys: legacyOptionalKeys
         )
         guard let status = try? JSONDecoder().decode(LegacyStatus.self, from: body),
-              validCommon(
+              validLegacyCommon(
                 enabled: status.enabled,
                 daemonRunning: status.daemonRunning,
                 persistedState: status.persistedState,
@@ -126,7 +129,6 @@ public enum InstallerStatusValidator {
                 lastUpload: status.lastSuccessfulUploadMS,
                 activeRunCount: status.activeRunCount,
                 availableVersion: status.availableCompanionVersion,
-                availableSequence: status.availableReleaseSequence,
                 updateCommand: status.updateCommand,
                 installedSequence: status.installedReleaseSequence
               ),
@@ -134,10 +136,7 @@ public enum InstallerStatusValidator {
               status.installedReleaseSequence == identity.releaseSequence,
               status.enabled == expectedEnabled,
               status.enabled == (status.activationState != .disabled),
-              status.queuedEventCount == expectedQueuedEventCount,
-              status.preparedForUpdate == prepared,
-              status.preparedForUpdate == (status.preparedReleaseStateGeneration != nil),
-              status.preparedReleaseStateGeneration == (prepared ? generation : nil) else {
+              status.queuedEventCount == expectedQueuedEventCount else {
             throw InstallerMigrationValidationError.invalidStatus
         }
     }
@@ -217,7 +216,7 @@ public enum InstallerStatusValidator {
         return topLevelFields.count == keys.count && Set(topLevelFields) == keys
     }
 
-    private static func validCommon(
+    private static func validLegacyCommon(
         enabled: Bool,
         daemonRunning: Bool,
         persistedState: PersistedCollectorState,
@@ -231,22 +230,65 @@ public enum InstallerStatusValidator {
         updateCommand: String?,
         installedSequence: Int64
     ) -> Bool {
-        guard daemonRunning,
-              activeRunCount == 0,
-              queuedCount >= 0,
-              persistedState == (enabled ? .enabled : .disabled),
-              surfaces == expectedSurfaces,
-              Set(adapters.keys) == expectedAdapters,
-              adapters.values.allSatisfy({ [.available, .disabled, .unavailable].contains($0) }),
-              lastUpload == nil || lastUpload! >= 0 else { return false }
+        guard validBase(
+            enabled: enabled, daemonRunning: daemonRunning, persistedState: persistedState,
+            surfaces: surfaces, adapters: adapters, queuedCount: queuedCount,
+            lastUpload: lastUpload, activeRunCount: activeRunCount
+        ) else { return false }
         switch (availableVersion, availableSequence, updateCommand) {
-        case (nil, nil, nil):
-            return true
+        case (nil, nil, nil): return true
         case let (.some(version), .some(sequence), .some(command)):
             return !version.isEmpty && sequence > installedSequence && command == "raiders update"
+        default: return false
+        }
+    }
+
+    private static func validCommon(
+        enabled: Bool,
+        daemonRunning: Bool,
+        persistedState: PersistedCollectorState,
+        surfaces: [RunSurface],
+        adapters: [RunSurface: AdapterHealth],
+        queuedCount: Int,
+        lastUpload: Int64?,
+        activeRunCount: Int,
+        availableVersion: String?,
+        updateCommand: String?,
+        installedSequence: Int64
+    ) -> Bool {
+        guard validBase(
+            enabled: enabled, daemonRunning: daemonRunning, persistedState: persistedState,
+            surfaces: surfaces, adapters: adapters, queuedCount: queuedCount,
+            lastUpload: lastUpload, activeRunCount: activeRunCount
+        ) else { return false }
+        switch (availableVersion, updateCommand) {
+        case (nil, nil):
+            return true
+        case let (.some(version), .some(command)):
+            return (try? SemanticVersion(version)) != nil && command == "raiders update"
         default:
             return false
         }
+    }
+
+    private static func validBase(
+        enabled: Bool,
+        daemonRunning: Bool,
+        persistedState: PersistedCollectorState,
+        surfaces: [RunSurface],
+        adapters: [RunSurface: AdapterHealth],
+        queuedCount: Int,
+        lastUpload: Int64?,
+        activeRunCount: Int
+    ) -> Bool {
+        daemonRunning &&
+            activeRunCount == 0 &&
+            queuedCount >= 0 &&
+            persistedState == (enabled ? .enabled : .disabled) &&
+            surfaces == expectedSurfaces &&
+            Set(adapters.keys) == expectedAdapters &&
+            adapters.values.allSatisfy({ [.available, .disabled, .unavailable].contains($0) }) &&
+            (lastUpload == nil || lastUpload! >= 0)
     }
 }
 
