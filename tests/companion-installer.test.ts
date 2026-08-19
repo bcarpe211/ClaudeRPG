@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  appendFileSync,
   chmodSync,
   cpSync,
   existsSync,
@@ -9,6 +10,7 @@ import {
   readFileSync,
   readlinkSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -41,15 +43,31 @@ function buildFixture() {
   const repository = join(root, 'repository');
   const bin = join(root, 'fake-bin');
   const log = join(root, 'tools.log');
+  const agentLog = join(root, 'agent.log');
   mkdirSync(join(repository, 'companion/packaging'), { recursive: true });
   mkdirSync(join(repository, 'scripts/release'), { recursive: true });
   mkdirSync(join(repository, 'scripts/test'), { recursive: true });
   mkdirSync(bin);
   cpSync(installerTemplate, join(repository, 'companion/packaging/install.sh'));
   cpSync(releaseBuilder, join(repository, 'scripts/release/build-runtime-raiders-agent.sh'));
-  cpSync(signedReleaseVerifier, join(repository, 'scripts/test/verify-runtime-raiders-signed-release.sh'));
+  cpSync(signedReleaseVerifier, join(repository, 'scripts/test/verify-runtime-raiders-signed-release-real.sh'));
+  executable(join(repository, 'scripts/test/verify-runtime-raiders-signed-release.sh'), [
+    'script_directory=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)',
+    '"$script_directory/verify-runtime-raiders-signed-release-real.sh" "$@"',
+    'verifier_status=$?',
+    '[ "$verifier_status" -eq 0 ] || exit "$verifier_status"',
+    'case "${RR_BUILD_CONCURRENT_DRIFT:-}" in',
+    '  dirty) printf "dirty\\n" >> "$RR_BUILD_CONCURRENT_FILE";;',
+    '  head)',
+    '    printf "head\\n" >> "$RR_BUILD_CONCURRENT_FILE"',
+    '    /usr/bin/git -C "${RR_BUILD_CONCURRENT_FILE%/*}" add concurrent-source.txt',
+    '    /usr/bin/git -C "${RR_BUILD_CONCURRENT_FILE%/*}" commit -qm concurrent-drift;;',
+    'esac',
+  ]);
   writeFileSync(join(repository, 'companion/RELEASE'), 'format=1\ncompanion_version=0.4.0\n');
+  writeFileSync(join(repository, 'concurrent-source.txt'), 'reviewed\n');
   writeFileSync(log, '');
+  writeFileSync(agentLog, '');
 
   executable(join(bin, 'swift'), [
     'printf "swift" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
@@ -65,11 +83,30 @@ function buildFixture() {
     '[ "$product" = raiders ] && { [ "$arch" = arm64 ] || [ "$arch" = x86_64 ]; } || exit 64',
     'output="$scratch/$arch-apple-macosx/release/raiders"',
     'mkdir -p "${output%/*}"',
-    'printf "#!/bin/sh\\nexit 0\\n" > "$output"',
+    'cat > "$output" <<\'AGENT\'',
+    '#!/bin/sh',
+    'set -eu',
+    `printf 'agent:%s\\n' "\${1:-status}" >> '${agentLog}'`,
+    'case "${1:-status}" in',
+    '  status) printf \'{"activationState":"disabled","companionVersion":"0.4.0"}\\n\';;',
+    '  daemon) exit 0;;',
+    '  update)',
+    '    response=${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-}',
+    '    [ -n "$response" ] && [ "$(cat "$response")" = \'{"version":"0.4.0"}\' ] || exit 70',
+    '    printf \'Runtime Raiders 0.4.0 is current.\\n\';;',
+    '  on) exit 97;;',
+    '  *) exit 64;;',
+    'esac',
+    'AGENT',
+    'if [ "${RR_BUILD_OVERSIZED_BINARY:-0}" = 1 ]; then /bin/dd if=/dev/urandom bs=1048576 count=9 >> "$output" 2>/dev/null; fi',
     'chmod 700 "$output"',
   ]);
   executable(join(bin, 'lipo'), [
     'printf "lipo" >> "$RR_BUILD_LOG"; for value in "$@"; do printf " <%s>" "$value" >> "$RR_BUILD_LOG"; done; printf "\\n" >> "$RR_BUILD_LOG"',
+    'if [ -n "${RR_VERIFY_MUTATE_RELEASE:-}" ] && [ ! -e "$RR_VERIFY_MUTATE_RELEASE/.mutated" ]; then',
+    '  for name in install.sh runtime-raiders-agent.zip version release-summary.txt; do printf "swapped\\n" > "$RR_VERIFY_MUTATE_RELEASE/$name"; done',
+    '  : > "$RR_VERIFY_MUTATE_RELEASE/.mutated"',
+    'fi',
     'if [ "$1" = -create ]; then',
     '  first=$2; output=""',
     '  while [ "$#" -gt 0 ]; do [ "$1" != -output ] || { output=$2; break; }; shift; done',
@@ -117,14 +154,23 @@ function buildFixture() {
     root,
     repository,
     log,
+    agentLog,
     output: join(repository, 'dist/runtime-raiders-beta-0.4.0'),
     environment: {
       ...process.env,
       PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
       RR_BUILD_LOG: log,
+      RR_BUILD_CONCURRENT_FILE: join(repository, 'concurrent-source.txt'),
       RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'Developer ID Application: Runtime Raiders (ABCDE12345)',
       RUNTIME_RAIDERS_NOTARY_PROFILE: 'runtime-raiders-test-profile',
       RUNTIME_RAIDERS_TEAM_ID: 'ABCDE12345',
+      RUNTIME_RAIDERS_TEST_MODE: '1',
+      RUNTIME_RAIDERS_TEST_ROOT: realpathSync(repository),
+      RUNTIME_RAIDERS_TEST_SWIFT: realpathSync(join(bin, 'swift')),
+      RUNTIME_RAIDERS_TEST_LIPO: realpathSync(join(bin, 'lipo')),
+      RUNTIME_RAIDERS_TEST_CODESIGN: realpathSync(join(bin, 'codesign')),
+      RUNTIME_RAIDERS_TEST_SPCTL: realpathSync(join(bin, 'spctl')),
+      RUNTIME_RAIDERS_TEST_XCRUN: realpathSync(join(bin, 'xcrun')),
     } as NodeJS.ProcessEnv,
   };
 }
@@ -135,6 +181,25 @@ function runBuild(value: BuildFixture, environment: NodeJS.ProcessEnv = value.en
     env: environment,
     encoding: 'utf8',
   });
+}
+
+function runSignedVerifier(value: BuildFixture, environment: NodeJS.ProcessEnv = value.environment) {
+  return spawnSync('/bin/bash', ['scripts/test/verify-runtime-raiders-signed-release.sh', value.output], {
+    cwd: value.repository,
+    env: environment,
+    encoding: 'utf8',
+  });
+}
+
+function commitFixture(value: BuildFixture, message: string): string {
+  for (const args of [['add', 'companion/RELEASE', 'concurrent-source.txt'], ['commit', '-qm', message]]) {
+    const result = spawnSync('/usr/bin/git', args, { cwd: value.repository, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  }
+  return spawnSync('/usr/bin/git', ['rev-parse', 'HEAD'], {
+    cwd: value.repository,
+    encoding: 'utf8',
+  }).stdout.trim();
 }
 
 function plist(bundleVersion = version, bundleId = label): string {
@@ -485,6 +550,35 @@ describe('Runtime Raiders release build', () => {
     expect(readFileSync(value.log, 'utf8')).toBe('');
   });
 
+  it('release build production mode ignores PATH-shadowed Apple tools', () => {
+    const value = buildFixture();
+    const environment = { ...value.environment };
+    for (const key of [
+      'RUNTIME_RAIDERS_TEST_MODE',
+      'RUNTIME_RAIDERS_TEST_ROOT',
+      'RUNTIME_RAIDERS_TEST_SWIFT',
+      'RUNTIME_RAIDERS_TEST_LIPO',
+      'RUNTIME_RAIDERS_TEST_CODESIGN',
+      'RUNTIME_RAIDERS_TEST_SPCTL',
+      'RUNTIME_RAIDERS_TEST_XCRUN',
+    ]) delete environment[key];
+    const result = runBuild(value, environment);
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(value.log, 'utf8')).toBe('');
+    expect(existsSync(value.output)).toBe(false);
+  });
+
+  it('release build accepts only absolute owned test tools in explicit test mode', () => {
+    const value = buildFixture();
+    const result = runBuild(value, {
+      ...value.environment,
+      RUNTIME_RAIDERS_TEST_LIPO: 'lipo',
+    });
+    expect(result.status).toBe(64);
+    expect(result.stderr).toContain('test tool configuration is invalid');
+    expect(readFileSync(value.log, 'utf8')).toBe('');
+  });
+
   it('release build produces one universal signed notarized app and only the beta release files', () => {
     const value = buildFixture();
     const result = runBuild(value);
@@ -547,6 +641,23 @@ describe('Runtime Raiders release build', () => {
     expect(summary).toMatch(/runtime-raiders-agent\.zip_sha256=[0-9a-f]{64}/);
     expect(summary).toMatch(/install\.sh_bytes=[1-9][0-9]*/);
     expect(summary).not.toMatch(/sequence|generation|launcher|validator|public.checksum|update.manifest/i);
+    expect(readFileSync(value.agentLog, 'utf8')).toMatch(/agent:status[\s\S]*agent:update/);
+  });
+
+  it.each(['dirty', 'head'])('release build refuses concurrent %s drift after verification', (drift) => {
+    const value = buildFixture();
+    const result = runBuild(value, { ...value.environment, RR_BUILD_CONCURRENT_DRIFT: drift });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('reviewed source changed during release build');
+    expect(existsSync(value.output)).toBe(false);
+  });
+
+  it('release build rejects an archive larger than the installer 8 MiB limit', () => {
+    const value = buildFixture();
+    const result = runBuild(value, { ...value.environment, RR_BUILD_OVERSIZED_BINARY: '1' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('release archive exceeds 8388608 bytes');
+    expect(existsSync(value.output)).toBe(false);
   });
 
   it('release build rejects any installer placeholder left after the two allowed substitutions', () => {
@@ -572,6 +683,76 @@ describe('Runtime Raiders release build', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('bundle version does not match companion/RELEASE');
     expect(existsSync(value.output)).toBe(false);
+  });
+
+  it('signed verifier production mode ignores PATH-shadowed Apple tools', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    writeFileSync(value.log, '');
+    const environment = { ...value.environment };
+    for (const key of [
+      'RUNTIME_RAIDERS_TEST_MODE',
+      'RUNTIME_RAIDERS_TEST_ROOT',
+      'RUNTIME_RAIDERS_TEST_SWIFT',
+      'RUNTIME_RAIDERS_TEST_LIPO',
+      'RUNTIME_RAIDERS_TEST_CODESIGN',
+      'RUNTIME_RAIDERS_TEST_SPCTL',
+      'RUNTIME_RAIDERS_TEST_XCRUN',
+    ]) delete environment[key];
+    const result = runSignedVerifier(value, environment);
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(value.log, 'utf8')).toBe('');
+  });
+
+  it('signed verifier refuses a group-writable release directory', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    chmodSync(value.output, 0o770);
+    const result = runSignedVerifier(value);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('release directory must not be group or world writable');
+  });
+
+  it('signed verifier requires a clean reviewed checkout', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    appendFileSync(join(value.repository, 'concurrent-source.txt'), 'dirty\n');
+    const result = runSignedVerifier(value);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('reviewed source must be clean');
+  });
+
+  it('signed verifier requires the exact companion RELEASE version from current HEAD', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    writeFileSync(join(value.repository, 'companion/RELEASE'), 'format=1\ncompanion_version=0.4.1\n');
+    const head = commitFixture(value, 'advance release metadata');
+    const summary = join(value.output, 'release-summary.txt');
+    writeFileSync(summary, readFileSync(summary, 'utf8').replace(/^git_sha=.*$/m, `git_sha=${head}`));
+    const result = runSignedVerifier(value);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('release files do not match companion/RELEASE');
+  });
+
+  it('signed verifier requires summary Git SHA to equal current reviewed HEAD', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    const summary = join(value.output, 'release-summary.txt');
+    writeFileSync(summary, readFileSync(summary, 'utf8').replace(/^git_sha=.*$/m, `git_sha=${'f'.repeat(40)}`));
+    const result = runSignedVerifier(value);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('release summary does not match reviewed HEAD');
+  });
+
+  it('signed verifier uses private copies after validating release members', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    const result = runSignedVerifier(value, {
+      ...value.environment,
+      RR_VERIFY_MUTATE_RELEASE: value.output,
+    });
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(readFileSync(join(value.output, 'install.sh'), 'utf8')).toBe('swapped\n');
   });
 });
 

@@ -102,6 +102,40 @@ final class ReleaseCheckerTests: XCTestCase {
         )
     }
 
+    func testVerificationTransportIsOptInAndReadsOnlyAnOwnerOnlyRegularResponse() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-version-response-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let response = root.appendingPathComponent("version")
+        try Data(#"{"version":"0.4.0"}"#.utf8).write(to: response)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: response.path)
+
+        XCTAssertNil(try ReleaseChecker.verificationTransport(environment: [:]))
+        let transport = try XCTUnwrap(ReleaseChecker.verificationTransport(environment: [
+            "RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE": response.path,
+        ]))
+        var request = URLRequest(url: VersionDocument.url)
+        request.httpMethod = "GET"
+        let result = try transport(request)
+        XCTAssertEqual(result.statusCode, 200)
+        XCTAssertEqual(result.body, Data(#"{"version":"0.4.0"}"#.utf8))
+
+        XCTAssertThrowsError(try ReleaseChecker.verificationTransport(environment: [
+            "RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE": "relative/version",
+        ]))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: response.path)
+        XCTAssertThrowsError(try ReleaseChecker.verificationTransport(environment: [
+            "RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE": response.path,
+        ]))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: response.path)
+        let link = root.appendingPathComponent("version-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: response)
+        XCTAssertThrowsError(try ReleaseChecker.verificationTransport(environment: [
+            "RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE": link.path,
+        ]))
+    }
+
     private func makeChecker(
         paths: AgentPaths,
         clock: @escaping ReleaseChecker.Clock = { 1_800_000_000_000 },

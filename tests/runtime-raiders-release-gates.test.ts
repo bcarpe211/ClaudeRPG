@@ -24,6 +24,10 @@ const gate1 = join(root, 'scripts/test/runtime-raiders-lifecycle.sh');
 const gate1Sandbox = join(root, 'scripts/test/runtime-raiders-gate1.sb');
 const gate2Paths = join(root, 'scripts/test/runtime-raiders-gate2-paths.sh');
 const safety = join(root, 'scripts/test/runtime-raiders-gate-safety.sh');
+const retiredReleaseEntrypoints = [
+  join(root, 'scripts/release/run-runtime-raiders-gate2.sh'),
+  join(root, 'scripts/release/prepare-runtime-raiders-sequence8-private-record.sh'),
+];
 
 function executable(path: string, lines: string[]): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -34,6 +38,25 @@ function executable(path: string, lines: string[]): void {
 function bash(script: string, env: NodeJS.ProcessEnv = process.env) {
   return spawnSync('/bin/bash', ['-c', script], { env, encoding: 'utf8' });
 }
+
+describe('Runtime Raiders retired release entrypoints', () => {
+  it.each(retiredReleaseEntrypoints)('%s fails closed before release work', (entrypoint) => {
+    const result = spawnSync('/bin/bash', [entrypoint], {
+      env: {
+        ...process.env,
+        RUNTIME_RAIDERS_CODESIGN_IDENTITY: 'must-not-run',
+        RUNTIME_RAIDERS_NOTARY_PROFILE: 'must-not-run',
+        RUNTIME_RAIDERS_TEAM_ID: 'ABCDE12345',
+      },
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(78);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(
+      'This sequence/quartet release entrypoint is retired; use the Task 6 beta release entrypoint. No release action was performed.\n',
+    );
+  });
+});
 
 describe('Runtime Raiders Gate 1 isolation', () => {
   it('enforces the OS sandbox against absolute live boundaries while preserving local IPC', () => {

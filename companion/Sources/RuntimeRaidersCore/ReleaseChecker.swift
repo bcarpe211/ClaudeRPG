@@ -291,6 +291,61 @@ public final class ReleaseChecker: @unchecked Sendable {
         try liveTransport(request, allowedURL: VersionDocument.url)
     }
 
+    /// This seam is absent from the installed LaunchAgent and installer environment. When the
+    /// exact opt-in key is unset, callers retain the live HTTPS transport unchanged. A verifier
+    /// can use an owner-only local response for the informational update command without network.
+    public static func verificationTransport(
+        environment: [String: String]
+    ) throws -> Transport? {
+        guard let path = environment["RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE"] else {
+            return nil
+        }
+        guard path.hasPrefix("/"), !path.contains("\n") else {
+            throw URLError(.badURL)
+        }
+        let descriptor = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw URLError(.cannotOpenFile) }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & 0o777 == 0o600,
+              metadata.st_nlink == 1,
+              metadata.st_size > 0,
+              metadata.st_size <= maximumResponseBytes else {
+            throw URLError(.noPermissionsToReadFile)
+        }
+        var body = Data(count: Int(metadata.st_size))
+        var offset = 0
+        try body.withUnsafeMutableBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            while offset < bytes.count {
+                let count = Darwin.read(descriptor, base.advanced(by: offset), bytes.count - offset)
+                if count > 0 { offset += count }
+                else if count < 0, errno == EINTR { continue }
+                else { throw URLError(.cannotOpenFile) }
+            }
+        }
+        var extra: UInt8 = 0
+        while true {
+            let count = Darwin.read(descriptor, &extra, 1)
+            if count == 0 { break }
+            if count < 0, errno == EINTR { continue }
+            throw URLError(.cannotOpenFile)
+        }
+        let capturedBody = body
+        return { request in
+            guard request.url == VersionDocument.url,
+                  request.httpMethod == "GET",
+                  request.httpBody == nil,
+                  request.allHTTPHeaderFields?.isEmpty ?? true else {
+                throw URLError(.unsupportedURL)
+            }
+            return UploadHTTPResponse(statusCode: 200, body: capturedBody)
+        }
+    }
+
     static func liveTransport(_ request: URLRequest, allowedURL: URL) throws -> UploadHTTPResponse {
         guard request.url == allowedURL,
               request.httpMethod == "GET",

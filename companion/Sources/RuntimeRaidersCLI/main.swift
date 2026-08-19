@@ -308,7 +308,14 @@ private final class DaemonRuntime: @unchecked Sendable {
 
 private func runUpdateCheck(paths: AgentPaths) throws {
     let installed = try CompanionReleaseIdentity.load(from: .main).companionVersion
-    let checker = try ReleaseChecker(paths: paths, installedVersion: installed)
+    let verificationTransport = try ReleaseChecker.verificationTransport(
+        environment: ProcessInfo.processInfo.environment
+    )
+    let checker = try ReleaseChecker(
+        paths: paths,
+        installedVersion: installed,
+        transport: verificationTransport ?? ReleaseChecker.liveTransport
+    )
     do {
         _ = try checker.fetchNow()
     } catch {

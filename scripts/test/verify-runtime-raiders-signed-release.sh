@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -euo pipefail
+umask 077
 
 usage() {
   echo "usage: $0 /absolute/path/to/local-runtime-raiders-beta-release" >&2
@@ -12,8 +13,86 @@ case "$1" in http://*|https://*) echo "signed verifier refuses URLs" >&2; exit 6
 [ -d "$1" ] && [ ! -L "$1" ] || usage
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
-RELEASE_DIR="$(cd "$1" && pwd -P)"
+SOURCE_RELEASE_DIR="$(cd "$1" && pwd -P)"
 OWNER="$(/usr/bin/id -u)"
+ARCHIVE_MAX_BYTES=8388608
+
+invalid_test_tools() {
+  echo "signed verifier test tool configuration is invalid" >&2
+  exit 64
+}
+
+validate_test_tool() {
+  local tool="$1" mode
+  case "$tool" in /*) ;; *) invalid_test_tools ;; esac
+  [ -f "$tool" ] && [ ! -L "$tool" ] && [ -x "$tool" ] || invalid_test_tools
+  [ "$(/usr/bin/stat -f '%u' "$tool")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f '%l' "$tool")" = 1 ] || invalid_test_tools
+  mode="$(/usr/bin/stat -f '%Lp' "$tool")"
+  (( (8#$mode & 8#022) == 0 )) || invalid_test_tools
+}
+
+if [ -n "${RUNTIME_RAIDERS_TEST_MODE:-}" ]; then
+  [ "$RUNTIME_RAIDERS_TEST_MODE" = 1 ] &&
+    [ "${RUNTIME_RAIDERS_TEST_ROOT:-}" = "$ROOT" ] || invalid_test_tools
+  LIPO_TOOL="${RUNTIME_RAIDERS_TEST_LIPO:-}"
+  CODESIGN_TOOL="${RUNTIME_RAIDERS_TEST_CODESIGN:-}"
+  SPCTL_TOOL="${RUNTIME_RAIDERS_TEST_SPCTL:-}"
+  XCRUN_TOOL="${RUNTIME_RAIDERS_TEST_XCRUN:-}"
+  for test_tool in "$LIPO_TOOL" "$CODESIGN_TOOL" "$SPCTL_TOOL" "$XCRUN_TOOL"; do
+    validate_test_tool "$test_tool"
+  done
+else
+  for injected_name in \
+    RUNTIME_RAIDERS_TEST_ROOT RUNTIME_RAIDERS_TEST_LIPO RUNTIME_RAIDERS_TEST_CODESIGN \
+    RUNTIME_RAIDERS_TEST_SPCTL RUNTIME_RAIDERS_TEST_XCRUN; do
+    [ -z "${!injected_name:-}" ] || invalid_test_tools
+  done
+  LIPO_TOOL=/usr/bin/lipo
+  CODESIGN_TOOL=/usr/bin/codesign
+  SPCTL_TOOL=/usr/sbin/spctl
+  XCRUN_TOOL=/usr/bin/xcrun
+fi
+for system_tool in "$LIPO_TOOL" "$CODESIGN_TOOL" "$SPCTL_TOOL" "$XCRUN_TOOL"; do
+  [ -x "$system_tool" ] || {
+    echo "required verifier tool is unavailable: $system_tool" >&2
+    exit 69
+  }
+done
+
+REVIEWED_STATUS="$(/usr/bin/git -C "$ROOT" status --porcelain --untracked-files=no)" || {
+  echo "signed verifier could not inspect reviewed source" >&2
+  exit 1
+}
+[ -z "$REVIEWED_STATUS" ] || {
+  echo "reviewed source must be clean" >&2
+  exit 1
+}
+REVIEWED_HEAD="$(/usr/bin/git -C "$ROOT" rev-parse --verify HEAD)" || {
+  echo "signed verifier could not inspect reviewed source" >&2
+  exit 1
+}
+[[ "$REVIEWED_HEAD" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "reviewed HEAD is invalid" >&2
+  exit 1
+}
+
+RELEASE_FILE="$ROOT/companion/RELEASE"
+[ -f "$RELEASE_FILE" ] && [ ! -L "$RELEASE_FILE" ] || {
+  echo "companion/RELEASE is invalid" >&2
+  exit 1
+}
+REVIEWED_VERSION_LINE="$(/usr/bin/sed -n '2p' "$RELEASE_FILE")"
+case "$REVIEWED_VERSION_LINE" in
+  companion_version=*) REVIEWED_VERSION="${REVIEWED_VERSION_LINE#companion_version=}" ;;
+  *) echo "companion/RELEASE is invalid" >&2; exit 1 ;;
+esac
+[[ "$REVIEWED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
+  /usr/bin/cmp -s "$RELEASE_FILE" <(printf 'format=1\ncompanion_version=%s\n' "$REVIEWED_VERSION") || {
+  echo "companion/RELEASE is invalid" >&2
+  exit 1
+}
+
 WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/runtime-raiders-beta-verify.XXXXXX")"
 cleanup() {
   local status=$?
@@ -30,49 +109,70 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-[ "$(/usr/bin/stat -f '%u' "$RELEASE_DIR")" = "$OWNER" ] || {
+[ "$(/usr/bin/stat -f '%u' "$SOURCE_RELEASE_DIR")" = "$OWNER" ] || {
   echo "signed verifier refuses an unowned release directory" >&2
   exit 1
 }
-[ "$(/usr/bin/find "$RELEASE_DIR" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 4 ] || {
+release_mode="$(/usr/bin/stat -f '%Lp' "$SOURCE_RELEASE_DIR")"
+(( (8#$release_mode & 8#022) == 0 )) || {
+  echo "release directory must not be group or world writable" >&2
+  exit 1
+}
+[ "$(/usr/bin/find "$SOURCE_RELEASE_DIR" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 4 ] || {
   echo "signed verifier requires exactly three public files and release-summary.txt" >&2
   exit 1
 }
 
-INSTALLER="$RELEASE_DIR/install.sh"
-ARCHIVE="$RELEASE_DIR/runtime-raiders-agent.zip"
-VERSION_FILE="$RELEASE_DIR/version"
-SUMMARY="$RELEASE_DIR/release-summary.txt"
-for file in "$INSTALLER" "$ARCHIVE" "$VERSION_FILE" "$SUMMARY"; do
-  [ -f "$file" ] && [ ! -L "$file" ] &&
-    [ "$(/usr/bin/stat -f '%u' "$file")" = "$OWNER" ] &&
-    [ "$(/usr/bin/stat -f '%l' "$file")" = 1 ] || {
+INPUT="$WORK/input"
+/bin/mkdir -m 700 "$INPUT"
+copy_release_member() {
+  local name="$1" destination_mode="$2" source="$SOURCE_RELEASE_DIR/$1"
+  local before after mode copied="$INPUT/$1"
+  [ -f "$source" ] && [ ! -L "$source" ] &&
+    [ "$(/usr/bin/stat -f '%u' "$source")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f '%l' "$source")" = 1 ] || {
     echo "signed verifier refuses an unsafe release member" >&2
     exit 1
   }
-  mode="$(/usr/bin/stat -f '%Lp' "$file")"
+  mode="$(/usr/bin/stat -f '%Lp' "$source")"
   (( (8#$mode & 8#022) == 0 )) || {
     echo "signed verifier refuses writable release members" >&2
     exit 1
   }
-done
+  before="$(/usr/bin/stat -f '%u:%l:%Lp:%d:%i:%z:%m:%c' "$source")"
+  /bin/cp "$source" "$copied"
+  after="$(/usr/bin/stat -f '%u:%l:%Lp:%d:%i:%z:%m:%c' "$source")"
+  [ "$after" = "$before" ] || {
+    echo "release member changed while being copied" >&2
+    exit 1
+  }
+  /bin/chmod "$destination_mode" "$copied"
+  [ -f "$copied" ] && [ ! -L "$copied" ] &&
+    [ "$(/usr/bin/stat -f '%u' "$copied")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f '%l' "$copied")" = 1 ] || {
+    echo "signed verifier could not isolate a release member" >&2
+    exit 1
+  }
+}
+copy_release_member install.sh 700
+copy_release_member runtime-raiders-agent.zip 600
+copy_release_member version 600
+copy_release_member release-summary.txt 600
+
+INSTALLER="$INPUT/install.sh"
+ARCHIVE="$INPUT/runtime-raiders-agent.zip"
+VERSION_FILE="$INPUT/version"
+SUMMARY="$INPUT/release-summary.txt"
 [ -x "$INSTALLER" ] || {
   echo "signed verifier requires executable install.sh" >&2
   exit 1
 }
 
-VERSION_DOCUMENT="$(<"$VERSION_FILE")"
-VERSION_PATTERN='^\{"version":"([0-9]+\.[0-9]+\.[0-9]+)"\}$'
-[[ "$VERSION_DOCUMENT" =~ $VERSION_PATTERN ]] || {
-  echo "version is not canonical" >&2
+/usr/bin/cmp -s "$VERSION_FILE" <(printf '{"version":"%s"}\n' "$REVIEWED_VERSION") || {
+  echo "release files do not match companion/RELEASE" >&2
   exit 1
 }
-COMPANION_VERSION="${BASH_REMATCH[1]}"
-[ "$(/usr/bin/wc -l < "$VERSION_FILE" | /usr/bin/tr -d ' ')" -eq 1 ] &&
-  [ "$(/usr/bin/wc -c < "$VERSION_FILE" | /usr/bin/tr -d ' ')" -eq $((${#VERSION_DOCUMENT} + 1)) ] || {
-  echo "version is not canonical" >&2
-  exit 1
-}
+COMPANION_VERSION="$REVIEWED_VERSION"
 
 INSTALLER_VERSION="$(/usr/bin/sed -n "s/^COMPANION_VERSION='\([^']*\)'$/\1/p" "$INSTALLER")"
 TEAM_ID="$(/usr/bin/sed -n "s/^TEAM_ID='\([^']*\)'$/\1/p" "$INSTALLER")"
@@ -85,7 +185,7 @@ EXPECTED_INSTALLER="$WORK/expected-install.sh"
   -e "s/__RUNTIME_RAIDERS_COMPANION_VERSION__/$COMPANION_VERSION/g" \
   -e "s/__RUNTIME_RAIDERS_TEAM_ID__/$TEAM_ID/g" \
   "$ROOT/companion/packaging/install.sh" > "$EXPECTED_INSTALLER"
-cmp -s "$INSTALLER" "$EXPECTED_INSTALLER" || {
+/usr/bin/cmp -s "$INSTALLER" "$EXPECTED_INSTALLER" || {
   echo "install.sh is not the exact two-value template rendering" >&2
   exit 1
 }
@@ -112,9 +212,11 @@ done
   echo "release-summary.txt contains unexpected fields" >&2
   exit 1
 }
-SUMMARY_GIT_SHA="$(summary_value git_sha)"
-[[ "$SUMMARY_GIT_SHA" =~ ^[0-9a-f]{40}$ ]] &&
-  [ "$(summary_value companion_version)" = "$COMPANION_VERSION" ] &&
+[ "$(summary_value git_sha)" = "$REVIEWED_HEAD" ] || {
+  echo "release summary does not match reviewed HEAD" >&2
+  exit 1
+}
+[ "$(summary_value companion_version)" = "$COMPANION_VERSION" ] &&
   [ "$(summary_value bundle_identifier)" = com.redlattice.runtime-raiders-agent ] &&
   [ "$(summary_value team_id)" = "$TEAM_ID" ] &&
   [ "$(summary_value codesign_verified)" = true ] &&
@@ -141,6 +243,12 @@ check_summary_file install.sh "$INSTALLER" &&
   echo "release-summary.txt size or SHA-256 evidence does not match" >&2
   exit 1
 }
+ARCHIVE_BYTES="$(/usr/bin/wc -c < "$ARCHIVE" | /usr/bin/tr -d ' ')"
+[ "$ARCHIVE_BYTES" -le "$ARCHIVE_MAX_BYTES" ] || {
+  echo "release archive exceeds $ARCHIVE_MAX_BYTES bytes" >&2
+  exit 1
+}
+ARCHIVE_SHA256="$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { print $1 }')"
 
 EXTRACTED="$WORK/extracted"
 /bin/mkdir "$EXTRACTED"
@@ -169,8 +277,8 @@ BUNDLE_VERSION="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$AGENT_INFO
   exit 1
 }
 
-lipo "$AGENT_EXECUTABLE" -verify_arch arm64 x86_64
-CODESIGN_FACTS="$(codesign -dv --verbose=4 "$AGENT_APP" 2>&1)"
+"$LIPO_TOOL" "$AGENT_EXECUTABLE" -verify_arch arm64 x86_64
+CODESIGN_FACTS="$("$CODESIGN_TOOL" -dv --verbose=4 "$AGENT_APP" 2>&1)"
 printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -F "TeamIdentifier=$TEAM_ID" >/dev/null &&
   printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -E 'flags=.*runtime' >/dev/null &&
   printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -E '^Timestamp=.+' >/dev/null || {
@@ -178,18 +286,18 @@ printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -F "TeamIdentifier=$TEAM_ID" >/d
   exit 1
 }
 AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
-codesign --verify --deep --strict --verbose=2 "$AGENT_APP"
-codesign --verify --strict -R "$AGENT_REQUIREMENT" "$AGENT_APP"
-spctl --assess --type execute --verbose=2 "$AGENT_APP"
-xcrun stapler validate "$AGENT_APP"
+"$CODESIGN_TOOL" --verify --deep --strict --verbose=2 "$AGENT_APP"
+"$CODESIGN_TOOL" --verify --strict -R "$AGENT_REQUIREMENT" "$AGENT_APP"
+"$SPCTL_TOOL" --assess --type execute --verbose=2 "$AGENT_APP"
+"$XCRUN_TOOL" stapler validate "$AGENT_APP"
+VERIFIED_EXECUTABLE_SHA256="$(/usr/bin/shasum -a 256 "$AGENT_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')"
 
 SMOKE_HOME="$WORK/home"
 SMOKE_BIN="$WORK/fake-bin"
-SMOKE_APP="$WORK/smoke/Runtime Raiders Agent.app"
 SMOKE_LOG="$WORK/smoke.log"
 LOCAL_VERSION="$WORK/version-response"
 /bin/mkdir -p "$SMOKE_HOME/Library/Application Support/Runtime Raiders/state" \
-  "$SMOKE_HOME/Library/Application Support/Runtime Raiders/outbox" "$SMOKE_BIN" "$(/usr/bin/dirname "$SMOKE_APP")"
+  "$SMOKE_HOME/Library/Application Support/Runtime Raiders/outbox" "$SMOKE_BIN"
 /bin/chmod 700 "$SMOKE_HOME" "$SMOKE_HOME/Library" "$SMOKE_HOME/Library/Application Support" \
   "$SMOKE_HOME/Library/Application Support/Runtime Raiders" \
   "$SMOKE_HOME/Library/Application Support/Runtime Raiders/state" \
@@ -198,24 +306,8 @@ cat > "$SMOKE_HOME/Library/Application Support/Runtime Raiders/state/enrollment.
 {"version":1,"device_id":"00000000-0000-4000-8000-000000000001","device_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","dedupe_secret":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","server_url":"https://raiders.redlattice.com","cutover_at":1700000000000,"enabled_surfaces":["codex_desktop","codex_cli"]}
 EOF
 /bin/chmod 600 "$SMOKE_HOME/Library/Application Support/Runtime Raiders/state/enrollment.json"
-/usr/bin/ditto "$AGENT_APP" "$SMOKE_APP"
-cat > "$SMOKE_APP/Contents/MacOS/runtime-raiders-agent" <<EOF
-#!/bin/sh
-set -eu
-case "\${1:-status}" in
-  status) printf '{"activationState":"disabled","companionVersion":"$COMPANION_VERSION"}\\n' ;;
-  daemon) printf 'daemon\\n' >> "\$RR_VERIFY_SMOKE_LOG" ;;
-  update)
-    [ "\$(cat "\$RR_VERIFY_LOCAL_VERSION")" = '{"version":"$COMPANION_VERSION"}' ] || exit 1
-    printf 'GET /version\\n' >> "\$RR_VERIFY_SMOKE_LOG"
-    printf 'Runtime Raiders $COMPANION_VERSION is current.\\n'
-    ;;
-  on) exit 97 ;;
-  *) exit 64 ;;
-esac
-EOF
-/bin/chmod 755 "$SMOKE_APP/Contents/MacOS/runtime-raiders-agent"
 printf '{"version":"%s"}\n' "$COMPANION_VERSION" > "$LOCAL_VERSION"
+/bin/chmod 600 "$LOCAL_VERSION"
 : > "$SMOKE_LOG"
 
 cat > "$SMOKE_BIN/curl" <<'EOF'
@@ -232,15 +324,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$url" = https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip ] || exit 97
-printf 'GET %s\n' "$url" >> "$RR_VERIFY_SMOKE_LOG"
-printf 'local archive fixture\n' > "$output"
+printf 'LOCAL_ARCHIVE\n' >> "$RR_VERIFY_SMOKE_LOG"
+/bin/cp "$RR_VERIFY_ARCHIVE" "$output"
 printf 200
 EOF
 cat > "$SMOKE_BIN/ditto" <<'EOF'
 #!/bin/sh
 set -eu
-[ "$#" -eq 4 ] && [ "$1" = -x ] && [ "$2" = -k ] || exit 64
-/bin/cp -R "$RR_VERIFY_SMOKE_APP" "$4/Runtime Raiders Agent.app"
+exec /usr/bin/ditto "$@"
 EOF
 cat > "$SMOKE_BIN/codesign" <<'EOF'
 #!/bin/sh
@@ -279,30 +370,39 @@ SMOKE_ENV=(
   HOME="$SMOKE_HOME"
   CFFIXED_USER_HOME="$SMOKE_HOME"
   RR_VERIFY_SMOKE_LOG="$SMOKE_LOG"
-  RR_VERIFY_LOCAL_VERSION="$LOCAL_VERSION"
-  RR_VERIFY_SMOKE_APP="$SMOKE_APP"
+  RR_VERIFY_ARCHIVE="$ARCHIVE"
 )
-
 /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "${SMOKE_ENV[@]}" /bin/sh "$SMOKE_INSTALLER" >/dev/null
 INSTALLED_COMMAND="$SMOKE_HOME/.local/bin/raiders"
+INSTALLED_EXECUTABLE="$SMOKE_HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
 [ -x "$INSTALLED_COMMAND" ] &&
-  [ ! -e "$SMOKE_HOME/Library/Application Support/Runtime Raiders/state/collector-state.json" ] || {
-  echo "fake-HOME fresh install did not remain off" >&2
+  [ ! -e "$SMOKE_HOME/Library/Application Support/Runtime Raiders/state/collector-state.json" ] &&
+  [ "$(/usr/bin/shasum -a 256 "$INSTALLED_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')" = "$VERIFIED_EXECUTABLE_SHA256" ] || {
+  echo "fake-HOME install did not preserve the verified disabled app" >&2
   exit 1
 }
-STATUS_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_USER_HOME="$SMOKE_HOME" \
-  RR_VERIFY_SMOKE_LOG="$SMOKE_LOG" RR_VERIFY_LOCAL_VERSION="$LOCAL_VERSION" "$INSTALLED_COMMAND" status)"
+STATUS_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_USER_HOME="$SMOKE_HOME" "$INSTALLED_COMMAND" status)"
 printf '%s\n' "$STATUS_OUTPUT" | /usr/bin/grep -F '"activationState":"disabled"' >/dev/null || {
   echo "fake-HOME status smoke was not disabled" >&2
   exit 1
 }
 UPDATE_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="$SMOKE_HOME" CFFIXED_USER_HOME="$SMOKE_HOME" \
-  RR_VERIFY_SMOKE_LOG="$SMOKE_LOG" RR_VERIFY_LOCAL_VERSION="$LOCAL_VERSION" "$INSTALLED_COMMAND" update)"
+  RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE="$LOCAL_VERSION" "$INSTALLED_COMMAND" update)"
 [ "$UPDATE_OUTPUT" = "Runtime Raiders $COMPANION_VERSION is current." ] &&
-  /usr/bin/grep -F -x 'GET /version' "$SMOKE_LOG" >/dev/null &&
-  /usr/bin/grep -F -x 'GET https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip' "$SMOKE_LOG" >/dev/null &&
-  [ "$(/usr/bin/grep -c '^GET ' "$SMOKE_LOG")" -eq 2 ] || {
+  [ "$(/usr/bin/grep -c '^LOCAL_ARCHIVE$' "$SMOKE_LOG")" -eq 1 ] || {
   echo "fake-HOME local update-check smoke failed" >&2
+  exit 1
+}
+[ "$(/usr/bin/shasum -a 256 "$AGENT_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')" = "$VERIFIED_EXECUTABLE_SHA256" ] &&
+  [ "$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { print $1 }')" = "$ARCHIVE_SHA256" ] || {
+  echo "signed verifier modified verified release bytes" >&2
+  exit 1
+}
+
+FINAL_REVIEWED_STATUS="$(/usr/bin/git -C "$ROOT" status --porcelain --untracked-files=no)" || exit 1
+FINAL_REVIEWED_HEAD="$(/usr/bin/git -C "$ROOT" rev-parse --verify HEAD)" || exit 1
+[ -z "$FINAL_REVIEWED_STATUS" ] && [ "$FINAL_REVIEWED_HEAD" = "$REVIEWED_HEAD" ] || {
+  echo "reviewed source changed during signed verification" >&2
   exit 1
 }
 

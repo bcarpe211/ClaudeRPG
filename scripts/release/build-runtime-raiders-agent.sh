@@ -23,6 +23,52 @@ fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 RELEASE_FILE="$ROOT/companion/RELEASE"
 INSTALLER_TEMPLATE="$ROOT/companion/packaging/install.sh"
+ARCHIVE_MAX_BYTES=8388608
+
+invalid_test_tools() {
+  echo "release test tool configuration is invalid" >&2
+  exit 64
+}
+
+validate_test_tool() {
+  local tool="$1" mode
+  case "$tool" in /*) ;; *) invalid_test_tools ;; esac
+  [ -f "$tool" ] && [ ! -L "$tool" ] && [ -x "$tool" ] || invalid_test_tools
+  [ "$(/usr/bin/stat -f '%u' "$tool")" = "$(/usr/bin/id -u)" ] &&
+    [ "$(/usr/bin/stat -f '%l' "$tool")" = 1 ] || invalid_test_tools
+  mode="$(/usr/bin/stat -f '%Lp' "$tool")"
+  (( (8#$mode & 8#022) == 0 )) || invalid_test_tools
+}
+
+if [ -n "${RUNTIME_RAIDERS_TEST_MODE:-}" ]; then
+  [ "$RUNTIME_RAIDERS_TEST_MODE" = 1 ] &&
+    [ "${RUNTIME_RAIDERS_TEST_ROOT:-}" = "$ROOT" ] || invalid_test_tools
+  SWIFT_TOOL="${RUNTIME_RAIDERS_TEST_SWIFT:-}"
+  LIPO_TOOL="${RUNTIME_RAIDERS_TEST_LIPO:-}"
+  CODESIGN_TOOL="${RUNTIME_RAIDERS_TEST_CODESIGN:-}"
+  SPCTL_TOOL="${RUNTIME_RAIDERS_TEST_SPCTL:-}"
+  XCRUN_TOOL="${RUNTIME_RAIDERS_TEST_XCRUN:-}"
+  for test_tool in "$SWIFT_TOOL" "$LIPO_TOOL" "$CODESIGN_TOOL" "$SPCTL_TOOL" "$XCRUN_TOOL"; do
+    validate_test_tool "$test_tool"
+  done
+else
+  for injected_name in \
+    RUNTIME_RAIDERS_TEST_ROOT RUNTIME_RAIDERS_TEST_SWIFT RUNTIME_RAIDERS_TEST_LIPO \
+    RUNTIME_RAIDERS_TEST_CODESIGN RUNTIME_RAIDERS_TEST_SPCTL RUNTIME_RAIDERS_TEST_XCRUN; do
+    [ -z "${!injected_name:-}" ] || invalid_test_tools
+  done
+  SWIFT_TOOL=/usr/bin/swift
+  LIPO_TOOL=/usr/bin/lipo
+  CODESIGN_TOOL=/usr/bin/codesign
+  SPCTL_TOOL=/usr/sbin/spctl
+  XCRUN_TOOL=/usr/bin/xcrun
+fi
+for system_tool in "$SWIFT_TOOL" "$LIPO_TOOL" "$CODESIGN_TOOL" "$SPCTL_TOOL" "$XCRUN_TOOL"; do
+  [ -x "$system_tool" ] || {
+    echo "required release tool is unavailable: $system_tool" >&2
+    exit 69
+  }
+done
 
 [ -f "$RELEASE_FILE" ] && [ ! -L "$RELEASE_FILE" ] || {
   echo "companion/RELEASE is required" >&2
@@ -42,7 +88,7 @@ esac
   echo "companion_version is invalid" >&2
   exit 64
 }
-cmp -s "$RELEASE_FILE" <(printf 'format=1\ncompanion_version=%s\n' "$COMPANION_VERSION") || {
+/usr/bin/cmp -s "$RELEASE_FILE" <(printf 'format=1\ncompanion_version=%s\n' "$COMPANION_VERSION") || {
   echo "companion/RELEASE is invalid" >&2
   exit 64
 }
@@ -67,13 +113,6 @@ GIT_SHA="$(/usr/bin/git -C "$ROOT" rev-parse --verify HEAD)" || {
   echo "Git HEAD is invalid" >&2
   exit 64
 }
-
-for tool in swift lipo codesign spctl xcrun; do
-  command -v "$tool" >/dev/null 2>&1 || {
-    echo "$tool is required" >&2
-    exit 69
-  }
-done
 
 OUTPUT_PARENT="$ROOT/dist"
 OUTPUT="$OUTPUT_PARENT/runtime-raiders-beta-$COMPANION_VERSION"
@@ -110,7 +149,7 @@ SWIFT_SCRATCH="$WORK/swift"
 for arch in arm64 x86_64; do
   (
     cd "$ROOT/companion"
-    swift build -c release --arch "$arch" --scratch-path "$SWIFT_SCRATCH" --product raiders
+    "$SWIFT_TOOL" build -c release --arch "$arch" --scratch-path "$SWIFT_SCRATCH" --product raiders
   )
   BUILT_BINARY="$SWIFT_SCRATCH/$arch-apple-macosx/release/raiders"
   [ -f "$BUILT_BINARY" ] && [ ! -L "$BUILT_BINARY" ] && [ -x "$BUILT_BINARY" ] || {
@@ -121,8 +160,8 @@ for arch in arm64 x86_64; do
 done
 
 UNIVERSAL_AGENT="$WORK/runtime-raiders-agent"
-lipo -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$UNIVERSAL_AGENT"
-lipo "$UNIVERSAL_AGENT" -verify_arch arm64 x86_64
+"$LIPO_TOOL" -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$UNIVERSAL_AGENT"
+"$LIPO_TOOL" "$UNIVERSAL_AGENT" -verify_arch arm64 x86_64
 
 AGENT_APP="$WORK/Runtime Raiders Agent.app"
 /bin/mkdir -p "$AGENT_APP/Contents/MacOS"
@@ -162,37 +201,42 @@ validate_bundle_version "$AGENT_APP" || {
   exit 1
 }
 
-codesign --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$AGENT_APP"
+"$CODESIGN_TOOL" --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$AGENT_APP"
 validate_bundle_version "$AGENT_APP" || {
   echo "bundle version does not match companion/RELEASE" >&2
   exit 1
 }
-CODESIGN_FACTS="$(codesign -dv --verbose=4 "$AGENT_APP" 2>&1)"
+CODESIGN_FACTS="$("$CODESIGN_TOOL" -dv --verbose=4 "$AGENT_APP" 2>&1)"
 printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -F "TeamIdentifier=$RUNTIME_RAIDERS_TEAM_ID" >/dev/null &&
   printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -E 'flags=.*runtime' >/dev/null &&
   printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -E '^Timestamp=.+' >/dev/null || {
   echo "signed app is missing Team ID, hardened runtime, or secure timestamp" >&2
   exit 1
 }
-codesign --verify --deep --strict --verbose=2 "$AGENT_APP"
+"$CODESIGN_TOOL" --verify --deep --strict --verbose=2 "$AGENT_APP"
 
 NOTARY_ZIP="$WORK/runtime-raiders-notary.zip"
 /usr/bin/ditto -c -k --keepParent "$AGENT_APP" "$NOTARY_ZIP"
-NOTARY_RESULT="$(xcrun notarytool submit "$NOTARY_ZIP" \
+NOTARY_RESULT="$("$XCRUN_TOOL" notarytool submit "$NOTARY_ZIP" \
   --keychain-profile "$RUNTIME_RAIDERS_NOTARY_PROFILE" --wait)"
 printf '%s\n' "$NOTARY_RESULT" | /usr/bin/grep -Ei 'status:[[:space:]]*Accepted' >/dev/null || {
   echo "notarization was not accepted" >&2
   exit 1
 }
-xcrun stapler staple "$AGENT_APP"
-xcrun stapler validate "$AGENT_APP"
-codesign --verify --deep --strict --verbose=2 "$AGENT_APP"
-spctl --assess --type execute --verbose=2 "$AGENT_APP"
+"$XCRUN_TOOL" stapler staple "$AGENT_APP"
+"$XCRUN_TOOL" stapler validate "$AGENT_APP"
+"$CODESIGN_TOOL" --verify --deep --strict --verbose=2 "$AGENT_APP"
+"$SPCTL_TOOL" --assess --type execute --verbose=2 "$AGENT_APP"
 
 ARCHIVE="$STAGED_OUTPUT/runtime-raiders-agent.zip"
 /usr/bin/ditto -c -k --keepParent "$AGENT_APP" "$ARCHIVE"
 [ -s "$ARCHIVE" ] && [ ! -L "$ARCHIVE" ] || {
   echo "release archive was not created" >&2
+  exit 1
+}
+ARCHIVE_CREATED_BYTES="$(/usr/bin/wc -c < "$ARCHIVE" | /usr/bin/tr -d ' ')"
+[ "$ARCHIVE_CREATED_BYTES" -le "$ARCHIVE_MAX_BYTES" ] || {
+  echo "release archive exceeds $ARCHIVE_MAX_BYTES bytes" >&2
   exit 1
 }
 
@@ -213,10 +257,10 @@ validate_bundle_version "$PACKAGED_APP" || {
   echo "bundle version does not match companion/RELEASE" >&2
   exit 1
 }
-lipo "$PACKAGED_APP/Contents/MacOS/runtime-raiders-agent" -verify_arch arm64 x86_64
-codesign --verify --deep --strict --verbose=2 "$PACKAGED_APP"
-spctl --assess --type execute --verbose=2 "$PACKAGED_APP"
-xcrun stapler validate "$PACKAGED_APP"
+"$LIPO_TOOL" "$PACKAGED_APP/Contents/MacOS/runtime-raiders-agent" -verify_arch arm64 x86_64
+"$CODESIGN_TOOL" --verify --deep --strict --verbose=2 "$PACKAGED_APP"
+"$SPCTL_TOOL" --assess --type execute --verbose=2 "$PACKAGED_APP"
+"$XCRUN_TOOL" stapler validate "$PACKAGED_APP"
 
 VERSION_PLACEHOLDERS="$(/usr/bin/grep -o '__RUNTIME_RAIDERS_COMPANION_VERSION__' "$INSTALLER_TEMPLATE" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
 TEAM_PLACEHOLDERS="$(/usr/bin/grep -o '__RUNTIME_RAIDERS_TEAM_ID__' "$INSTALLER_TEMPLATE" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
@@ -279,6 +323,19 @@ EOF
   exit 1
 }
 "$ROOT/scripts/test/verify-runtime-raiders-signed-release.sh" "$STAGED_OUTPUT"
+
+FINAL_GIT_STATUS="$(/usr/bin/git -C "$ROOT" status --porcelain --untracked-files=no)" || {
+  echo "unable to recheck reviewed source" >&2
+  exit 1
+}
+FINAL_GIT_SHA="$(/usr/bin/git -C "$ROOT" rev-parse --verify HEAD)" || {
+  echo "unable to recheck reviewed source" >&2
+  exit 1
+}
+[ -z "$FINAL_GIT_STATUS" ] && [ "$FINAL_GIT_SHA" = "$GIT_SHA" ] || {
+  echo "reviewed source changed during release build" >&2
+  exit 1
+}
 
 [ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
   echo "release output appeared during build" >&2
