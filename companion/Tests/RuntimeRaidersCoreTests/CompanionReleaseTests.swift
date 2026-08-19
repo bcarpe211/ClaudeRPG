@@ -116,6 +116,28 @@ final class CompanionReleaseTests: XCTestCase {
         )
     }
 
+    func testLaunchAgentTemplateRunsStableAgentExecutableAsDaemon() throws {
+        let data = try Data(contentsOf: packageDirectory.appendingPathComponent(
+            "packaging/com.redlattice.runtime-raiders-agent.plist.template",
+            isDirectory: false
+        ))
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+
+        XCTAssertEqual(
+            plist["ProgramArguments"] as? [String],
+            ["__RUNTIME_RAIDERS_AGENT_EXECUTABLE__", "daemon"]
+        )
+    }
+
+    private var packageDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     private func validInfoDictionary() -> [String: Any] {
         [
             "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",

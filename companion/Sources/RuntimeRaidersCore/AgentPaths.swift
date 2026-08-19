@@ -7,15 +7,21 @@ public struct AgentPaths: Equatable, Sendable {
     public let controlSocket: URL
     public let updateState: URL
     public let updateLock: URL
-    public let preparedStartupLease: URL
-    public let legacyFlatApplication: URL
-    public let launcherDirectory: URL
-    public let launcherApplication: URL
-    public let launcherExecutable: URL
-    public let releasesDirectory: URL
-    public let installationDirectory: URL
-    public let releaseState: URL
-    public let updateJournal: URL
+    public let agentApplication: URL
+    public let agentExecutable: URL
+
+    // Deprecated compatibility paths keep the obsolete updater and migration
+    // sources compiling until Task 8 removes that source. Live routing and the
+    // installer must use agentApplication and agentExecutable.
+    let preparedStartupLease: URL
+    let legacyFlatApplication: URL
+    let launcherDirectory: URL
+    let launcherApplication: URL
+    let launcherExecutable: URL
+    let releasesDirectory: URL
+    let installationDirectory: URL
+    let releaseState: URL
+    let updateJournal: URL
 
     public init(applicationSupportDirectory: URL) {
         supportDirectory = applicationSupportDirectory
@@ -25,14 +31,19 @@ public struct AgentPaths: Equatable, Sendable {
         controlSocket = supportDirectory.appendingPathComponent("agent.sock", isDirectory: false)
         updateState = stateDirectory.appendingPathComponent("update-state.json", isDirectory: false)
         updateLock = stateDirectory.appendingPathComponent("update.lock", isDirectory: false)
+        agentApplication = supportDirectory.appendingPathComponent(
+            "Runtime Raiders Agent.app",
+            isDirectory: true
+        )
+        agentExecutable = agentApplication.appendingPathComponent(
+            "Contents/MacOS/runtime-raiders-agent",
+            isDirectory: false
+        )
         preparedStartupLease = stateDirectory.appendingPathComponent(
             "prepared-startup.lock",
             isDirectory: false
         )
-        legacyFlatApplication = supportDirectory.appendingPathComponent(
-            "Runtime Raiders Agent.app",
-            isDirectory: true
-        )
+        legacyFlatApplication = agentApplication
         launcherDirectory = supportDirectory.appendingPathComponent("launcher", isDirectory: true)
         launcherApplication = launcherDirectory.appendingPathComponent(
             "Runtime Raiders Launcher.app",
@@ -66,7 +77,7 @@ public struct AgentPaths: Equatable, Sendable {
         self.init(applicationSupportDirectory: applicationSupport)
     }
 
-    public func releaseDirectory(for release: ReleaseReference) throws -> URL {
+    func releaseDirectory(for release: ReleaseReference) throws -> URL {
         guard ReleaseReference.isValid(release) else {
             throw ReleaseContractError.invalidReleaseState
         }
@@ -76,14 +87,14 @@ public struct AgentPaths: Equatable, Sendable {
         )
     }
 
-    public func application(for release: ReleaseReference) throws -> URL {
+    func application(for release: ReleaseReference) throws -> URL {
         try releaseDirectory(for: release).appendingPathComponent(
             "Runtime Raiders Agent.app",
             isDirectory: true
         )
     }
 
-    public func executable(for release: ReleaseReference) throws -> URL {
+    func executable(for release: ReleaseReference) throws -> URL {
         try application(for: release).appendingPathComponent(
             "Contents/MacOS/runtime-raiders-agent",
             isDirectory: false

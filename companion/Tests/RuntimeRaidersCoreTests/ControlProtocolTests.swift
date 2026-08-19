@@ -4,6 +4,144 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ControlProtocolTests: XCTestCase {
+    func testAgentPathsExposeOneStableApplicationWithoutChangingStatePaths() {
+        let root = URL(fileURLWithPath: "/Users/test/Library/Application Support")
+        let paths = AgentPaths(applicationSupportDirectory: root)
+        let support = root.appendingPathComponent("Runtime Raiders", isDirectory: true)
+        let application = support.appendingPathComponent(
+            "Runtime Raiders Agent.app",
+            isDirectory: true
+        )
+
+        XCTAssertEqual(paths.supportDirectory, support)
+        XCTAssertEqual(
+            paths.stateDirectory,
+            support.appendingPathComponent("state", isDirectory: true)
+        )
+        XCTAssertEqual(
+            paths.outboxDirectory,
+            support.appendingPathComponent("outbox", isDirectory: true)
+        )
+        XCTAssertEqual(
+            paths.controlSocket,
+            support.appendingPathComponent("agent.sock", isDirectory: false)
+        )
+        XCTAssertEqual(paths.agentApplication, application)
+        XCTAssertEqual(
+            paths.agentExecutable,
+            application.appendingPathComponent(
+                "Contents/MacOS/runtime-raiders-agent",
+                isDirectory: false
+            )
+        )
+    }
+
+    func testFlatCommandRoutingUsesOnlyStableDaemonControlAndUpdateCheckRoutes() {
+        let paths = AgentPaths(
+            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-flat-routing")
+        )
+        let stableExecutable = paths.agentExecutable
+        let otherExecutable = URL(fileURLWithPath: "/private/tmp/runtime-raiders-agent")
+
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: [],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .control(.status)
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["daemon"],
+                executableURL: stableExecutable,
+                paths: paths
+            ),
+            .daemon
+        )
+        XCTAssertNil(CompanionCommandRouter.route(
+            arguments: ["daemon"],
+            executableURL: otherExecutable,
+            paths: paths
+        ))
+        for command in [
+            ControlCommand.on,
+            .off,
+            .status,
+            .doctor,
+            .uninstall,
+        ] {
+            XCTAssertEqual(
+                CompanionCommandRouter.route(
+                    arguments: [command.rawValue],
+                    executableURL: otherExecutable,
+                    paths: paths
+                ),
+                .control(command)
+            )
+        }
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["update"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .updateCheck
+        )
+
+        for arguments in [
+            ["prepare_update"],
+            ["resume_update"],
+            ["__self-check"],
+            ["__runtime-raiders-installer-lease"],
+            ["__runtime-raiders-legacy-prepare"],
+            ["__runtime-raiders-installer-validate-legacy"],
+            ["__runtime-raiders-installer-retire-sequence-eight-command"],
+            ["__runtime-raiders-installer-status", "legacy-running"],
+            ["__runtime-raiders-installer-protected-state"],
+            ["__runtime-raiders-installer-sync-migration", "candidate"],
+            ["__runtime-raiders-legacy-resume"],
+            ["__runtime-raiders-installer-resume", "1"],
+            ["daemon", "__runtime-raiders-trial-generation", "1"],
+            ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
+        ] {
+            XCTAssertNil(
+                CompanionCommandRouter.route(
+                    arguments: arguments,
+                    executableURL: stableExecutable,
+                    paths: paths
+                ),
+                "accepted retired route \(arguments)"
+            )
+        }
+    }
+
+    func testNormalDaemonStartupStartsControlBeforeOptionalActivationAndVersionCheck() throws {
+        var actions: [String] = []
+        let enabledStartup = NormalDaemonStartupCoordinator(operations: DaemonStartupOperations(
+            startControl: { actions.append("control") },
+            prepareLocalState: { actions.append("local-state") },
+            activatePersistedEnabled: { actions.append("activate") },
+            scheduleVersionCheck: { actions.append("version-check") }
+        ))
+
+        try enabledStartup.start(persistedEnabled: true)
+
+        XCTAssertEqual(actions, ["control", "local-state", "activate", "version-check"])
+
+        actions.removeAll()
+        let disabledStartup = NormalDaemonStartupCoordinator(operations: DaemonStartupOperations(
+            startControl: { actions.append("control") },
+            prepareLocalState: { actions.append("local-state") },
+            activatePersistedEnabled: { actions.append("activate") },
+            scheduleVersionCheck: { actions.append("version-check") }
+        ))
+
+        try disabledStartup.start(persistedEnabled: false)
+
+        XCTAssertEqual(actions, ["control", "local-state", "version-check"])
+    }
+
     func testAgentStatusWireIncludesActivationStateWithoutRemovingEnabled() throws {
         let status = AgentStatus(
             enabled: true,
@@ -28,45 +166,6 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertNil(object["preparedReleaseStateGeneration"])
     }
 
-    func testPrepareUpdateUsesLongTimeoutAndCarriesExactReleaseGeneration() throws {
-        let request = ControlRequest(command: .prepareUpdate, releaseStateGeneration: 7)
-        let frame = try ControlSocketProtocol.encode(request, maximumFrameBytes: 4_096)
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: frame.dropLast()) as? [String: Any]
-        )
-
-        XCTAssertEqual(ControlSocketClient.timeoutSeconds(for: .prepareUpdate), 30)
-        XCTAssertEqual(Set(object.keys), ["command", "release_state_generation"])
-        XCTAssertEqual(object["command"] as? String, "prepare_update")
-        XCTAssertEqual(object["release_state_generation"] as? Int64, 7)
-        XCTAssertNil(request.claudeOTelEnvironmentPresent)
-        XCTAssertEqual(
-            try ControlSocketProtocol.decode(frame, maximumFrameBytes: 4_096),
-            request
-        )
-    }
-
-    func testResumeUpdateIsInternalGenerationBoundAndNotUserRoutable() throws {
-        let request = ControlRequest(command: .resumeUpdate, releaseStateGeneration: 8)
-        let frame = try ControlSocketProtocol.encode(request, maximumFrameBytes: 4_096)
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: frame.dropLast()) as? [String: Any]
-        )
-        let paths = AgentPaths(
-            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-resume-routing")
-        )
-
-        XCTAssertEqual(ControlSocketClient.timeoutSeconds(for: .resumeUpdate), 30)
-        XCTAssertEqual(Set(object.keys), ["command", "release_state_generation"])
-        XCTAssertEqual(object["command"] as? String, "resume_update")
-        XCTAssertEqual(object["release_state_generation"] as? Int64, 8)
-        XCTAssertNil(request.claudeOTelEnvironmentPresent)
-        XCTAssertNil(CompanionCommandRouter.route(
-            arguments: ["resume_update"],
-            executableURL: URL(fileURLWithPath: "/private/tmp/runtime-raiders-agent"),
-            paths: paths
-        ))
-    }
 
     func testSerializedResumeIsIdempotentAndClearsPreparedOnlyAfterResumeSucceeds() {
         let queue = DispatchQueue(label: "com.redlattice.runtime-raiders.tests.resume-preparation")
@@ -661,428 +760,6 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertFalse(stopped.value)
     }
 
-    func testCommandRoutingKeepsUpdateLocalAndRejectsInternalControlName() {
-        let paths = AgentPaths(
-            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-routing")
-        )
-        let ordinaryExecutable = URL(fileURLWithPath: "/private/tmp/runtime-raiders-agent")
-
-        for command in [
-            ControlCommand.on,
-            .off,
-            .status,
-            .doctor,
-            .uninstall,
-        ] {
-            XCTAssertEqual(
-                CompanionCommandRouter.route(
-                    arguments: [command.rawValue],
-                    executableURL: ordinaryExecutable,
-                    paths: paths
-                ),
-                .control(command)
-            )
-        }
-        XCTAssertEqual(
-            CompanionCommandRouter.route(
-                arguments: ["update"],
-                executableURL: ordinaryExecutable,
-                paths: paths
-            ),
-            .foregroundUpdate
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["prepare_update"],
-                executableURL: ordinaryExecutable,
-                paths: paths
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["update", "status"],
-                executableURL: ordinaryExecutable,
-                paths: paths
-            )
-        )
-        for privateCommand in [
-            "__runtime-raiders-installer-lease",
-            "__runtime-raiders-legacy-prepare",
-            "__runtime-raiders-installer-resume",
-            "__runtime-raiders-installer-sync-migration",
-        ] {
-            XCTAssertNil(
-                LauncherInvocation(arguments: [privateCommand]),
-                "stable launcher accepted installer-private route \(privateCommand)"
-            )
-        }
-    }
-
-    func testInstallerPrivateRoutesRequireProtocolTwoDirectAgentAndExactActivePath() throws {
-        let paths = AgentPaths(
-            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-installer-routing")
-        )
-        let active = ReleaseReference(
-            releaseSequence: 9,
-            releaseSHA: String(repeating: "a", count: 40),
-            companionVersion: "0.3.0",
-            updateProtocolVersion: 2
-        )
-        let state = ReleaseStateV1(
-            schemaVersion: 1,
-            generation: 1,
-            active: active,
-            fallback: nil,
-            trial: nil
-        )
-        let identity = try active.companionReleaseIdentity()
-        let staged = URL(fileURLWithPath: "/private/tmp/staged/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent")
-        let activeExecutable = try paths.executable(for: active)
-        let wrongExecutable = URL(fileURLWithPath: "/private/tmp/not-the-agent")
-        let protocolOne = CompanionReleaseIdentity(
-            releaseSequence: 8,
-            releaseSHA: String(repeating: "b", count: 40),
-            companionVersion: "0.2.6",
-            updateProtocolVersion: 1
-        )
-
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-lease"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ),
-            .installerLease
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-legacy-prepare"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ),
-            .legacyPrepare
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-validate-legacy"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ),
-            .installerValidateLegacy
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-retire-sequence-eight-command"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ),
-            .installerRetireSequenceEightCommand
-        )
-        for target in [
-            InstallerMigrationSyncTarget.stagingTree,
-            .stagingTombstoneTree,
-            .activeJournal,
-            .activeReleaseState,
-            .supportDirectory,
-        ] {
-            XCTAssertEqual(
-                CompanionCommandRouter.installerRoute(
-                    arguments: ["__runtime-raiders-installer-sync-migration", target.rawValue],
-                    executableURL: staged,
-                    paths: paths,
-                    releaseState: nil,
-                    releaseIdentity: identity
-                ),
-                .installerSyncMigration(target: target)
-            )
-        }
-        for invalid in [
-            ["__runtime-raiders-installer-sync-migration"],
-            ["__runtime-raiders-installer-sync-migration", "arbitrary-path"],
-            ["__runtime-raiders-installer-sync-migration", "staging-tree", "/tmp/other"],
-        ] {
-            XCTAssertNil(CompanionCommandRouter.installerRoute(
-                arguments: invalid,
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ))
-        }
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-status", "legacy-running"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ),
-            .installerLegacyStatus(
-                prepared: false,
-                expectedEnabled: nil,
-                expectedQueuedEventCount: nil
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-status", "legacy-prepared", "enabled", "3"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ),
-            .installerLegacyStatus(
-                prepared: true,
-                expectedEnabled: true,
-                expectedQueuedEventCount: 3
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-status", "legacy-running", "disabled", "3"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ),
-            .installerLegacyStatus(
-                prepared: false,
-                expectedEnabled: false,
-                expectedQueuedEventCount: 3
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: [
-                    "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
-                ],
-                executableURL: activeExecutable,
-                paths: paths,
-                releaseState: state,
-                releaseIdentity: identity
-            ),
-            .installerCandidateStatus(
-                generation: 1,
-                prepared: true,
-                expectedEnabled: false,
-                expectedQueuedEventCount: 3
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: [
-                    "__runtime-raiders-installer-status", "candidate-resumed", "1", "enabled", "3",
-                ],
-                executableURL: activeExecutable,
-                paths: paths,
-                releaseState: state,
-                releaseIdentity: identity
-            ),
-            .installerCandidateStatus(
-                generation: 1,
-                prepared: false,
-                expectedEnabled: true,
-                expectedQueuedEventCount: 3
-            )
-        )
-        XCTAssertNil(CompanionCommandRouter.installerRoute(
-            arguments: [
-                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
-            ],
-            executableURL: staged,
-            paths: paths,
-            releaseState: nil,
-            releaseIdentity: identity
-        ))
-        let wrongActive = ReleaseReference(
-            releaseSequence: active.releaseSequence,
-            releaseSHA: String(repeating: "c", count: 40),
-            companionVersion: active.companionVersion,
-            updateProtocolVersion: active.updateProtocolVersion
-        )
-        XCTAssertNil(CompanionCommandRouter.installerRoute(
-            arguments: [
-                "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
-            ],
-            executableURL: activeExecutable,
-            paths: paths,
-            releaseState: ReleaseStateV1(
-                schemaVersion: 1,
-                generation: 1,
-                active: wrongActive,
-                fallback: nil,
-                trial: nil
-            ),
-            releaseIdentity: identity
-        ))
-        for command in [
-            "__runtime-raiders-installer-protected-state",
-            "__runtime-raiders-legacy-resume",
-        ] {
-            XCTAssertNotNil(CompanionCommandRouter.installerRoute(
-                arguments: [command],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ))
-            XCTAssertNil(CompanionCommandRouter.installerRoute(
-                arguments: [command, "extra"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ))
-        }
-        for arguments in [
-            ["__runtime-raiders-installer-status"],
-            ["__runtime-raiders-installer-status", "legacy-prepared"],
-            ["__runtime-raiders-installer-status", "legacy-running", "enabled"],
-            ["__runtime-raiders-installer-status", "legacy-prepared", "enabled", "-1"],
-            ["__runtime-raiders-installer-status", "candidate-prepared", "0", "disabled", "3"],
-            ["__runtime-raiders-installer-status", "candidate-prepared", "+1", "disabled", "3"],
-            ["__runtime-raiders-installer-status", "candidate-prepared", "1", "unknown", "3"],
-            ["__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "-1"],
-            ["__runtime-raiders-installer-status", "candidate-running", "1", "disabled", "3"],
-        ] {
-            XCTAssertNil(CompanionCommandRouter.installerRoute(
-                arguments: arguments,
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            ))
-        }
-        XCTAssertNil(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-lease", "extra"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-legacy-prepare"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: protocolOne
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-lease"],
-                executableURL: wrongExecutable,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-resume", "1"],
-                executableURL: activeExecutable,
-                paths: paths,
-                releaseState: state,
-                releaseIdentity: identity
-            ),
-            .installerResume(generation: 1)
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity,
-                preparedStartupLeaseHeld: true
-            ),
-            .installerMigrationDaemon(generation: 1)
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity,
-                preparedStartupLeaseHeld: false
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["daemon", "__runtime-raiders-installer-migration-generation", "1"],
-                executableURL: activeExecutable,
-                paths: paths,
-                releaseState: state,
-                releaseIdentity: identity,
-                preparedStartupLeaseHeld: true
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.installerRoute(
-                arguments: [
-                    "__runtime-raiders-installer-status", "candidate-prepared", "1", "disabled", "3",
-                ],
-                executableURL: staged,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity,
-                preparedStartupLeaseHeld: true
-            ),
-            .installerCandidateStatus(
-                generation: 1,
-                prepared: true,
-                expectedEnabled: false,
-                expectedQueuedEventCount: 3
-            )
-        )
-        for badGeneration in ["", "0", "+1", "01", "1.0", "9007199254740992"] {
-            XCTAssertNil(
-                CompanionCommandRouter.installerRoute(
-                    arguments: ["__runtime-raiders-installer-resume", badGeneration],
-                    executableURL: activeExecutable,
-                    paths: paths,
-                    releaseState: state,
-                    releaseIdentity: identity
-                )
-            )
-        }
-        XCTAssertNil(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-resume", "1"],
-                executableURL: staged,
-                paths: paths,
-                releaseState: state,
-                releaseIdentity: identity
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.installerRoute(
-                arguments: ["__runtime-raiders-installer-resume", "1"],
-                executableURL: activeExecutable,
-                paths: paths,
-                releaseState: ReleaseStateV1(
-                    schemaVersion: 1,
-                    generation: 2,
-                    active: active,
-                    fallback: nil,
-                    trial: nil
-                ),
-                releaseIdentity: identity
-            )
-        )
-    }
 
     func testLegacyMigrationControlUsesOnlyExactBoundedFrameAndResponse() throws {
         let paths = AgentPaths(
@@ -1144,124 +821,6 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertNil(try CompanionPreparedStartupLease.observe(paths: paths))
     }
 
-    func testDaemonAndInternalCommandsRequireExactSingleArgumentAndPathRules() {
-        let paths = AgentPaths(
-            applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-internal-routing")
-        )
-        let active = ReleaseReference(
-            releaseSequence: 9,
-            releaseSHA: String(repeating: "a", count: 40),
-            companionVersion: "0.3.9",
-            updateProtocolVersion: 2
-        )
-        let trial = ReleaseReference(
-            releaseSequence: 10,
-            releaseSHA: String(repeating: "b", count: 40),
-            companionVersion: "0.3.10",
-            updateProtocolVersion: 2
-        )
-        let state = ReleaseStateV1(
-            schemaVersion: 1,
-            generation: 7,
-            active: active,
-            fallback: nil,
-            trial: trial
-        )
-        let activeExecutable = try! paths.executable(for: active)
-        let trialExecutable = try! paths.executable(for: trial)
-        let otherExecutable = URL(fileURLWithPath: "/private/tmp/runtime-raiders-agent")
-
-        XCTAssertEqual(
-            CompanionCommandRouter.route(
-                arguments: ["daemon"],
-                executableURL: activeExecutable,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: false,
-                releaseIdentity: try! active.companionReleaseIdentity()
-            ),
-            .daemon(trialGeneration: nil)
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["daemon"],
-                executableURL: otherExecutable,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: false,
-                releaseIdentity: try! active.companionReleaseIdentity()
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.route(
-                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
-                executableURL: trialExecutable,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: true,
-                releaseIdentity: try! trial.companionReleaseIdentity()
-            ),
-            .daemon(trialGeneration: 7)
-        )
-        for malformed in ["", "0", "-1", "+7", "7.0", " 7", "9007199254740992"] {
-            XCTAssertNil(
-                CompanionCommandRouter.route(
-                    arguments: ["daemon", "__runtime-raiders-trial-generation", malformed],
-                    executableURL: trialExecutable,
-                    paths: paths,
-                    releaseState: state,
-                    preparedStartupLeaseHeld: true,
-                    releaseIdentity: try! trial.companionReleaseIdentity()
-                ),
-                "accepted malformed generation \(malformed)"
-            )
-        }
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
-                executableURL: activeExecutable,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: true,
-                releaseIdentity: try! trial.companionReleaseIdentity()
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
-                executableURL: trialExecutable,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: false,
-                releaseIdentity: try! trial.companionReleaseIdentity()
-            )
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["daemon", "__runtime-raiders-trial-generation", "7"],
-                executableURL: trialExecutable,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: true,
-                releaseIdentity: try! active.companionReleaseIdentity()
-            )
-        )
-        XCTAssertEqual(
-            CompanionCommandRouter.route(
-                arguments: ["__self-check"],
-                executableURL: otherExecutable,
-                paths: paths
-            ),
-            .selfCheck
-        )
-        XCTAssertNil(
-            CompanionCommandRouter.route(
-                arguments: ["__self-check", "status"],
-                executableURL: otherExecutable,
-                paths: paths
-            )
-        )
-    }
 
     func testSelfCheckEmitsOnlyExactSealedReleaseIdentityJSON() throws {
         let identity = CompanionReleaseIdentity(
@@ -1337,8 +896,7 @@ final class ControlProtocolTests: XCTestCase {
     }
 
     func testPublicNonDoctorCommandsRoundTripWithoutInternalMetadata() throws {
-        for command in ControlCommand.allCases where
-            command != .doctor && command != .prepareUpdate && command != .resumeUpdate {
+        for command in ControlCommand.allCases where command != .doctor {
             let request = ControlRequest.invocation(
                 command: command,
                 environment: ["CLAUDE_CODE_ENABLE_TELEMETRY": "DO_NOT_EXPORT_VALUE"]
@@ -1394,18 +952,6 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertThrowsError(
             try ControlSocketProtocol.encode(
                 ControlRequest(command: .status, claudeOTelEnvironmentPresent: true),
-                maximumFrameBytes: 4_096
-            )
-        )
-        XCTAssertThrowsError(
-            try ControlSocketProtocol.encode(
-                ControlRequest(command: .prepareUpdate),
-                maximumFrameBytes: 4_096
-            )
-        )
-        XCTAssertThrowsError(
-            try ControlSocketProtocol.encode(
-                ControlRequest(command: .resumeUpdate, releaseStateGeneration: -1),
                 maximumFrameBytes: 4_096
             )
         )

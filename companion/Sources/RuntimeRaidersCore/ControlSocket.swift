@@ -11,35 +11,12 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
     case status
     case doctor
     case uninstall
-    case prepareUpdate = "prepare_update"
-    case resumeUpdate = "resume_update"
 }
 
 public enum CompanionCommandRoute: Equatable, Sendable {
-    case daemon(trialGeneration: Int64?)
-    case installerMigrationDaemon(generation: Int64)
+    case daemon
     case control(ControlCommand)
-    case foregroundUpdate
-    case selfCheck
-    case installerLease
-    case legacyPrepare
-    case installerResume(generation: Int64)
-    case installerValidateLegacy
-    case installerRetireSequenceEightCommand
-    case installerLegacyStatus(
-        prepared: Bool,
-        expectedEnabled: Bool?,
-        expectedQueuedEventCount: Int?
-    )
-    case installerCandidateStatus(
-        generation: Int64,
-        prepared: Bool,
-        expectedEnabled: Bool,
-        expectedQueuedEventCount: Int
-    )
-    case installerProtectedState
-    case installerSyncMigration(target: InstallerMigrationSyncTarget)
-    case legacyResume
+    case updateCheck
 }
 
 public enum CompanionCommandRouter {
@@ -49,282 +26,62 @@ public enum CompanionCommandRouter {
         paths: AgentPaths
     ) -> CompanionCommandRoute? {
         switch arguments {
+        case []:
+            return .control(.status)
         case ["on"], ["off"], ["status"], ["doctor"], ["uninstall"]:
             guard let argument = arguments.first,
                   let command = ControlCommand(rawValue: argument) else { return nil }
             return .control(command)
         case ["update"]:
-            return .foregroundUpdate
-        case ["__self-check"]:
-            return .selfCheck
-        case let values where values.count == 3 &&
-            values[0] == "daemon" &&
-            values[1] == "__runtime-raiders-installer-migration-generation":
-            guard let identity = try? CompanionReleaseIdentity.load(from: .main),
-                  releaseStatePathIsAbsent(paths.releaseState) else { return nil }
-            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
-            return installerRoute(
-                arguments: arguments,
-                executableURL: executableURL,
-                paths: paths,
-                releaseState: nil,
-                releaseIdentity: identity,
-                preparedStartupLeaseHeld: leaseHeld
-            )
-        case let values where installerStandaloneCommand(values):
-            guard let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
-            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
-            return installerRoute(
-                arguments: arguments,
-                executableURL: executableURL,
-                paths: paths,
-                releaseState: try? ReleaseStateStore.loadExisting(paths: paths),
-                releaseIdentity: identity,
-                preparedStartupLeaseHeld: leaseHeld
-            )
-        case let values where values.count == 2 &&
-            values[0] == "__runtime-raiders-installer-resume":
-            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
-                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
-            return installerRoute(
-                arguments: arguments,
-                executableURL: executableURL,
-                paths: paths,
-                releaseState: state,
-                releaseIdentity: identity
-            )
+            return .updateCheck
         case ["daemon"]:
-            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
-                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
-            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
-            return route(
-                arguments: arguments,
-                executableURL: executableURL,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: leaseHeld,
-                releaseIdentity: identity
-            )
-        case let values where values.count == 3 &&
-            values[0] == "daemon" &&
-            values[1] == "__runtime-raiders-trial-generation":
-            guard let state = try? ReleaseStateStore.loadExisting(paths: paths),
-                  let identity = try? CompanionReleaseIdentity.load(from: .main) else { return nil }
-            let leaseHeld = (try? CompanionPreparedStartupLease.observe(paths: paths)) != nil
-            return route(
-                arguments: arguments,
-                executableURL: executableURL,
-                paths: paths,
-                releaseState: state,
-                preparedStartupLeaseHeld: leaseHeld,
-                releaseIdentity: identity
-            )
+            guard exactExecutable(executableURL, equals: paths.agentExecutable) else { return nil }
+            return .daemon
         default:
             return nil
         }
-    }
-
-    static func route(
-        arguments: [String],
-        executableURL: URL,
-        paths: AgentPaths,
-        releaseState: ReleaseStateV1,
-        preparedStartupLeaseHeld: Bool,
-        releaseIdentity: CompanionReleaseIdentity
-    ) -> CompanionCommandRoute? {
-        guard ReleaseStateV1.isValid(releaseState) else { return nil }
-        switch arguments {
-        case ["daemon"]:
-            guard let activeExecutable = try? paths.executable(for: releaseState.active),
-                  releaseIdentity == (try? releaseState.active.companionReleaseIdentity()),
-                  exactExecutable(executableURL, equals: activeExecutable) else {
-                return nil
-            }
-            return .daemon(trialGeneration: nil)
-        case let values where values.count == 3 &&
-            values[0] == "daemon" &&
-            values[1] == "__runtime-raiders-trial-generation":
-            let rawGeneration = values[2]
-            guard rawGeneration.first != "+",
-                  let generation = Int64(rawGeneration),
-                  String(generation) == rawGeneration,
-                  (1...ReleaseContractValidation.maximumSafeInteger).contains(generation),
-                  generation == releaseState.generation,
-                  let trial = releaseState.trial,
-                  releaseIdentity == (try? trial.companionReleaseIdentity()),
-                  preparedStartupLeaseHeld,
-                  let trialExecutable = try? paths.executable(for: trial),
-                  exactExecutable(executableURL, equals: trialExecutable) else {
-                return nil
-            }
-            return .daemon(trialGeneration: generation)
-        default:
-            return nil
-        }
-    }
-
-    static func installerRoute(
-        arguments: [String],
-        executableURL: URL,
-        paths: AgentPaths,
-        releaseState: ReleaseStateV1?,
-        releaseIdentity: CompanionReleaseIdentity,
-        preparedStartupLeaseHeld: Bool = false
-    ) -> CompanionCommandRoute? {
-        guard releaseIdentity.updateProtocolVersion == 2,
-              directAgentExecutable(executableURL, paths: paths) else { return nil }
-        switch arguments {
-        case ["daemon", "__runtime-raiders-installer-migration-generation", "1"]:
-            guard releaseState == nil, preparedStartupLeaseHeld else { return nil }
-            return .installerMigrationDaemon(generation: 1)
-        case ["__runtime-raiders-installer-lease"]:
-            return .installerLease
-        case ["__runtime-raiders-legacy-prepare"]:
-            return .legacyPrepare
-        case ["__runtime-raiders-installer-validate-legacy"]:
-            return .installerValidateLegacy
-        case ["__runtime-raiders-installer-retire-sequence-eight-command"]:
-            return .installerRetireSequenceEightCommand
-        case ["__runtime-raiders-installer-status", "legacy-running"]:
-            return .installerLegacyStatus(
-                prepared: false,
-                expectedEnabled: nil,
-                expectedQueuedEventCount: nil
-            )
-        case let values where values.count == 4 &&
-            values[0] == "__runtime-raiders-installer-status" &&
-            ["legacy-running", "legacy-prepared"].contains(values[1]):
-            guard let enabled = canonicalEnabled(values[2]),
-                  let queuedEventCount = canonicalCount(values[3]) else { return nil }
-            return .installerLegacyStatus(
-                prepared: values[1] == "legacy-prepared",
-                expectedEnabled: enabled,
-                expectedQueuedEventCount: queuedEventCount
-            )
-        case let values where values.count == 5 &&
-            values[0] == "__runtime-raiders-installer-status" &&
-            ["candidate-prepared", "candidate-resumed"].contains(values[1]):
-            guard let generation = canonicalGeneration(values[2]),
-                  let enabled = canonicalEnabled(values[3]),
-                  let queuedEventCount = canonicalCount(values[4]) else { return nil }
-            if values[1] == "candidate-prepared",
-               generation == 1,
-               releaseState == nil,
-               preparedStartupLeaseHeld {
-                return .installerCandidateStatus(
-                    generation: generation,
-                    prepared: true,
-                    expectedEnabled: enabled,
-                    expectedQueuedEventCount: queuedEventCount
-                )
-            }
-            guard let state = releaseState,
-                  ReleaseStateV1.isValid(state),
-                  state.generation == generation,
-                  state.trial == nil,
-                  state.fallback == nil,
-                  state.active == (try? releaseIdentity.releaseReference()),
-                  let activeExecutable = try? paths.executable(for: state.active),
-                  exactExecutable(executableURL, equals: activeExecutable) else { return nil }
-            return .installerCandidateStatus(
-                generation: generation,
-                prepared: values[1] == "candidate-prepared",
-                expectedEnabled: enabled,
-                expectedQueuedEventCount: queuedEventCount
-            )
-        case ["__runtime-raiders-installer-protected-state"]:
-            return .installerProtectedState
-        case let values where values.count == 2 &&
-            values[0] == "__runtime-raiders-installer-sync-migration":
-            guard let target = InstallerMigrationSyncTarget(rawValue: values[1]) else { return nil }
-            return .installerSyncMigration(target: target)
-        case ["__runtime-raiders-legacy-resume"]:
-            return .legacyResume
-        case let values where values.count == 2 &&
-            values[0] == "__runtime-raiders-installer-resume":
-            guard let state = releaseState,
-                  ReleaseStateV1.isValid(state),
-                  state.trial == nil,
-                  state.fallback == nil,
-                  state.active == (try? releaseIdentity.releaseReference()),
-                  let generation = canonicalGeneration(values[1]),
-                  generation == state.generation,
-                  let activeExecutable = try? paths.executable(for: state.active),
-                  exactExecutable(executableURL, equals: activeExecutable) else {
-                return nil
-            }
-            return .installerResume(generation: generation)
-        default:
-            return nil
-        }
-    }
-
-    private static func canonicalGeneration(_ raw: String) -> Int64? {
-        guard raw.first != "+",
-              let generation = Int64(raw),
-              String(generation) == raw,
-              (1...ReleaseContractValidation.maximumSafeInteger).contains(generation) else {
-            return nil
-        }
-        return generation
-    }
-
-    private static func canonicalEnabled(_ raw: String) -> Bool? {
-        switch raw {
-        case "enabled": true
-        case "disabled": false
-        default: nil
-        }
-    }
-
-    private static func canonicalCount(_ raw: String) -> Int? {
-        guard raw.first != "+",
-              let count = Int(raw),
-              String(count) == raw,
-              count >= 0,
-              Int64(count) <= ReleaseContractValidation.maximumSafeInteger else {
-            return nil
-        }
-        return count
-    }
-
-    private static func installerStandaloneCommand(_ arguments: [String]) -> Bool {
-        guard let command = arguments.first else { return false }
-        return [
-            "__runtime-raiders-installer-lease",
-            "__runtime-raiders-legacy-prepare",
-            "__runtime-raiders-installer-validate-legacy",
-            "__runtime-raiders-installer-retire-sequence-eight-command",
-            "__runtime-raiders-installer-status",
-            "__runtime-raiders-installer-protected-state",
-            "__runtime-raiders-installer-sync-migration",
-            "__runtime-raiders-legacy-resume",
-        ].contains(command)
-    }
-
-    private static func releaseStatePathIsAbsent(_ url: URL) -> Bool {
-        var metadata = stat()
-        let result = url.path.withCString { Darwin.lstat($0, &metadata) }
-        return result != 0 && errno == ENOENT
-    }
-
-    private static func directAgentExecutable(_ executable: URL, paths: AgentPaths) -> Bool {
-        guard executable.isFileURL,
-              executable.lastPathComponent == "runtime-raiders-agent" else { return false }
-        let application = executable
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        guard application.lastPathComponent == "Runtime Raiders Agent.app" else { return false }
-        let standardized = application.standardizedFileURL.path
-        return standardized != paths.legacyFlatApplication.standardizedFileURL.path &&
-            !standardized.hasPrefix(paths.launcherDirectory.standardizedFileURL.path + "/")
     }
 
     private static func exactExecutable(_ first: URL, equals second: URL) -> Bool {
         first.isFileURL &&
             second.isFileURL &&
             first.standardizedFileURL.path == second.standardizedFileURL.path
+    }
+}
+
+public struct DaemonStartupOperations: @unchecked Sendable {
+    public let startControl: () throws -> Void
+    public let prepareLocalState: () throws -> Void
+    public let activatePersistedEnabled: () throws -> Void
+    public let scheduleVersionCheck: () -> Void
+
+    public init(
+        startControl: @escaping () throws -> Void,
+        prepareLocalState: @escaping () throws -> Void,
+        activatePersistedEnabled: @escaping () throws -> Void,
+        scheduleVersionCheck: @escaping () -> Void
+    ) {
+        self.startControl = startControl
+        self.prepareLocalState = prepareLocalState
+        self.activatePersistedEnabled = activatePersistedEnabled
+        self.scheduleVersionCheck = scheduleVersionCheck
+    }
+}
+
+public struct NormalDaemonStartupCoordinator: Sendable {
+    private let operations: DaemonStartupOperations
+
+    public init(operations: DaemonStartupOperations) {
+        self.operations = operations
+    }
+
+    public func start(persistedEnabled: Bool) throws {
+        try operations.startControl()
+        try operations.prepareLocalState()
+        if persistedEnabled {
+            try operations.activatePersistedEnabled()
+        }
+        operations.scheduleVersionCheck()
     }
 }
 
@@ -528,16 +285,13 @@ public struct LaunchdJobController {
 public struct ControlRequest: Codable, Equatable, Sendable {
     public let command: ControlCommand
     public let claudeOTelEnvironmentPresent: Bool?
-    public let releaseStateGeneration: Int64?
 
     public init(
         command: ControlCommand,
-        claudeOTelEnvironmentPresent: Bool? = nil,
-        releaseStateGeneration: Int64? = nil
+        claudeOTelEnvironmentPresent: Bool? = nil
     ) {
         self.command = command
         self.claudeOTelEnvironmentPresent = claudeOTelEnvironmentPresent
-        self.releaseStateGeneration = releaseStateGeneration
     }
 
     public static func invocation(
@@ -548,15 +302,13 @@ public struct ControlRequest: Codable, Equatable, Sendable {
             command: command,
             claudeOTelEnvironmentPresent: command == .doctor
                 ? DoctorEnvironment.claudeOTelPresent(in: environment)
-                : nil,
-            releaseStateGeneration: nil
+                : nil
         )
     }
 
     private enum CodingKeys: String, CodingKey {
         case command
         case claudeOTelEnvironmentPresent = "claude_otel_environment_present"
-        case releaseStateGeneration = "release_state_generation"
     }
 }
 
@@ -621,8 +373,6 @@ public enum ControlSocketProtocol {
         switch request.command {
         case .doctor:
             expectedFields = ["command", "claude_otel_environment_present"]
-        case .prepareUpdate, .resumeUpdate:
-            expectedFields = ["command", "release_state_generation"]
         default:
             expectedFields = ["command"]
         }
@@ -635,15 +385,9 @@ public enum ControlSocketProtocol {
     private static func valid(_ request: ControlRequest) -> Bool {
         switch request.command {
         case .doctor:
-            return request.claudeOTelEnvironmentPresent != nil &&
-                request.releaseStateGeneration == nil
-        case .prepareUpdate, .resumeUpdate:
-            guard let generation = request.releaseStateGeneration else { return false }
-            return request.claudeOTelEnvironmentPresent == nil &&
-                (1...ReleaseContractValidation.maximumSafeInteger).contains(generation)
+            return request.claudeOTelEnvironmentPresent != nil
         default:
-            return request.claudeOTelEnvironmentPresent == nil &&
-                request.releaseStateGeneration == nil
+            return request.claudeOTelEnvironmentPresent == nil
         }
     }
 }
@@ -934,7 +678,7 @@ public enum ControlSocketClient {
 
     static func timeoutSeconds(for command: ControlCommand) -> Int {
         switch command {
-        case .on, .off, .uninstall, .prepareUpdate, .resumeUpdate:
+        case .on, .off, .uninstall:
             30
         case .daemon, .status, .doctor:
             2
