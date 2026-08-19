@@ -87,8 +87,16 @@ case "${'$'}{1:-}" in
     if [ "${'$'}{GATE_SCENARIO:-}" = status-fail ] && [ "${'$'}status_count" -eq 1 ]; then exit 1; fi
     current="${'$'}(/bin/cat '${state}/activation' 2>/dev/null || printf disabled)"
     if [ "${'$'}{GATE_SCENARIO:-}" = initial-enabled ] && [ "${'$'}status_count" -eq 1 ]; then current=ready; fi
-    if [ "${'$'}current" = preparing ] &&
+    if [ "${'$'}current" = preparing ] && [ "${'$'}{GATE_SCENARIO:-}" = ready-disabled ]; then
+      current=disabled
+      printf disabled > '${state}/activation'
+    elif [ "${'$'}current" = preparing ] && [ "${'$'}{GATE_SCENARIO:-}" = ready-slow ] &&
+       [ "${'$'}status_count" -ge 4 ]; then
+      current=ready
+      printf ready > '${state}/activation'
+    elif [ "${'$'}current" = preparing ] &&
        [ "${'$'}{GATE_SCENARIO:-}" != ready-timeout ] &&
+       [ "${'$'}{GATE_SCENARIO:-}" != ready-slow ] &&
        [ "${'$'}{GATE_SCENARIO:-}" != signal ]; then
       current=ready
       printf ready > '${state}/activation'
@@ -256,6 +264,33 @@ describe('Runtime Raiders one-shot live activation gate', () => {
     expect(streamed).toContain('baseline_query=\'SELECT "ok"');
     expect(streamed).toContain('repository=/home/rluser/ClaudeRPG');
     expect(streamed.match(/systemctl is-active --quiet/g)).toHaveLength(2);
+  });
+
+  it('records content-free evidence when readiness takes multiple observations', () => {
+    const value = fixture('ready-slow');
+    const result = runGate(value);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const gateReport = report(value);
+    expect(gateReport).toContain('readiness_attempts=3');
+    expect(gateReport).toContain('readiness_preparing_observations=2');
+    expect(gateReport).toContain('readiness_last_state=ready');
+    expect(gateReport).not.toMatch(/device[_ -]?token|enrollment|\.jsonl|turn_id/i);
+  });
+
+  it('fails immediately and records when the daemon disables itself during preparation', () => {
+    const value = fixture('ready-disabled');
+    const result = runGate(value);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('agent disabled itself while preparing');
+    const gateReport = report(value);
+    expect(gateReport).toContain('readiness_attempts=1');
+    expect(gateReport).toContain('readiness_preparing_observations=0');
+    expect(gateReport).toContain('readiness_last_state=disabled');
+    const commands = readFileSync(value.log, 'utf8');
+    expect(commands.match(/raiders:status/g)).toHaveLength(3);
+    expect(commands).toContain('raiders:off');
   });
 
   it.each([

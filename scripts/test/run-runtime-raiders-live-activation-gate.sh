@@ -64,7 +64,7 @@ else
   SPCTL_TOOL=/usr/sbin/spctl
   SLEEP_TOOL=/bin/sleep
   REPORT_ROOT=/private/tmp
-  READY_ATTEMPTS=30
+  READY_ATTEMPTS=180
   UPLOAD_ATTEMPTS=45
   [ -z "$(/usr/bin/git -C "$ROOT" status --porcelain --untracked-files=no)" ] || {
     echo "Runtime Raiders live gate requires a clean reviewed checkout" >&2
@@ -115,6 +115,10 @@ FIXTURE_DIRECTORY=''
 FIXTURE_CREATED=0
 RESULT=FAIL
 FAILURE='gate did not complete'
+READINESS_STARTED=0
+READINESS_ATTEMPTS=0
+READINESS_PREPARING_OBSERVATIONS=0
+READINESS_LAST_STATE=unobserved
 
 report_line() {
   printf '%s\n' "$1" >> "$REPORT"
@@ -173,6 +177,11 @@ cleanup() {
       FAILURE='emergency shutdown could not prove collection is off'
       status=1
     fi
+  fi
+  if [ "$READINESS_STARTED" -eq 1 ]; then
+    report_line "readiness_attempts=$READINESS_ATTEMPTS"
+    report_line "readiness_preparing_observations=$READINESS_PREPARING_OBSERVATIONS"
+    report_line "readiness_last_state=$READINESS_LAST_STATE"
   fi
   report_line "shutdown=$([ "$shutdown_ok" -eq 1 ] && printf PASS || printf FAIL)"
   report_line "result=$([ "$status" -eq 0 ] && [ "$RESULT" = PASS ] && printf PASS || printf FAIL)"
@@ -344,8 +353,17 @@ echo 'Runtime Raiders live gate: enabling collection for the bounded proof...'
 ON_RESPONSE="$("$RAIDERS_TOOL" on)" || gate_fail 'raiders on failed'
 [ "$ON_RESPONSE" = preparing ] || gate_fail 'raiders on did not return preparing'
 READY=0
+READINESS_STARTED=1
 for ((attempt = 0; attempt < READY_ATTEMPTS; attempt++)); do
   STATUS="$("$RAIDERS_TOOL" status 2>/dev/null)" || true
+  READINESS_ATTEMPTS=$((READINESS_ATTEMPTS + 1))
+  READINESS_LAST_STATE="$(/usr/bin/sed -n 's/.*"activationState":"\([^"]*\)".*/\1/p' <<<"$STATUS")"
+  case "$READINESS_LAST_STATE" in
+    preparing) READINESS_PREPARING_OBSERVATIONS=$((READINESS_PREPARING_OBSERVATIONS + 1)) ;;
+    ready) ;;
+    disabled) gate_fail 'agent disabled itself while preparing' ;;
+    *) READINESS_LAST_STATE=unavailable ;;
+  esac
   if /usr/bin/grep -F '"activationState":"ready"' <<<"$STATUS" >/dev/null &&
     /usr/bin/grep -F '"enabled":true' <<<"$STATUS" >/dev/null &&
     /usr/bin/grep -F '"queuedEventCount":0' <<<"$STATUS" >/dev/null &&
