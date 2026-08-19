@@ -138,6 +138,10 @@ function buildFixture() {
     '  printf "Executable=fake\\nIdentifier=com.redlattice.runtime-raiders-agent\\nFormat=app bundle with Mach-O universal (arm64 x86_64)\\nCodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+0 location=embedded\\nSignature size=1\\nAuthority=Developer ID Application: Runtime Raiders (ABCDE12345)\\nTeamIdentifier=ABCDE12345\\nRuntime Version=26.0.0\\nTimestamp=Aug 18, 2026 at 12:00:00\\n" >&2',
     '  exit 0',
     'fi',
+    'if [ "${1:-}" = --verify ] && [ "${2:-}" = --strict ]; then',
+    '  [ "$#" -eq 4 ] || { echo "codesign fake rejects split requirement arguments" >&2; exit 65; }',
+    `  [ "$3" = '-R=identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "ABCDE12345"' ] || { echo "codesign fake requires inline requirement expression" >&2; exit 65; }`,
+    'fi',
     'case " $* " in',
     '  *" --sign "*)',
     '    if [ "${RR_BUILD_MUTATE_BUNDLE:-0}" = 1 ]; then',
@@ -546,6 +550,28 @@ afterEach(() => {
 });
 
 describe('Runtime Raiders release build', () => {
+  it('real codesign parses inline requirement expressions instead of treating them as paths', () => {
+    const separate = spawnSync('/usr/bin/codesign', [
+      '--verify', '--strict', '-R', 'anchor apple', '/bin/ls',
+    ], { encoding: 'utf8' });
+    const inline = spawnSync('/usr/bin/codesign', [
+      '--verify', '--strict', '-R=anchor apple', '/bin/ls',
+    ], { encoding: 'utf8' });
+    expect(separate.stderr).toContain('anchor apple: No such file or directory');
+    expect(separate.stderr).toContain('invalid requirement specification');
+    expect(inline.stderr).not.toContain('No such file or directory');
+    expect(inline.stderr).not.toContain('invalid requirement specification');
+  });
+
+  it('signed verifier passes its designated requirement in codesign inline form', () => {
+    const value = buildFixture();
+    const result = runBuild(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(readFileSync(value.log, 'utf8')).toContain(
+      'codesign <--verify> <--strict> <-R=identifier "com.redlattice.runtime-raiders-agent"',
+    );
+  });
+
   it.each([
     ['RUNTIME_RAIDERS_CODESIGN_IDENTITY'],
     ['RUNTIME_RAIDERS_NOTARY_PROFILE'],

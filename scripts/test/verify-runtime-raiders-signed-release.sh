@@ -323,7 +323,7 @@ printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -F "TeamIdentifier=$TEAM_ID" >/d
 }
 AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
 "$CODESIGN_TOOL" --verify --deep --strict --verbose=2 "$AGENT_APP"
-"$CODESIGN_TOOL" --verify --strict -R "$AGENT_REQUIREMENT" "$AGENT_APP"
+"$CODESIGN_TOOL" --verify --strict "-R=$AGENT_REQUIREMENT" "$AGENT_APP"
 "$SPCTL_TOOL" --assess --type execute --verbose=2 "$AGENT_APP"
 "$XCRUN_TOOL" stapler validate "$AGENT_APP"
 VERIFIED_EXECUTABLE_SHA256="$(/usr/bin/shasum -a 256 "$AGENT_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')"
