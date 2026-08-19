@@ -96,10 +96,20 @@ esac
   exit 1
 }
 
+SMOKE_ROOT=''
 WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/runtime-raiders-beta-verify.XXXXXX")"
 cleanup() {
   local status=$?
   trap - EXIT HUP INT TERM
+  if [ -n "$SMOKE_ROOT" ]; then
+    if [[ "$SMOKE_ROOT" == /private/tmp/rrv.?????? ]] &&
+      [ -d "$SMOKE_ROOT" ] && [ ! -L "$SMOKE_ROOT" ] &&
+      [ "$(/usr/bin/stat -f '%u' "$SMOKE_ROOT")" = "$OWNER" ]; then
+      /bin/rm -rf -- "$SMOKE_ROOT" || status=1
+    else
+      status=1
+    fi
+  fi
   if [[ "$WORK" == "${TMPDIR:-/tmp}"/runtime-raiders-beta-verify.* ]]; then
     /bin/rm -rf -- "$WORK" || status=1
   else
@@ -328,7 +338,25 @@ AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor 
 "$XCRUN_TOOL" stapler validate "$AGENT_APP"
 VERIFIED_EXECUTABLE_SHA256="$(/usr/bin/shasum -a 256 "$AGENT_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')"
 
-SMOKE_HOME="$WORK/home"
+PRIVATE_TMP="$(cd /private/tmp && pwd -P)"
+[ "$PRIVATE_TMP" = /private/tmp ] && [ -d /private/tmp ] && [ ! -L /private/tmp ] || {
+  echo "signed verifier requires physical /private/tmp for smoke" >&2
+  exit 1
+}
+SMOKE_ROOT="$(/usr/bin/mktemp -d /private/tmp/rrv.XXXXXX)"
+[[ "$SMOKE_ROOT" == /private/tmp/rrv.?????? ]] &&
+  [ -d "$SMOKE_ROOT" ] && [ ! -L "$SMOKE_ROOT" ] &&
+  [ "$(/usr/bin/stat -f '%u' "$SMOKE_ROOT")" = "$OWNER" ] &&
+  [ "$(/usr/bin/stat -f '%Lp' "$SMOKE_ROOT")" = 700 ] || {
+  echo "signed verifier could not create a safe short smoke root" >&2
+  exit 1
+}
+SMOKE_HOME="$SMOKE_ROOT/home"
+SMOKE_SOCKET_PATH="$SMOKE_HOME/Library/Application Support/Runtime Raiders/agent.sock"
+[ "$(printf %s "$SMOKE_SOCKET_PATH" | /usr/bin/wc -c | /usr/bin/tr -d ' ')" -lt 104 ] || {
+  echo "signed verifier smoke socket path is unsafe" >&2
+  exit 1
+}
 SMOKE_BIN="$WORK/fake-bin"
 SMOKE_LOG="$WORK/smoke.log"
 LOCAL_VERSION="$WORK/version-response"

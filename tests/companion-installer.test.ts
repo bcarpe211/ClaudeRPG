@@ -97,7 +97,12 @@ function buildFixture() {
     'cat > "$output" <<\'AGENT\'',
     '#!/bin/sh',
     'set -eu',
-    `printf 'agent:%s\\n' "\${1:-status}" >> '${agentLog}'`,
+    `printf 'agent:%s home=%s\\n' "\${1:-status}" "$HOME" >> '${agentLog}'`,
+    'case "${1:-status}" in',
+    '  status|update)',
+    '    socket_path="$HOME/Library/Application Support/Runtime Raiders/agent.sock"',
+    '    [ "$(printf %s "$socket_path" | /usr/bin/wc -c | /usr/bin/tr -d " ")" -lt 104 ] || { echo unsafeSocketPath >&2; exit 78; };;',
+    'esac',
     'case "${1:-status}" in',
     '  status) printf \'{"activationState":"disabled","companionVersion":"0.4.0"}\\n\';;',
     '  daemon) exit 0;;',
@@ -570,6 +575,42 @@ describe('Runtime Raiders release build', () => {
     expect(readFileSync(value.log, 'utf8')).toContain(
       'codesign <--verify> <--strict> <-R=identifier "com.redlattice.runtime-raiders-agent"',
     );
+  });
+
+  it('signed verifier smoke keeps the runtime socket path within Darwin limit', () => {
+    const value = buildFixture();
+    const result = runBuild(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(result.stderr).not.toContain('unsafeSocketPath');
+  });
+
+  it('signed verifier removes its short smoke root after success', () => {
+    const value = buildFixture();
+    const result = runBuild(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=(.+)$/gm)]
+      .map((match) => match[1]);
+    expect(new Set(homes).size).toBe(1);
+    expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
+    expect(existsSync(homes[0])).toBe(false);
+  });
+
+  it('signed verifier removes its short smoke root after a later verification failure', () => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    writeFileSync(value.agentLog, '');
+    const result = runSignedVerifier(value, {
+      ...value.environment,
+      RR_VERIFY_MUTATE_RELEASE: value.output,
+      RR_VERIFY_MUTATION: 'hash',
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('release directory changed during signed verification');
+    const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=(.+)$/gm)]
+      .map((match) => match[1]);
+    expect(new Set(homes).size).toBe(1);
+    expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
+    expect(existsSync(homes[0])).toBe(false);
   });
 
   it.each([
