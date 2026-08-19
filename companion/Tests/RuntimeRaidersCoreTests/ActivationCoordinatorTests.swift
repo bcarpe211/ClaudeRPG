@@ -3,6 +3,64 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ActivationCoordinatorTests: XCTestCase {
+    func testInFlightChangedFileCannotScheduleUploadAfterTurnOffInvalidatesGeneration() throws {
+        let readGate = InFlightChangeGate()
+        try withHarness(afterProviderRead: { readGate.blockIfArmed() }) { harness in
+            let files = try harness.makeHistoricalFiles(count: 1)
+            let stopStarted = DispatchSemaphore(value: 0)
+            let releaseStop = DispatchSemaphore(value: 0)
+            let changedFinished = DispatchSemaphore(value: 0)
+            let offFinished = DispatchSemaphore(value: 0)
+            let runtime = RuntimeEnableState()
+            try harness.controller.turnOn(existingFiles: files)
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+            runtime.setEnabled(true)
+            let coordinator = ActivationCoordinator(
+                controller: harness.controller,
+                workerQueue: DispatchQueue(label: "com.redlattice.runtime-raiders.tests.change-off-order"),
+                operations: ActivationOperations(
+                    startWatching: {},
+                    stopWatching: {
+                        stopStarted.signal()
+                        releaseStop.wait()
+                    },
+                    discoverProviderFiles: { [] },
+                    scheduleUpload: { runtime.setEnabled(true) },
+                    becameReady: {},
+                    becameDisabled: { runtime.setEnabled(false) }
+                )
+            )
+            XCTAssertTrue(runtime.isEnabled)
+
+            readGate.arm()
+            try harness.appendDesktopCompletion(to: files[0])
+            DispatchQueue.global(qos: .utility).async {
+                coordinator.processChangedFiles([files[0]])
+                changedFinished.signal()
+            }
+            XCTAssertEqual(readGate.readStarted.wait(timeout: .now() + 2), .success)
+
+            DispatchQueue.global(qos: .utility).async {
+                try? coordinator.turnOff()
+                offFinished.signal()
+            }
+            XCTAssertEqual(stopStarted.wait(timeout: .now() + 2), .success)
+            XCTAssertFalse(runtime.isEnabled)
+
+            readGate.releaseRead.signal()
+            XCTAssertEqual(changedFinished.wait(timeout: .now() + 0.05), .timedOut)
+            XCTAssertFalse(runtime.isEnabled)
+
+            releaseStop.signal()
+            XCTAssertEqual(offFinished.wait(timeout: .now() + 2), .success)
+            XCTAssertEqual(changedFinished.wait(timeout: .now() + 2), .success)
+            XCTAssertFalse(runtime.isEnabled)
+            XCTAssertEqual(harness.controller.activationState, .disabled)
+        }
+    }
+
     func testReadyCoordinatorContinuesBoundedLiveReadWorkToCompletion() throws {
         try withHarness(readLimitBytes: 64) { harness in
             let files = try harness.makeHistoricalFiles(count: 1)
@@ -167,11 +225,48 @@ final class ActivationCoordinatorTests: XCTestCase {
 
     private func withHarness(
         readLimitBytes: Int = JSONLReader.maximumReadBytes,
+        afterProviderRead: @escaping @Sendable () -> Void = {},
         _ body: (ActivationHarness) throws -> Void
     ) throws {
-        let harness = try ActivationHarness(readLimitBytes: readLimitBytes)
+        let harness = try ActivationHarness(
+            readLimitBytes: readLimitBytes,
+            afterProviderRead: afterProviderRead
+        )
         defer { try? FileManager.default.removeItem(at: harness.root) }
         try body(harness)
+    }
+}
+
+private final class InFlightChangeGate: @unchecked Sendable {
+    let readStarted = DispatchSemaphore(value: 0)
+    let releaseRead = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var armed = false
+
+    func arm() {
+        lock.withLock { armed = true }
+    }
+
+    func blockIfArmed() {
+        let shouldBlock = lock.withLock { () -> Bool in
+            guard armed else { return false }
+            armed = false
+            return true
+        }
+        guard shouldBlock else { return }
+        readStarted.signal()
+        releaseRead.wait()
+    }
+}
+
+private final class RuntimeEnableState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var enabled = false
+
+    var isEnabled: Bool { lock.withLock { enabled } }
+
+    func setEnabled(_ value: Bool) {
+        lock.withLock { enabled = value }
     }
 }
 
@@ -192,7 +287,10 @@ private final class ActivationHarness {
     let outbox: Outbox
     let controller: AgentController
 
-    init(readLimitBytes: Int) throws {
+    init(
+        readLimitBytes: Int,
+        afterProviderRead: @escaping @Sendable () -> Void
+    ) throws {
         root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-activation-\(UUID().uuidString)", isDirectory: true)
         providerRoot = root.appendingPathComponent("codex", isDirectory: true)
@@ -213,7 +311,8 @@ private final class ActivationHarness {
                 dedupeSecret: Data("DO_NOT_EXPORT_LOCAL_SECRET".utf8)
             ),
             readLimitBytes: readLimitBytes,
-            clockMS: { 1_800_000_000_000 }
+            clockMS: { 1_800_000_000_000 },
+            afterProviderRead: afterProviderRead
         )
     }
 

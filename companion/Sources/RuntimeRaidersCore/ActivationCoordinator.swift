@@ -4,6 +4,7 @@ public struct ActivationOperations: @unchecked Sendable {
     public let startWatching: @Sendable () throws -> Void
     public let stopWatching: @Sendable () -> Void
     public let discoverProviderFiles: @Sendable () throws -> [URL]
+    public let scheduleUpload: @Sendable () -> Void
     public let becameReady: @Sendable () -> Void
     public let becameDisabled: @Sendable () -> Void
 
@@ -11,12 +12,14 @@ public struct ActivationOperations: @unchecked Sendable {
         startWatching: @escaping @Sendable () throws -> Void,
         stopWatching: @escaping @Sendable () -> Void,
         discoverProviderFiles: @escaping @Sendable () throws -> [URL],
+        scheduleUpload: @escaping @Sendable () -> Void = {},
         becameReady: @escaping @Sendable () -> Void,
         becameDisabled: @escaping @Sendable () -> Void
     ) {
         self.startWatching = startWatching
         self.stopWatching = stopWatching
         self.discoverProviderFiles = discoverProviderFiles
+        self.scheduleUpload = scheduleUpload
         self.becameReady = becameReady
         self.becameDisabled = becameDisabled
     }
@@ -79,6 +82,7 @@ public final class ActivationCoordinator: @unchecked Sendable {
         guard let activationGeneration = currentGenerationIfEnabled() else { return }
         do {
             try controller.processChangedFiles(files)
+            scheduleUploadIfCurrent(generation: activationGeneration)
             workerQueue.async { [weak self] in
                 self?.advance(generation: activationGeneration)
             }
@@ -128,6 +132,7 @@ public final class ActivationCoordinator: @unchecked Sendable {
     private func continueAndReschedule(generation activationGeneration: UInt64) {
         do {
             try controller.continuePendingWork()
+            scheduleUploadIfCurrent(generation: activationGeneration)
         } catch {
             failActivation(generation: activationGeneration)
             return
@@ -141,6 +146,14 @@ public final class ActivationCoordinator: @unchecked Sendable {
         lock.withLock {
             guard controller.enabled else { return nil }
             return generation
+        }
+    }
+
+    private func scheduleUploadIfCurrent(generation activationGeneration: UInt64) {
+        lock.withLock {
+            guard generation == activationGeneration,
+                  controller.isAcceptingCollection else { return }
+            operations.scheduleUpload()
         }
     }
 

@@ -86,6 +86,7 @@ private final class DaemonRuntime: @unchecked Sendable {
                 guard let self else { throw CLIError.invalidRuntimeConfiguration }
                 return try watcher.discoverProviderFiles()
             },
+            scheduleUpload: { [weak self] in self?.uploader.schedule(enabled: true) },
             becameReady: { [weak self] in
                 guard let self else { return }
                 uploader.schedule(enabled: true)
@@ -241,14 +242,7 @@ private final class DaemonRuntime: @unchecked Sendable {
     }
 
     private func handleChangedFiles(_ files: [URL]) {
-        do {
-            activation.processChangedFiles(files)
-            guard controller.isAcceptingCollection else { return }
-            try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
-            uploader.schedule(enabled: true)
-        } catch {
-            // Provider/user work is never impeded by collection failures.
-        }
+        activation.processChangedFiles(files)
     }
 
     private func scheduleReadContinuationIfNeeded() {
