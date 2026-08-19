@@ -97,7 +97,9 @@ function buildFixture() {
     'cat > "$output" <<\'AGENT\'',
     '#!/bin/sh',
     'set -eu',
-    `printf 'agent:%s home=%s\\n' "\${1:-status}" "$HOME" >> '${agentLog}'`,
+    `printf 'agent:%s home=%s verify=%s support=%s response=%s\\n' "\${1:-status}" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" >> '${agentLog}'`,
+    'expected_support="$HOME/Library/Application Support"',
+    '[ "${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-}" = 1 ] && [ "${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-}" = "$expected_support" ] || { echo unsafeVerificationEnvironment >&2; exit 79; }',
     'case "${1:-status}" in',
     '  status|update)',
     '    socket_path="$HOME/Library/Application Support/Runtime Raiders/agent.sock"',
@@ -588,7 +590,7 @@ describe('Runtime Raiders release build', () => {
     const value = buildFixture();
     const result = runBuild(value);
     expect(result.status, result.stderr + result.stdout).toBe(0);
-    const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=(.+)$/gm)]
+    const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=([^ ]+)/gm)]
       .map((match) => match[1]);
     expect(new Set(homes).size).toBe(1);
     expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
@@ -606,11 +608,34 @@ describe('Runtime Raiders release build', () => {
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('release directory changed during signed verification');
-    const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=(.+)$/gm)]
+    const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=([^ ]+)/gm)]
       .map((match) => match[1]);
     expect(new Set(homes).size).toBe(1);
     expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
     expect(existsSync(homes[0])).toBe(false);
+  });
+
+  it('signed verifier isolates installer and standalone status plus update in one verified support root', () => {
+    const value = buildFixture();
+    const result = runBuild(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+
+    const invocations = readFileSync(value.agentLog, 'utf8').trim().split('\n');
+    expect(invocations).toHaveLength(3);
+    expect(invocations.map((line) => line.split(' ')[0])).toEqual([
+      'agent:status',
+      'agent:status',
+      'agent:update',
+    ]);
+    for (const line of invocations) {
+      const matched = line.match(/^agent:(?:status|update) home=([^ ]+) verify=1 support=(.+) response=/);
+      expect(matched, line).not.toBeNull();
+      expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
+      expect(matched![2]).toBe(`${matched![1]}/Library/Application Support`);
+    }
+    expect(invocations[0]).toContain('response=unset');
+    expect(invocations[1]).toContain('response=unset');
+    expect(invocations[2]).not.toContain('response=unset');
   });
 
   it.each([

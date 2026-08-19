@@ -309,11 +309,44 @@ private final class DaemonRuntime: @unchecked Sendable {
     }
 }
 
-private func runUpdateCheck(paths: AgentPaths) throws {
+private func runUpdateCheck(
+    paths: AgentPaths,
+    environment: [String: String],
+    verificationReadOnly: Bool = false
+) throws {
     let installed = try InstalledCompanionVersion.load(from: .main)
-    let verificationTransport = try ReleaseChecker.verificationTransport(
-        environment: ProcessInfo.processInfo.environment
-    )
+    let verificationTransport: ReleaseChecker.Transport?
+    do {
+        verificationTransport = try ReleaseChecker.verificationTransport(environment: environment)
+    } catch {
+        if verificationReadOnly { throw CLIError.usage }
+        throw error
+    }
+    if verificationReadOnly {
+        guard let verificationTransport else { throw CLIError.usage }
+        var request = URLRequest(url: VersionDocument.url)
+        request.httpMethod = "GET"
+        let response: UploadHTTPResponse
+        do {
+            response = try verificationTransport(request)
+        } catch {
+            throw CLIError.updateCheckUnavailable
+        }
+        guard response.statusCode == 200,
+              let fetched = try? VersionDocument.decode(response.body),
+              let installedVersion = try? SemanticVersion(installed),
+              let fetchedVersion = try? SemanticVersion(fetched.version) else {
+            throw CLIError.updateCheckUnavailable
+        }
+        if installedVersion < fetchedVersion {
+            print("Runtime Raiders \(fetched.version) is available.")
+            print("Run:")
+            print("curl -fsSL https://raiders.redlattice.com/install.sh | sh")
+        } else {
+            print("Runtime Raiders \(installed) is current.")
+        }
+        return
+    }
     let checker = try ReleaseChecker(
         paths: paths,
         installedVersion: installed,
@@ -335,18 +368,29 @@ private func runUpdateCheck(paths: AgentPaths) throws {
 
 private func run() throws {
     let environment = ProcessInfo.processInfo.environment
-    let paths = try runtimePaths(environment: environment)
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if arguments == [runtimeInputsVerificationArgument] {
-        guard environment[runtimeInputsVerificationEnvironment] == "1" else {
+    if let verificationPaths = try verificationPaths(environment: environment) {
+        switch arguments {
+        case ["status"]:
+            print(try localStatus(paths: verificationPaths, readCachedUpdateState: false).description)
+        case ["update"]:
+            try runUpdateCheck(
+                paths: verificationPaths,
+                environment: environment,
+                verificationReadOnly: true
+            )
+        case [runtimeInputsVerificationArgument]:
+            let enrollment = try EnrollmentConfiguration.load(
+                from: verificationPaths.stateDirectory.appendingPathComponent("enrollment.json")
+            )
+            print(try RuntimeInputs(enrollment: enrollment).companionVersion)
+        default:
             throw CLIError.usage
         }
-        let enrollment = try EnrollmentConfiguration.load(
-            from: paths.stateDirectory.appendingPathComponent("enrollment.json")
-        )
-        print(try RuntimeInputs(enrollment: enrollment).companionVersion)
         return
     }
+    guard arguments != [runtimeInputsVerificationArgument] else { throw CLIError.usage }
+    let paths = AgentPaths()
     guard let executableURL = Bundle.main.executableURL,
           let route = CompanionCommandRouter.route(
               arguments: arguments,
@@ -364,26 +408,79 @@ private func run() throws {
         try DaemonRuntime(inputs: RuntimeInputs(enrollment: enrollment)).run()
         return
     case .updateCheck:
-        try runUpdateCheck(paths: paths)
+        try runUpdateCheck(paths: paths, environment: environment)
         return
     case let .control(command):
         try runUserControlCommand(command, paths: paths)
     }
 }
 
-private func runtimePaths(environment: [String: String]) throws -> AgentPaths {
+private func verificationPaths(environment: [String: String]) throws -> AgentPaths? {
     guard let path = environment[applicationSupportVerificationEnvironment] else {
-        return AgentPaths()
+        return nil
     }
     guard environment[runtimeInputsVerificationEnvironment] == "1",
-          path.hasPrefix("/"),
-          !path.contains("\n") else {
+          let root = verificationRoot(forApplicationSupportPath: path) else {
         throw CLIError.usage
     }
-    return AgentPaths(applicationSupportDirectory: URL(
-        fileURLWithPath: path,
-        isDirectory: true
-    ))
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let library = home.appendingPathComponent("Library", isDirectory: true)
+    let applicationSupport = library.appendingPathComponent("Application Support", isDirectory: true)
+    let paths = AgentPaths(applicationSupportDirectory: applicationSupport)
+    for directory in [
+        root,
+        home,
+        library,
+        applicationSupport,
+        paths.supportDirectory,
+        paths.stateDirectory,
+        paths.outboxDirectory,
+    ] {
+        guard isExactOwnerOnlyPhysicalDirectory(directory) else { throw CLIError.usage }
+    }
+    return paths
+}
+
+private func verificationRoot(forApplicationSupportPath path: String) -> URL? {
+    let prefix = "/private/tmp/rrv."
+    let suffix = "/home/Library/Application Support"
+    guard path.hasPrefix(prefix), path.hasSuffix(suffix) else { return nil }
+    let tokenStart = path.index(path.startIndex, offsetBy: prefix.count)
+    let tokenEnd = path.index(path.endIndex, offsetBy: -suffix.count)
+    guard tokenStart <= tokenEnd else { return nil }
+    let token = path[tokenStart..<tokenEnd]
+    guard token.utf8.count == 6,
+          token.utf8.allSatisfy({ byte in
+              (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
+          }) else {
+        return nil
+    }
+    let rootPath = prefix + String(token)
+    guard path == rootPath + suffix else { return nil }
+    return URL(fileURLWithPath: rootPath, isDirectory: true)
+}
+
+private func isExactOwnerOnlyPhysicalDirectory(_ directory: URL) -> Bool {
+    var pathMetadata = stat()
+    guard Darwin.lstat(directory.path, &pathMetadata) == 0,
+          pathMetadata.st_mode & S_IFMT == S_IFDIR,
+          pathMetadata.st_uid == Darwin.geteuid(),
+          pathMetadata.st_mode & 0o777 == 0o700 else {
+        return false
+    }
+    let descriptor = Darwin.open(
+        directory.path,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard descriptor >= 0 else { return false }
+    defer { Darwin.close(descriptor) }
+    var openedMetadata = stat()
+    return Darwin.fstat(descriptor, &openedMetadata) == 0 &&
+        openedMetadata.st_mode & S_IFMT == S_IFDIR &&
+        openedMetadata.st_uid == Darwin.geteuid() &&
+        openedMetadata.st_mode & 0o777 == 0o700 &&
+        openedMetadata.st_dev == pathMetadata.st_dev &&
+        openedMetadata.st_ino == pathMetadata.st_ino
 }
 
 private func runUserControlCommand(_ command: ControlCommand, paths: AgentPaths) throws {
@@ -416,7 +513,10 @@ private func daemonIsUnavailable(_ error: Error) -> Bool {
     return posix.code == .ENOENT || posix.code == .ECONNREFUSED
 }
 
-private func localStatus(paths: AgentPaths) throws -> AgentStatus {
+private func localStatus(
+    paths: AgentPaths,
+    readCachedUpdateState: Bool = true
+) throws -> AgentStatus {
     let enrollment = try? EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
     )
@@ -440,9 +540,12 @@ private func localStatus(paths: AgentPaths) throws -> AgentStatus {
         inExistingDirectory: paths.outboxDirectory
     )) ?? 0
     let installedVersion = try InstalledCompanionVersion.load(from: .main)
+    let cachedVersion = readCachedUpdateState
+        ? (try? UpdateStateStore(paths: paths).load())?.availableVersion
+        : nil
     let updateAvailability = ReleaseChecker.availableVersion(
         installedVersion: installedVersion,
-        cachedVersion: (try? UpdateStateStore(paths: paths).load())?.availableVersion
+        cachedVersion: cachedVersion
     )
     let adapterFacts = (try? AgentController.persistedAdapterFacts(
         paths: paths,
