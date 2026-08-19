@@ -147,6 +147,7 @@ final class ControlProtocolTests: XCTestCase {
         let scheduler = RecurringVersionCheckScheduler(
             operations: VersionCheckScheduleOperations(
                 checkIfDue: { harness.check() },
+                execute: { action in harness.enqueue(action) },
                 scheduleAfter: { delay, action in
                     harness.schedule(after: delay, action: action)
                 }
@@ -155,14 +156,22 @@ final class ControlProtocolTests: XCTestCase {
 
         scheduler.start()
 
-        XCTAssertEqual(harness.checkCount, 1)
+        XCTAssertEqual(harness.checkCount, 0)
+        XCTAssertEqual(harness.enqueuedActionCount, 1)
         XCTAssertEqual(harness.delays, [60 * 60])
+
+        try harness.enqueuedAction(at: 0)()
+        XCTAssertEqual(harness.checkCount, 1)
 
         let firstOpportunity = try harness.action(at: 0)
         firstOpportunity()
 
-        XCTAssertEqual(harness.checkCount, 2)
+        XCTAssertEqual(harness.checkCount, 1)
+        XCTAssertEqual(harness.enqueuedActionCount, 2)
         XCTAssertEqual(harness.delays, [60 * 60, 60 * 60])
+
+        try harness.enqueuedAction(at: 1)()
+        XCTAssertEqual(harness.checkCount, 2)
 
         let shutdownTimer = try harness.action(at: 1)
         scheduler.stop()
@@ -171,6 +180,71 @@ final class ControlProtocolTests: XCTestCase {
         shutdownTimer()
         XCTAssertEqual(harness.checkCount, 2)
         XCTAssertEqual(harness.delays, [60 * 60, 60 * 60])
+    }
+
+    func testVersionCheckSchedulerEnqueuesStartupCheckWithoutRunningInline() throws {
+        let harness = VersionCheckScheduleHarness()
+        let scheduler = RecurringVersionCheckScheduler(
+            operations: VersionCheckScheduleOperations(
+                checkIfDue: { harness.check() },
+                execute: { action in harness.enqueue(action) },
+                scheduleAfter: { delay, action in
+                    harness.schedule(after: delay, action: action)
+                }
+            )
+        )
+
+        scheduler.start()
+
+        XCTAssertEqual(harness.checkCount, 0)
+        XCTAssertEqual(harness.enqueuedActionCount, 1)
+
+        scheduler.stop()
+        try harness.enqueuedAction(at: 0)()
+        XCTAssertEqual(harness.checkCount, 0)
+    }
+
+    func testVersionCheckSchedulerStopWaitsForInFlightCheckBeforeReturning() throws {
+        let checkStarted = DispatchSemaphore(value: 0)
+        let allowCheckToFinish = DispatchSemaphore(value: 0)
+        let checkFinished = DispatchSemaphore(value: 0)
+        let cancellationStarted = DispatchSemaphore(value: 0)
+        let allowCancellationToFinish = DispatchSemaphore(value: 0)
+        let stopReturned = DispatchSemaphore(value: 0)
+        let harness = VersionCheckScheduleHarness { _ in
+            cancellationStarted.signal()
+            allowCancellationToFinish.wait()
+        }
+        let scheduler = RecurringVersionCheckScheduler(
+            operations: VersionCheckScheduleOperations(
+                checkIfDue: {
+                    checkStarted.signal()
+                    allowCheckToFinish.wait()
+                    checkFinished.signal()
+                },
+                execute: { action in harness.enqueue(action) },
+                scheduleAfter: { delay, action in
+                    harness.schedule(after: delay, action: action)
+                }
+            )
+        )
+
+        scheduler.start()
+        let startupCheck = try harness.enqueuedAction(at: 0)
+        DispatchQueue(label: "version-check-test.check").async(execute: startupCheck)
+        XCTAssertEqual(checkStarted.wait(timeout: .now() + 1), .success)
+
+        DispatchQueue(label: "version-check-test.stop").async {
+            scheduler.stop()
+            stopReturned.signal()
+        }
+        XCTAssertEqual(cancellationStarted.wait(timeout: .now() + 1), .success)
+        allowCancellationToFinish.signal()
+
+        XCTAssertEqual(stopReturned.wait(timeout: .now() + 0.2), .timedOut)
+        allowCheckToFinish.signal()
+        XCTAssertEqual(checkFinished.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(stopReturned.wait(timeout: .now() + 1), .success)
     }
 
     func testAgentStatusWireIncludesActivationStateWithoutRemovingEnabled() throws {
@@ -1397,17 +1471,28 @@ private final class ReleaseAbandonmentHarness {
 
 private final class VersionCheckScheduleHarness: @unchecked Sendable {
     private let lock = NSLock()
+    private let cancellationObserver: @Sendable (Int) -> Void
     private var checkCountStorage = 0
     private var delaysStorage: [TimeInterval] = []
     private var actionsStorage: [@Sendable () -> Void] = []
+    private var enqueuedActionsStorage: [@Sendable () -> Void] = []
     private var cancelledTimerIDsStorage: [Int] = []
 
     var checkCount: Int { lock.withLock { checkCountStorage } }
     var delays: [TimeInterval] { lock.withLock { delaysStorage } }
     var cancelledTimerIDs: [Int] { lock.withLock { cancelledTimerIDsStorage } }
+    var enqueuedActionCount: Int { lock.withLock { enqueuedActionsStorage.count } }
+
+    init(cancellationObserver: @escaping @Sendable (Int) -> Void = { _ in }) {
+        self.cancellationObserver = cancellationObserver
+    }
 
     func check() {
         lock.withLock { checkCountStorage += 1 }
+    }
+
+    func enqueue(_ action: @escaping @Sendable () -> Void) {
+        lock.withLock { enqueuedActionsStorage.append(action) }
     }
 
     func schedule(
@@ -1422,6 +1507,7 @@ private final class VersionCheckScheduleHarness: @unchecked Sendable {
         }
         return ScheduledVersionCheck { [weak self] in
             self?.lock.withLock { self?.cancelledTimerIDsStorage.append(timerID) }
+            self?.cancellationObserver(timerID)
         }
     }
 
@@ -1431,6 +1517,15 @@ private final class VersionCheckScheduleHarness: @unchecked Sendable {
                 throw POSIXError(.EINVAL)
             }
             return actionsStorage[index]
+        }
+    }
+
+    func enqueuedAction(at index: Int) throws -> @Sendable () -> Void {
+        try lock.withLock {
+            guard enqueuedActionsStorage.indices.contains(index) else {
+                throw POSIXError(.EINVAL)
+            }
+            return enqueuedActionsStorage[index]
         }
     }
 }

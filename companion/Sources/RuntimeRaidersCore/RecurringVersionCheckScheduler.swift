@@ -14,6 +14,7 @@ public struct ScheduledVersionCheck: Sendable {
 
 public struct VersionCheckScheduleOperations: Sendable {
     public let checkIfDue: @Sendable () -> Void
+    public let execute: @Sendable (@escaping @Sendable () -> Void) -> Void
     public let scheduleAfter: @Sendable (
         TimeInterval,
         @escaping @Sendable () -> Void
@@ -21,12 +22,14 @@ public struct VersionCheckScheduleOperations: Sendable {
 
     public init(
         checkIfDue: @escaping @Sendable () -> Void,
+        execute: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void,
         scheduleAfter: @escaping @Sendable (
             TimeInterval,
             @escaping @Sendable () -> Void
         ) -> ScheduledVersionCheck
     ) {
         self.checkIfDue = checkIfDue
+        self.execute = execute
         self.scheduleAfter = scheduleAfter
     }
 }
@@ -35,8 +38,9 @@ public final class RecurringVersionCheckScheduler: @unchecked Sendable {
     public static let opportunityInterval: TimeInterval = 60 * 60
 
     private let operations: VersionCheckScheduleOperations
-    private let lock = NSLock()
+    private let condition = NSCondition()
     private var running = false
+    private var inFlightCheckCount = 0
     private var generation: UInt64 = 0
     private var nextTimerID: UInt64 = 0
     private var scheduledTimerID: UInt64?
@@ -51,7 +55,7 @@ public final class RecurringVersionCheckScheduler: @unchecked Sendable {
     }
 
     public func start() {
-        let activeGeneration = lock.withLock { () -> UInt64? in
+        let activeGeneration = condition.withLock { () -> UInt64? in
             guard !running else { return nil }
             running = true
             generation &+= 1
@@ -59,12 +63,14 @@ public final class RecurringVersionCheckScheduler: @unchecked Sendable {
         }
         guard let activeGeneration else { return }
 
-        operations.checkIfDue()
+        operations.execute { [weak self] in
+            self?.runCheck(generation: activeGeneration)
+        }
         scheduleNext(generation: activeGeneration)
     }
 
     public func stop() {
-        let cancellation = lock.withLock { () -> ScheduledVersionCheck? in
+        let cancellation = condition.withLock { () -> ScheduledVersionCheck? in
             running = false
             generation &+= 1
             scheduledTimerID = nil
@@ -72,10 +78,15 @@ public final class RecurringVersionCheckScheduler: @unchecked Sendable {
             return scheduledCancellation
         }
         cancellation?.cancel()
+        condition.withLock {
+            while inFlightCheckCount > 0 {
+                condition.wait()
+            }
+        }
     }
 
     private func scheduleNext(generation activeGeneration: UInt64) {
-        let timerID = lock.withLock { () -> UInt64? in
+        let timerID = condition.withLock { () -> UInt64? in
             guard running, generation == activeGeneration else { return nil }
             nextTimerID &+= 1
             scheduledTimerID = nextTimerID
@@ -87,7 +98,7 @@ public final class RecurringVersionCheckScheduler: @unchecked Sendable {
         let cancellation = operations.scheduleAfter(Self.opportunityInterval) { [weak self] in
             self?.runOpportunity(generation: activeGeneration, timerID: timerID)
         }
-        let staleCancellation = lock.withLock { () -> ScheduledVersionCheck? in
+        let staleCancellation = condition.withLock { () -> ScheduledVersionCheck? in
             guard running,
                   generation == activeGeneration,
                   scheduledTimerID == timerID else {
@@ -100,7 +111,7 @@ public final class RecurringVersionCheckScheduler: @unchecked Sendable {
     }
 
     private func runOpportunity(generation activeGeneration: UInt64, timerID: UInt64) {
-        let shouldCheck = lock.withLock { () -> Bool in
+        let shouldCheck = condition.withLock { () -> Bool in
             guard running,
                   generation == activeGeneration,
                   scheduledTimerID == timerID else {
@@ -112,7 +123,28 @@ public final class RecurringVersionCheckScheduler: @unchecked Sendable {
         }
         guard shouldCheck else { return }
 
-        operations.checkIfDue()
+        operations.execute { [weak self] in
+            self?.runCheck(generation: activeGeneration)
+        }
         scheduleNext(generation: activeGeneration)
+    }
+
+    private func runCheck(generation activeGeneration: UInt64) {
+        let shouldCheck = condition.withLock { () -> Bool in
+            guard running, generation == activeGeneration else { return false }
+            inFlightCheckCount += 1
+            return true
+        }
+        guard shouldCheck else { return }
+        defer {
+            condition.withLock {
+                inFlightCheckCount -= 1
+                if inFlightCheckCount == 0 {
+                    condition.broadcast()
+                }
+            }
+        }
+
+        operations.checkIfDue()
     }
 }

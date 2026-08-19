@@ -113,6 +113,9 @@ private final class DaemonRuntime: @unchecked Sendable {
             checkIfDue: { [weak self] in
                 _ = self?.releaseChecker?.checkIfDue()
             },
+            execute: { [weak self] action in
+                self?.updateQueue.async(execute: action)
+            },
             scheduleAfter: { [weak self] delay, action in
                 let timer = CancellableDispatchTimer(action: action)
                 if let self {
