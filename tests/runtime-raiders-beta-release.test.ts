@@ -120,7 +120,7 @@ function makeReleaseFixture(): {
     `  https://raiders.redlattice.com/install.sh) file='${remoteRoot}/public/install.sh' ;;`,
     `  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip) file='${remoteRoot}/public/runtime-raiders-agent.zip' ;;`,
     `  https://raiders.redlattice.com/version) file='${remoteRoot}/public/version' ;;`,
-    `  https://raiders.redlattice.com/health) printf '{\"ok\":true}\\n'; exit 0 ;;`,
+    `  https://raiders.redlattice.com/health) printf '{\"ok\":true}'; exit 0 ;;`,
     `  *) exit 22 ;;`,
     `esac`,
     '[ -s "$file" ]',
@@ -615,9 +615,16 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
   executable(fakeCaddy, [
     `printf '%s\\n' "$*" >> '${caddyLog}'`,
     '[ "${1:-}" != list-modules ] || { printf "dns.providers.cloudflare\\n"; exit 0; }',
+    `expected_env='${join(target, 'etc/caddy/cloudflare.env')}'`,
+    'if [ "${1:-}" = validate ]; then',
+    '  [ "${2:-}" = --config ] || exit 82',
+    '  [ -n "${3:-}" ] || exit 83',
+    '  [ "${4:-}" = --adapter ] && [ "${5:-}" = caddyfile ] || exit 84',
+    '  [ "${6:-}" = --envfile ] && [ "${7:-}" = "$expected_env" ] || exit 85',
+    '  [ "$#" -eq 7 ] || exit 89',
+    'fi',
     `if [ "${'$'}{UNIT_DRIFT_PHASE:-}" = post ] && [ -f '${reloadCount}' ]; then`,
     `  expected_config='${join(target, 'etc/caddy/Caddyfile')}'`,
-    `  expected_env='${join(target, 'etc/caddy/cloudflare.env')}'`,
     '  case "${1:-}" in',
     '    validate)',
     '      [ "$*" = "validate --config $expected_config --adapter caddyfile --envfile $expected_env" ] || exit 86',
@@ -681,7 +688,7 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
   executable(fakeCurl, [
     `printf '%s\\n' "${'$'}{@: -1}" >> '${curlLog}'`,
     '[ "${FAIL_HEALTH_HOST:-}" != "${@: -1}" ] || exit 22',
-    'printf "{\\"ok\\":true}\\n"',
+    'printf "{\\"ok\\":true}"',
   ]);
   executable(fakeId, [
     '[ "${1:-}" = -u ] && [ "$#" -eq 2 ]',
@@ -763,6 +770,34 @@ function expectPriorBootstrapState(value: BootstrapFixture, existingReleaseTools
 }
 
 describe('Runtime Raiders one-time Caddy bootstrap', () => {
+  it('rejects a non-root production invocation before inspecting protected system paths', () => {
+    if (process.getuid?.() === 0) return;
+
+    const result = run('/bin/bash', ['scripts/pi/setup-caddy.sh', 'runtime-raiders-beta-bootstrap'], {
+      cwd: resolve('.'),
+      env: { ...process.env },
+    });
+
+    expect(result.status).toBe(77);
+    expect(result.stderr).toContain('run the one-time Caddy bootstrap as root');
+  });
+
+  it('inspects a protected non-traversable parent before attempting replacement', () => {
+    const value = makeBootstrapFixture();
+    const protectedParent = join(value.target, 'etc/sudoers.d');
+    chmodSync(protectedParent, 0o000);
+
+    try {
+      const result = runBootstrap(value);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).not.toContain(`unsafe bootstrap parent: ${protectedParent}`);
+      expect(readFileSync(value.caddyLog, 'utf8')).toContain('validate --config');
+    } finally {
+      chmodSync(protectedParent, 0o700);
+    }
+  });
+
   it('installs the fixed machinery for an explicit valid user, reloads, and checks both hosts', () => {
     const value = makeBootstrapFixture();
     const result = runBootstrap(value);

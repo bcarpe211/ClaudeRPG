@@ -58,7 +58,7 @@ The only active companion installation and publication procedure is
 Fresh Pi setup does not authorize publication or employee collection. The
 operator runs the documented local `prepare` mode first and uses `publish` only
 after separate approval. Before the first beta publication, the separately
-authorized one-time Caddy bootstrap in that runbook transactionally installs
+authorized one-time root Caddy bootstrap in that runbook transactionally installs
 the fixed root-owned publisher and narrow user-specific `sudo -n` rule, reloads
 Caddy, and checks both public health hostnames. The release account defaults to
 `rluser`; use the same `RUNTIME_RAIDERS_RELEASE_USER` setting for bootstrap and

@@ -42,10 +42,13 @@ Before the first 0.4.0 publication, Task 7 requires a separate authorization to
 run this once on the Pi checkout:
 
 ```sh
-RUNTIME_RAIDERS_RELEASE_USER=rluser /bin/bash scripts/pi/setup-caddy.sh runtime-raiders-beta-bootstrap
+/usr/bin/sudo -n /usr/bin/env RUNTIME_RAIDERS_RELEASE_USER=rluser /bin/bash scripts/pi/setup-caddy.sh runtime-raiders-beta-bootstrap
 ```
 
-The named account must already exist on the Pi. Caddy with its Cloudflare DNS
+Run that one-time command from the Pi checkout. The bootstrap itself runs as
+root because it must inspect the protected sudoers directory; `rluser` remains
+the unprivileged account authorized for later releases. The named account must
+already exist on the Pi. Caddy with its Cloudflare DNS
 module must already be installed. Its manager-loaded unit must start and reload
 using exactly `/etc/caddy/Caddyfile` and load exactly
 `/etc/caddy/cloudflare.env`. That environment file must be a single-link,

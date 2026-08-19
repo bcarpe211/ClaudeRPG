@@ -71,6 +71,11 @@ else
   done
 fi
 
+if [ "$TEST_MODE" = 0 ] && [ "$(/usr/bin/id -u)" != 0 ]; then
+  echo "run the one-time Caddy bootstrap as root" >&2
+  exit 77
+fi
+
 RELEASE_USER="${RUNTIME_RAIDERS_RELEASE_USER:-rluser}"
 [[ "$RELEASE_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || {
   echo "RUNTIME_RAIDERS_RELEASE_USER is invalid" >&2
@@ -105,7 +110,7 @@ STAGING_ROOT="$RUNTIME_ROOT/staging"
 safe_parent() {
   local directory="$1" resolved mode
   [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
-  resolved="$(cd "$directory" && pwd -P)" || return 1
+  resolved="$(as_root /usr/bin/readlink -f -- "$directory")" || return 1
   [ "$resolved" = "$directory" ] && [ "$(file_uid "$directory")" = "$EXPECTED_OWNER" ] || return 1
   mode="$(file_mode "$directory")"
   (( (8#$mode & 8#022) == 0 ))
@@ -192,7 +197,8 @@ printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/runtime-raiders-publish /var/lib
 
 /bin/bash -n "$CANDIDATE_PUBLISHER"
 "$VISUDO_TOOL" -cf "$CANDIDATE_SUDOERS"
-"$CADDY_TOOL" validate --config "$CANDIDATE_CADDY"
+as_root "$CADDY_TOOL" validate --config "$CANDIDATE_CADDY" \
+  --adapter caddyfile --envfile "$CADDY_ENV"
 
 PUBLISHER_EXISTED=0
 SUDOERS_EXISTED=0
@@ -303,7 +309,8 @@ replace_target publisher "$CANDIDATE_PUBLISHER" "$PUBLISHER_TARGET" 0755 0
 replace_target sudoers "$CANDIDATE_SUDOERS" "$SUDOERS_TARGET" 0440 0
 as_root "$VISUDO_TOOL" -cf "$SUDOERS_TARGET"
 replace_target caddy "$CANDIDATE_CADDY" "$CADDY_TARGET" 0644 1
-"$CADDY_TOOL" validate --config "$CADDY_TARGET"
+as_root "$CADDY_TOOL" validate --config "$CADDY_TARGET" \
+  --adapter caddyfile --envfile "$CADDY_ENV"
 safe_caddy_environment || { echo "protected Caddy environment changed before reload" >&2; exit 1; }
 as_root "$SYSTEMCTL_TOOL" reload caddy
 manager_unit_is_exact || {
@@ -316,7 +323,7 @@ as_root "$SYSTEMCTL_TOOL" is-active --quiet caddy
 for hostname in raiders.redlattice.com clauderpg.redlattice.com; do
   HEALTH_RESULT="$WORK/health-$hostname"
   "$CURL_TOOL" -fsS "https://$hostname/health" > "$HEALTH_RESULT"
-  /usr/bin/cmp -s "$HEALTH_RESULT" <(printf '{"ok":true}\n') || {
+  /usr/bin/cmp -s "$HEALTH_RESULT" <(printf '{"ok":true}') || {
     echo "Caddy bootstrap health check failed: $hostname" >&2
     exit 1
   }

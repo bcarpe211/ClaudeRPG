@@ -341,7 +341,7 @@ verify_release_headers "$VERIFY_WORK/archive.headers" 'application/zip' || { ech
 /usr/bin/cmp -s "$VERIFY_WORK/version" "$PUBLISH_RELEASE/version" || { echo "public version mismatch" >&2; exit 1; }
 verify_release_headers "$VERIFY_WORK/version.headers" 'application/json; charset=utf-8' || { echo "public release headers are invalid: version" >&2; exit 1; }
 "$CURL_TOOL" -fsS "$PUBLIC_BASE/health" > "$VERIFY_WORK/health"
-/usr/bin/cmp -s "$VERIFY_WORK/health" <(printf '{"ok":true}\n') || { echo "public health check failed" >&2; exit 1; }
+/usr/bin/cmp -s "$VERIFY_WORK/health" <(printf '{"ok":true}') || { echo "public health check failed" >&2; exit 1; }
 
 echo "Runtime Raiders $VERSION published."
 echo "Git SHA: $GIT_SHA"
