@@ -154,6 +154,9 @@ final class InstallerMigrationValidationTests: XCTestCase {
                       #""enabled":false"#,
                       with: #""enabled":false,"\u0065nabled":true"#),
             replacing(candidateStatus(enabled: false, preparedGeneration: 1),
+                      #""activationState":"disabled""#,
+                      with: #""activationState":"preparing""#),
+            replacing(candidateStatus(enabled: false, preparedGeneration: 1),
                       #""availableCompanionVersion":null,"#, with: ""),
             insertingExtraKey(into: candidateStatus(enabled: false, preparedGeneration: 1)),
         ] {
@@ -877,10 +880,12 @@ final class InstallerMigrationValidationTests: XCTestCase {
     ) -> Data {
         let generation = preparedGeneration.map(String.init) ?? "null"
         let enabledValue = enabled ? "true" : "false"
+        let activationState = enabled ? "ready" : "disabled"
         let persisted = enabled ? "enabled" : "disabled"
         let preparedValue = preparedGeneration == nil ? "false" : "true"
         return Data((
-            #"{"activeRunCount":0,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":true,"enabled":"# +
+            #"{"activationState":""# + activationState +
+            #"","activeRunCount":0,"availableCompanionVersion":null,"availableReleaseSequence":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":true,"enabled":"# +
             enabledValue +
             #", "installedCompanionVersion":"0.3.0","installedReleaseSequence":9,"lastSuccessfulUploadMS":null,"persistedState":""# +
             persisted +

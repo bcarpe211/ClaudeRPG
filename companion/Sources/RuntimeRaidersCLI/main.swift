@@ -73,6 +73,30 @@ private final class DaemonRuntime: @unchecked Sendable {
     ) { [weak self] files in
         self?.handleChangedFiles(files)
     }
+    private lazy var activation = ActivationCoordinator(
+        controller: controller,
+        workerQueue: workQueue,
+        operations: ActivationOperations(
+            startWatching: { [weak self] in
+                guard let self else { throw CLIError.invalidRuntimeConfiguration }
+                try watcher.start(scanExistingFiles: false)
+            },
+            stopWatching: { [weak self] in self?.watcher.stop() },
+            discoverProviderFiles: { [weak self] in
+                guard let self else { throw CLIError.invalidRuntimeConfiguration }
+                return try watcher.discoverProviderFiles()
+            },
+            becameReady: { [weak self] in
+                guard let self else { return }
+                uploader.schedule(enabled: true)
+                heartbeat.setEnabled(true)
+            },
+            becameDisabled: { [weak self] in
+                self?.uploader.setEnabled(false)
+                self?.heartbeat.setEnabled(false)
+            }
+        )
+    )
     private lazy var control = ControlSocketServer(socketURL: paths.controlSocket)
     private lazy var abandonmentOrchestrator = PreparedReleaseAbandonmentOrchestrator(
         coordinator: startupCoordinator,
@@ -218,8 +242,7 @@ private final class DaemonRuntime: @unchecked Sendable {
 
     private func handleChangedFiles(_ files: [URL]) {
         do {
-            try controller.processChangedFiles(files)
-            scheduleReadContinuationIfNeeded()
+            activation.processChangedFiles(files)
             guard controller.isAcceptingCollection else { return }
             try outbox.prune(nowMS: Int64(Date().timeIntervalSince1970 * 1_000))
             uploader.schedule(enabled: true)
@@ -259,37 +282,18 @@ private final class DaemonRuntime: @unchecked Sendable {
         case .daemon:
             return ControlResponse(ok: false, message: "daemon is already running")
         case .on:
-            return workQueue.sync {
-                do {
-                    let files = try watcher.discoverProviderFiles()
-                    try controller.turnOn(existingFiles: files)
-                    scheduleReadContinuationIfNeeded()
-                    try watcher.start()
-                    uploader.schedule(enabled: true)
-                    heartbeat.setEnabled(true)
-                    return ControlResponse(ok: true, message: "enabled")
-                } catch {
-                    uploader.setEnabled(false)
-                    heartbeat.setEnabled(false)
-                    watcher.stop()
-                    try? controller.turnOff()
-                    return ControlResponse(ok: false, message: "unable to enable")
-                }
+            do {
+                let state = try activation.turnOn()
+                return ControlResponse(ok: true, message: state.rawValue)
+            } catch {
+                return ControlResponse(ok: false, message: "unable to enable")
             }
         case .off:
-            controller.pauseCollection()
-            uploader.setEnabled(false)
-            heartbeat.setEnabled(false)
-            watcher.stop()
-            return workQueue.sync {
-                do {
-                    try controller.turnOff()
-                    uploader.setEnabled(false)
-                    heartbeat.setEnabled(false)
-                    return ControlResponse(ok: true, message: "off")
-                } catch {
-                    return ControlResponse(ok: false, message: "unable to turn off")
-                }
+            do {
+                try activation.turnOff()
+                return ControlResponse(ok: true, message: "disabled")
+            } catch {
+                return ControlResponse(ok: false, message: "unable to turn off")
             }
         case .status:
             do {

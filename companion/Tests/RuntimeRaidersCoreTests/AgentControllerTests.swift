@@ -6,6 +6,108 @@ import XCTest
 final class AgentControllerTests: XCTestCase {
     private let now: Int64 = 1_800_000_000_000
 
+    func testActivationStateIsDisabledForMissingAndPersistedDisabledState() throws {
+        try withHarness(startsEnabled: false) { harness in
+            XCTAssertEqual(harness.controller.activationState, .disabled)
+
+            try harness.controller.turnOff()
+
+            XCTAssertEqual(harness.controller.activationState, .disabled)
+        }
+    }
+
+    func testBeginTurnOnPersistsPreparingWithoutReadingHistoricalContent() throws {
+        try withHarness { harness in
+            let historical = try harness.makeFile(
+                "historical-before-on.jsonl",
+                contents: completedRun(nativeID: "DO_NOT_EXPORT_HISTORICAL")
+            )
+            try harness.controller.install(existingFiles: [historical])
+            try harness.controller.turnOff()
+
+            try harness.controller.beginTurnOn()
+
+            XCTAssertTrue(harness.controller.enabled)
+            XCTAssertEqual(harness.controller.activationState, .preparing)
+            XCTAssertEqual(harness.controller.lastCallbackBytesRead, 0)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+            XCTAssertEqual(
+                try AgentController.persistedCollectorState(
+                    paths: harness.paths,
+                    surfaces: harness.registry.surfaces
+                ),
+                .enabled
+            )
+        }
+    }
+
+    func testBoundarySeedingProducesNoRunOrUploadableEventBeforeReady() throws {
+        try withHarness(startsEnabled: false) { harness in
+            let historical = try harness.makeFile(
+                "seed-boundary.jsonl",
+                contents: completedRun(nativeID: "DO_NOT_EXPORT_SEED_BOUNDARY")
+            )
+
+            try harness.controller.beginTurnOn()
+            try harness.controller.install(existingFiles: [historical])
+
+            XCTAssertEqual(harness.controller.activeRunCount, 0)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+        }
+    }
+
+    func testCompletingBoundaryPreparationReportsReady() throws {
+        try withHarness(startsEnabled: false, readLimitBytes: 128) { harness in
+            let historical = try harness.makeFile(
+                "ready-after-preparation.jsonl",
+                contents: completedRun(nativeID: "DO_NOT_EXPORT_READY_HISTORY")
+            )
+
+            try harness.controller.beginTurnOn()
+            try harness.controller.install(existingFiles: [historical])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+
+            XCTAssertEqual(harness.controller.activationState, .ready)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+        }
+    }
+
+    func testTurnOffWhilePreparingPreservesQueuedData() throws {
+        try withHarness { harness in
+            let live = try harness.makeFile("queued-before-off.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [live])
+            try append(completedRun(nativeID: "queued-before-preparing"), to: live)
+            try harness.controller.processChangedFiles([live])
+            let queuedBefore = try harness.outbox.queuedCount()
+            XCTAssertGreaterThan(queuedBefore, 0)
+
+            try harness.controller.turnOff()
+            try harness.controller.beginTurnOn()
+            XCTAssertEqual(harness.controller.activationState, .preparing)
+
+            try harness.controller.turnOff()
+
+            XCTAssertEqual(harness.controller.activationState, .disabled)
+            XCTAssertEqual(try harness.outbox.queuedCount(), queuedBefore)
+        }
+    }
+
+    func testRestartDerivesPreparingFromEnabledSeedingState() throws {
+        try withHarness { harness in
+            let known = try harness.makeFile("restart-preparing.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [known])
+            try harness.controller.turnOff()
+            try harness.controller.beginTurnOn()
+
+            let restarted = try harness.makeController()
+
+            XCTAssertTrue(restarted.enabled)
+            XCTAssertEqual(restarted.activationState, .preparing)
+        }
+    }
+
     func testInstallPreservesDisabledCollectorStateByteForByte() throws {
         try withHarness { harness in
             try harness.controller.turnOff()
@@ -192,6 +294,36 @@ final class AgentControllerTests: XCTestCase {
             XCTAssertEqual(status.availableCompanionVersion, "0.2.1")
             XCTAssertEqual(status.availableReleaseSequence, 2)
             XCTAssertEqual(status.updateCommand, "raiders update")
+        }
+    }
+
+    func testStatusSerializesDisabledPreparingAndReadyActivationStates() throws {
+        try withHarness(startsEnabled: false) { harness in
+            var status = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil
+            )
+            XCTAssertEqual(status.activationState, .disabled)
+            XCTAssertTrue(status.description.contains(#""activationState":"disabled""#))
+
+            try harness.controller.beginTurnOn()
+            status = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil
+            )
+            XCTAssertEqual(status.activationState, .preparing)
+            XCTAssertTrue(status.description.contains(#""activationState":"preparing""#))
+
+            try harness.controller.install(existingFiles: [])
+            status = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil
+            )
+            XCTAssertEqual(status.activationState, .ready)
+            XCTAssertTrue(status.description.contains(#""activationState":"ready""#))
         }
     }
 
@@ -950,7 +1082,7 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
-    func testFileCreatedAfterTurnOnReturnsIsCollected() throws {
+    func testFileCreatedAfterPreparationReachesReadyIsCollected() throws {
         try withHarness(readLimitBytes: 64) { harness in
             try harness.controller.turnOff()
             var history = lines([
@@ -964,6 +1096,9 @@ final class AgentControllerTests: XCTestCase {
             let existing = try harness.makeFile("history-before-on.jsonl", contents: history)
 
             try harness.controller.turnOn(existingFiles: [existing])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
 
             XCTAssertTrue(harness.controller.isAcceptingCollection)
             XCTAssertFalse(harness.controller.hasPendingSeedWork)
@@ -1673,6 +1808,30 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testFileWatcherCanStartWithoutAutomaticExistingFileScan() throws {
+        try withHarness { harness in
+            let streamStarted = expectation(description: "stream started")
+            let initialScan = expectation(description: "automatic scan skipped")
+            initialScan.isInverted = true
+            let watcher = FileWatcher(
+                registry: harness.registry,
+                processingQueue: DispatchQueue(
+                    label: "com.redlattice.runtime-raiders.tests.no-start-scan"
+                ),
+                afterStreamStarted: { streamStarted.fulfill() },
+                initialScan: {
+                    initialScan.fulfill()
+                    return []
+                }
+            ) { _ in }
+            defer { watcher.stop() }
+
+            try watcher.start(scanExistingFiles: false)
+
+            wait(for: [streamStarted, initialScan], timeout: 0.2)
+        }
+    }
+
     func testWatcherStartRescanCollectsFilesCreatedAfterAcceptedBoundaries() throws {
         for startsEnabled in [true, false] {
             try withHarness { harness in
@@ -1946,10 +2105,15 @@ final class AgentControllerTests: XCTestCase {
     }
 
     private func withHarness(
+        startsEnabled: Bool = true,
         readLimitBytes: Int = JSONLReader.maximumReadBytes,
         _ body: (ControllerHarness) throws -> Void
     ) throws {
-        let harness = try ControllerHarness(now: now, readLimitBytes: readLimitBytes)
+        let harness = try ControllerHarness(
+            now: now,
+            readLimitBytes: readLimitBytes,
+            startsEnabled: startsEnabled
+        )
         defer { try? FileManager.default.removeItem(at: harness.root) }
         try body(harness)
     }
@@ -1972,7 +2136,7 @@ private final class ControllerHarness {
     let readLimitBytes: Int
     var controller: AgentController
 
-    init(now: Int64, readLimitBytes: Int) throws {
+    init(now: Int64, readLimitBytes: Int, startsEnabled: Bool = true) throws {
         self.now = now
         self.readLimitBytes = readLimitBytes
         root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
@@ -1995,7 +2159,7 @@ private final class ControllerHarness {
             readLimitBytes: readLimitBytes,
             clockMS: { fixedNow }
         )
-        try controller.turnOn(existingFiles: [])
+        if startsEnabled { try controller.turnOn(existingFiles: []) }
     }
 
     func makeController(

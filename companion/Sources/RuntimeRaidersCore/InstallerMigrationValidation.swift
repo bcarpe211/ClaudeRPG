@@ -44,7 +44,9 @@ public enum InstallerStatusValidator {
         "lastSuccessfulUploadMS", "updateCommand",
     ]
     private static let legacyRequiredKeys = legacyKeys.subtracting(legacyOptionalKeys)
-    private static let candidateKeys = legacyKeys.union(["preparedReleaseStateGeneration"])
+    private static let candidateKeys = legacyKeys.union([
+        "activationState", "preparedReleaseStateGeneration",
+    ])
     private static let expectedSurfaces: [RunSurface] = [.codexCLI, .codexDesktop]
     private static let expectedAdapters: Set<RunSurface> = [
         .claudeCode, .omp, .codexDesktop, .codexCLI,
@@ -131,6 +133,7 @@ public enum InstallerStatusValidator {
               status.installedCompanionVersion == identity.companionVersion,
               status.installedReleaseSequence == identity.releaseSequence,
               status.enabled == expectedEnabled,
+              status.enabled == (status.activationState != .disabled),
               status.queuedEventCount == expectedQueuedEventCount,
               status.preparedForUpdate == prepared,
               status.preparedForUpdate == (status.preparedReleaseStateGeneration != nil),

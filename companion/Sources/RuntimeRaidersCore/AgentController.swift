@@ -26,8 +26,15 @@ public enum PersistedCollectorState: String, Codable, Equatable, Sendable {
     case disabled
 }
 
+public enum CollectorActivationState: String, Codable, Equatable, Sendable {
+    case disabled
+    case preparing
+    case ready
+}
+
 public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable {
     public let enabled: Bool
+    public let activationState: CollectorActivationState
     public let daemonRunning: Bool
     public let persistedState: PersistedCollectorState
     public let serverEnabledSurfaces: [RunSurface]
@@ -45,6 +52,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
 
     public init(
         enabled: Bool,
+        activationState: CollectorActivationState? = nil,
         daemonRunning: Bool,
         persistedState: PersistedCollectorState,
         serverEnabledSurfaces: [RunSurface],
@@ -60,6 +68,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         preparedReleaseStateGeneration: Int64? = nil
     ) {
         self.enabled = enabled
+        self.activationState = activationState ?? (enabled ? .ready : .disabled)
         self.daemonRunning = daemonRunning
         self.persistedState = persistedState
         self.serverEnabledSurfaces = serverEnabledSurfaces
@@ -78,6 +87,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
 
     public init(
         enabled: Bool,
+        activationState: CollectorActivationState? = nil,
         daemonRunning: Bool,
         persistedState: PersistedCollectorState,
         serverEnabledSurfaces: [RunSurface],
@@ -88,6 +98,7 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     ) {
         self.init(
             enabled: enabled,
+            activationState: activationState,
             daemonRunning: daemonRunning,
             persistedState: persistedState,
             serverEnabledSurfaces: serverEnabledSurfaces,
@@ -469,6 +480,10 @@ public final class AgentController: @unchecked Sendable {
 
     public var enabled: Bool { lock.withLock { state.enabled } }
     public var isAcceptingCollection: Bool { acceptanceLock.withLock { acceptingCollection } }
+    public var activationState: CollectorActivationState {
+        guard enabled else { return .disabled }
+        return isAcceptingCollection ? .ready : .preparing
+    }
     public var activeRunCount: Int { lock.withLock { runRegistry.activeRunCount } }
     public var hasPendingSeedWork: Bool {
         lock.withLock { state.enabled && state.files.values.contains(where: \.seeding) }
@@ -631,49 +646,42 @@ public final class AgentController: @unchecked Sendable {
         }
     }
 
-    public func turnOn(existingFiles: [URL]) throws {
+    public func beginTurnOn() throws {
+        pauseCollection()
         try lock.withLock {
-            guard !state.enabled else {
-                lastCallbackBytesRead = 0
-                finishBoundarySetupIfReady()
-                return
-            }
+            guard !state.enabled else { return }
             state.enabled = true
             runRegistry = RunRegistry()
             pendingPaths.removeAll()
-            let files = normalized(existingFiles)
-            let existingPaths = Set(files.map(\.path))
-            for path in Array(state.files.keys) where !existingPaths.contains(path) {
-                state.deferredSeedPaths.insert(path)
-                state.files.removeValue(forKey: path)
+            for path in state.files.keys {
+                guard var file = state.files[path] else { continue }
+                file.seeding = true
+                file.adapterSnapshots = try snapshotsPreparedForSeeding(
+                    from: file.adapterSnapshots
+                )
+                file.cursor = JSONLCursor()
+                file.nextOrdinal = 0
+                file.seedTargetOffset = nil
+                file.seedFileIdentity = nil
+                file.seedTargetCheckpoint = nil
+                state.files[path] = file
             }
-            state.deferredSeedPaths.subtract(existingPaths)
-            for file in files {
-                if var fileState = state.files[file.path] {
-                    fileState.seeding = true
-                    fileState.adapterSnapshots = try snapshotsPreparedForSeeding(
-                        from: fileState.adapterSnapshots
-                    )
-                    fileState.cursor = JSONLCursor()
-                    fileState.nextOrdinal = 0
-                    fileState.seedTargetOffset = nil
-                    fileState.seedFileIdentity = nil
-                    fileState.seedTargetCheckpoint = nil
-                    state.files[file.path] = fileState
-                } else {
-                    state.files[file.path] = initialFileState(seeding: true)
-                }
-            }
-            try captureSeedBoundaries(files)
+            lastCallbackBytesRead = 0
             try persist()
-            try process(files: files, bypassAcceptance: true, boundaryOnly: true)
-            finishBoundarySetupIfReady()
         }
-        while hasPendingSeedWork {
-            guard hasPendingReadWork else { throw AgentControllerError.invalidState }
-            try continuePendingWork()
+    }
+
+    public func turnOn(existingFiles: [URL]) throws {
+        let wasEnabled = enabled
+        try beginTurnOn()
+        guard !wasEnabled else {
+            lock.withLock {
+                lastCallbackBytesRead = 0
+                finishBoundarySetupIfReady()
+            }
+            return
         }
-        guard isAcceptingCollection else { throw AgentControllerError.invalidState }
+        try install(existingFiles: existingFiles)
     }
 
     public func processChangedFiles(_ files: [URL]) throws {
@@ -767,6 +775,7 @@ public final class AgentController: @unchecked Sendable {
             let persistedActiveRunCount = Self.snapshotFacts(in: state).activeRunCount
             return AgentStatus(
                 enabled: state.enabled,
+                activationState: activationState,
                 daemonRunning: daemonRunning,
                 persistedState: state.enabled ? .enabled : .disabled,
                 serverEnabledSurfaces: serverEnabledSurfaces.sorted { $0.rawValue < $1.rawValue },

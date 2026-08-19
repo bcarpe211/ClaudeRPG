@@ -4,6 +4,27 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ControlProtocolTests: XCTestCase {
+    func testAgentStatusWireIncludesActivationStateWithoutRemovingEnabled() throws {
+        let status = AgentStatus(
+            enabled: true,
+            activationState: .preparing,
+            daemonRunning: true,
+            persistedState: .enabled,
+            serverEnabledSurfaces: [.codexDesktop],
+            compiledAdapters: [.codexDesktop: .available],
+            queuedEventCount: 0,
+            lastSuccessfulUploadMS: nil,
+            activeRunCount: 0
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(status.description.utf8))
+                as? [String: Any]
+        )
+
+        XCTAssertEqual(object["enabled"] as? Bool, true)
+        XCTAssertEqual(object["activationState"] as? String, "preparing")
+    }
+
     func testPrepareUpdateUsesLongTimeoutAndCarriesExactReleaseGeneration() throws {
         let request = ControlRequest(command: .prepareUpdate, releaseStateGeneration: 7)
         let frame = try ControlSocketProtocol.encode(request, maximumFrameBytes: 4_096)

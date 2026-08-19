@@ -15,6 +15,7 @@ public final class FileWatcher: @unchecked Sendable {
     private let handler: ChangeHandler
     private let processingQueue: DispatchQueue
     private let afterStreamStarted: @Sendable () -> Void
+    private let initialScan: @Sendable () -> [URL]?
     private let eventQueue = DispatchQueue(
         label: "com.redlattice.runtime-raiders.fsevents",
         qos: .utility
@@ -45,6 +46,7 @@ public final class FileWatcher: @unchecked Sendable {
         self.registry = registry
         self.processingQueue = processingQueue
         afterStreamStarted = {}
+        initialScan = { [registry] in try? Self.discoverProviderFiles(in: registry) }
         handler = onChange
         watchedRoots = [registry.codexRoot]
     }
@@ -53,11 +55,14 @@ public final class FileWatcher: @unchecked Sendable {
         registry: AdapterRegistry,
         processingQueue: DispatchQueue,
         afterStreamStarted: @escaping @Sendable () -> Void,
+        initialScan: (@Sendable () -> [URL]?)? = nil,
         onChange: @escaping ChangeHandler
     ) {
         self.registry = registry
         self.processingQueue = processingQueue
         self.afterStreamStarted = afterStreamStarted
+        self.initialScan = initialScan
+            ?? { [registry] in try? Self.discoverProviderFiles(in: registry) }
         handler = onChange
         watchedRoots = [registry.codexRoot]
     }
@@ -65,6 +70,10 @@ public final class FileWatcher: @unchecked Sendable {
     deinit { stop() }
 
     public func discoverProviderFiles() throws -> [URL] {
+        try Self.discoverProviderFiles(in: registry)
+    }
+
+    private static func discoverProviderFiles(in registry: AdapterRegistry) throws -> [URL] {
         guard let enumerator = FileManager.default.enumerator(
             at: registry.codexRoot,
             includingPropertiesForKeys: nil,
@@ -72,17 +81,19 @@ public final class FileWatcher: @unchecked Sendable {
         ) else { return [] }
         var files: [URL] = []
         for case let file as URL in enumerator where file.pathExtension == "jsonl" {
-            if let approved = approvedRegularFile(file.path) { files.append(approved) }
+            if let approved = approvedRegularFile(file.path, registry: registry) {
+                files.append(approved)
+            }
         }
         return files.sorted { $0.path < $1.path }
     }
 
     public func providerFiles(forChangedPaths paths: [String]) throws -> [URL] {
-        Array(Set(paths.compactMap(approvedRegularFile)))
+        Array(Set(paths.compactMap { Self.approvedRegularFile($0, registry: registry) }))
             .sorted { $0.path < $1.path }
     }
 
-    public func start() throws {
+    public func start(scanExistingFiles: Bool = true) throws {
         let didStart = try lock.withLock { () throws -> Bool in
             guard stream == nil else { return false }
             let contextOwner = Unmanaged.passRetained(callbackBox)
@@ -124,9 +135,9 @@ public final class FileWatcher: @unchecked Sendable {
         }
         guard didStart else { return }
         afterStreamStarted()
+        guard scanExistingFiles else { return }
         processingQueue.async { [weak self] in
-            guard let self,
-                  let files = try? discoverProviderFiles() else { return }
+            guard let self, let files = initialScan() else { return }
             handler(files)
         }
     }
@@ -147,7 +158,10 @@ public final class FileWatcher: @unchecked Sendable {
         old.1?.release()
     }
 
-    private func approvedRegularFile(_ path: String) -> URL? {
+    private static func approvedRegularFile(
+        _ path: String,
+        registry: AdapterRegistry
+    ) -> URL? {
         let file = URL(fileURLWithPath: path)
         let prefix = registry.codexRoot.path.hasSuffix("/")
             ? registry.codexRoot.path : registry.codexRoot.path + "/"
