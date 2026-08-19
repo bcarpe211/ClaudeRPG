@@ -174,12 +174,10 @@ describe('Runtime Raiders canonical onboarding command', () => {
     expect(publication).not.toMatch(/INSTALLER_MAX_BYTES=8388608/);
   });
 
-  it('uses a shell-portable HTTP result variable', () => {
+  it('displays the exact employee-facing installer command', () => {
     const command = buildCompanionInstallCommand();
 
-    expect(command).toContain('download_http_code=');
-    expect(command).toContain('[ "$download_http_code" = 200 ]');
-    expect(command).not.toMatch(/(?:^|[ ;])status=/);
+    expect(command).toBe('curl -fsSL https://raiders.redlattice.com/install.sh | sh');
   });
 
   it.each(commandShells)('$name executes a builder-permitted rendered installer', (shell) => {

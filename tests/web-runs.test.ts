@@ -345,18 +345,10 @@ describe('Raider enrollment routes', () => {
   it('creates a private one-time install command and exchanges it exactly once', async () => {
     const { response: created, code } = await createEnrollment();
     expect(created.body).toEqual({
-      install_command: expect.stringContaining("'https://raiders.redlattice.com/install.sh'"),
+      install_command: 'curl -fsSL https://raiders.redlattice.com/install.sh | sh',
       enrollment_code: code,
       expires_at: NOW + 10 * 60_000,
     });
-    expect(created.body.install_command).toContain('--proto-redir');
-    expect(created.body.install_command).toContain('--output "$installer"');
-    expect(created.body.install_command).toContain("--write-out '%{http_code}'");
-    expect(created.body.install_command).toContain('[ "$download_http_code" = 200 ]');
-    expect(created.body.install_command).not.toContain('[ "$status" = 200 ]');
-    expect(created.body.install_command).toContain('test -s "$installer"');
-    expect(created.body.install_command).toContain('sh "$installer"');
-    expect(created.body.install_command).not.toContain('| sh');
 
     const deviceId = randomUUID();
     const exchanged = await request(app)

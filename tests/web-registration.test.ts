@@ -141,12 +141,7 @@ describe('registration', () => {
     expect(oneTimeCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(installCommand).not.toContain(players[0].auth_token);
     expect(installCommand).not.toContain(oneTimeCode);
-    expect(installCommand).toContain("'https://raiders.redlattice.com/install.sh'");
-    expect(installCommand).toContain('--output "$installer"');
-    expect(installCommand).toContain('[ "$download_http_code" = 200 ]');
-    expect(installCommand).not.toContain('[ "$status" = 200 ]');
-    expect(installCommand).toContain('sh "$installer"');
-    expect(installCommand).not.toContain('| sh');
+    expect(installCommand).toBe('curl -fsSL https://raiders.redlattice.com/install.sh | sh');
     expect(res.text).not.toContain('--code');
   });
 

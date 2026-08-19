@@ -15,6 +15,7 @@ import { recentRuns } from '../src/domain/runs';
 import type { RunEventV1, UsageCountersV1 } from '../src/domain/run-events';
 import { seedSettings } from '../src/domain/settings';
 import { createApp } from '../src/web/app';
+import { buildCompanionInstallCommand } from '../src/web/companion-install';
 
 const NOW = 1_800_000_000_000;
 const CUTOVER = NOW - 60_000;
@@ -90,6 +91,9 @@ async function enrollDevice(): Promise<{ deviceId: string; deviceToken: string }
   const issuedBody = issued.body as { install_command: string; enrollment_code: string };
   const code = issuedBody.enrollment_code;
   expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(issuedBody.install_command).toBe(
+    'curl -fsSL https://raiders.redlattice.com/install.sh | sh',
+  );
   expect(issuedBody.install_command).not.toContain(code);
 
   const deviceId = randomUUID();
@@ -172,6 +176,12 @@ afterEach(() => {
 });
 
 describe('Runtime Raiders local integration gate', () => {
+  it('displays the one-line employee installer command', () => {
+    expect(buildCompanionInstallCommand()).toBe(
+      'curl -fsSL https://raiders.redlattice.com/install.sh | sh',
+    );
+  });
+
   it('passes the production acceptance query for a real accepted canary Run', async () => {
     const device = await enrollDevice();
     const accepted = await post(

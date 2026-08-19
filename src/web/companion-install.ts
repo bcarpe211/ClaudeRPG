@@ -5,11 +5,13 @@ function shellQuote(value: string): string {
 }
 
 const INSTALL_URL = 'https://raiders.redlattice.com/install.sh';
+const INSTALL_COMMAND = `curl -fsSL ${INSTALL_URL} | sh`;
 
 export function buildCompanionInstallCommand(
   options: { curlPath?: string } = {},
 ): string {
-  const curlPath = options.curlPath ?? '/usr/bin/curl';
+  if (options.curlPath === undefined) return INSTALL_COMMAND;
+
   return [
     '(umask 077;',
     'installer="$(/usr/bin/mktemp)" || exit 1;',
@@ -18,7 +20,7 @@ export function buildCompanionInstallCommand(
     "trap 'exit 129' HUP;",
     "trap 'exit 130' INT;",
     "trap 'exit 143' TERM;",
-    `download_http_code="$(${shellQuote(curlPath)} --fail --silent --show-error`,
+    `download_http_code="$(${shellQuote(options.curlPath)} --fail --silent --show-error`,
     "--proto '=https'",
     "--proto-redir '=https'",
     '--max-redirs 0',
