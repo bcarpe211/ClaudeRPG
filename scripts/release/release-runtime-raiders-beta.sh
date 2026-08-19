@@ -18,6 +18,7 @@ SSH_TOOL=/usr/bin/ssh
 CURL_TOOL=/usr/bin/curl
 PUBLISH_ROOT=/var/lib/runtime-raiders
 BEFORE_TRANSMISSION_HOOK=''
+DURING_TRANSMISSION_COPY_HOOK=''
 
 unsafe_test_configuration() {
   echo "release test configuration is invalid" >&2
@@ -43,15 +44,17 @@ if [ -n "${RUNTIME_RAIDERS_TEST_MODE:-}" ]; then
   CURL_TOOL="${RUNTIME_RAIDERS_TEST_CURL:-}"
   PUBLISH_ROOT="${RUNTIME_RAIDERS_TEST_PUBLISH_ROOT:-}"
   BEFORE_TRANSMISSION_HOOK="${RUNTIME_RAIDERS_TEST_BEFORE_TRANSMISSION:-}"
+  DURING_TRANSMISSION_COPY_HOOK="${RUNTIME_RAIDERS_TEST_DURING_TRANSMISSION_COPY:-}"
   case "$PUBLISH_ROOT" in /*) ;; *) unsafe_test_configuration ;; esac
   [ -d "$PUBLISH_ROOT" ] && [ ! -L "$PUBLISH_ROOT" ] || unsafe_test_configuration
   for tool in "$BUILDER" "$VERIFIER" "$SSH_TOOL" "$CURL_TOOL"; do validate_test_tool "$tool"; done
   [ -z "$BEFORE_TRANSMISSION_HOOK" ] || validate_test_tool "$BEFORE_TRANSMISSION_HOOK"
+  [ -z "$DURING_TRANSMISSION_COPY_HOOK" ] || validate_test_tool "$DURING_TRANSMISSION_COPY_HOOK"
 else
   for injected_name in \
     RUNTIME_RAIDERS_TEST_ROOT RUNTIME_RAIDERS_TEST_BUILDER RUNTIME_RAIDERS_TEST_VERIFIER \
     RUNTIME_RAIDERS_TEST_SSH RUNTIME_RAIDERS_TEST_CURL RUNTIME_RAIDERS_TEST_PUBLISH_ROOT \
-    RUNTIME_RAIDERS_TEST_BEFORE_TRANSMISSION; do
+    RUNTIME_RAIDERS_TEST_BEFORE_TRANSMISSION RUNTIME_RAIDERS_TEST_DURING_TRANSMISSION_COPY; do
     [ -z "${!injected_name:-}" ] || unsafe_test_configuration
   done
 fi
@@ -116,6 +119,15 @@ release_snapshot() {
     printf '%s:%s:' "$name" "$(/usr/bin/stat -f '%u:%g:%l:%Lp:%d:%i:%z:%m:%c' "$member")"
     /usr/bin/shasum -a 256 "$member" | /usr/bin/awk 'NR == 1 { print $1 }'
   done
+}
+snapshot_hash() {
+  local snapshot="$1" name="$2" value
+  value="$(printf '%s\n' "$snapshot" | /usr/bin/awk -F: -v name="$name" '$1 == name { count += 1; value = $NF } END { if (count == 1) print value; else exit 1 }')" || return 1
+  [[ "$value" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$value"
+}
+file_sha256() {
+  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk 'NR == 1 { print $1 }'
 }
 OUTPUT_BEFORE_VERIFY="$(release_snapshot "$OUTPUT")" || {
   echo "local release output is unsafe" >&2
@@ -188,6 +200,9 @@ PRIVATE_AFTER_VERIFY="$(release_snapshot "$PUBLISH_RELEASE")" || {
   echo "private publication copy changed during verification" >&2
   exit 1
 }
+APPROVED_INSTALLER_SHA="$(snapshot_hash "$PRIVATE_AFTER_VERIFY" install.sh)" || exit 1
+APPROVED_ARCHIVE_SHA="$(snapshot_hash "$PRIVATE_AFTER_VERIFY" runtime-raiders-agent.zip)" || exit 1
+APPROVED_VERSION_SHA="$(snapshot_hash "$PRIVATE_AFTER_VERIFY" version)" || exit 1
 [ "$(clean_head)" = "$GIT_SHA" ] || {
   echo "reviewed source changed while sealing publication input" >&2
   exit 1
@@ -203,28 +218,40 @@ PRIVATE_BEFORE_TRANSMISSION="$(release_snapshot "$PUBLISH_RELEASE")" || {
   exit 1
 }
 
-file_sha256() {
-  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk 'NR == 1 { print $1 }'
-}
 TRANSMISSION_DIR="$PUBLISH_WORK/transmission"
 /bin/mkdir -m 0700 "$TRANSMISSION_DIR"
 for name in install.sh runtime-raiders-agent.zip version; do
+  [ -z "$DURING_TRANSMISSION_COPY_HOOK" ] || "$DURING_TRANSMISSION_COPY_HOOK" "$name" "$PUBLISH_RELEASE"
   /bin/cp "$PUBLISH_RELEASE/$name" "$TRANSMISSION_DIR/$name"
 done
 /bin/chmod 0700 "$TRANSMISSION_DIR/install.sh"
 /bin/chmod 0600 "$TRANSMISSION_DIR/runtime-raiders-agent.zip" "$TRANSMISSION_DIR/version"
 cat > "$TRANSMISSION_DIR/expected-sha256" <<EOF
-install.sh=$(file_sha256 "$PUBLISH_RELEASE/install.sh")
-runtime-raiders-agent.zip=$(file_sha256 "$PUBLISH_RELEASE/runtime-raiders-agent.zip")
-version=$(file_sha256 "$PUBLISH_RELEASE/version")
+install.sh=$APPROVED_INSTALLER_SHA
+runtime-raiders-agent.zip=$APPROVED_ARCHIVE_SHA
+version=$APPROVED_VERSION_SHA
 EOF
 /bin/chmod 0600 "$TRANSMISSION_DIR/expected-sha256"
+PRIVATE_AFTER_TRANSMISSION_COPY="$(release_snapshot "$PUBLISH_RELEASE")" || {
+  echo "private release changed while sealing transmission" >&2
+  exit 1
+}
+[ "$PRIVATE_AFTER_TRANSMISSION_COPY" = "$PRIVATE_AFTER_VERIFY" ] || {
+  echo "private release changed while sealing transmission" >&2
+  exit 1
+}
 for name in install.sh runtime-raiders-agent.zip version; do
   /usr/bin/cmp -s "$TRANSMISSION_DIR/$name" "$PUBLISH_RELEASE/$name" || {
     echo "transmission input does not match the approved release" >&2
     exit 1
   }
 done
+[ "$(file_sha256 "$TRANSMISSION_DIR/install.sh")" = "$APPROVED_INSTALLER_SHA" ] &&
+  [ "$(file_sha256 "$TRANSMISSION_DIR/runtime-raiders-agent.zip")" = "$APPROVED_ARCHIVE_SHA" ] &&
+  [ "$(file_sha256 "$TRANSMISSION_DIR/version")" = "$APPROVED_VERSION_SHA" ] || {
+  echo "transmission files do not match the verifier-approved release" >&2
+  exit 1
+}
 
 TRANSMISSION_TAR="$PUBLISH_WORK/transmission.tar"
 /usr/bin/tar -cf "$TRANSMISSION_TAR" -C "$TRANSMISSION_DIR" \
@@ -247,9 +274,18 @@ done
 /bin/chmod 0400 "$TRANSMISSION_TAR"
 TRANSMISSION_SNAPSHOT="$(/usr/bin/stat -f '%u:%l:%Lp:%d:%i:%z:%m:%c' "$TRANSMISSION_TAR"):$(file_sha256 "$TRANSMISSION_TAR")"
 
-RELEASE_HOST="${RUNTIME_RAIDERS_RELEASE_HOST:-rluser@raiders.local}"
+RELEASE_USER="${RUNTIME_RAIDERS_RELEASE_USER:-rluser}"
+[[ "$RELEASE_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || {
+  echo "RUNTIME_RAIDERS_RELEASE_USER is invalid" >&2
+  exit 64
+}
+RELEASE_HOST="${RUNTIME_RAIDERS_RELEASE_HOST:-$RELEASE_USER@raiders.local}"
 [[ "$RELEASE_HOST" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || {
   echo "RUNTIME_RAIDERS_RELEASE_HOST is invalid" >&2
+  exit 64
+}
+[ "${RELEASE_HOST%%@*}" = "$RELEASE_USER" ] || {
+  echo "RUNTIME_RAIDERS_RELEASE_HOST user must match RUNTIME_RAIDERS_RELEASE_USER" >&2
   exit 64
 }
 RELEASE_ID="$(/usr/bin/uuidgen | /usr/bin/tr -d '-' | /usr/bin/tr 'A-F' 'a-f')"
@@ -274,13 +310,16 @@ header_has_exact_value() {
   /usr/bin/awk -v header="$header" -v expected="$expected" '
     BEGIN { target = tolower(header) }
     { sub(/\r$/, "") }
-    index($0, ":") > 0 {
+    /^HTTP\/[0-9.]+[[:space:]][0-9][0-9][0-9]([[:space:]]|$)/ {
+      blocks += 1; count = 0; found = ""; next
+    }
+    blocks > 0 && index($0, ":") > 0 {
       name = substr($0, 1, index($0, ":") - 1)
       value = substr($0, index($0, ":") + 1)
       sub(/^[[:space:]]+/, "", value); sub(/[[:space:]]+$/, "", value)
       if (tolower(name) == target) { count += 1; found = value }
     }
-    END { exit !(count == 1 && found == expected) }
+    END { exit !(blocks > 0 && count == 1 && found == expected) }
   ' "$file"
 }
 verify_release_headers() {

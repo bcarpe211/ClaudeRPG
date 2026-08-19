@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -56,6 +57,7 @@ function makeReleaseFixture(): {
   sshLog: string;
   curlLog: string;
   mutationHook: string;
+  transmissionCopyHook: string;
 } {
   const repository = temporaryRoot('runtime-raiders-release-');
   const remoteRoot = temporaryRoot('runtime-raiders-remote-');
@@ -65,6 +67,7 @@ function makeReleaseFixture(): {
   const sshLog = join(repository, '.ssh-log');
   const curlLog = join(repository, '.curl-log');
   const mutationHook = join(tools, 'mutate-before-transmission');
+  const transmissionCopyHook = join(tools, 'mutate-during-transmission-copy');
   mkdirSync(join(remoteRoot, 'staging'), { mode: 0o700 });
 
   for (const path of [
@@ -99,11 +102,15 @@ function makeReleaseFixture(): {
   executable(join(tools, 'ssh'), [
     `printf '%s\\n' "$*" >> '${sshLog}'`,
     '[ "${BOOTSTRAP_MISSING:-0}" = 0 ] || { echo "fixed publisher unavailable" >&2; exit 127; }',
+    '[ "${SUDO_FAILURE:-0}" = 0 ] || { echo "sudo permission denied" >&2; exit 1; }',
     `/bin/bash '${repository}/scripts/pi/publish-runtime-raiders-beta.sh' "${'$'}{@: -1}"`,
     `[ "${'$'}{CORRUPT_PUBLIC_ARCHIVE:-0}" = 0 ] || printf 'corrupt\\n' > '${remoteRoot}/public/runtime-raiders-agent.zip'`,
   ]);
   executable(mutationHook, [
     'printf "changed after private verification\\n" >> "$1/runtime-raiders-agent.zip"',
+  ]);
+  executable(transmissionCopyHook, [
+    '[ "$1" != version ] || printf "changed during transmission copy\\n" >> "$2/version"',
   ]);
   executable(join(tools, 'curl'), [
     `printf '%s\\n' "${'$'}{@: -1}" >> '${curlLog}'`,
@@ -127,7 +134,11 @@ function makeReleaseFixture(): {
     '  content_type="application/octet-stream"',
     '  case "$url" in *install.sh) content_type="text/x-shellscript; charset=utf-8" ;; *agent.zip) content_type="application/zip" ;; *version) content_type="application/json; charset=utf-8" ;; esac',
     '  cache_control="no-store"; [ "${BAD_PUBLIC_HEADERS:-0}" = 0 ] || cache_control="public, max-age=3600"',
-    '  printf "HTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: %s\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\n" "$content_type" "$cache_control" > "$headers"',
+    '  case "${PUBLIC_HEADER_MODE:-single}" in',
+    '    interim-valid-final-missing) printf "HTTP/1.1 200 Connection established\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\nHTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: no-store\\r\\n\\r\\n" "$content_type" > "$headers" ;;',
+    '    interim-missing-final-valid) printf "HTTP/1.1 200 Connection established\\r\\nProxy-Agent: fixture\\r\\n\\r\\nHTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: no-store\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\n" "$content_type" > "$headers" ;;',
+    '    *) printf "HTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: %s\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\n" "$content_type" "$cache_control" > "$headers" ;;',
+    '  esac',
     'fi',
     'if [ -n "$output" ]; then /bin/cp "$file" "$output"; else /bin/cat "$file"; fi',
   ]);
@@ -146,6 +157,7 @@ function makeReleaseFixture(): {
     sshLog,
     curlLog,
     mutationHook,
+    transmissionCopyHook,
     env: {
       ...process.env,
       RUNTIME_RAIDERS_TEST_MODE: '1',
@@ -156,6 +168,7 @@ function makeReleaseFixture(): {
       RUNTIME_RAIDERS_TEST_CURL: join(tools, 'curl'),
       RUNTIME_RAIDERS_TEST_PUBLISH_ROOT: remoteRoot,
       RUNTIME_RAIDERS_RELEASE_HOST: 'release-user@raiders.test',
+      RUNTIME_RAIDERS_RELEASE_USER: 'release-user',
     },
   };
 }
@@ -336,6 +349,21 @@ describe('Runtime Raiders beta release entry point', () => {
     expect(existsSync(value.sshLog)).toBe(false);
   });
 
+  it('refuses mutation during transmission copying before opening SSH', () => {
+    const value = makeReleaseFixture();
+    const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: value.repository,
+      env: {
+        ...value.env,
+        RUNTIME_RAIDERS_TEST_DURING_TRANSMISSION_COPY: value.transmissionCopyHook,
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('private release changed while sealing transmission');
+    expect(existsSync(value.sshLog)).toBe(false);
+  });
+
   it('fails closed when the one-time Pi bootstrap is absent', () => {
     const value = makeReleaseFixture();
     const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
@@ -358,6 +386,47 @@ describe('Runtime Raiders beta release entry point', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('public release headers are invalid');
+  });
+
+  it('validates required headers only in the final HTTP response block', () => {
+    const missingFinal = makeReleaseFixture();
+    const missingResult = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: missingFinal.repository,
+      env: { ...missingFinal.env, PUBLIC_HEADER_MODE: 'interim-valid-final-missing' },
+    });
+    expect(missingResult.status).not.toBe(0);
+    expect(missingResult.stderr).toContain('public release headers are invalid');
+
+    const validFinal = makeReleaseFixture();
+    const validResult = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: validFinal.repository,
+      env: { ...validFinal.env, PUBLIC_HEADER_MODE: 'interim-missing-final-valid' },
+    });
+    expect(validResult.status, validResult.stderr).toBe(0);
+  });
+
+  it('requires the configured release user to match the SSH host user', () => {
+    for (const releaseUser of ['other-user', 'invalid;user']) {
+      const value = makeReleaseFixture();
+      const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+        cwd: value.repository,
+        env: { ...value.env, RUNTIME_RAIDERS_RELEASE_USER: releaseUser },
+      });
+      expect(result.status).not.toBe(0);
+      expect(existsSync(value.sshLog)).toBe(false);
+    }
+  });
+
+  it('fails closed when the fixed publisher sudo invocation is denied', () => {
+    const value = makeReleaseFixture();
+    const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: value.repository,
+      env: { ...value.env, SUDO_FAILURE: '1' },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('sudo permission denied');
+    expect(existsSync(join(value.remoteRoot, 'public/version'))).toBe(false);
   });
 
   it('rejects a public archive that differs from the verified local release', () => {
@@ -488,51 +557,257 @@ describe('Runtime Raiders root publisher', () => {
   });
 });
 
-describe('Runtime Raiders one-time Caddy bootstrap', () => {
-  it('installs and validates fixed root-owned release machinery before reloading Caddy', () => {
-    const target = temporaryRoot('runtime-raiders-caddy-bootstrap-');
-    const tools = temporaryRoot('runtime-raiders-caddy-tools-');
-    const caddyLog = join(target, 'caddy.log');
-    const systemctlLog = join(target, 'systemctl.log');
-    const fakeCaddy = join(tools, 'caddy');
-    const fakeSystemctl = join(tools, 'systemctl');
-    const fakeVisudo = join(tools, 'visudo');
-    executable(fakeCaddy, [
-      `printf '%s\\n' "$*" >> '${caddyLog}'`,
-      '[ "${1:-}" != list-modules ] || printf "dns.providers.cloudflare\\n"',
-    ]);
-    executable(fakeSystemctl, [`printf '%s\\n' "$*" >> '${systemctlLog}'`]);
-    executable(fakeVisudo, ['[ "$1" = -cf ]', '[ -s "$2" ]']);
-    executable(join(tools, 'sudo'), ['exit 0']);
+type BootstrapFixture = ReturnType<typeof makeBootstrapFixture>;
 
-    const result = run('/bin/bash', ['scripts/pi/setup-caddy.sh', 'runtime-raiders-beta-bootstrap'], {
-      cwd: resolve('.'),
-      env: {
-        ...process.env,
-        PATH: `${tools}:${process.env.PATH ?? ''}`,
-        RUNTIME_RAIDERS_CADDY_TEST_MODE: '1',
-        RUNTIME_RAIDERS_CADDY_TEST_ROOT: target,
-        RUNTIME_RAIDERS_CADDY_TEST_CADDY: fakeCaddy,
-        RUNTIME_RAIDERS_CADDY_TEST_SYSTEMCTL: fakeSystemctl,
-        RUNTIME_RAIDERS_CADDY_TEST_VISUDO: fakeVisudo,
-      },
-    });
+function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) {
+  const target = temporaryRoot('runtime-raiders-caddy-bootstrap-');
+  const tools = temporaryRoot('runtime-raiders-caddy-tools-');
+  const existingReleaseTools = options.existingReleaseTools ?? true;
+  for (const directory of [
+    'etc/caddy', 'etc/systemd/system', 'etc/sudoers.d', 'usr/local/sbin', 'var/lib',
+  ]) mkdirSync(join(target, directory), { recursive: true });
+  writeFileSync(join(target, 'etc/caddy/Caddyfile'), 'old caddy configuration\n', { mode: 0o640 });
+  writeFileSync(join(target, 'etc/caddy/cloudflare.env'), 'CLOUDFLARE_API_TOKEN=existing-secret\n', { mode: 0o600 });
+  writeFileSync(join(target, 'etc/systemd/system/caddy.service'), 'old service unit\n', { mode: 0o644 });
+  writeFileSync(join(target, 'etc/caddy/unrelated.conf'), 'preserve me\n', { mode: 0o644 });
+  if (existingReleaseTools) {
+    writeFileSync(join(target, 'usr/local/sbin/runtime-raiders-publish'), 'old publisher\n', { mode: 0o751 });
+    writeFileSync(join(target, 'etc/sudoers.d/runtime-raiders-publish'), 'old sudo rule\n', { mode: 0o440 });
+  }
+
+  const caddyLog = join(target, 'caddy.log');
+  const caddyCount = join(target, 'caddy-count');
+  const systemctlLog = join(target, 'systemctl.log');
+  const reloadCount = join(target, 'reload-count');
+  const curlLog = join(target, 'curl.log');
+  const visudoCount = join(target, 'visudo-count');
+  const installLog = join(target, 'install.log');
+  const fakeCaddy = join(tools, 'caddy');
+  const fakeSystemctl = join(tools, 'systemctl');
+  const fakeVisudo = join(tools, 'visudo');
+  const fakeCurl = join(tools, 'curl');
+  const fakeId = join(tools, 'id');
+  const fakeInstall = join(tools, 'install');
+  const swapHook = join(tools, 'swap-boundary');
+
+  executable(fakeCaddy, [
+    `printf '%s\\n' "$*" >> '${caddyLog}'`,
+    '[ "${1:-}" != list-modules ] || { printf "dns.providers.cloudflare\\n"; exit 0; }',
+    '[ "${1:-}" != validate ] || {',
+    `  count=0; [ ! -f '${caddyCount}' ] || count="$(/bin/cat '${caddyCount}')"`,
+    `  count=$((count + 1)); printf '%s' "$count" > '${caddyCount}'`,
+    '  [ "${FAIL_CADDY_VALIDATE_CALL:-0}" != "$count" ] || exit 1',
+    '}',
+  ]);
+  executable(fakeSystemctl, [
+    `printf '%s\\n' "$*" >> '${systemctlLog}'`,
+    'if [ "${1:-}" = reload ]; then',
+    `  count=0; [ ! -f '${reloadCount}' ] || count="$(/bin/cat '${reloadCount}')"`,
+    `  count=$((count + 1)); printf '%s' "$count" > '${reloadCount}'`,
+    '  [ "${FAIL_RELOAD_CALL:-0}" != "$count" ] || exit 1',
+    'fi',
+    '[ "${1:-}" != is-active ] || [ "${SERVICE_INACTIVE:-0}" = 0 ]',
+  ]);
+  executable(fakeVisudo, [
+    '[ "$1" = -cf ]',
+    `count=0; [ ! -f '${visudoCount}' ] || count="$(/bin/cat '${visudoCount}')"`,
+    `count=$((count + 1)); printf '%s' "$count" > '${visudoCount}'`,
+    '[ "${FAIL_VISUDO_CALL:-0}" != "$count" ]',
+    '[ -s "$2" ]',
+  ]);
+  executable(fakeCurl, [
+    `printf '%s\\n' "${'$'}{@: -1}" >> '${curlLog}'`,
+    '[ "${FAIL_HEALTH_HOST:-}" != "${@: -1}" ] || exit 22',
+    'printf "{\\"ok\\":true}\\n"',
+  ]);
+  executable(fakeId, [
+    '[ "${1:-}" = -u ] && [ "$#" -eq 2 ]',
+    '[ "$2" = "${EXISTING_RELEASE_USER:-betauser}" ]',
+    '/usr/bin/id -u',
+  ]);
+  executable(fakeInstall, [
+    'target="${@: -1}"',
+    `printf '%s\\n' "$target" >> '${installLog}'`,
+    '[ -z "${FAIL_INSTALL_TARGET_SUFFIX:-}" ] || case "$target" in *"$FAIL_INSTALL_TARGET_SUFFIX") exit 1 ;; esac',
+    '/usr/bin/install "$@"',
+    '[ -z "${CORRUPT_INSTALL_TARGET_SUFFIX:-}" ] || case "$target" in *"$CORRUPT_INSTALL_TARGET_SUFFIX") printf "if (\\n" >> "$target" ;; esac',
+  ]);
+  executable(swapHook, [
+    'label="$1"; target="$2"',
+    'if [ "${SWAP_TARGET_LABEL:-}" = "$label" ]; then /bin/rm -f -- "$target"; /bin/ln -s "${SWAP_SENTINEL}" "$target"; fi',
+    'if [ "${SWAP_PARENT_LABEL:-}" = "$label" ]; then parent="${target%/*}"; /bin/mv "$parent" "$parent.saved"; /bin/ln -s "${SWAP_PARENT_DEST}" "$parent"; fi',
+  ]);
+
+  return {
+    target,
+    caddyLog,
+    systemctlLog,
+    curlLog,
+    installLog,
+    swapHook,
+    env: {
+      ...process.env,
+      RUNTIME_RAIDERS_RELEASE_USER: 'betauser',
+      RUNTIME_RAIDERS_CADDY_TEST_MODE: '1',
+      RUNTIME_RAIDERS_CADDY_TEST_ROOT: target,
+      RUNTIME_RAIDERS_CADDY_TEST_CADDY: fakeCaddy,
+      RUNTIME_RAIDERS_CADDY_TEST_SYSTEMCTL: fakeSystemctl,
+      RUNTIME_RAIDERS_CADDY_TEST_VISUDO: fakeVisudo,
+      RUNTIME_RAIDERS_CADDY_TEST_CURL: fakeCurl,
+      RUNTIME_RAIDERS_CADDY_TEST_ID: fakeId,
+      RUNTIME_RAIDERS_CADDY_TEST_INSTALL: fakeInstall,
+      RUNTIME_RAIDERS_CADDY_TEST_BEFORE_REPLACE: swapHook,
+      EXISTING_RELEASE_USER: 'betauser',
+    },
+  };
+}
+
+function runBootstrap(value: BootstrapFixture, extraEnv: NodeJS.ProcessEnv = {}) {
+  return run('/bin/bash', ['scripts/pi/setup-caddy.sh', 'runtime-raiders-beta-bootstrap'], {
+    cwd: resolve('.'),
+    env: { ...value.env, ...extraEnv },
+  });
+}
+
+function expectPriorBootstrapState(value: BootstrapFixture, existingReleaseTools = true): void {
+  expect(readFileSync(join(value.target, 'etc/caddy/Caddyfile'), 'utf8')).toBe('old caddy configuration\n');
+  expect(statSync(join(value.target, 'etc/caddy/Caddyfile')).mode & 0o777).toBe(0o640);
+  expect(readFileSync(join(value.target, 'etc/systemd/system/caddy.service'), 'utf8')).toBe('old service unit\n');
+  expect(readFileSync(join(value.target, 'etc/caddy/unrelated.conf'), 'utf8')).toBe('preserve me\n');
+  if (existingReleaseTools) {
+    expect(readFileSync(join(value.target, 'usr/local/sbin/runtime-raiders-publish'), 'utf8')).toBe('old publisher\n');
+    expect(statSync(join(value.target, 'usr/local/sbin/runtime-raiders-publish')).mode & 0o777).toBe(0o751);
+    expect(readFileSync(join(value.target, 'etc/sudoers.d/runtime-raiders-publish'), 'utf8')).toBe('old sudo rule\n');
+    expect(statSync(join(value.target, 'etc/sudoers.d/runtime-raiders-publish')).mode & 0o777).toBe(0o440);
+  } else {
+    expect(existsSync(join(value.target, 'usr/local/sbin/runtime-raiders-publish'))).toBe(false);
+    expect(existsSync(join(value.target, 'etc/sudoers.d/runtime-raiders-publish'))).toBe(false);
+  }
+}
+
+describe('Runtime Raiders one-time Caddy bootstrap', () => {
+  it('installs the fixed machinery for an explicit valid user, reloads, and checks both hosts', () => {
+    const value = makeBootstrapFixture();
+    const result = runBootstrap(value);
 
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(join(target, 'etc/caddy/Caddyfile'), 'utf8'))
+    expect(readFileSync(join(value.target, 'etc/caddy/Caddyfile'), 'utf8'))
       .toBe(readFileSync(resolve('deploy/Caddyfile'), 'utf8'));
-    expect(readFileSync(join(target, 'usr/local/sbin/runtime-raiders-publish'), 'utf8'))
+    expect(readFileSync(join(value.target, 'usr/local/sbin/runtime-raiders-publish'), 'utf8'))
       .toBe(readFileSync(publisherScript, 'utf8'));
-    expect(statSync(join(target, 'usr/local/sbin/runtime-raiders-publish')).mode & 0o777).toBe(0o755);
-    expect(statSync(join(target, 'etc/sudoers.d/runtime-raiders-publish')).mode & 0o777).toBe(0o440);
-    expect(readFileSync(join(target, 'etc/sudoers.d/runtime-raiders-publish'), 'utf8')).toBe(
-      'rluser ALL=(root) NOPASSWD: /usr/local/sbin/runtime-raiders-publish /var/lib/runtime-raiders/staging/release-*\n',
+    expect(statSync(join(value.target, 'usr/local/sbin/runtime-raiders-publish')).mode & 0o777).toBe(0o755);
+    expect(statSync(join(value.target, 'etc/sudoers.d/runtime-raiders-publish')).mode & 0o777).toBe(0o440);
+    expect(readFileSync(join(value.target, 'etc/sudoers.d/runtime-raiders-publish'), 'utf8')).toBe(
+      'betauser ALL=(root) NOPASSWD: /usr/local/sbin/runtime-raiders-publish /var/lib/runtime-raiders/staging/release-*\n',
     );
-    expect(readFileSync(caddyLog, 'utf8')).toContain(`validate --config ${resolve('deploy/Caddyfile')}`);
-    expect(readFileSync(caddyLog, 'utf8')).toContain(`validate --config ${join(target, 'etc/caddy/Caddyfile')}`);
-    expect(readFileSync(systemctlLog, 'utf8').trim().split('\n')).toEqual([
-      'daemon-reload',
+    expect(readFileSync(join(value.target, 'etc/systemd/system/caddy.service'), 'utf8')).toBe('old service unit\n');
+    expect(readFileSync(value.systemctlLog, 'utf8').trim().split('\n')).toEqual([
       'reload caddy',
+      'is-active --quiet caddy',
     ]);
+    expect(readFileSync(value.curlLog, 'utf8').trim().split('\n')).toEqual([
+      'https://raiders.redlattice.com/health',
+      'https://clauderpg.redlattice.com/health',
+    ]);
+  });
+
+  it('rejects invalid, injected, mismatched, or nonexistent release users before replacement', () => {
+    for (const [releaseUser, existingUser] of [
+      ['BadUser', 'BadUser'],
+      ['bad;user', 'bad;user'],
+      ['missinguser', 'someoneelse'],
+    ]) {
+      const value = makeBootstrapFixture();
+      const result = runBootstrap(value, {
+        RUNTIME_RAIDERS_RELEASE_USER: releaseUser,
+        EXISTING_RELEASE_USER: existingUser,
+      });
+      expect(result.status).not.toBe(0);
+      expectPriorBootstrapState(value);
+      expect(existsSync(value.installLog)).toBe(false);
+    }
+  });
+
+  it('validates every candidate before the first replacement', () => {
+    const value = makeBootstrapFixture();
+    const result = runBootstrap(value, { FAIL_CADDY_VALIDATE_CALL: '1' });
+    expect(result.status).not.toBe(0);
+    expectPriorBootstrapState(value);
+    expect(existsSync(value.installLog)).toBe(false);
+    expect(existsSync(value.systemctlLog)).toBe(false);
+  });
+
+  it.each([
+    ['publisher replacement', { FAIL_INSTALL_TARGET_SUFFIX: '/usr/local/sbin/runtime-raiders-publish' }, 1],
+    ['sudoers replacement', { FAIL_INSTALL_TARGET_SUFFIX: '/etc/sudoers.d/runtime-raiders-publish' }, 1],
+    ['Caddy replacement', { FAIL_INSTALL_TARGET_SUFFIX: '/etc/caddy/Caddyfile' }, 1],
+    ['publisher validation', { CORRUPT_INSTALL_TARGET_SUFFIX: '/usr/local/sbin/runtime-raiders-publish' }, 1],
+    ['sudoers validation', { FAIL_VISUDO_CALL: '2' }, 1],
+    ['installed Caddy validation', { FAIL_CADDY_VALIDATE_CALL: '2' }, 1],
+    ['reload', { FAIL_RELOAD_CALL: '1' }, 2],
+    ['active service check', { SERVICE_INACTIVE: '1' }, 2],
+    ['primary hostname health', { FAIL_HEALTH_HOST: 'https://raiders.redlattice.com/health' }, 2],
+    ['compatibility hostname health', { FAIL_HEALTH_HOST: 'https://clauderpg.redlattice.com/health' }, 2],
+  ])('rolls back preexisting state after %s failure', (_label, failureEnv, expectedReloads) => {
+    const value = makeBootstrapFixture();
+    const result = runBootstrap(value, failureEnv);
+    expect(result.status).not.toBe(0);
+    expectPriorBootstrapState(value);
+    expect(readFileSync(value.systemctlLog, 'utf8').trim().split('\n').filter((line) => line === 'reload caddy'))
+      .toHaveLength(expectedReloads);
+    expect(result.stdout).not.toContain('bootstrap installed');
+  });
+
+  it('removes newly added publisher files when a later step fails', () => {
+    const value = makeBootstrapFixture({ existingReleaseTools: false });
+    const result = runBootstrap(value, { FAIL_CADDY_VALIDATE_CALL: '2' });
+    expect(result.status).not.toBe(0);
+    expectPriorBootstrapState(value, false);
+    expect(readFileSync(value.systemctlLog, 'utf8')).toContain('reload caddy');
+  });
+
+  it('rejects symlinked parents and targets before replacement', () => {
+    const parent = makeBootstrapFixture();
+    const alternate = temporaryRoot('runtime-raiders-parent-link-');
+    const originalParent = join(parent.target, 'usr/local/sbin');
+    renameSync(originalParent, `${originalParent}.saved`);
+    symlinkSync(alternate, originalParent);
+    const parentResult = runBootstrap(parent);
+    expect(parentResult.status).not.toBe(0);
+    expect(existsSync(join(alternate, 'runtime-raiders-publish'))).toBe(false);
+
+    const target = makeBootstrapFixture();
+    const sentinel = join(target.target, 'target-sentinel');
+    writeFileSync(sentinel, 'sentinel\n', { mode: 0o600 });
+    rmSync(join(target.target, 'usr/local/sbin/runtime-raiders-publish'));
+    symlinkSync(sentinel, join(target.target, 'usr/local/sbin/runtime-raiders-publish'));
+    const targetResult = runBootstrap(target);
+    expect(targetResult.status).not.toBe(0);
+    expect(readFileSync(sentinel, 'utf8')).toBe('sentinel\n');
+  });
+
+  it.each(['publisher', 'sudoers', 'caddy'])('rejects a %s target swap immediately before replacement', (label) => {
+    const value = makeBootstrapFixture();
+    const sentinel = join(value.target, `swap-${label}-sentinel`);
+    writeFileSync(sentinel, 'sentinel\n', { mode: 0o600 });
+    const result = runBootstrap(value, {
+      SWAP_TARGET_LABEL: label,
+      SWAP_SENTINEL: sentinel,
+    });
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(sentinel, 'utf8')).toBe('sentinel\n');
+    expect(result.stdout).not.toContain('bootstrap installed');
+  });
+
+  it('rejects a parent swap immediately before replacement', () => {
+    const value = makeBootstrapFixture();
+    const alternate = temporaryRoot('runtime-raiders-swapped-parent-');
+    const result = runBootstrap(value, {
+      SWAP_PARENT_LABEL: 'publisher',
+      SWAP_PARENT_DEST: alternate,
+    });
+    expect(result.status).not.toBe(0);
+    expect(existsSync(join(alternate, 'runtime-raiders-publish'))).toBe(false);
+    expect(result.stdout).not.toContain('bootstrap installed');
   });
 });

@@ -3,7 +3,7 @@
 # One-time, separately authorized Runtime Raiders beta publication bootstrap.
 # Normal beta publication never invokes this script, installs config, or reloads Caddy.
 set -euo pipefail
-umask 022
+umask 077
 
 usage() {
   echo "usage: $0 runtime-raiders-beta-bootstrap" >&2
@@ -16,7 +16,12 @@ DEST_ROOT=''
 CADDY_TOOL=/usr/bin/caddy
 SYSTEMCTL_TOOL=/usr/bin/systemctl
 VISUDO_TOOL=/usr/sbin/visudo
+CURL_TOOL=/usr/bin/curl
+ID_TOOL=/usr/bin/id
+INSTALL_TOOL=/usr/bin/install
+BEFORE_REPLACE_HOOK=''
 TEST_MODE=0
+EXPECTED_OWNER=0
 
 invalid_test_configuration() {
   echo "Caddy bootstrap test configuration is invalid" >&2
@@ -39,88 +44,224 @@ if [ -n "${RUNTIME_RAIDERS_CADDY_TEST_MODE:-}" ]; then
   CADDY_TOOL="${RUNTIME_RAIDERS_CADDY_TEST_CADDY:-}"
   SYSTEMCTL_TOOL="${RUNTIME_RAIDERS_CADDY_TEST_SYSTEMCTL:-}"
   VISUDO_TOOL="${RUNTIME_RAIDERS_CADDY_TEST_VISUDO:-}"
+  CURL_TOOL="${RUNTIME_RAIDERS_CADDY_TEST_CURL:-}"
+  ID_TOOL="${RUNTIME_RAIDERS_CADDY_TEST_ID:-}"
+  INSTALL_TOOL="${RUNTIME_RAIDERS_CADDY_TEST_INSTALL:-}"
+  BEFORE_REPLACE_HOOK="${RUNTIME_RAIDERS_CADDY_TEST_BEFORE_REPLACE:-}"
   case "$DEST_ROOT" in /*) ;; *) invalid_test_configuration ;; esac
-  [ -d "$DEST_ROOT" ] && [ ! -L "$DEST_ROOT" ] || invalid_test_configuration
-  for tool in "$CADDY_TOOL" "$SYSTEMCTL_TOOL" "$VISUDO_TOOL"; do validate_test_tool "$tool"; done
+  [ -d "$DEST_ROOT" ] && [ ! -L "$DEST_ROOT" ] &&
+    [ "$(cd "$DEST_ROOT" && pwd -P)" = "$DEST_ROOT" ] || invalid_test_configuration
+  EXPECTED_OWNER="$(/usr/bin/id -u)"
+  for tool in "$CADDY_TOOL" "$SYSTEMCTL_TOOL" "$VISUDO_TOOL" "$CURL_TOOL" "$ID_TOOL" "$INSTALL_TOOL"; do
+    validate_test_tool "$tool"
+  done
+  [ -z "$BEFORE_REPLACE_HOOK" ] || validate_test_tool "$BEFORE_REPLACE_HOOK"
 else
-  for injected_name in RUNTIME_RAIDERS_CADDY_TEST_ROOT RUNTIME_RAIDERS_CADDY_TEST_CADDY \
-    RUNTIME_RAIDERS_CADDY_TEST_SYSTEMCTL RUNTIME_RAIDERS_CADDY_TEST_VISUDO; do
+  for injected_name in \
+    RUNTIME_RAIDERS_CADDY_TEST_ROOT RUNTIME_RAIDERS_CADDY_TEST_CADDY \
+    RUNTIME_RAIDERS_CADDY_TEST_SYSTEMCTL RUNTIME_RAIDERS_CADDY_TEST_VISUDO \
+    RUNTIME_RAIDERS_CADDY_TEST_CURL RUNTIME_RAIDERS_CADDY_TEST_ID \
+    RUNTIME_RAIDERS_CADDY_TEST_INSTALL RUNTIME_RAIDERS_CADDY_TEST_BEFORE_REPLACE; do
     [ -z "${!injected_name:-}" ] || invalid_test_configuration
   done
 fi
 
+RELEASE_USER="${RUNTIME_RAIDERS_RELEASE_USER:-rluser}"
+[[ "$RELEASE_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || {
+  echo "RUNTIME_RAIDERS_RELEASE_USER is invalid" >&2
+  exit 64
+}
+"$ID_TOOL" -u "$RELEASE_USER" >/dev/null 2>&1 || {
+  echo "Runtime Raiders release user does not exist: $RELEASE_USER" >&2
+  exit 67
+}
+
 target() { printf '%s%s\n' "$DEST_ROOT" "$1"; }
 as_root() {
-  if [ "$TEST_MODE" = 1 ]; then "$@"; else /usr/bin/sudo "$@"; fi
+  if [ "$TEST_MODE" = 1 ]; then "$@"; else /usr/bin/sudo -n "$@"; fi
 }
-install_owned() {
-  if [ "$TEST_MODE" = 1 ]; then
-    as_root /usr/bin/install "$@"
-  else
-    as_root /usr/bin/install -o root -g root "$@"
+file_uid() { /usr/bin/stat -c '%u' "$1" 2>/dev/null || /usr/bin/stat -f '%u' "$1"; }
+file_links() { /usr/bin/stat -c '%h' "$1" 2>/dev/null || /usr/bin/stat -f '%l' "$1"; }
+file_mode() { /usr/bin/stat -c '%a' "$1" 2>/dev/null || /usr/bin/stat -f '%Lp' "$1"; }
+
+CADDY_PARENT="$(target /etc/caddy)"
+PUBLISHER_PARENT="$(target /usr/local/sbin)"
+SUDOERS_PARENT="$(target /etc/sudoers.d)"
+VAR_LIB_PARENT="$(target /var/lib)"
+CADDY_TARGET="$CADDY_PARENT/Caddyfile"
+CADDY_ENV="$CADDY_PARENT/cloudflare.env"
+PUBLISHER_TARGET="$PUBLISHER_PARENT/runtime-raiders-publish"
+SUDOERS_TARGET="$SUDOERS_PARENT/runtime-raiders-publish"
+RUNTIME_ROOT="$(target /var/lib/runtime-raiders)"
+PUBLIC_ROOT="$RUNTIME_ROOT/public"
+STAGING_ROOT="$RUNTIME_ROOT/staging"
+
+safe_parent() {
+  local directory="$1" resolved mode
+  [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
+  resolved="$(cd "$directory" && pwd -P)" || return 1
+  [ "$resolved" = "$directory" ] && [ "$(file_uid "$directory")" = "$EXPECTED_OWNER" ] || return 1
+  mode="$(file_mode "$directory")"
+  (( (8#$mode & 8#022) == 0 ))
+}
+safe_target() {
+  local path="$1" required="${2:-0}" mode
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then [ "$required" = 0 ]; return; fi
+  [ -f "$path" ] && [ ! -L "$path" ] && [ "$(file_uid "$path")" = "$EXPECTED_OWNER" ] &&
+    [ "$(file_links "$path")" = 1 ] || return 1
+  mode="$(file_mode "$path")"
+  (( (8#$mode & 8#022) == 0 ))
+}
+check_boundary() {
+  safe_parent "${1%/*}" && safe_target "$1" "${2:-0}"
+}
+
+for directory in "$CADDY_PARENT" "$PUBLISHER_PARENT" "$SUDOERS_PARENT" "$VAR_LIB_PARENT"; do
+  safe_parent "$directory" || { echo "unsafe bootstrap parent: $directory" >&2; exit 1; }
+done
+check_boundary "$CADDY_TARGET" 1 || { echo "existing Caddy target is unsafe or missing" >&2; exit 1; }
+check_boundary "$CADDY_ENV" 1 || { echo "existing Caddy environment is unsafe or missing" >&2; exit 1; }
+check_boundary "$PUBLISHER_TARGET" 0 || { echo "existing publisher target is unsafe" >&2; exit 1; }
+check_boundary "$SUDOERS_TARGET" 0 || { echo "existing sudoers target is unsafe" >&2; exit 1; }
+
+[ -x "$CADDY_TOOL" ] && "$CADDY_TOOL" list-modules 2>/dev/null | /usr/bin/grep -q dns.providers.cloudflare || {
+  echo "Caddy with the Cloudflare DNS module must already be installed" >&2
+  exit 69
+}
+
+WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/runtime-raiders-caddy-bootstrap.XXXXXX")"
+BACKUP="$WORK/backup"
+/bin/mkdir -m 0700 "$BACKUP"
+CANDIDATE_PUBLISHER="$WORK/runtime-raiders-publish"
+CANDIDATE_SUDOERS="$WORK/runtime-raiders-publish.sudoers"
+CANDIDATE_CADDY="$WORK/Caddyfile"
+/bin/cp "$REPO_DIR/scripts/pi/publish-runtime-raiders-beta.sh" "$CANDIDATE_PUBLISHER"
+/bin/chmod 0755 "$CANDIDATE_PUBLISHER"
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/runtime-raiders-publish /var/lib/runtime-raiders/staging/release-*\n' \
+  "$RELEASE_USER" > "$CANDIDATE_SUDOERS"
+/bin/chmod 0440 "$CANDIDATE_SUDOERS"
+/bin/cp "$REPO_DIR/deploy/Caddyfile" "$CANDIDATE_CADDY"
+/bin/chmod 0644 "$CANDIDATE_CADDY"
+
+/bin/bash -n "$CANDIDATE_PUBLISHER"
+"$VISUDO_TOOL" -cf "$CANDIDATE_SUDOERS"
+"$CADDY_TOOL" validate --config "$CANDIDATE_CADDY"
+
+PUBLISHER_EXISTED=0
+SUDOERS_EXISTED=0
+CADDY_EXISTED=1
+backup_target() {
+  local label="$1" path="$2"
+  if [ -e "$path" ]; then
+    as_root /bin/cp -p "$path" "$BACKUP/$label"
+    case "$label" in publisher) PUBLISHER_EXISTED=1 ;; sudoers) SUDOERS_EXISTED=1 ;; esac
   fi
 }
 
-if [ ! -x "$CADDY_TOOL" ] || ! "$CADDY_TOOL" list-modules 2>/dev/null | /usr/bin/grep -q dns.providers.cloudflare; then
-  [ "$TEST_MODE" = 0 ] || invalid_test_configuration
-  echo "Downloading Caddy (linux/arm64 + Cloudflare DNS plugin)..."
-  candidate="$(/usr/bin/mktemp)"
-  cleanup() { /bin/rm -f -- "$candidate"; }
-  trap cleanup EXIT HUP INT TERM
-  /usr/bin/curl -fsSL -o "$candidate" "https://caddyserver.com/api/download?os=linux&arch=arm64&p=github.com/caddy-dns/cloudflare"
-  install_owned -m 0755 "$candidate" /usr/bin/caddy
-  CADDY_TOOL=/usr/bin/caddy
-  cleanup
+TRANSACTION_ACTIVE=0
+CREATED_RUNTIME_ROOT=0
+CREATED_PUBLIC_ROOT=0
+CREATED_STAGING_ROOT=0
+rollback_target() {
+  local label="$1" path="$2" existed="$3"
+  safe_parent "${path%/*}" || return 1
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    [ ! -d "$path" ] || return 1
+    as_root /bin/rm -f -- "$path"
+  fi
+  if [ "$existed" = 1 ]; then
+    as_root /bin/cp -p "$BACKUP/$label" "$path"
+    /usr/bin/cmp -s "$BACKUP/$label" "$path" || return 1
+  fi
+}
+rollback() {
+  local rollback_status=0
+  rollback_target caddy "$CADDY_TARGET" "$CADDY_EXISTED" || rollback_status=1
+  rollback_target sudoers "$SUDOERS_TARGET" "$SUDOERS_EXISTED" || rollback_status=1
+  rollback_target publisher "$PUBLISHER_TARGET" "$PUBLISHER_EXISTED" || rollback_status=1
+  if [ -f "$CADDY_TARGET" ] && [ ! -L "$CADDY_TARGET" ]; then
+    "$CADDY_TOOL" validate --config "$CADDY_TARGET" || rollback_status=1
+    as_root "$SYSTEMCTL_TOOL" reload caddy || rollback_status=1
+  else
+    rollback_status=1
+  fi
+  [ "$CREATED_STAGING_ROOT" = 0 ] || as_root /bin/rmdir "$STAGING_ROOT" 2>/dev/null || rollback_status=1
+  [ "$CREATED_PUBLIC_ROOT" = 0 ] || as_root /bin/rmdir "$PUBLIC_ROOT" 2>/dev/null || rollback_status=1
+  [ "$CREATED_RUNTIME_ROOT" = 0 ] || as_root /bin/rmdir "$RUNTIME_ROOT" 2>/dev/null || rollback_status=1
+  return "$rollback_status"
+}
+cleanup() {
+  local status=$?
   trap - EXIT HUP INT TERM
-fi
-"$CADDY_TOOL" list-modules | /usr/bin/grep -q dns.providers.cloudflare || {
-  echo "Caddy Cloudflare DNS module is missing" >&2
-  exit 1
+  if [ "$TRANSACTION_ACTIVE" = 1 ]; then rollback || status=1; fi
+  as_root /bin/rm -rf -- "$WORK" || status=1
+  exit "$status"
 }
-"$CADDY_TOOL" validate --config "$REPO_DIR/deploy/Caddyfile"
-/bin/bash -n "$REPO_DIR/scripts/pi/publish-runtime-raiders-beta.sh"
-"$VISUDO_TOOL" -cf "$REPO_DIR/deploy/runtime-raiders-publish.sudoers"
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-if [ "$TEST_MODE" = 0 ]; then
-  as_root /usr/sbin/useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
-  as_root /usr/bin/install -d -m 0755 -o caddy -g caddy /var/lib/caddy
-fi
-install_owned -d -m 0755 "$(target /etc/caddy)" "$(target /etc/systemd/system)"
-install_owned -d -m 0755 "$(target /var/lib/runtime-raiders)" "$(target /var/lib/runtime-raiders/public)"
-install_owned -d -m 0700 "$(target /var/lib/runtime-raiders/staging)"
-install_owned -d -m 0755 "$(target /usr/local/sbin)" "$(target /etc/sudoers.d)"
+if [ "$TEST_MODE" = 0 ]; then /usr/bin/sudo -v; fi
+backup_target publisher "$PUBLISHER_TARGET"
+backup_target sudoers "$SUDOERS_TARGET"
+backup_target caddy "$CADDY_TARGET"
+TRANSACTION_ACTIVE=1
 
-install_owned -m 0755 \
-  "$REPO_DIR/scripts/pi/publish-runtime-raiders-beta.sh" \
-  "$(target /usr/local/sbin/runtime-raiders-publish)"
-/bin/bash -n "$(target /usr/local/sbin/runtime-raiders-publish)"
-/usr/bin/cmp -s "$REPO_DIR/scripts/pi/publish-runtime-raiders-beta.sh" \
-  "$(target /usr/local/sbin/runtime-raiders-publish)" || {
-  echo "installed Runtime Raiders publisher does not match reviewed source" >&2
-  exit 1
+ensure_runtime_directory() {
+  local directory="$1" mode="$2" created_variable="$3" actual_mode
+  if [ -e "$directory" ] || [ -L "$directory" ]; then
+    safe_parent "$directory" || return 1
+    actual_mode="$(file_mode "$directory")"
+    (( 8#$actual_mode == 8#$mode )) || return 1
+  else
+    safe_parent "${directory%/*}" || return 1
+    if [ "$TEST_MODE" = 1 ]; then
+      as_root "$INSTALL_TOOL" -d -m "$mode" "$directory"
+    else
+      as_root "$INSTALL_TOOL" -d -m "$mode" -o root -g root "$directory"
+    fi
+    printf -v "$created_variable" '%s' 1
+    safe_parent "$directory" || return 1
+    actual_mode="$(file_mode "$directory")"
+    (( 8#$actual_mode == 8#$mode ))
+  fi
 }
-install_owned -m 0440 \
-  "$REPO_DIR/deploy/runtime-raiders-publish.sudoers" \
-  "$(target /etc/sudoers.d/runtime-raiders-publish)"
-as_root "$VISUDO_TOOL" -cf "$(target /etc/sudoers.d/runtime-raiders-publish)"
-if [ "$TEST_MODE" = 0 ]; then
-  [ "$(/usr/bin/stat -c '%U:%G:%a' /usr/local/sbin/runtime-raiders-publish)" = root:root:755 ] &&
-    [ "$(/usr/bin/stat -c '%U:%G:%a' /etc/sudoers.d/runtime-raiders-publish)" = root:root:440 ] || {
-    echo "installed publisher or sudo rule ownership is invalid" >&2
+ensure_runtime_directory "$RUNTIME_ROOT" 0755 CREATED_RUNTIME_ROOT
+ensure_runtime_directory "$PUBLIC_ROOT" 0755 CREATED_PUBLIC_ROOT
+ensure_runtime_directory "$STAGING_ROOT" 0700 CREATED_STAGING_ROOT
+
+replace_target() {
+  local label="$1" candidate="$2" destination="$3" mode="$4" required="$5"
+  check_boundary "$destination" "$required" || { echo "unsafe target before replacement: $label" >&2; return 1; }
+  [ -z "$BEFORE_REPLACE_HOOK" ] || "$BEFORE_REPLACE_HOOK" "$label" "$destination"
+  check_boundary "$destination" "$required" || { echo "unsafe target at replacement: $label" >&2; return 1; }
+  if [ "$TEST_MODE" = 1 ]; then
+    as_root "$INSTALL_TOOL" -m "$mode" "$candidate" "$destination"
+  else
+    as_root "$INSTALL_TOOL" -o root -g root -m "$mode" "$candidate" "$destination"
+  fi
+  check_boundary "$destination" 1 && /usr/bin/cmp -s "$candidate" "$destination"
+}
+
+replace_target publisher "$CANDIDATE_PUBLISHER" "$PUBLISHER_TARGET" 0755 0
+/bin/bash -n "$PUBLISHER_TARGET"
+replace_target sudoers "$CANDIDATE_SUDOERS" "$SUDOERS_TARGET" 0440 0
+as_root "$VISUDO_TOOL" -cf "$SUDOERS_TARGET"
+replace_target caddy "$CANDIDATE_CADDY" "$CADDY_TARGET" 0644 1
+"$CADDY_TOOL" validate --config "$CADDY_TARGET"
+as_root "$SYSTEMCTL_TOOL" reload caddy
+as_root "$SYSTEMCTL_TOOL" is-active --quiet caddy
+
+for hostname in raiders.redlattice.com clauderpg.redlattice.com; do
+  HEALTH_RESULT="$WORK/health-$hostname"
+  "$CURL_TOOL" -fsS "https://$hostname/health" > "$HEALTH_RESULT"
+  /usr/bin/cmp -s "$HEALTH_RESULT" <(printf '{"ok":true}\n') || {
+    echo "Caddy bootstrap health check failed: $hostname" >&2
     exit 1
   }
-fi
+done
 
-install_owned -m 0644 "$REPO_DIR/deploy/Caddyfile" "$(target /etc/caddy/Caddyfile)"
-install_owned -m 0644 "$REPO_DIR/deploy/caddy.service" "$(target /etc/systemd/system/caddy.service)"
-if [ ! -f "$(target /etc/caddy/cloudflare.env)" ]; then
-  install_owned -m 0600 \
-    "$REPO_DIR/deploy/cloudflare.env.example" "$(target /etc/caddy/cloudflare.env)"
-fi
-
-"$CADDY_TOOL" validate --config "$(target /etc/caddy/Caddyfile)"
-as_root "$SYSTEMCTL_TOOL" daemon-reload
-as_root "$SYSTEMCTL_TOOL" reload caddy
-
-echo "Runtime Raiders beta Caddy bootstrap installed and reloaded."
+TRANSACTION_ACTIVE=0
+echo "Runtime Raiders beta Caddy bootstrap installed and verified."
 echo "Normal releases now use the fixed root-owned publisher without reloading Caddy."

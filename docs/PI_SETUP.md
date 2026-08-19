@@ -58,9 +58,13 @@ The only active companion installation and publication procedure is
 Fresh Pi setup does not authorize publication or employee collection. The
 operator runs the documented local `prepare` mode first and uses `publish` only
 after separate approval. Before the first beta publication, the separately
-authorized one-time Caddy bootstrap in that runbook must install the fixed
-root-owned publisher and narrow `sudo -n` rule. Repeat publication never reloads
-Caddy. Publishing does not run `raiders on` for anyone.
+authorized one-time Caddy bootstrap in that runbook transactionally installs
+the fixed root-owned publisher and narrow user-specific `sudo -n` rule, reloads
+Caddy, and checks both public health hostnames. The release account defaults to
+`rluser`; use the same `RUNTIME_RAIDERS_RELEASE_USER` setting for bootstrap and
+every release command if another existing POSIX account is selected. A failed
+bootstrap restores the prior files and Caddy configuration. Repeat publication
+never reloads Caddy. Publishing does not run `raiders on` for anyone.
 
 ### Historical release notes retained until cleanup
 
