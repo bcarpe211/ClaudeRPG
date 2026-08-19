@@ -499,15 +499,14 @@ not commit the internal IP.
       selection, canary, manifest, checksum, or multi-generation machinery; and
       is not a blocker for the employee beta.
 
-## 29. Next-release zsh-compatible onboarding and pasted-command audit — HARD BLOCKER
+## 29. Next-release zsh-compatible onboarding and pasted-command audit ✅ DONE (2026-08-19)
 
-The accepted sequence-10 release at
-`c04214c6ead5d6bcffc06ab6bbbbf4af407360ae` and its quartet remain frozen; do
-not modify or rebuild them for this repair. Sequence 10 may still be published
-solely for an installed-off canary migration. This repair is mandatory before
-routine fresh onboarding or office activation.
+The earlier onboarding command used a zsh read-only variable and could fail when
+employees pasted it into their normal terminal. Runtime Raiders `0.4.0` replaces
+that variable, exercises the complete command under both zsh and POSIX sh, and
+has completed a clean public installed-off canary.
 
-Original confirmed defect:
+Original defect:
 
 - zsh defines `status` as a read-only special parameter;
 - `src/web/companion-install.ts` assigned the generated command's HTTP result
@@ -517,11 +516,7 @@ Original confirmed defect:
 - `tests/runtime-raiders-onboarding.test.ts` executed the complete generated
   command only with `/bin/sh`.
 
-Implementation is complete in the sequence-12 source boundary. Release and
-independent verification remain pending, so fresh onboarding and office
-activation are still blocked.
-
-Next-release requirements:
+Completed requirements:
 
 - [x] Rename only the user-facing command variable to a portable, specific name
       such as `download_http_code`. Do not require users to invoke Bash to run
@@ -551,7 +546,26 @@ Acceptance gate:
       fail-closed matrix under clean zsh and POSIX sh processes.
 - [x] Website, route, runbook, and documentation drift tests agree on one
       canonical onboarding behavior.
-- [ ] No fresh-player onboarding or office activation occurs until the repair
-      is merged, released, and independently verified. Installed-off canary
-      migration remains a separate allowed boundary and does not waive this
-      blocker.
+- [x] Released and independently verified in Runtime Raiders `0.4.0`; the exact
+      public `curl -fsSL https://raiders.redlattice.com/install.sh | sh`
+      employee command completed a clean installed-off canary on 2026-08-19.
+
+## 30. Runtime Raiders background-item name and icon — EMPLOYEE-ROLLOUT BLOCKER
+
+The signed `0.4.0` canary is functionally correct, but its app bundle currently
+appears as **Runtime Raiders Agent** and has no bundled icon. Before the wider
+employee rollout, make the user-facing background item consistently appear as
+**Runtime Raiders** while retaining `com.redlattice.runtime-raiders-agent` as
+the internal LaunchAgent label. The Apple signer-derived Developer Name may
+remain **Bryan Carpenter**; that identity is separate from the service name.
+
+- [ ] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
+      remove the retired `Runtime Raiders Launcher` / `Runtime Raiders Agent`
+      wording from visible system UI.
+- [ ] Ship one approved Runtime Raiders `.icns` resource and bind it through the
+      app bundle metadata.
+- [ ] After a clean signed install, verify the actual Background Items entry in
+      System Settings and the corresponding `sfltool dumpbtm` record show the
+      intended name, icon, and developer identity.
+- [ ] Keep this branding-only work independent from enrollment, collection,
+      telemetry, update checking, and publication behavior.
