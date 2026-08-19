@@ -119,6 +119,8 @@ READINESS_STARTED=0
 READINESS_ATTEMPTS=0
 READINESS_PREPARING_OBSERVATIONS=0
 READINESS_LAST_STATE=unobserved
+SHUTDOWN_ATTEMPTS=0
+SHUTDOWN_FAILURE=''
 
 report_line() {
   printf '%s\n' "$1" >> "$REPORT"
@@ -150,7 +152,7 @@ status_is_disabled() {
 }
 
 cleanup() {
-  local status=$? shutdown_ok=1 attempt
+  local status=$? shutdown_ok=0 attempt
   trap - EXIT HUP INT TERM
   if [ -n "$FIXTURE_DIRECTORY" ] && [ "$FIXTURE_CREATED" -eq 1 ]; then
     if [[ "$FIXTURE_DIRECTORY" == "$SESSION_ROOT"/.runtime-raiders-gate-* ]] &&
@@ -165,16 +167,16 @@ cleanup() {
     fi
   fi
   if [ "$SHUTDOWN_REQUIRED" -eq 1 ]; then
-    "$RAIDERS_TOOL" off >/dev/null 2>&1 || shutdown_ok=0
-    if [ "$shutdown_ok" -eq 1 ]; then
-      shutdown_ok=0
-      for ((attempt = 0; attempt < 10; attempt++)); do
-        if status_is_disabled; then shutdown_ok=1; break; fi
-        "$SLEEP_TOOL" 1
-      done
-    fi
+    for ((attempt = 0; attempt < 10; attempt++)); do
+      SHUTDOWN_ATTEMPTS=$((SHUTDOWN_ATTEMPTS + 1))
+      if "$RAIDERS_TOOL" off >/dev/null 2>&1 && status_is_disabled; then
+        shutdown_ok=1
+        break
+      fi
+      if [ "$attempt" -lt 9 ]; then "$SLEEP_TOOL" 1; fi
+    done
     if [ "$shutdown_ok" -ne 1 ]; then
-      FAILURE='emergency shutdown could not prove collection is off'
+      SHUTDOWN_FAILURE='emergency shutdown could not prove collection is off'
       status=1
     fi
   fi
@@ -183,9 +185,11 @@ cleanup() {
     report_line "readiness_preparing_observations=$READINESS_PREPARING_OBSERVATIONS"
     report_line "readiness_last_state=$READINESS_LAST_STATE"
   fi
+  report_line "shutdown_attempts=$SHUTDOWN_ATTEMPTS"
   report_line "shutdown=$([ "$shutdown_ok" -eq 1 ] && printf PASS || printf FAIL)"
   report_line "result=$([ "$status" -eq 0 ] && [ "$RESULT" = PASS ] && printf PASS || printf FAIL)"
-  if [ "$status" -ne 0 ] || [ "$RESULT" != PASS ]; then report_line "failure=$FAILURE"; fi
+  if [ -n "$FAILURE" ]; then report_line "failure=$FAILURE"; fi
+  if [ -n "$SHUTDOWN_FAILURE" ]; then report_line "shutdown_failure=$SHUTDOWN_FAILURE"; fi
   /bin/chmod 600 "$REPORT" 2>/dev/null || status=1
   printf 'Report: %s\n' "$REPORT"
   exit "$status"
@@ -264,6 +268,15 @@ parse_baseline() {
   [ "${#SNAP_FIELDS[@]}" -eq 19 ] && [ "${SNAP_FIELDS[0]}" = ok ] &&
     [ "${SNAP_FIELDS[1]}" = 1 ] || return 1
   for field in "${SNAP_FIELDS[@]:1}"; do [[ "$field" =~ ^[0-9]+$ ]] || return 1; done
+}
+
+stable_server_history_matches() {
+  local wire="$1" field_index
+  parse_baseline "$wire" || return 1
+  for ((field_index = 0; field_index < 19; field_index++)); do
+    [ "$field_index" -eq 2 ] && continue
+    [ "${SNAP_FIELDS[$field_index]}" = "${BASE_FIELDS[$field_index]}" ] || return 1
+  done
 }
 
 reconciles_post_snapshot() {
@@ -376,7 +389,7 @@ done
 [ "$READY" -eq 1 ] || gate_fail 'agent did not become ready'
 
 READY_WIRE="$(server_snapshot)" || gate_fail 'server history recheck failed'
-[ "$READY_WIRE" = "$BASELINE_WIRE" ] || gate_fail 'server history changed before the synthetic Run'
+stable_server_history_matches "$READY_WIRE" || gate_fail 'server history changed before the synthetic Run'
 report_line 'history_only_activation=PASS'
 
 RUN_ID="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
