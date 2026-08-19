@@ -778,7 +778,7 @@ describe('Runtime Raiders Gate 2 installer binding', () => {
       const variants = [
         ['comment', `${readFileSync(expected, 'utf8')}# reviewed?\n`],
         ['dead-code', `${readFileSync(expected, 'utf8')}\nif false; then /tmp/untrusted; fi\n`],
-        ['substitution', readFileSync(expected, 'utf8').replace('curl --silent', '/tmp/untrusted --silent')],
+        ['substitution', readFileSync(expected, 'utf8').replace('/usr/bin/curl --fail', '/tmp/untrusted --fail')],
       ] as const;
       for (const [name, contents] of variants) {
         const actual = join(fixture, `${name}.sh`);

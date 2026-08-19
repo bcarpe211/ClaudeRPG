@@ -175,8 +175,8 @@ the trusted game server's fixed update-manifest URL—no query,
 cookies, token, device/player/provider/usage data, redirects, or additional
 provider telemetry. Local update state and the privacy record hold aggregate
 status/timestamps and validated public release fields only. `raiders status`
-shows availability and the exact `raiders update` instruction; model and effort
-are display-only metadata, while Raid Power is the score.
+shows installed and available versions; model and effort are display-only
+metadata, while Raid Power is the score.
 
 ## Routine office installation after every prior gate passes
 
@@ -186,7 +186,7 @@ one-line fixed-origin command:
 
 <!-- runtime-raiders-canonical-install-command:start -->
 ```sh
-(umask 077; installer="$(/usr/bin/mktemp)" || exit 1; cleanup() { /bin/rm -f "$installer"; }; trap cleanup EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; download_http_code="$('/usr/bin/curl' --fail --silent --show-error --proto '=https' --proto-redir '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 --max-filesize 8388608 --output "$installer" --write-out '%{http_code}' 'https://raiders.redlattice.com/install.sh' )" && [ "$download_http_code" = 200 ] && test -f "$installer" && test ! -L "$installer" && [ "$(/usr/bin/stat -f '%u' "$installer")" = "$(/usr/bin/id -u)" ] && [ "$(/usr/bin/stat -f '%Lp' "$installer")" = 600 ] && [ "$(/usr/bin/stat -f '%l' "$installer")" = 1 ] && test -s "$installer" && bytes="$(/usr/bin/wc -c < "$installer" | /usr/bin/tr -d ' ')" && [ "$bytes" -le 8388608 ] && /bin/sh -n "$installer" && /bin/sh "$installer")
+curl -fsSL https://raiders.redlattice.com/install.sh | sh
 ```
 <!-- runtime-raiders-canonical-install-command:end -->
 

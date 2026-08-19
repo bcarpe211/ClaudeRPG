@@ -223,7 +223,7 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     }
   });
 
-  it('uses the canonical safe downloader for routine and verified canary installation', () => {
+  it('uses the canonical employee command for routine install and the safe downloader for verified canary installation', () => {
     for (const document of [runbook, operations]) {
       expect(document).not.toMatch(/--code(?:\s|=)/);
       expect(document).toContain('--code-file "$CANARY_CODE_FILE"');
@@ -232,7 +232,6 @@ describe('Runtime Raiders artifact-publication documentation', () => {
     expect(operations).toMatch(/routine office installation[\s\S]*one-line/i);
     const routine = operations.slice(operations.indexOf('## Routine office installation'));
     expect(routine).toContain(buildCompanionInstallCommand());
-    expect(routine).not.toMatch(/curl[^\n]*\|\s*(?:sh|\/bin\/sh)/);
     const installedOff = operations.slice(
       operations.indexOf('## Install the sequence-2 canary'),
       operations.indexOf('## Routine office installation'),

@@ -236,28 +236,18 @@ validate_source() {
       "$SOURCE_INSTALLER" > "$normalized_installer" 2>/dev/null; then
     die 'installer could not be normalized'
   fi
-  local artifact_url_count
-  local artifact_assignment_count
-  local checksum_url_count
-  local checksum_assignment_count
-  artifact_url_count=$(grep -Fxc -- \
-    "ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'" \
+  local archive_url_count
+  local archive_assignment_count
+  archive_url_count=$(grep -Fxc -- \
+    "ARCHIVE_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'" \
     "$normalized_installer" 2>/dev/null || true)
-  artifact_assignment_count=$(grep -Ec -- \
-    '(^|[^[:alnum:]_])ARTIFACT_URL(\[[^]]*\]|\+)?[[:space:]]*=' \
+  archive_assignment_count=$(grep -Ec -- \
+    '(^|[^[:alnum:]_])ARCHIVE_URL(\[[^]]*\]|\+)?[[:space:]]*=' \
     "$normalized_installer" 2>/dev/null || true)
-  checksum_url_count=$(grep -Fxc -- \
-    "CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'" \
-    "$normalized_installer" 2>/dev/null || true)
-  checksum_assignment_count=$(grep -Ec -- \
-    '(^|[^[:alnum:]_])CHECKSUM_URL(\[[^]]*\]|\+)?[[:space:]]*=' \
-    "$normalized_installer" 2>/dev/null || true)
-  test "$artifact_url_count" = 1 || die 'installer artifact URL is invalid'
-  test "$artifact_assignment_count" = 1 || die 'installer artifact URL is invalid'
-  test "$checksum_url_count" = 1 || die 'installer checksum URL is invalid'
-  test "$checksum_assignment_count" = 1 || die 'installer checksum URL is invalid'
-  if grep -Fq -- '__RUNTIME_RAIDERS_TEAM_ID__' "$SOURCE_INSTALLER" 2>/dev/null; then
-    die 'installer Team ID is not rendered'
+  test "$archive_url_count" = 1 || die 'installer archive URL is invalid'
+  test "$archive_assignment_count" = 1 || die 'installer archive URL is invalid'
+  if grep -Fq -- '__RUNTIME_RAIDERS_' "$SOURCE_INSTALLER" 2>/dev/null; then
+    die 'installer release facts are not rendered'
   fi
   rm -f -- "$normalized_installer"
 

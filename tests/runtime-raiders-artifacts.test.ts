@@ -72,8 +72,7 @@ function sourceTriplet(
   const updateManifest = join(source, 'runtime-raiders-agent.update.json');
   writeFileSync(installer, [
     '#!/bin/sh',
-    "ARTIFACT_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'",
-    "CHECKSUM_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip.sha256'",
+    "ARCHIVE_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'",
     "TEAM_ID='ABCDE12345'",
     '',
   ].join('\n'));
@@ -782,38 +781,29 @@ describe('Runtime Raiders artifact publication', () => {
       writeFileSync(f.files.installer, readFileSync(f.files.installer, 'utf8')
         .replace('raiders.redlattice.com', 'example.invalid'));
     }],
-    ['second artifact URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "ARTIFACT_URL='https://example.invalid/agent.zip'\n");
+    ['second archive URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARCHIVE_URL='https://example.invalid/agent.zip'\n");
     }],
-    ['second checksum URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "CHECKSUM_URL='https://example.invalid/agent.zip.sha256'\n");
+    ['indented archive URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, " ARCHIVE_URL='https://example.invalid/agent.zip'\n");
     }],
-    ['indented artifact URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, " ARTIFACT_URL='https://example.invalid/agent.zip'\n");
+    ['exported archive URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "export ARCHIVE_URL='https://example.invalid/agent.zip'\n");
     }],
-    ['exported artifact URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "export ARTIFACT_URL='https://example.invalid/agent.zip'\n");
+    ['compound archive URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "true; ARCHIVE_URL='https://example.invalid/agent.zip'\n");
     }],
-    ['compound artifact URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "true; ARTIFACT_URL='https://example.invalid/agent.zip'\n");
+    ['appended archive URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARCHIVE_URL+='/unexpected'\n");
     }],
-    ['exported checksum URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "export CHECKSUM_URL='https://example.invalid/agent.zip.sha256'\n");
+    ['continued archive URL assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARCHIVE_URL\\\n='https://example.invalid/agent.zip'\n");
     }],
-    ['appended artifact URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "ARTIFACT_URL+='/unexpected'\n");
+    ['continued archive URL identifier assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARCHIVE_\\\nURL='https://example.invalid/agent.zip'\n");
     }],
-    ['appended checksum URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "CHECKSUM_URL+='/unexpected'\n");
-    }],
-    ['continued artifact URL assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "ARTIFACT_URL\\\n='https://example.invalid/agent.zip'\n");
-    }],
-    ['continued artifact URL identifier assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "ARTIFACT_\\\nURL='https://example.invalid/agent.zip'\n");
-    }],
-    ['artifact URL array-element assignment', (f: PublicationFixture) => {
-      appendFileSync(f.files.installer, "ARTIFACT_URL[0]='https://example.invalid/agent.zip'\n");
+    ['archive URL array-element assignment', (f: PublicationFixture) => {
+      appendFileSync(f.files.installer, "ARCHIVE_URL[0]='https://example.invalid/agent.zip'\n");
     }],
     ['malformed checksum filename', (f: PublicationFixture) => {
       writeFileSync(f.files.checksum, `${sha256(f.files.zip)}  other.zip\n`);
@@ -1653,7 +1643,8 @@ describe('Runtime Raiders artifact publication', () => {
   it('publishes the rendered production installer with legitimate runtime URL references', () => {
     const f = publicationFixture();
     const renderedInstaller = readFileSync(INSTALLER_TEMPLATE, 'utf8')
-      .replaceAll('__RUNTIME_RAIDERS_TEAM_ID__', 'ABCDE12345');
+      .replaceAll('__RUNTIME_RAIDERS_TEAM_ID__', 'ABCDE12345')
+      .replaceAll('__RUNTIME_RAIDERS_COMPANION_VERSION__', companionVersion);
     writeFileSync(f.files.installer, renderedInstaller);
 
     const published = runPublish(f);
