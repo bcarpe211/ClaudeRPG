@@ -109,44 +109,127 @@ esac
 /bin/mkdir -p "$STATE" "$OUTBOX" "$LAUNCH_AGENTS" "$COMMAND_DIRECTORY"
 [ -e "$SUPPORT" ] || exit 1
 
-validate_enrollment() {
-  [ -f "$ENROLLMENT" ] && [ ! -L "$ENROLLMENT" ] &&
-    [ "$(/usr/bin/stat -f %u "$ENROLLMENT")" = "$OWNER" ] &&
-    [ "$(/usr/bin/stat -f %Lp "$ENROLLMENT")" = 600 ] || return 1
-  enrollment_version="$(/usr/bin/plutil -extract version raw -o - "$ENROLLMENT")" &&
-    enrollment_device_id="$(/usr/bin/plutil -extract device_id raw -o - "$ENROLLMENT")" &&
-    enrollment_token="$(/usr/bin/plutil -extract device_token raw -o - "$ENROLLMENT")" &&
-    enrollment_secret="$(/usr/bin/plutil -extract dedupe_secret raw -o - "$ENROLLMENT")" &&
-    enrollment_server="$(/usr/bin/plutil -extract server_url raw -o - "$ENROLLMENT")" &&
-    enrollment_cutover="$(/usr/bin/plutil -extract cutover_at raw -o - "$ENROLLMENT")" &&
-    enrollment_surfaces="$(/usr/bin/plutil -extract enabled_surfaces json -o - "$ENROLLMENT")" || return 1
-  [ "$enrollment_version" = 1 ] && [ "$enrollment_server" = "$ORIGIN" ] &&
-    [ "$enrollment_surfaces" = '["codex_desktop","codex_cli"]' ] || return 1
-  case "$enrollment_device_id" in *[!A-Fa-f0-9-]*|'') return 1;; esac
+plist_has_exact_keys() {
+  schema_file=$1
+  schema_count=$2
+  shift 2
+  schema_xml="$(/usr/bin/plutil -convert xml1 -o - "$schema_file")" || return 1
+  actual_count="$(printf '%s\n' "$schema_xml" | /usr/bin/grep -c '<key>')"
+  [ "$actual_count" -eq "$schema_count" ] || return 1
+  for schema_key in "$@"; do
+    printf '%s\n' "$schema_xml" | /usr/bin/grep -F "<key>$schema_key</key>" >/dev/null || return 1
+  done
+}
+
+plist_value_has_type() {
+  type_file=$1
+  type_key=$2
+  type_name=$3
+  type_xml="$(/usr/bin/plutil -extract "$type_key" xml1 -o - "$type_file")" || return 1
+  printf '%s\n' "$type_xml" | /usr/bin/grep -F "<$type_name>" >/dev/null
+}
+
+is_bounded_json_dictionary() {
+  json_file=$1
+  json_size="$(/usr/bin/stat -f %z "$json_file")" || return 1
+  [ "$json_size" -gt 0 ] && [ "$json_size" -le 65536 ] || return 1
+  LC_ALL=C /usr/bin/awk '
+    match($0, /[^[:space:]]/) { found = 1; valid = substr($0, RSTART, 1) == "{"; exit }
+    END { if (!found || !valid) exit 1 }
+  ' "$json_file"
+}
+
+valid_uuid() {
+  uuid_value=$1
+  case "$uuid_value" in
+    ????????-????-????-????-????????????) ;;
+    *) return 1;;
+  esac
+  uuid_hex="$(printf '%s' "$uuid_value" | /usr/bin/tr -d '-')"
+  case "$uuid_hex" in *[!A-Fa-f0-9]*|'') return 1;; esac
+  [ "${#uuid_hex}" -eq 32 ]
+}
+
+valid_enrollment_values() {
+  values_file=$1
+  enrollment_device_id="$(/usr/bin/plutil -extract device_id raw -o - "$values_file")" &&
+    enrollment_token="$(/usr/bin/plutil -extract device_token raw -o - "$values_file")" &&
+    enrollment_secret="$(/usr/bin/plutil -extract dedupe_secret raw -o - "$values_file")" &&
+    enrollment_server="$(/usr/bin/plutil -extract server_url raw -o - "$values_file")" &&
+    enrollment_cutover="$(/usr/bin/plutil -extract cutover_at raw -o - "$values_file")" &&
+    enrollment_surfaces="$(/usr/bin/plutil -extract enabled_surfaces json -o - "$values_file")" || return 1
+  valid_uuid "$enrollment_device_id" && [ "$enrollment_server" = "$ORIGIN" ] || return 1
   case "$enrollment_token" in *[!A-Za-z0-9_-]*|'') return 1;; esac
   case "$enrollment_secret" in *[!0123456789abcdef]*|'') return 1;; esac
   case "$enrollment_cutover" in *[!0123456789]*|'') return 1;; esac
-  [ "${#enrollment_token}" -eq 43 ] && [ "${#enrollment_secret}" -eq 64 ]
+  [ "${#enrollment_token}" -eq 43 ] && [ "${#enrollment_secret}" -eq 64 ] &&
+    [ "$enrollment_cutover" -le 9007199254740991 ] || return 1
+  case "$enrollment_surfaces" in
+    '["codex_desktop"]'|'["codex_cli"]'|'["codex_desktop","codex_cli"]'|'["codex_cli","codex_desktop"]') ;;
+    *) return 1;;
+  esac
+}
+
+validate_enrollment_contents() {
+  enrollment_file=$1
+  is_bounded_json_dictionary "$enrollment_file" &&
+    plist_has_exact_keys "$enrollment_file" 7 \
+    version device_id device_token dedupe_secret server_url cutover_at enabled_surfaces &&
+    plist_value_has_type "$enrollment_file" version integer &&
+    plist_value_has_type "$enrollment_file" device_id string &&
+    plist_value_has_type "$enrollment_file" device_token string &&
+    plist_value_has_type "$enrollment_file" dedupe_secret string &&
+    plist_value_has_type "$enrollment_file" server_url string &&
+    plist_value_has_type "$enrollment_file" cutover_at integer &&
+    plist_value_has_type "$enrollment_file" enabled_surfaces array || return 1
+  enrollment_version="$(/usr/bin/plutil -extract version raw -o - "$enrollment_file")" || return 1
+  [ "$enrollment_version" = 1 ] && valid_enrollment_values "$enrollment_file"
+}
+
+validate_enrollment() {
+  [ -f "$ENROLLMENT" ] && [ ! -L "$ENROLLMENT" ] &&
+    [ "$(/usr/bin/stat -f %u "$ENROLLMENT")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f %Lp "$ENROLLMENT")" = 600 ] &&
+    validate_enrollment_contents "$ENROLLMENT"
+}
+
+validate_enrollment_response() {
+  response_file=$1
+  [ -f "$response_file" ] && [ ! -L "$response_file" ] &&
+    is_bounded_json_dictionary "$response_file" &&
+    plist_has_exact_keys "$response_file" 5 \
+      device_token dedupe_secret server_url cutover_at enabled_surfaces &&
+    plist_value_has_type "$response_file" device_token string &&
+    plist_value_has_type "$response_file" dedupe_secret string &&
+    plist_value_has_type "$response_file" server_url string &&
+    plist_value_has_type "$response_file" cutover_at integer &&
+    plist_value_has_type "$response_file" enabled_surfaces array
 }
 
 has_enrollment=0
 if [ -e "$ENROLLMENT" ] || [ -L "$ENROLLMENT" ]; then
   refuse_symlink "$ENROLLMENT"
-  validate_enrollment || {
-    echo 'Runtime Raiders refuses invalid existing enrollment.' >&2
+  [ -f "$ENROLLMENT" ] &&
+    [ "$(/usr/bin/stat -f %u "$ENROLLMENT")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f %Lp "$ENROLLMENT")" = 600 ] || {
+    echo 'Runtime Raiders refuses unsafe existing enrollment.' >&2
     exit 1
   }
-  has_enrollment=1
+  if validate_enrollment; then has_enrollment=1; fi
 fi
 
 WORK="$(/usr/bin/mktemp -d "$SUPPORT/.runtime-raiders-install.XXXXXX")"
 PLIST_BACKUP_DIRECTORY=''
 transaction_active=0
 transaction_committed=0
-had_app=0
-had_plist=0
-had_shim=0
-command_created=0
+original_app=0
+original_plist=0
+original_shim=0
+original_command=0
+[ ! -e "$APP" ] || original_app=1
+[ ! -e "$PLIST" ] || original_plist=1
+[ ! -e "$SHIM" ] || original_shim=1
+[ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ] || original_command=1
 tty_changed=0
 tty_state=''
 
@@ -157,31 +240,65 @@ restore_tty() {
   fi
 }
 
+restore_target() {
+  restore_stable=$1
+  restore_backup=$2
+  restore_failed=$3
+  restore_original=$4
+  if [ "$restore_original" -eq 1 ]; then
+    if [ -e "$restore_backup" ]; then
+      if [ -e "$restore_stable" ]; then
+        /bin/mv "$restore_stable" "$restore_failed" || return 1
+      fi
+      /bin/mv "$restore_backup" "$restore_stable" || return 1
+    else
+      [ -e "$restore_stable" ] || return 1
+    fi
+  elif [ -e "$restore_stable" ]; then
+    if [ -d "$restore_stable" ]; then
+      /bin/rm -rf "$restore_stable" || return 1
+    else
+      /bin/rm -f "$restore_stable" || return 1
+    fi
+  fi
+}
+
 rollback() {
   rollback_status=$?
   trap - EXIT HUP INT TERM
   restore_tty
+  restoration_complete=1
   if [ "$transaction_active" -eq 1 ] && [ "$transaction_committed" -eq 0 ]; then
     /bin/launchctl bootout "gui/$OWNER/$LABEL" 2>/dev/null || true
-    /bin/rm -rf "$APP"
-    /bin/rm -f "$PLIST" "$SHIM"
-    if [ "$had_app" -eq 1 ] && [ -e "$WORK/old.app" ]; then
-      /bin/mv "$WORK/old.app" "$APP" || true
+    if ! restore_target "$APP" "$WORK/old.app" "$WORK/failed.app" "$original_app"; then
+      restoration_complete=0
     fi
-    if [ "$had_plist" -eq 1 ] && [ -n "$PLIST_BACKUP_DIRECTORY" ] &&
-       [ -e "$PLIST_BACKUP_DIRECTORY/old.plist" ]; then
-      /bin/mv "$PLIST_BACKUP_DIRECTORY/old.plist" "$PLIST" || true
+    if ! restore_target "$PLIST" "$PLIST_BACKUP_DIRECTORY/old.plist" \
+      "$PLIST_BACKUP_DIRECTORY/failed.plist" "$original_plist"; then
+      restoration_complete=0
     fi
-    if [ "$had_shim" -eq 1 ] && [ -e "$WORK/old.shim" ]; then
-      /bin/mv "$WORK/old.shim" "$SHIM" || true
+    if ! restore_target "$SHIM" "$WORK/old.shim" "$WORK/failed.shim" "$original_shim"; then
+      restoration_complete=0
     fi
-    if [ "$command_created" -eq 1 ]; then /bin/rm -f "$COMMAND"; fi
-    if [ "$reinstall" -eq 1 ] && [ -e "$PLIST" ]; then
-      /bin/launchctl bootstrap "gui/$OWNER" "$PLIST" >/dev/null 2>&1 || true
+    if [ "$original_command" -eq 0 ] && { [ -e "$COMMAND" ] || [ -L "$COMMAND" ]; }; then
+      /bin/rm -f "$COMMAND" || restoration_complete=0
+    fi
+    if [ "$restoration_complete" -eq 1 ] && [ "$reinstall" -eq 1 ]; then
+      if ! /bin/launchctl bootstrap "gui/$OWNER" "$PLIST" >/dev/null 2>&1; then
+        restoration_complete=0
+      fi
     fi
   fi
-  /bin/rm -rf "$WORK"
-  if [ -n "$PLIST_BACKUP_DIRECTORY" ]; then /bin/rm -rf "$PLIST_BACKUP_DIRECTORY"; fi
+  if [ "$restoration_complete" -eq 1 ]; then
+    /bin/rm -rf "$WORK"
+    if [ -n "$PLIST_BACKUP_DIRECTORY" ]; then /bin/rm -rf "$PLIST_BACKUP_DIRECTORY"; fi
+  else
+    echo 'Runtime Raiders rollback was incomplete; do not retry until recovery is reviewed.' >&2
+    [ ! -e "$WORK" ] || echo "Runtime Raiders recovery material preserved at: $WORK" >&2
+    if [ -n "$PLIST_BACKUP_DIRECTORY" ] && [ -e "$PLIST_BACKUP_DIRECTORY" ]; then
+      echo "Runtime Raiders recovery material preserved at: $PLIST_BACKUP_DIRECTORY" >&2
+    fi
+  fi
   exit "$rollback_status"
 }
 trap rollback EXIT
@@ -258,17 +375,31 @@ if [ "$has_enrollment" -eq 0 ]; then
   }
   enrollment_code=''
   [ "$enrollment_status" = 201 ] || exit 1
+  validate_enrollment_response "$response" || {
+    echo 'Runtime Raiders enrollment response was invalid.' >&2
+    exit 1
+  }
   device_token="$(/usr/bin/plutil -extract device_token raw -o - "$response")" &&
     dedupe_secret="$(/usr/bin/plutil -extract dedupe_secret raw -o - "$response")" &&
     server_url="$(/usr/bin/plutil -extract server_url raw -o - "$response")" &&
     cutover_at="$(/usr/bin/plutil -extract cutover_at raw -o - "$response")" &&
     enabled_surfaces="$(/usr/bin/plutil -extract enabled_surfaces json -o - "$response")" || exit 1
-  [ "$server_url" = "$ORIGIN" ] && [ "$enabled_surfaces" = '["codex_desktop","codex_cli"]' ] &&
-    [ "${#device_token}" -eq 43 ] && [ "${#dedupe_secret}" -eq 64 ] || exit 1
+  [ "$server_url" = "$ORIGIN" ] || exit 1
+  case "$device_token" in *[!A-Za-z0-9_-]*|'') exit 1;; esac
+  case "$dedupe_secret" in *[!0123456789abcdef]*|'') exit 1;; esac
+  case "$cutover_at" in *[!0123456789]*|'') exit 1;; esac
+  [ "${#device_token}" -eq 43 ] && [ "${#dedupe_secret}" -eq 64 ] &&
+    [ "$cutover_at" -le 9007199254740991 ] || exit 1
+  case "$enabled_surfaces" in
+    '["codex_desktop"]'|'["codex_cli"]'|'["codex_desktop","codex_cli"]'|'["codex_cli","codex_desktop"]') ;;
+    *) exit 1;;
+  esac
+  valid_uuid "$device_id" || exit 1
   staged_enrollment="$(/usr/bin/mktemp "$STATE/.enrollment.XXXXXX")"
   printf '{"version":1,"device_id":"%s","device_token":"%s","dedupe_secret":"%s","server_url":"%s","cutover_at":%s,"enabled_surfaces":%s}\n' \
     "$device_id" "$device_token" "$dedupe_secret" "$server_url" "$cutover_at" "$enabled_surfaces" > "$staged_enrollment"
   /bin/chmod 600 "$staged_enrollment"
+  validate_enrollment_contents "$staged_enrollment" || exit 1
   /bin/mv "$staged_enrollment" "$ENROLLMENT"
 fi
 
@@ -305,9 +436,9 @@ PLIST_BACKUP_DIRECTORY="$(/usr/bin/mktemp -d "$LAUNCH_AGENTS/.runtime-raiders-ba
 transaction_active=1
 /bin/launchctl bootout "gui/$OWNER/$LABEL" 2>/dev/null || true
 
-if [ -e "$APP" ]; then /bin/mv "$APP" "$WORK/old.app"; had_app=1; fi
-if [ -e "$PLIST" ]; then /bin/mv "$PLIST" "$PLIST_BACKUP_DIRECTORY/old.plist"; had_plist=1; fi
-if [ -e "$SHIM" ]; then /bin/mv "$SHIM" "$WORK/old.shim"; had_shim=1; fi
+if [ -e "$APP" ]; then /bin/mv "$APP" "$WORK/old.app"; fi
+if [ -e "$PLIST" ]; then /bin/mv "$PLIST" "$PLIST_BACKUP_DIRECTORY/old.plist"; fi
+if [ -e "$SHIM" ]; then /bin/mv "$SHIM" "$WORK/old.shim"; fi
 
 /bin/mv "$CANDIDATE_APP" "$APP"
 /bin/mv "$STAGED_PLIST" "$PLIST"
@@ -317,7 +448,6 @@ if [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ]; then
   staged_command="$COMMAND_DIRECTORY/.raiders.$$"
   /bin/ln -s "$SHIM" "$staged_command"
   /bin/mv "$staged_command" "$COMMAND"
-  command_created=1
 fi
 
 /bin/launchctl bootstrap "gui/$OWNER" "$PLIST"

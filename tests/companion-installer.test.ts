@@ -42,8 +42,8 @@ function plist(bundleVersion = version, bundleId = label): string {
   ].join('\n');
 }
 
-function enrollment(): string {
-  return JSON.stringify({
+function enrollmentObject(): Record<string, unknown> {
+  return {
     version: 1,
     device_id: '00000000-0000-4000-8000-000000000001',
     device_token: token,
@@ -51,7 +51,11 @@ function enrollment(): string {
     server_url: 'https://raiders.redlattice.com',
     cutover_at: 1_800_000_000_000,
     enabled_surfaces: ['codex_desktop', 'codex_cli'],
-  }) + '\n';
+  };
+}
+
+function enrollment(value: Record<string, unknown> = enrollmentObject()): string {
+  return JSON.stringify(value) + '\n';
 }
 
 function fakeTools(root: string): string {
@@ -75,6 +79,7 @@ function fakeTools(root: string): string {
     '  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip)',
     '    printf "curl:archive\\n" >> "$RR_EVENT_LOG"',
     '    [ "${RR_FAIL_ARCHIVE_DOWNLOAD:-0}" != 1 ] || exit 56',
+    '    printf "%s/unpacked/Runtime Raiders Agent.app\\n" "${output%/*}" > "$RR_EXPECT_CANDIDATE"',
     '    cp "$RR_ARCHIVE" "$output"; printf 200;;',
     '  https://raiders.redlattice.com/api/raiders/enroll)',
     '    printf "curl:enroll\\n" >> "$RR_EVENT_LOG"',
@@ -99,6 +104,9 @@ function fakeTools(root: string): string {
     'for argument in "$@"; do printf " <%s>" "$argument" >> "$RR_ARGV_LOG"; done',
     'printf "\\n" >> "$RR_ARGV_LOG"',
     '[ "${RR_FAIL_SIGNATURE:-0}" != 1 ] || exit 1',
+    'candidate=""; for candidate do :; done',
+    'IFS= read -r expected_candidate < "$RR_EXPECT_CANDIDATE"',
+    '[ "$candidate" = "$expected_candidate" ] || exit 65',
     'if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --deep ] && [ "$3" = --strict ] && [ "$4" = --verbose=2 ]; then',
     '  printf "codesign:deep\\n" >> "$RR_EVENT_LOG"; exit 0',
     'fi',
@@ -111,17 +119,23 @@ function fakeTools(root: string): string {
   ]);
   executable(join(bin, 'spctl'), [
     '[ "$#" -eq 5 ] && [ "$1" = --assess ] && [ "$2" = --type ] && [ "$3" = execute ] && [ "$4" = --verbose=2 ] || exit 64',
+    'IFS= read -r expected_candidate < "$RR_EXPECT_CANDIDATE"',
+    '[ "$5" = "$expected_candidate" ] || exit 65',
     '[ "${RR_FAIL_SPCTL:-0}" != 1 ] || exit 1',
     'printf "spctl:assess\\n" >> "$RR_EVENT_LOG"',
   ]);
   executable(join(bin, 'launchctl'), [
     'printf "launchctl:%s\\n" "$*" >> "$RR_EVENT_LOG"',
     'case "${1:-}" in',
-    '  bootout) rm -f "$RR_RUNNING"; exit 0;;',
+    '  bootout)',
+    '    [ "$#" -eq 2 ] && [ "$2" = "gui/$RR_OWNER/com.redlattice.runtime-raiders-agent" ] || exit 64',
+    '    : > "$RR_BOOTOUT_OK"; rm -f "$RR_RUNNING"; exit 0;;',
     '  bootstrap)',
+    '    [ "$#" -eq 3 ] && [ "$2" = "gui/$RR_OWNER" ] && [ "$3" = "$RR_PLIST" ] || exit 64',
     '    if [ "${RR_FAIL_FIRST_BOOTSTRAP:-0}" = 1 ] && [ ! -e "$RR_BOOTSTRAP_FAILED" ]; then',
     '      : > "$RR_BOOTSTRAP_FAILED"; exit 75',
     '    fi',
+    '    if [ "${RR_FAIL_ROLLBACK_BOOTSTRAP:-0}" = 1 ] && [ -e "$RR_BOOTSTRAP_FAILED" ]; then exit 76; fi',
     '    : > "$RR_RUNNING"; exit 0;;',
     '  *) exit 64;;',
     'esac',
@@ -130,7 +144,33 @@ function fakeTools(root: string): string {
     'printf "tty:%s\\n" "$*" >> "$RR_EVENT_LOG"',
     '[ "${1:-}" != -g ] || printf saved',
   ]);
-  executable(join(bin, 'uuidgen'), ['printf "00000000-0000-4000-8000-000000000001\\n"']);
+  executable(join(bin, 'uuidgen'), ['printf "%s\\n" "${RR_UUID:-00000000-0000-4000-8000-000000000001}"']);
+  executable(join(bin, 'mv'), [
+    '[ "$#" -eq 2 ] || exec /bin/mv "$@"',
+    'source=$1; destination=$2; boundary=',
+    'case "$destination" in',
+    '  */old.app) boundary=backup-app;;',
+    '  */old.plist) boundary=backup-plist;;',
+    '  */old.shim) boundary=backup-shim;;',
+    'esac',
+    'if [ "$source" != "$destination" ]; then',
+    '  case "$source:$destination" in',
+    '    */old.app:"$RR_APP") boundary=restore-app;;',
+    '    */old.plist:"$RR_PLIST") boundary=restore-plist;;',
+    '    */old.shim:"$RR_SHIM") boundary=restore-shim;;',
+    '    *:"$RR_APP") boundary=replace-app;;',
+    '    *:"$RR_PLIST") boundary=replace-plist;;',
+    '    *:"$RR_SHIM") boundary=replace-shim;;',
+    '  esac',
+    'fi',
+    'if [ -n "$boundary" ]; then',
+    '  printf "mv:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
+    '  [ -e "$RR_BOOTOUT_OK" ] || exit 66',
+    'fi',
+    'if [ -n "$boundary" ] && { [ "${RR_FAIL_MV_BOUNDARY:-}" = "$boundary" ] || [ "${RR_FAIL_RESTORE_BOUNDARY:-}" = "$boundary" ]; }; then exit 74; fi',
+    '/bin/mv "$source" "$destination"',
+    'if [ -n "$boundary" ] && [ "${RR_SIGNAL_AFTER_MV_BOUNDARY:-}" = "$boundary" ]; then kill -TERM "$PPID"; fi',
+  ]);
   return bin;
 }
 
@@ -179,7 +219,7 @@ function fixture() {
   const bin = fakeTools(root);
   return {
     root, home, support, state, outbox, app, plist: plistPath, shim, command,
-    candidate, eventLog, argvLog, enrollmentStdin, running,
+    candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running,
     environment: {
       ...process.env,
       HOME: home,
@@ -191,6 +231,12 @@ function fixture() {
       RR_EVENT_LOG: eventLog,
       RR_ARGV_LOG: argvLog,
       RR_RUNNING: running,
+      RR_APP: app,
+      RR_PLIST: plistPath,
+      RR_SHIM: shim,
+      RR_OWNER: String(process.getuid!()),
+      RR_BOOTOUT_OK: join(root, 'bootout-ok'),
+      RR_EXPECT_CANDIDATE: join(root, 'expected-candidate'),
       RR_BOOTSTRAP_FAILED: join(root, 'bootstrap-failed'),
       RR_TEAM_ID: teamId,
       RR_TTY: tty,
@@ -199,13 +245,13 @@ function fixture() {
   };
 }
 
-function renderInstaller(value: Fixture): string {
+function renderInstaller(value: Fixture, mutate: (source: string) => string = (source) => source): string {
   const fake = value.environment.RR_FAKE_BIN!;
   const tty = value.environment.RR_TTY!;
   const rendered = join(value.root, 'install-rendered.sh');
   const validator = join(value.root, 'old-validator');
   executable(validator, ['exit 0']);
-  const source = readFileSync(installerTemplate, 'utf8')
+  const source = mutate(readFileSync(installerTemplate, 'utf8'))
     .replaceAll('__RUNTIME_RAIDERS_COMPANION_VERSION__', version)
     .replaceAll('__RUNTIME_RAIDERS_TEAM_ID__', teamId)
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_SEQUENCE__', '16')
@@ -218,6 +264,7 @@ function renderInstaller(value: Fixture): string {
     .replaceAll('/usr/bin/codesign', join(fake, 'codesign'))
     .replaceAll('/usr/sbin/spctl', join(fake, 'spctl'))
     .replaceAll('/bin/launchctl', join(fake, 'launchctl'))
+    .replaceAll('/bin/mv', join(fake, 'mv'))
     .replaceAll('/usr/bin/stty', join(fake, 'stty'))
     .replaceAll('/usr/bin/uuidgen', join(fake, 'uuidgen'))
     .replaceAll('/dev/tty', tty);
@@ -225,8 +272,8 @@ function renderInstaller(value: Fixture): string {
   return rendered;
 }
 
-function run(value: Fixture, shell = '/bin/sh') {
-  return spawnSync(shell, [renderInstaller(value)], {
+function run(value: Fixture, shell = '/bin/sh', mutate?: (source: string) => string) {
+  return spawnSync(shell, [renderInstaller(value, mutate)], {
     env: value.environment,
     encoding: 'utf8',
   });
@@ -283,6 +330,26 @@ function expectNoBootout(value: Fixture): void {
   expect(events(value).some((line) => line.startsWith('launchctl:bootout '))).toBe(false);
 }
 
+function installedTargets(value: Fixture): Record<string, unknown> {
+  return {
+    app: treeSnapshot(value.app),
+    plist: existsSync(value.plist) ? readFileSync(value.plist).toString('base64') : null,
+    shim: existsSync(value.shim) ? readFileSync(value.shim).toString('base64') : null,
+  };
+}
+
+function recoveryDirectories(value: Fixture): string[] {
+  const launchAgents = join(value.home, 'Library/LaunchAgents');
+  return [
+    ...(existsSync(value.support)
+      ? readdirSync(value.support).filter((name) => name.startsWith('.runtime-raiders-install.')).map((name) => join(value.support, name))
+      : []),
+    ...(existsSync(launchAgents)
+      ? readdirSync(launchAgents).filter((name) => name.startsWith('.runtime-raiders-backup.')).map((name) => join(launchAgents, name))
+      : []),
+  ];
+}
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true });
 });
@@ -304,6 +371,102 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(result.status, result.stderr + result.stdout).toBe(0);
     expect(events(value).some((line) => line.startsWith('tty:'))).toBe(false);
     expect(events(value)).not.toContain('curl:enroll');
+  });
+
+  it('reuses every nonempty unique subset of runtime-supported surfaces', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const configured = { ...enrollmentObject(), enabled_surfaces: ['codex_desktop'] };
+    writeFileSync(join(value.state, 'enrollment.json'), enrollment(configured), { mode: 0o600 });
+    const result = run(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollment(configured));
+  });
+
+  it.each([
+    ['extra key', (wire: Record<string, unknown>) => { wire.extra = true; }],
+    ['string version', (wire: Record<string, unknown>) => { wire.version = '1'; }],
+    ['wrong version', (wire: Record<string, unknown>) => { wire.version = 2; }],
+    ['missing key', (wire: Record<string, unknown>) => { delete wire.device_token; }],
+    ['non-UUID device ID', (wire: Record<string, unknown>) => { wire.device_id = 'deadbeef'; }],
+    ['numeric token', (wire: Record<string, unknown>) => { wire.device_token = 4_242; }],
+    ['bad token alphabet', (wire: Record<string, unknown>) => { wire.device_token = `${'T'.repeat(42)}!`; }],
+    ['short token', (wire: Record<string, unknown>) => { wire.device_token = 'T'.repeat(42); }],
+    ['uppercase secret', (wire: Record<string, unknown>) => { wire.dedupe_secret = 'A'.repeat(64); }],
+    ['short secret', (wire: Record<string, unknown>) => { wire.dedupe_secret = 'a'.repeat(62); }],
+    ['wrong server URL', (wire: Record<string, unknown>) => { wire.server_url = 'https://example.invalid'; }],
+    ['negative cutover', (wire: Record<string, unknown>) => { wire.cutover_at = -1; }],
+    ['unsafe cutover', (wire: Record<string, unknown>) => { wire.cutover_at = 9_007_199_254_740_992; }],
+    ['string cutover', (wire: Record<string, unknown>) => { wire.cutover_at = '1800000000000'; }],
+    ['empty surfaces', (wire: Record<string, unknown>) => { wire.enabled_surfaces = []; }],
+    ['duplicate surfaces', (wire: Record<string, unknown>) => { wire.enabled_surfaces = ['codex_cli', 'codex_cli']; }],
+    ['unsupported surface', (wire: Record<string, unknown>) => { wire.enabled_surfaces = ['codex_desktop', 'terminal']; }],
+    ['non-array surfaces', (wire: Record<string, unknown>) => { wire.enabled_surfaces = 'codex_desktop'; }],
+  ] as const)('invalid existing enrollment (%s) cannot suppress a fresh prompt', (_, mutate) => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const malformed = enrollmentObject();
+    mutate(malformed);
+    writeFileSync(join(value.state, 'enrollment.json'), enrollment(malformed), { mode: 0o600 });
+    const result = run(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value).filter((line) => line === 'curl:enroll')).toHaveLength(1);
+    expect(events(value).some((line) => line.startsWith('tty:'))).toBe(true);
+    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollment());
+  });
+
+  it.each([
+    ['oversized JSON', (path: string) => {
+      writeFileSync(path, enrollment().padEnd(65_537, ' '), { mode: 0o600 });
+    }],
+    ['non-JSON plist', (path: string) => {
+      writeFileSync(path, enrollment(), { mode: 0o600 });
+      const converted = spawnSync('/usr/bin/plutil', ['-convert', 'xml1', path], { encoding: 'utf8' });
+      expect(converted.status, converted.stderr).toBe(0);
+    }],
+  ] as const)('%s cannot suppress a fresh enrollment prompt', (_, writeMalformed) => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    writeMalformed(join(value.state, 'enrollment.json'));
+    const result = run(value);
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value).filter((line) => line === 'curl:enroll')).toHaveLength(1);
+    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollment());
+  });
+
+  it.each([
+    ['extra key', (wire: Record<string, unknown>, _value: Fixture) => { wire.extra = true; }],
+    ['missing key', (wire: Record<string, unknown>, _value: Fixture) => { delete wire.device_token; }],
+    ['numeric token', (wire: Record<string, unknown>, _value: Fixture) => { wire.device_token = 4_242; }],
+    ['bad token alphabet', (wire: Record<string, unknown>, _value: Fixture) => { wire.device_token = `${'T'.repeat(42)}!`; }],
+    ['short token', (wire: Record<string, unknown>, _value: Fixture) => { wire.device_token = 'T'.repeat(42); }],
+    ['uppercase secret', (wire: Record<string, unknown>, _value: Fixture) => { wire.dedupe_secret = 'A'.repeat(64); }],
+    ['short secret', (wire: Record<string, unknown>, _value: Fixture) => { wire.dedupe_secret = 'a'.repeat(62); }],
+    ['wrong server URL', (wire: Record<string, unknown>, _value: Fixture) => { wire.server_url = 'https://example.invalid'; }],
+    ['negative cutover', (wire: Record<string, unknown>, _value: Fixture) => { wire.cutover_at = -1; }],
+    ['unsafe cutover', (wire: Record<string, unknown>, _value: Fixture) => { wire.cutover_at = 9_007_199_254_740_992; }],
+    ['string cutover', (wire: Record<string, unknown>, _value: Fixture) => { wire.cutover_at = '1800000000000'; }],
+    ['empty surfaces', (wire: Record<string, unknown>, _value: Fixture) => { wire.enabled_surfaces = []; }],
+    ['duplicate surfaces', (wire: Record<string, unknown>, _value: Fixture) => { wire.enabled_surfaces = ['codex_cli', 'codex_cli']; }],
+    ['unsupported surface', (wire: Record<string, unknown>, _value: Fixture) => { wire.enabled_surfaces = ['codex_desktop', 'terminal']; }],
+    ['non-array surfaces', (wire: Record<string, unknown>, _value: Fixture) => { wire.enabled_surfaces = 'codex_desktop'; }],
+    ['invalid generated UUID', (_wire: Record<string, unknown>, value: Fixture) => { value.environment.RR_UUID = 'deadbeef'; }],
+  ] as const)('rejects malformed fresh enrollment response (%s) before stopping launchd', (_, mutate) => {
+    const value = fixture();
+    const wire = {
+      device_token: token,
+      dedupe_secret: secret,
+      server_url: 'https://raiders.redlattice.com',
+      cutover_at: 1_800_000_000_000,
+      enabled_surfaces: ['codex_desktop', 'codex_cli'],
+    } as Record<string, unknown>;
+    mutate(wire, value);
+    writeFileSync(value.enrollmentResponse, JSON.stringify(wire) + '\n');
+    const result = run(value);
+    expect(result.status).not.toBe(0);
+    expectNoBootout(value);
+    expect(existsSync(join(value.state, 'enrollment.json'))).toBe(false);
   });
 
   it.each([false, true])('reinstall preserves state, outbox, and enabled=%s byte-for-byte', (enabled) => {
@@ -386,6 +549,128 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(value.shim)).toEqual(shimBefore);
     expect(events(value).filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(2);
     expect(existsSync(value.running)).toBe(true);
+  });
+
+  it.each(['backup-app', 'backup-plist', 'backup-shim'] as const)(
+    'a %s move failure leaves untouched targets intact, restores moved targets, and restarts the old app',
+    (boundary) => {
+      const value = fixture();
+      writeExistingInstall(value, true);
+      const before = installedTargets(value);
+      value.environment.RR_FAIL_MV_BOUNDARY = boundary;
+      const result = run(value);
+      expect(result.status).not.toBe(0);
+      expect(installedTargets(value)).toEqual(before);
+      expect(existsSync(value.running)).toBe(true);
+      expect(recoveryDirectories(value)).toHaveLength(0);
+    },
+  );
+
+  it.each(['replace-app', 'replace-plist', 'replace-shim'] as const)(
+    'a %s move failure restores every old target and restarts the old app',
+    (boundary) => {
+      const value = fixture();
+      writeExistingInstall(value, true);
+      const before = installedTargets(value);
+      value.environment.RR_FAIL_MV_BOUNDARY = boundary;
+      const result = run(value);
+      expect(result.status).not.toBe(0);
+      expect(installedTargets(value)).toEqual(before);
+      expect(existsSync(value.running)).toBe(true);
+      expect(recoveryDirectories(value)).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    'backup-app', 'backup-plist', 'backup-shim',
+    'replace-app', 'replace-plist', 'replace-shim',
+  ] as const)('SIGTERM immediately after %s rolls back without a flag-update race', (boundary) => {
+    const value = fixture();
+    writeExistingInstall(value, true);
+    const before = installedTargets(value);
+    value.environment.RR_SIGNAL_AFTER_MV_BOUNDARY = boundary;
+    const result = run(value);
+    expect(result.status).toBe(143);
+    expect(installedTargets(value)).toEqual(before);
+    expect(existsSync(value.running)).toBe(true);
+    expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
+  it.each(['restore-app', 'restore-plist', 'restore-shim'] as const)(
+    'a %s failure keeps the old backup and reports recovery material instead of deleting it',
+    (boundary) => {
+      const value = fixture();
+      writeExistingInstall(value, true);
+      value.environment.RR_FAIL_FIRST_BOOTSTRAP = '1';
+      value.environment.RR_FAIL_RESTORE_BOUNDARY = boundary;
+      const result = run(value);
+      const recovery = recoveryDirectories(value);
+      expect(result.status).not.toBe(0);
+      expect(existsSync(value.running)).toBe(false);
+      expect(recovery.length).toBeGreaterThan(0);
+      expect(recovery.some((path) => result.stderr.includes(path))).toBe(true);
+      const expectedBackup = boundary === 'restore-app' ? 'old.app'
+        : boundary === 'restore-plist' ? 'old.plist'
+          : 'old.shim';
+      expect(recovery.some((path) => existsSync(join(path, expectedBackup)))).toBe(true);
+    },
+  );
+
+  it('a rollback bootstrap failure is reported and preserves recovery material', () => {
+    const value = fixture();
+    writeExistingInstall(value, true);
+    const before = installedTargets(value);
+    value.environment.RR_FAIL_FIRST_BOOTSTRAP = '1';
+    value.environment.RR_FAIL_ROLLBACK_BOOTSTRAP = '1';
+    const result = run(value);
+    const recovery = recoveryDirectories(value);
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(existsSync(value.running)).toBe(false);
+    expect(recovery.length).toBeGreaterThan(0);
+    expect(recovery.some((path) => result.stderr.includes(path))).toBe(true);
+  });
+
+  it.each([
+    ['codesign', (source: string) => source.replace(
+      '/usr/bin/codesign --verify --deep --strict --verbose=2 "$CANDIDATE_APP"',
+      '/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"',
+    )],
+    ['spctl', (source: string) => source.replace(
+      '/usr/sbin/spctl --assess --type execute --verbose=2 "$CANDIDATE_APP"',
+      '/usr/sbin/spctl --assess --type execute --verbose=2 "$APP"',
+    )],
+    ['launchctl bootout label', (source: string) => source.replaceAll(
+      'bootout "gui/$OWNER/$LABEL"', 'bootout "gui/$OWNER/wrong-label"',
+    )],
+    ['launchctl bootout domain', (source: string) => source.replaceAll(
+      'bootout "gui/$OWNER/$LABEL"', 'bootout "gui/99999/$LABEL"',
+    )],
+  ] as const)('a mutated wrong-target %s call fails before destructive replacement', (_, mutate) => {
+    const value = fixture();
+    writeExistingInstall(value, true);
+    const before = installedTargets(value);
+    const result = run(value, '/bin/sh', mutate);
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(events(value).some((line) => line.startsWith('mv:replace-'))).toBe(false);
+  });
+
+  it.each([
+    ['plist', (source: string) => source.replaceAll(
+      'bootstrap "gui/$OWNER" "$PLIST"', 'bootstrap "gui/$OWNER" "$SHIM"',
+    )],
+    ['domain', (source: string) => source.replaceAll(
+      'bootstrap "gui/$OWNER" "$PLIST"', 'bootstrap "gui/99999" "$PLIST"',
+    )],
+  ] as const)('a mutated wrong-%s launchctl bootstrap fails and rolls all targets back', (_, mutate) => {
+    const value = fixture();
+    writeExistingInstall(value, true);
+    const before = installedTargets(value);
+    const result = run(value, '/bin/sh', mutate);
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(existsSync(value.running)).toBe(false);
   });
 
   it('the canonical command executes the flat stable app executable', () => {
