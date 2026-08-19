@@ -12,9 +12,10 @@ companion. The current release enables two Run surfaces: **Codex Desktop** and
 **Codex CLI**. Existing package, database, service, route, and migration names
 remain compatibility identifiers; a product rebrand does not rename them.
 
-The candidate's local verification record is
-[docs/runtime-raiders/canary-checklist.md](docs/runtime-raiders/canary-checklist.md).
-It is not a claim that an installer is signed, published, deployed, or active.
+Employee install, use, and release instructions are in the single active beta
+runbook: **[docs/runtime-raiders/employee-beta.md](docs/runtime-raiders/employee-beta.md)**.
+Historical sequence and canary records remain in Git as evidence; they are not
+the employee-beta release procedure.
 
 ## How it works
 
@@ -148,7 +149,9 @@ intentionally retained for this release are `/home/rluser/ClaudeRPG`, <!-- runti
 `data/claude-rpg.db`, `/etc/claude-rpg.env`, `claude-rpg.service`, and
 `claude-rpg-autoupdate.*`. See
 **[docs/PI_SETUP.md](docs/PI_SETUP.md)** for the established server and Chromium
-kiosk setup on `/tv`.
+kiosk setup on `/tv`, and
+**[docs/runtime-raiders/employee-beta.md](docs/runtime-raiders/employee-beta.md)**
+for companion installation and publication.
 
 Do not treat local candidate verification as authorization to deploy, publish,
 change DNS/Caddy, or replace the currently running Pi service.

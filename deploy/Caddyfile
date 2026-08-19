@@ -6,7 +6,7 @@ raiders.redlattice.com, clauderpg.redlattice.com {
 		header Cache-Control "no-store"
 		header X-Content-Type-Options "nosniff"
 		header Content-Type "text/x-shellscript; charset=utf-8"
-		root * /var/lib/runtime-raiders/current
+		root * /var/lib/runtime-raiders/public
 		file_server
 	}
 
@@ -14,23 +14,15 @@ raiders.redlattice.com, clauderpg.redlattice.com {
 		header Cache-Control "no-store"
 		header X-Content-Type-Options "nosniff"
 		header Content-Type "application/zip"
-		root * /var/lib/runtime-raiders/current
+		root * /var/lib/runtime-raiders/public
 		file_server
 	}
 
-	handle /downloads/runtime-raiders-agent.zip.sha256 {
-		header Cache-Control "no-store"
-		header X-Content-Type-Options "nosniff"
-		header Content-Type "text/plain; charset=utf-8"
-		root * /var/lib/runtime-raiders/current
-		file_server
-	}
-
-	handle /downloads/runtime-raiders-agent.update.json {
+	handle /version {
 		header Cache-Control "no-store"
 		header X-Content-Type-Options "nosniff"
 		header Content-Type "application/json; charset=utf-8"
-		root * /var/lib/runtime-raiders/current
+		root * /var/lib/runtime-raiders/public
 		file_server
 	}
 

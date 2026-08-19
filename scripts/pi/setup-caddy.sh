@@ -23,6 +23,8 @@ caddy list-modules | grep -q dns.providers.cloudflare && echo "OK: cloudflare DN
 sudo useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
 sudo mkdir -p /var/lib/caddy /etc/caddy
 sudo chown -R caddy:caddy /var/lib/caddy
+sudo install -d -m 0755 -o root -g root /var/lib/runtime-raiders /var/lib/runtime-raiders/public
+sudo install -d -m 0700 -o root -g root /var/lib/runtime-raiders/staging
 
 # 3) config + service; token env placeholder (never overwrite a real token).
 sudo install -m 0644 "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile

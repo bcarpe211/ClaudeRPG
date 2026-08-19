@@ -51,17 +51,26 @@ After reboot the TV should show the dungeon. From your laptop:
 
 Both names are for internal-network access only; neither creates public ingress.
 
-## 5. Do not onboard players from fresh setup
+## 5. Use the employee beta runbook
+
+The only active companion installation and publication procedure is
+[`docs/runtime-raiders/employee-beta.md`](runtime-raiders/employee-beta.md).
+Fresh Pi setup does not authorize publication or employee collection. The
+operator runs the documented local `prepare` mode first and uses `publish` only
+after separate approval. Publishing does not run `raiders on` for anyone.
+
+### Historical release notes retained until cleanup
 
 Fresh Pi setup does not authorize Runtime Raiders cutover, artifact publication,
-companion installation, or activation. Follow
-[`docs/RUNTIME_RAIDERS_CUTOVER.md`](RUNTIME_RAIDERS_CUTOVER.md) and record these
-separate gates in order before onboarding anyone:
+companion installation, or activation. The pre-0.4.0 sequence procedure below
+is retained temporarily for historical evidence and is not the active beta
+runbook. Its source files are `docs/RUNTIME_RAIDERS_CUTOVER.md` and
+`docs/runtime-raiders/companion-operations.md`.
 
 Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence and
-never reuse, reselect, modify, delete, or repackage it. Follow the authoritative
-companion procedure in
-[`docs/runtime-raiders/companion-operations.md`](runtime-raiders/companion-operations.md).
+never reuse, reselect, modify, delete, or repackage it. The historical companion
+procedure is retained at `docs/runtime-raiders/companion-operations.md`; it is
+not the employee-beta release authority.
 
 1. Caddy preparation approval;
 2. sequence-2 publication approval;
@@ -143,12 +152,11 @@ companion installer does not remove or change legacy shell configuration for you
 
 ## Releasing an update
 
-Every release, including a routine update, must follow the exact recorded,
-pinned-SHA, and separately authorized procedure in
-[`docs/RUNTIME_RAIDERS_CUTOVER.md`](RUNTIME_RAIDERS_CUTOVER.md). That procedure
-rechecks the pause and updater holds, approved SHA, environment, ownership,
-database backup and integrity, service contract, and post-start verification.
-There is no raw pull-and-restart release shortcut.
+Use the two commands in the active
+[`employee beta runbook`](runtime-raiders/employee-beta.md). The beta publisher
+changes only the three companion files and performs public read-only checks. It
+does not pull or restart the game server, alter the database, change pause or
+scoring state, or enable employee collection.
 
 ### Release automation is disabled
 
