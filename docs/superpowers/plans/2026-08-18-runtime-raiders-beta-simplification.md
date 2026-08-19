@@ -904,7 +904,14 @@ Execute the recorded local `install.sh`, not the public URL. Verify Apple trust 
 
 - [ ] **Step 5: Run the real 816-file activation acceptance test**
 
-With the known 816-file Codex corpus present:
+Quit Codex completely so the watched history is quiet, then run from the
+reviewed checkout:
+
+```bash
+/bin/bash scripts/test/run-runtime-raiders-live-activation-gate.sh
+```
+
+With the known 816-file Codex corpus present, the runner must:
 
 1. record game Run/score/token baselines;
 2. run `raiders on` and require an immediate `preparing` response;
@@ -1061,4 +1068,3 @@ git commit -m "refactor(raiders): retire versioned updater machinery"
 - [ ] Publication does not enable collection, unpause the game, change scoring, or deploy Node.
 - [ ] Employee beta readiness is documented as GO or NO-GO with signed/runtime evidence.
 - [ ] Obsolete updater/launcher/migration code is deleted only after the signed beta is GO.
-

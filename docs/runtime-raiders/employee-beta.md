@@ -19,6 +19,32 @@ The installer starts a new employee with collection off. A reinstall keeps that
 employee's enrollment, queued metrics, cursors, and previous on/off choice.
 Publishing a release never turns collection on for anyone.
 
+## Run the one-shot live acceptance gate
+
+This is an operator check for a newly installed beta, not an employee install
+step. Quit Codex completely so it stops changing the provider-history files.
+From the clean reviewed checkout, run:
+
+```sh
+/bin/bash scripts/test/run-runtime-raiders-live-activation-gate.sh
+```
+
+The script waits for 60 seconds of quiet provider-file metadata, requires at
+least 816 existing records, checks the installed Apple signature and
+Gatekeeper result, checks that the game is paused and its database is healthy,
+and records aggregate Run and score baselines. It then turns collection on,
+proves that history created no server changes, creates one content-free
+synthetic Codex Desktop completion, and requires exactly one matching scored
+Run.
+
+On success, failure, or interruption, the script removes only its uniquely
+named synthetic fixture and always runs `raiders off` before returning. It
+writes a secret-free, owner-only report at
+`/private/tmp/runtime-raiders-activation-gate-<timestamp>.<random>`. Reopen
+Codex after the command finishes and use that report for the gate record. If
+the script reports a failure, do not continue to the reinstall or publication
+gate.
+
 ## Release a beta
 
 Use a clean, reviewed Git commit on a Mac with Apple release access. Set these
