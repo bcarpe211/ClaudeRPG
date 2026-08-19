@@ -311,9 +311,10 @@ header_has_exact_value() {
     BEGIN { target = tolower(header) }
     { sub(/\r$/, "") }
     /^HTTP\/[0-9.]+[[:space:]][0-9][0-9][0-9]([[:space:]]|$)/ {
-      blocks += 1; count = 0; found = ""; next
+      blocks += 1; count = 0; found = ""; in_headers = 1; next
     }
-    blocks > 0 && index($0, ":") > 0 {
+    in_headers && $0 == "" { in_headers = 0; next }
+    in_headers && index($0, ":") > 0 {
       name = substr($0, 1, index($0, ":") - 1)
       value = substr($0, index($0, ":") + 1)
       sub(/^[[:space:]]+/, "", value); sub(/[[:space:]]+$/, "", value)

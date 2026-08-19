@@ -64,7 +64,10 @@ Caddy, and checks both public health hostnames. The release account defaults to
 `rluser`; use the same `RUNTIME_RAIDERS_RELEASE_USER` setting for bootstrap and
 every release command if another existing POSIX account is selected. A failed
 bootstrap restores the prior files and Caddy configuration. Repeat publication
-never reloads Caddy. Publishing does not run `raiders on` for anyone.
+never reloads Caddy. Bootstrap also requires the manager-loaded Caddy unit to
+use the exact reviewed config, reload command, and Cloudflare environment path;
+that environment must be a root-owned, root-group, single-link regular file at
+mode `0600`. Publishing does not run `raiders on` for anyone.
 
 ### Historical release notes retained until cleanup
 

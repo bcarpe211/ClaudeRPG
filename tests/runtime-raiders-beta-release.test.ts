@@ -2,6 +2,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -137,6 +138,8 @@ function makeReleaseFixture(): {
     '  case "${PUBLIC_HEADER_MODE:-single}" in',
     '    interim-valid-final-missing) printf "HTTP/1.1 200 Connection established\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\nHTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: no-store\\r\\n\\r\\n" "$content_type" > "$headers" ;;',
     '    interim-missing-final-valid) printf "HTTP/1.1 200 Connection established\\r\\nProxy-Agent: fixture\\r\\n\\r\\nHTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: no-store\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\n" "$content_type" > "$headers" ;;',
+    '    final-missing-trailer) printf "HTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: no-store\\r\\n\\r\\nX-Content-Type-Options: nosniff\\r\\n" "$content_type" > "$headers" ;;',
+    '    final-valid-with-trailer) printf "HTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: no-store\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\nX-Content-Type-Options: unsafe-trailer\\r\\n" "$content_type" > "$headers" ;;',
     '    *) printf "HTTP/2 200\\r\\nContent-Type: %s\\r\\nCache-Control: %s\\r\\nX-Content-Type-Options: nosniff\\r\\n\\r\\n" "$content_type" "$cache_control" > "$headers" ;;',
     '  esac',
     'fi',
@@ -405,6 +408,23 @@ describe('Runtime Raiders beta release entry point', () => {
     expect(validResult.status, validResult.stderr).toBe(0);
   });
 
+  it('ignores trailer fields after the final HTTP header section', () => {
+    const missingHeader = makeReleaseFixture();
+    const missingResult = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: missingHeader.repository,
+      env: { ...missingHeader.env, PUBLIC_HEADER_MODE: 'final-missing-trailer' },
+    });
+    expect(missingResult.status).not.toBe(0);
+    expect(missingResult.stderr).toContain('public release headers are invalid');
+
+    const validHeaders = makeReleaseFixture();
+    const validResult = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: validHeaders.repository,
+      env: { ...validHeaders.env, PUBLIC_HEADER_MODE: 'final-valid-with-trailer' },
+    });
+    expect(validResult.status, validResult.stderr).toBe(0);
+  });
+
   it('requires the configured release user to match the SSH host user', () => {
     for (const releaseUser of ['other-user', 'invalid;user']) {
       const value = makeReleaseFixture();
@@ -588,6 +608,7 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
   const fakeCurl = join(tools, 'curl');
   const fakeId = join(tools, 'id');
   const fakeInstall = join(tools, 'install');
+  const fakeStat = join(tools, 'stat');
   const swapHook = join(tools, 'swap-boundary');
 
   executable(fakeCaddy, [
@@ -601,6 +622,23 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
   ]);
   executable(fakeSystemctl, [
     `printf '%s\\n' "$*" >> '${systemctlLog}'`,
+    'if [ "${1:-}" = show ]; then',
+    `  phase=pre; [ ! -f '${reloadCount}' ] || phase=post`,
+    '  property="${3:-}"; kind="${UNIT_DRIFT_KIND:-}"',
+    '  [ "${UNIT_DRIFT_PHASE:-}" = "$phase" ] || kind=""',
+    '  case "$property:$kind" in',
+    '    --property=ExecStart:start-alternate) printf "{ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy run --config /tmp/alternate-Caddyfile ; ignore_errors=no ; }\\n" ;;',
+    '    --property=ExecReload:reload-empty) printf "\\n" ;;',
+    '    --property=ExecReload:reload-wrong) printf "{ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy reload --config /tmp/alternate-Caddyfile --force ; ignore_errors=no ; }\\n" ;;',
+    '    --property=EnvironmentFiles:env-empty) printf "\\n" ;;',
+    '    --property=EnvironmentFiles:env-wrong) printf "/tmp/alternate.env (ignore_errors=no)\\n" ;;',
+    '    --property=ExecStart:*) printf "{ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy run --config /etc/caddy/Caddyfile ; ignore_errors=no ; }\\n" ;;',
+    '    --property=ExecReload:*) printf "{ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force ; ignore_errors=no ; }\\n" ;;',
+    '    --property=EnvironmentFiles:*) printf "/etc/caddy/cloudflare.env (ignore_errors=no)\\n" ;;',
+    '    *) exit 64 ;;',
+    '  esac',
+    '  exit 0',
+    'fi',
     'if [ "${1:-}" = reload ]; then',
     `  count=0; [ ! -f '${reloadCount}' ] || count="$(/bin/cat '${reloadCount}')"`,
     `  count=$((count + 1)); printf '%s' "$count" > '${reloadCount}'`,
@@ -632,6 +670,18 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
     '/usr/bin/install "$@"',
     '[ -z "${CORRUPT_INSTALL_TARGET_SUFFIX:-}" ] || case "$target" in *"$CORRUPT_INSTALL_TARGET_SUFFIX") printf "if (\\n" >> "$target" ;; esac',
   ]);
+  executable(fakeStat, [
+    'target="${@: -1}"; format="${2:-}"',
+    'if [ "$target" = "${RUNTIME_RAIDERS_CADDY_TEST_ROOT}/etc/caddy/cloudflare.env" ]; then',
+    `  post=0; [ ! -f '${reloadCount}' ] || post=1`,
+    '  case "$format" in',
+    '    %u) [ -z "${FAKE_ENV_UID:-}" ] || { printf "%s\\n" "$FAKE_ENV_UID"; exit 0; } ;;',
+    '    %g) [ -z "${FAKE_ENV_GID:-}" ] || { printf "%s\\n" "$FAKE_ENV_GID"; exit 0; } ;;',
+    '    %Lp|%a) [ "$post" = 0 ] || [ "${ENV_METADATA_POST_DRIFT:-}" != mode ] || { printf "640\\n"; exit 0; } ;;',
+    '  esac',
+    'fi',
+    '/usr/bin/stat "$@"',
+  ]);
   executable(swapHook, [
     'label="$1"; target="$2"',
     'if [ "${SWAP_TARGET_LABEL:-}" = "$label" ]; then /bin/rm -f -- "$target"; /bin/ln -s "${SWAP_SENTINEL}" "$target"; fi',
@@ -656,6 +706,7 @@ function makeBootstrapFixture(options: { existingReleaseTools?: boolean } = {}) 
       RUNTIME_RAIDERS_CADDY_TEST_CURL: fakeCurl,
       RUNTIME_RAIDERS_CADDY_TEST_ID: fakeId,
       RUNTIME_RAIDERS_CADDY_TEST_INSTALL: fakeInstall,
+      RUNTIME_RAIDERS_CADDY_TEST_STAT: fakeStat,
       RUNTIME_RAIDERS_CADDY_TEST_BEFORE_REPLACE: swapHook,
       EXISTING_RELEASE_USER: 'betauser',
     },
@@ -702,7 +753,13 @@ describe('Runtime Raiders one-time Caddy bootstrap', () => {
     );
     expect(readFileSync(join(value.target, 'etc/systemd/system/caddy.service'), 'utf8')).toBe('old service unit\n');
     expect(readFileSync(value.systemctlLog, 'utf8').trim().split('\n')).toEqual([
+      'show caddy --property=ExecStart --value --no-pager',
+      'show caddy --property=ExecReload --value --no-pager',
+      'show caddy --property=EnvironmentFiles --value --no-pager',
       'reload caddy',
+      'show caddy --property=ExecStart --value --no-pager',
+      'show caddy --property=ExecReload --value --no-pager',
+      'show caddy --property=EnvironmentFiles --value --no-pager',
       'is-active --quiet caddy',
     ]);
     expect(readFileSync(value.curlLog, 'utf8').trim().split('\n')).toEqual([
@@ -734,7 +791,80 @@ describe('Runtime Raiders one-time Caddy bootstrap', () => {
     expect(result.status).not.toBe(0);
     expectPriorBootstrapState(value);
     expect(existsSync(value.installLog)).toBe(false);
-    expect(existsSync(value.systemctlLog)).toBe(false);
+    expect(existsSync(value.systemctlLog) ? readFileSync(value.systemctlLog, 'utf8') : '')
+      .not.toContain('reload caddy');
+  });
+
+  it.each([
+    ['alternate start config', 'start-alternate'],
+    ['empty reload', 'reload-empty'],
+    ['wrong reload config', 'reload-wrong'],
+    ['missing environment input', 'env-empty'],
+    ['wrong environment input', 'env-wrong'],
+  ])('rejects manager-loaded Caddy unit drift before mutation: %s', (_label, kind) => {
+    const value = makeBootstrapFixture();
+    const result = runBootstrap(value, {
+      UNIT_DRIFT_PHASE: 'pre',
+      UNIT_DRIFT_KIND: kind,
+    });
+    expect(result.status).not.toBe(0);
+    expectPriorBootstrapState(value);
+    expect(existsSync(value.installLog)).toBe(false);
+    expect(readFileSync(value.systemctlLog, 'utf8')).not.toContain('reload caddy');
+  });
+
+  it.each([
+    ['alternate start config', 'start-alternate'],
+    ['empty reload', 'reload-empty'],
+    ['wrong reload config', 'reload-wrong'],
+    ['missing environment input', 'env-empty'],
+    ['wrong environment input', 'env-wrong'],
+  ])('rolls back manager-loaded Caddy unit drift after reload: %s', (_label, kind) => {
+    const value = makeBootstrapFixture();
+    const result = runBootstrap(value, {
+      UNIT_DRIFT_PHASE: 'post',
+      UNIT_DRIFT_KIND: kind,
+    });
+    expect(result.status).not.toBe(0);
+    expectPriorBootstrapState(value);
+    expect(readFileSync(value.systemctlLog, 'utf8').trim().split('\n').filter((line) => line === 'reload caddy'))
+      .toHaveLength(1);
+    expect(readFileSync(value.caddyLog, 'utf8')).toContain(
+      `reload --config ${join(value.target, 'etc/caddy/Caddyfile')} --force`,
+    );
+    expect(result.stdout).not.toContain('bootstrap installed');
+  });
+
+  it('requires exact protected Cloudflare environment metadata before mutation', () => {
+    for (const kind of ['mode-0644', 'mode-0640', 'wrong-owner', 'wrong-group', 'symlink', 'hardlink']) {
+      const value = makeBootstrapFixture();
+      const environmentFile = join(value.target, 'etc/caddy/cloudflare.env');
+      const extraEnv: NodeJS.ProcessEnv = {};
+      if (kind === 'mode-0644') chmodSync(environmentFile, 0o644);
+      if (kind === 'mode-0640') chmodSync(environmentFile, 0o640);
+      if (kind === 'wrong-owner') extraEnv.FAKE_ENV_UID = '999';
+      if (kind === 'wrong-group') extraEnv.FAKE_ENV_GID = '999';
+      if (kind === 'symlink') {
+        const sentinel = join(value.target, 'cloudflare-sentinel');
+        writeFileSync(sentinel, 'CLOUDFLARE_API_TOKEN=sentinel\n', { mode: 0o600 });
+        rmSync(environmentFile);
+        symlinkSync(sentinel, environmentFile);
+      }
+      if (kind === 'hardlink') linkSync(environmentFile, `${environmentFile}.link`);
+
+      const result = runBootstrap(value, extraEnv);
+      expect(result.status, kind).not.toBe(0);
+      expect(existsSync(value.installLog)).toBe(false);
+    }
+  });
+
+  it('rolls back when protected environment metadata drifts after reload', () => {
+    const value = makeBootstrapFixture();
+    const result = runBootstrap(value, { ENV_METADATA_POST_DRIFT: 'mode' });
+    expect(result.status).not.toBe(0);
+    expectPriorBootstrapState(value);
+    expect(readFileSync(value.systemctlLog, 'utf8').trim().split('\n').filter((line) => line === 'reload caddy'))
+      .toHaveLength(2);
   });
 
   it.each([

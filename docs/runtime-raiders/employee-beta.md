@@ -46,9 +46,13 @@ RUNTIME_RAIDERS_RELEASE_USER=rluser /bin/bash scripts/pi/setup-caddy.sh runtime-
 ```
 
 The named account must already exist on the Pi. Caddy with its Cloudflare DNS
-module and the protected Cloudflare environment file must also already exist.
-That command transactionally validates and installs the new Caddy configuration,
-installs the reviewed publisher as the root-owned fixed program
+module must already be installed. Its manager-loaded unit must start and reload
+using exactly `/etc/caddy/Caddyfile` and load exactly
+`/etc/caddy/cloudflare.env`. That environment file must be a single-link,
+root-owned, root-group regular file with mode `0600`. The command checks those
+preconditions before any change and again after reload. It then transactionally
+validates and installs the new Caddy configuration and installs the reviewed
+publisher as the root-owned fixed program
 `/usr/local/sbin/runtime-raiders-publish`, validates and installs this narrow
 sudo rule for the named account, validates the installed Caddy file, reloads
 Caddy, requires the service to be active, and checks both public health
