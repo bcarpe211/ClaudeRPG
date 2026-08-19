@@ -553,19 +553,28 @@ Acceptance gate:
 ## 30. Runtime Raiders background-item name and icon — EMPLOYEE-ROLLOUT BLOCKER
 
 The signed `0.4.0` canary is functionally correct, but its app bundle currently
-appears as **Runtime Raiders Agent** and has no bundled icon. Before the wider
-employee rollout, make the user-facing background item consistently appear as
-**Runtime Raiders** while retaining `com.redlattice.runtime-raiders-agent` as
-the internal LaunchAgent label. The Apple signer-derived Developer Name may
-remain **Bryan Carpenter**; that identity is separate from the service name.
+appears as **Runtime Raiders Agent** and has no bundled icon. macOS also shows
+**Software from “Bryan Carpenter”** in the App Background Activity notification
+because the app is signed as `Developer ID Application: Bryan Carpenter`; the
+live Background Task record repeats that value as both Developer Name and Parent
+Identifier. Before the wider employee rollout, make the user-facing background
+item consistently appear as **Runtime Raiders** while retaining
+`com.redlattice.runtime-raiders-agent` as the internal LaunchAgent label. Bundle
+name and icon changes alone cannot remove the personal signer name from that
+notification.
 
 - [ ] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
       remove the retired `Runtime Raiders Launcher` / `Runtime Raiders Agent`
       wording from visible system UI.
 - [ ] Ship one approved Runtime Raiders `.icns` resource and bind it through the
       app bundle metadata.
+- [ ] Sign the employee release with an approved organization-facing Apple
+      Developer ID, or use another reviewed Apple-supported registration design,
+      so the background-activity notification does not identify the software as
+      coming from `Bryan Carpenter`.
 - [ ] After a clean signed install, verify the actual Background Items entry in
-      System Settings and the corresponding `sfltool dumpbtm` record show the
-      intended name, icon, and developer identity.
+      System Settings, the first-run App Background Activity notification, and
+      the corresponding `sfltool dumpbtm` record show the intended name, icon,
+      developer identity, and parent identifier with no personal-name fallback.
 - [ ] Keep this branding-only work independent from enrollment, collection,
       telemetry, update checking, and publication behavior.
