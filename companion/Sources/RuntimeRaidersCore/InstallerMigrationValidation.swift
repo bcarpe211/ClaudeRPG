@@ -46,7 +46,7 @@ public enum InstallerStatusValidator {
     private static let legacyRequiredKeys = legacyKeys.subtracting(legacyOptionalKeys)
     private static let candidateKeys: Set<String> = [
         "activeRunCount", "activationState", "availableCompanionVersion", "compiledAdapters",
-        "daemonRunning", "enabled", "installedCompanionVersion", "installedReleaseSequence",
+        "daemonRunning", "enabled", "installedCompanionVersion",
         "lastSuccessfulUploadMS", "persistedState", "queuedEventCount",
         "serverEnabledSurfaces", "updateCommand",
     ]
@@ -129,11 +129,9 @@ public enum InstallerStatusValidator {
                 lastUpload: status.lastSuccessfulUploadMS,
                 activeRunCount: status.activeRunCount,
                 availableVersion: status.availableCompanionVersion,
-                updateCommand: status.updateCommand,
-                installedSequence: status.installedReleaseSequence
+                updateCommand: status.updateCommand
               ),
               status.installedCompanionVersion == identity.companionVersion,
-              status.installedReleaseSequence == identity.releaseSequence,
               status.enabled == expectedEnabled,
               status.enabled == (status.activationState != .disabled),
               status.queuedEventCount == expectedQueuedEventCount else {
@@ -253,8 +251,7 @@ public enum InstallerStatusValidator {
         lastUpload: Int64?,
         activeRunCount: Int,
         availableVersion: String?,
-        updateCommand: String?,
-        installedSequence: Int64
+        updateCommand: String?
     ) -> Bool {
         guard validBase(
             enabled: enabled, daemonRunning: daemonRunning, persistedState: persistedState,

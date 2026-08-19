@@ -10,7 +10,6 @@ private struct RuntimeInputs {
     let dedupeSecret: Data
     let deviceToken: String
     let companionVersion: String
-    let releaseIdentity: CompanionReleaseIdentity
     let serverURL: URL
 
     init(enrollment: EnrollmentConfiguration) throws {
@@ -22,8 +21,7 @@ private struct RuntimeInputs {
         dedupeSecret = enrollment.dedupeSecret
         deviceToken = enrollment.deviceToken
         serverURL = enrollment.serverURL
-        releaseIdentity = try CompanionReleaseIdentity.load(from: .main)
-        companionVersion = releaseIdentity.companionVersion
+        companionVersion = try InstalledCompanionVersion.load(from: .main)
     }
 }
 
@@ -282,7 +280,7 @@ private final class DaemonRuntime: @unchecked Sendable {
             daemonRunning: true,
             serverEnabledSurfaces: inputs.surfaces,
             lastSuccessfulUploadMS: uploader.lastSuccessfulUploadMS,
-            installedRelease: inputs.releaseIdentity,
+            installedCompanionVersion: inputs.companionVersion,
             availableCompanionVersion: releaseChecker?.availability()
         )
     }
@@ -307,7 +305,7 @@ private final class DaemonRuntime: @unchecked Sendable {
 }
 
 private func runUpdateCheck(paths: AgentPaths) throws {
-    let installed = try CompanionReleaseIdentity.load(from: .main).companionVersion
+    let installed = try InstalledCompanionVersion.load(from: .main)
     let verificationTransport = try ReleaseChecker.verificationTransport(
         environment: ProcessInfo.processInfo.environment
     )
@@ -410,9 +408,9 @@ private func localStatus(paths: AgentPaths) throws -> AgentStatus {
     let queuedCount = (try? Outbox.queuedCount(
         inExistingDirectory: paths.outboxDirectory
     )) ?? 0
-    let installed = try CompanionReleaseIdentity.load(from: .main)
+    let installedVersion = try InstalledCompanionVersion.load(from: .main)
     let updateAvailability = ReleaseChecker.availableVersion(
-        installedVersion: installed.companionVersion,
+        installedVersion: installedVersion,
         cachedVersion: (try? UpdateStateStore(paths: paths).load())?.availableVersion
     )
     let adapterFacts = (try? AgentController.persistedAdapterFacts(
@@ -428,8 +426,7 @@ private func localStatus(paths: AgentPaths) throws -> AgentStatus {
         queuedEventCount: queuedCount,
         lastSuccessfulUploadMS: nil,
         activeRunCount: adapterFacts.activeRunCount,
-        installedCompanionVersion: installed.companionVersion,
-        installedReleaseSequence: installed.releaseSequence,
+        installedCompanionVersion: installedVersion,
         availableCompanionVersion: updateAvailability,
         updateCommand: updateAvailability == nil ? nil : "raiders update"
     )

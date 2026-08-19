@@ -141,9 +141,6 @@ final class InstallerMigrationValidationTests: XCTestCase {
         ))
         for invalid in [
             replacing(candidateStatus(enabled: false, preparedGeneration: 1),
-                      #""installedReleaseSequence":9"#,
-                      with: #""installedReleaseSequence":8"#),
-            replacing(candidateStatus(enabled: false, preparedGeneration: 1),
                       #""installedCompanionVersion":"0.3.0""#,
                       with: #""installedCompanionVersion":"stale""#),
             replacing(candidateStatus(enabled: false, preparedGeneration: 1),
@@ -188,7 +185,6 @@ final class InstallerMigrationValidationTests: XCTestCase {
             lastSuccessfulUploadMS: nil,
             activeRunCount: 0,
             installedCompanionVersion: identity.companionVersion,
-            installedReleaseSequence: identity.releaseSequence,
             availableCompanionVersion: nil,
             updateCommand: nil
         )
@@ -879,7 +875,7 @@ final class InstallerMigrationValidationTests: XCTestCase {
             #"{"activationState":""# + activationState +
             #"","activeRunCount":0,"availableCompanionVersion":null,"compiledAdapters":["claude_code","unavailable","codex_cli","available","codex_desktop","available","omp","unavailable"],"daemonRunning":true,"enabled":"# +
             enabledValue +
-            #", "installedCompanionVersion":"0.3.0","installedReleaseSequence":9,"lastSuccessfulUploadMS":null,"persistedState":""# +
+            #", "installedCompanionVersion":"0.3.0","lastSuccessfulUploadMS":null,"persistedState":""# +
             persisted +
             #"","queuedEventCount":"# + String(queuedEventCount) +
             #", "serverEnabledSurfaces":["codex_cli","codex_desktop"],"updateCommand":null}"# +

@@ -3,6 +3,44 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class CompanionReleaseTests: XCTestCase {
+    func testInstalledCompanionVersionLoadsVersionOnlyBundle() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-version-only-bundle-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundle = try makeBundle(
+            at: root.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true),
+            infoDictionary: installedVersionInfoDictionary()
+        )
+
+        XCTAssertEqual(try InstalledCompanionVersion.load(from: bundle), "1.2.3")
+    }
+
+    func testInstalledCompanionVersionRejectsInvalidBundleMetadata() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-invalid-version-bundles-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let invalidDictionaries: [[String: Any]] = [
+            replacingInstalledVersion("CFBundleIdentifier", with: "com.example.other"),
+            installedVersionInfoDictionary(version: "1.2"),
+            installedVersionInfoDictionary(version: "01.2.3"),
+            replacingInstalledVersion("CFBundleVersion", with: "1.2.4"),
+            removingInstalledVersion("CFBundleIdentifier"),
+            removingInstalledVersion("CFBundleShortVersionString"),
+            removingInstalledVersion("CFBundleVersion"),
+        ]
+
+        for (index, dictionary) in invalidDictionaries.enumerated() {
+            let bundle = try makeBundle(
+                at: root.appendingPathComponent("Invalid-\(index).app", isDirectory: true),
+                infoDictionary: dictionary
+            )
+            XCTAssertThrowsError(
+                try InstalledCompanionVersion.load(from: bundle),
+                "accepted invalid bundle metadata at index \(index)"
+            )
+        }
+    }
+
     func testReleaseIdentityRequiresExactNamedInfoDictionaryValues() throws {
         let expected = CompanionReleaseIdentity(
             releaseSequence: 1,
@@ -146,6 +184,26 @@ final class CompanionReleaseTests: XCTestCase {
             "RuntimeRaidersReleaseSHA": String(repeating: "a", count: 40),
             "RuntimeRaidersUpdateProtocolVersion": 1,
         ]
+    }
+
+    private func installedVersionInfoDictionary(version: String = "1.2.3") -> [String: Any] {
+        [
+            "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": version,
+        ]
+    }
+
+    private func replacingInstalledVersion(_ key: String, with value: Any) -> [String: Any] {
+        var dictionary = installedVersionInfoDictionary()
+        dictionary[key] = value
+        return dictionary
+    }
+
+    private func removingInstalledVersion(_ key: String) -> [String: Any] {
+        var dictionary = installedVersionInfoDictionary()
+        dictionary.removeValue(forKey: key)
+        return dictionary
     }
 
     private func replacing(_ key: String, with value: Any) -> [String: Any] {

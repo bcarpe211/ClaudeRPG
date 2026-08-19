@@ -104,7 +104,7 @@ function buildFixture() {
     '    [ "$(printf %s "$socket_path" | /usr/bin/wc -c | /usr/bin/tr -d " ")" -lt 104 ] || { echo unsafeSocketPath >&2; exit 78; };;',
     'esac',
     'case "${1:-status}" in',
-    '  status) printf \'{"activationState":"disabled","companionVersion":"0.4.0"}\\n\';;',
+    '  status) printf \'{"activationState":"disabled","availableCompanionVersion":null,"installedCompanionVersion":"0.4.0","updateCommand":null}\\n\';;',
     '  daemon) exit 0;;',
     '  update)',
     '    response=${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-}',
@@ -701,6 +701,14 @@ describe('Runtime Raiders release build', () => {
       const checked = spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', info], { encoding: 'utf8' });
       expect(checked.status, checked.stderr).toBe(0);
       expect(checked.stdout.trim()).toBe(expected);
+    }
+    for (const key of [
+      'RuntimeRaidersReleaseSequence',
+      'RuntimeRaidersReleaseSHA',
+      'RuntimeRaidersUpdateProtocolVersion',
+    ]) {
+      const checked = spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', info], { encoding: 'utf8' });
+      expect(checked.status).not.toBe(0);
     }
 
     const commands = readFileSync(value.log, 'utf8');

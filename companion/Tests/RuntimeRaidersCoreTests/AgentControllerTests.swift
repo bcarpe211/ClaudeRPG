@@ -267,24 +267,22 @@ final class AgentControllerTests: XCTestCase {
 
     func testStatusShowsInstalledAvailableAndExactUpdateCommand() throws {
         try withHarness { harness in
-            let installed = CompanionReleaseIdentity(
-                releaseSequence: 1,
-                releaseSHA: String(repeating: "a", count: 40),
-                companionVersion: "0.2.0",
-                updateProtocolVersion: 1
-            )
             let status = try harness.controller.status(
                 daemonRunning: true,
                 serverEnabledSurfaces: [.codexCLI],
                 lastSuccessfulUploadMS: nil,
-                installedRelease: installed,
+                installedCompanionVersion: "0.2.0",
                 availableCompanionVersion: "0.2.1"
             )
 
             XCTAssertEqual(status.installedCompanionVersion, "0.2.0")
-            XCTAssertEqual(status.installedReleaseSequence, 1)
             XCTAssertEqual(status.availableCompanionVersion, "0.2.1")
             XCTAssertEqual(status.updateCommand, "raiders update")
+            let encoded = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(status.description.utf8))
+                    as? [String: Any]
+            )
+            XCTAssertNil(encoded["installedReleaseSequence"])
         }
     }
 
@@ -320,18 +318,11 @@ final class AgentControllerTests: XCTestCase {
 
     func testStatusOmitsLegacyPreparationAndReleaseAvailabilityFields() throws {
         try withHarness { harness in
-            let installed = CompanionReleaseIdentity(
-                releaseSequence: 9,
-                releaseSHA: String(repeating: "a", count: 40),
-                companionVersion: "0.3.9",
-                updateProtocolVersion: 2
-            )
-
             let status = try harness.controller.status(
                 daemonRunning: true,
                 serverEnabledSurfaces: [.codexCLI],
                 lastSuccessfulUploadMS: nil,
-                installedRelease: installed,
+                installedCompanionVersion: "0.3.9",
                 availableCompanionVersion: nil
             )
 
@@ -340,6 +331,7 @@ final class AgentControllerTests: XCTestCase {
                     as? [String: Any]
             )
             XCTAssertNil(encoded["availableReleaseSequence"])
+            XCTAssertNil(encoded["installedReleaseSequence"])
             XCTAssertNil(encoded["preparedForUpdate"])
             XCTAssertNil(encoded["preparedReleaseStateGeneration"])
         }

@@ -43,7 +43,6 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     public let lastSuccessfulUploadMS: Int64?
     public let activeRunCount: Int
     public let installedCompanionVersion: String
-    public let installedReleaseSequence: Int64
     public let availableCompanionVersion: String?
     public let updateCommand: String?
 
@@ -58,7 +57,6 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         lastSuccessfulUploadMS: Int64?,
         activeRunCount: Int,
         installedCompanionVersion: String,
-        installedReleaseSequence: Int64,
         availableCompanionVersion: String?,
         updateCommand: String?
     ) {
@@ -72,7 +70,6 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         self.lastSuccessfulUploadMS = lastSuccessfulUploadMS
         self.activeRunCount = activeRunCount
         self.installedCompanionVersion = installedCompanionVersion
-        self.installedReleaseSequence = installedReleaseSequence
         self.availableCompanionVersion = availableCompanionVersion
         self.updateCommand = updateCommand
     }
@@ -99,7 +96,6 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
             lastSuccessfulUploadMS: lastSuccessfulUploadMS,
             activeRunCount: activeRunCount,
             installedCompanionVersion: "unknown",
-            installedReleaseSequence: 0,
             availableCompanionVersion: nil,
             updateCommand: nil
         )
@@ -734,12 +730,7 @@ public final class AgentController: @unchecked Sendable {
             daemonRunning: daemonRunning,
             serverEnabledSurfaces: serverEnabledSurfaces,
             lastSuccessfulUploadMS: lastSuccessfulUploadMS,
-            installedRelease: CompanionReleaseIdentity(
-                releaseSequence: 1,
-                releaseSHA: String(repeating: "0", count: 40),
-                companionVersion: configuration.companionVersion,
-                updateProtocolVersion: 1
-            ),
+            installedCompanionVersion: configuration.companionVersion,
             availableCompanionVersion: nil
         )
     }
@@ -748,7 +739,7 @@ public final class AgentController: @unchecked Sendable {
         daemonRunning: Bool,
         serverEnabledSurfaces: [RunSurface],
         lastSuccessfulUploadMS: Int64?,
-        installedRelease: CompanionReleaseIdentity,
+        installedCompanionVersion: String,
         availableCompanionVersion: String?
     ) throws -> AgentStatus {
         try lock.withLock {
@@ -770,8 +761,7 @@ public final class AgentController: @unchecked Sendable {
                 queuedEventCount: try outbox.queuedCount(),
                 lastSuccessfulUploadMS: lastSuccessfulUploadMS,
                 activeRunCount: max(runRegistry.activeRunCount, persistedActiveRunCount),
-                installedCompanionVersion: installedRelease.companionVersion,
-                installedReleaseSequence: installedRelease.releaseSequence,
+                installedCompanionVersion: installedCompanionVersion,
                 availableCompanionVersion: availableCompanionVersion,
                 updateCommand: availableCompanionVersion == nil ? nil : "raiders update"
             )

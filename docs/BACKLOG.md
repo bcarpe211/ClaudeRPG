@@ -492,6 +492,12 @@ not commit the internal IP.
       while preserving HTTP `404`, the three exact artifact matchers,
       `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and the
       unpublished-state tests. This is not an asset dependency for this release.
+- [ ] Optional audit metadata — consider recording release sequence, Git SHA,
+      and protocol as opaque metadata only if employees or operators later find
+      it useful. It must remain non-required for startup, collection, status,
+      install, update, and publication; must not restore self-update, artifact
+      selection, canary, manifest, checksum, or multi-generation machinery; and
+      is not a blocker for the employee beta.
 
 ## 29. Next-release zsh-compatible onboarding and pasted-command audit — HARD BLOCKER
 
