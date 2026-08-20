@@ -680,7 +680,9 @@ public enum ControlSocketClient {
         switch command {
         case .on, .off, .uninstall:
             30
-        case .daemon, .status, .doctor:
+        case .doctor:
+            5
+        case .daemon, .status:
             2
         }
     }

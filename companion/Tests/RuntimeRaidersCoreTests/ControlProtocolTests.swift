@@ -1115,6 +1115,30 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(response, ControlResponse(ok: true, message: "present"))
     }
 
+    func testDoctorWaitsLongerThanItsBoundedServerHealthProbe() throws {
+        let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-slow-doctor-control-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let socketURL = parent.appendingPathComponent("agent.sock")
+        let server = ControlSocketServer(socketURL: socketURL)
+        try server.startRequests { request in
+            XCTAssertEqual(request.command, .doctor)
+            Thread.sleep(forTimeInterval: 2.25)
+            return ControlResponse(ok: true, message: "server health unavailable")
+        }
+        defer { server.stop() }
+
+        let response = try ControlSocketClient.send(
+            request: ControlRequest(command: .doctor, claudeOTelEnvironmentPresent: false),
+            to: socketURL
+        )
+
+        XCTAssertEqual(
+            response,
+            ControlResponse(ok: true, message: "server health unavailable")
+        )
+    }
+
     func testAttestedSocketResponseReportsTheActualServingExecutable() throws {
         let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-attested-control-\(UUID().uuidString)", isDirectory: true)
