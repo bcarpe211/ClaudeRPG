@@ -130,6 +130,10 @@ esac`);
 
   const baseline = 'ok|1|100|200|4|6066045|4|6|6|13596|164541509|3763464623|13740|13|3763464623|164541509|84005051|1|1';
   const post = 'ok|1|100|200|5|6066947|5|9|9|13598|164542411|3763464623|13742|13|3763464623|164542411|84006020|1|1|1|5|codex|codex_desktop|completed|40|5|0|1|2|48|854|0|902|3|902|1|5|2|902|0';
+  const postAfterGameWake = post.replace(
+    'ok|1|100|200|',
+    'ok|0|1700000001000|250|',
+  ).replace('|84006020|1|1|1|5|', '|84004000|1|1|1|5|');
   const historyDrift = baseline.replace('|4|6066045|', '|5|6066045|');
   const volatileActivity = baseline.replace('|1|100|200|', '|1|101|200|');
   const scoreMismatch = post.replace('|902|3|902|', '|903|3|902|');
@@ -169,6 +173,7 @@ case "${'$'}{GATE_SCENARIO:-success}:${'$'}count" in
   history-drift:2) printf '%s\n' '${historyDrift}' ;;
   history-drift-off-permanent:2) printf '%s\n' '${historyDrift}' ;;
   volatile-activity:2) printf '%s\n' '${volatileActivity}' ;;
+  game-wake:3) printf '%s\n' '${postAfterGameWake}' ;;
   score-mismatch:3) printf '%s\n' '${scoreMismatch}' ;;
   *:3) printf '%s\n' '${post}' ;;
   *) printf '%s\n' '${baseline}' ;;
@@ -294,6 +299,23 @@ describe('Runtime Raiders one-shot live activation gate', () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(report(value)).toContain('history_only_activation=PASS');
+  });
+
+  it('accepts exact telemetry scoring when the synthetic activity wakes the game', () => {
+    const value = fixture('game-wake');
+    const result = runGate(value);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const gateReport = report(value);
+    expect(gateReport).toContain('exactly_one_scored_run=PASS');
+    expect(gateReport).toContain('baseline_game_paused=1');
+    expect(gateReport).toContain('baseline_game_last_activity_at=100');
+    expect(gateReport).toContain('baseline_combat_active_ms=200');
+    expect(gateReport).toContain('baseline_player_gold=84005051');
+    expect(gateReport).toContain('post_game_paused=0');
+    expect(gateReport).toContain('post_game_last_activity_at=1700000001000');
+    expect(gateReport).toContain('post_combat_active_ms=250');
+    expect(gateReport).toContain('post_player_gold=84004000');
   });
 
   it('retries emergency shutdown until status proves collection is disabled', () => {

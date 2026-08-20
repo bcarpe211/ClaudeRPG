@@ -282,8 +282,7 @@ stable_server_history_matches() {
 reconciles_post_snapshot() {
   local wire="$1" field raid usage completion duration new_events new_tokens
   IFS='|' read -r -a POST_FIELDS <<<"$wire"
-  [ "${#POST_FIELDS[@]}" -eq 40 ] && [ "${POST_FIELDS[0]}" = ok ] &&
-    [ "${POST_FIELDS[1]}" = 1 ] || return 1
+  [ "${#POST_FIELDS[@]}" -eq 40 ] && [ "${POST_FIELDS[0]}" = ok ] || return 1
   for field in "${POST_FIELDS[@]:1:20}" "${POST_FIELDS[@]:24}"; do
     [[ "$field" =~ ^[0-9]+$ ]] || return 1
   done
@@ -296,9 +295,8 @@ reconciles_post_snapshot() {
   duration="${POST_FIELDS[31]}"
   new_events="${POST_FIELDS[33]}"
   new_tokens="${POST_FIELDS[37]}"
-  [ "${POST_FIELDS[2]}" = "${BASE_FIELDS[2]}" ] &&
-    [ "${POST_FIELDS[3]}" = "${BASE_FIELDS[3]}" ] &&
-    [ "${POST_FIELDS[4]}" -eq "$((BASE_FIELDS[4] + 1))" ] &&
+  # Positive activity can wake the game; fields 1-3 and 16 are report-only here.
+  [ "${POST_FIELDS[4]}" -eq "$((BASE_FIELDS[4] + 1))" ] &&
     [ "${POST_FIELDS[5]}" -eq "$((BASE_FIELDS[5] + raid))" ] &&
     [ "${POST_FIELDS[6]}" = "${POST_FIELDS[20]}" ] &&
     [ "${POST_FIELDS[19]}" -eq 1 ] && [ "${POST_FIELDS[20]}" -gt "${BASE_FIELDS[6]}" ] &&
@@ -318,7 +316,6 @@ reconciles_post_snapshot() {
     [ "${POST_FIELDS[13]}" = "${BASE_FIELDS[13]}" ] &&
     [ "${POST_FIELDS[14]}" = "${BASE_FIELDS[14]}" ] &&
     [ "${POST_FIELDS[15]}" -eq "$((BASE_FIELDS[15] + raid))" ] &&
-    [ "${POST_FIELDS[16]}" -ge "${BASE_FIELDS[16]}" ] &&
     [ "${POST_FIELDS[17]}" = "${BASE_FIELDS[17]}" ] &&
     [ "${POST_FIELDS[18]}" = "${BASE_FIELDS[18]}" ]
 }
@@ -356,11 +353,15 @@ BASE_FIELDS=("${SNAP_FIELDS[@]}")
 report_line "baseline_runs=${BASE_FIELDS[4]}"
 report_line "baseline_run_events=${BASE_FIELDS[7]}"
 report_line "baseline_raid_power=${BASE_FIELDS[5]}"
+report_line "baseline_game_paused=${BASE_FIELDS[1]}"
+report_line "baseline_game_last_activity_at=${BASE_FIELDS[2]}"
+report_line "baseline_combat_active_ms=${BASE_FIELDS[3]}"
 report_line "baseline_token_events=${BASE_FIELDS[9]}"
 report_line "baseline_token_effective=${BASE_FIELDS[10]}"
 report_line "baseline_token_total=${BASE_FIELDS[11]}"
 report_line "baseline_player_total=${BASE_FIELDS[14]}"
 report_line "baseline_player_effective=${BASE_FIELDS[15]}"
+report_line "baseline_player_gold=${BASE_FIELDS[16]}"
 
 echo 'Runtime Raiders live gate: enabling collection for the bounded proof...'
 ON_RESPONSE="$("$RAIDERS_TOOL" on)" || gate_fail 'raiders on failed'
@@ -424,6 +425,10 @@ done
 
 report_line "new_run_id=${POST_FIELDS[20]}"
 report_line "new_raid_power=${POST_FIELDS[32]}"
+report_line "post_game_paused=${POST_FIELDS[1]}"
+report_line "post_game_last_activity_at=${POST_FIELDS[2]}"
+report_line "post_combat_active_ms=${POST_FIELDS[3]}"
+report_line "post_player_gold=${POST_FIELDS[16]}"
 report_line 'exactly_one_scored_run=PASS'
 RESULT=PASS
 FAILURE=''
