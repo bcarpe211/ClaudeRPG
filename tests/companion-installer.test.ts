@@ -11,6 +11,7 @@ import {
   readlinkSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -20,6 +21,7 @@ import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const installerTemplate = join(process.cwd(), 'companion/packaging/install.sh');
+const iconResource = join(process.cwd(), 'companion/packaging/RuntimeRaiders.icns');
 const releaseBuilder = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
 const signedReleaseVerifier = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
 const label = 'com.redlattice.runtime-raiders-agent';
@@ -50,6 +52,7 @@ function buildFixture() {
   mkdirSync(join(repository, 'scripts/test'), { recursive: true });
   mkdirSync(bin);
   cpSync(installerTemplate, join(repository, 'companion/packaging/install.sh'));
+  cpSync(iconResource, join(repository, 'companion/packaging/RuntimeRaiders.icns'));
   cpSync(releaseBuilder, join(repository, 'scripts/release/build-runtime-raiders-agent.sh'));
   cpSync(signedReleaseVerifier, join(repository, 'scripts/test/verify-runtime-raiders-signed-release-real.sh'));
   executable(join(repository, 'scripts/test/verify-runtime-raiders-signed-release.sh'), [
@@ -238,6 +241,9 @@ function plist(bundleVersion = version, bundleId = label): string {
     '<plist version="1.0"><dict>',
     `<key>CFBundleIdentifier</key><string>${bundleId}</string>`,
     '<key>CFBundleExecutable</key><string>runtime-raiders-agent</string>',
+    '<key>CFBundleName</key><string>Runtime Raiders</string>',
+    '<key>CFBundleDisplayName</key><string>Runtime Raiders</string>',
+    '<key>CFBundleIconFile</key><string>RuntimeRaiders</string>',
     `<key>CFBundleShortVersionString</key><string>${bundleVersion}</string>`,
     '</dict></plist>',
     '',
@@ -281,7 +287,7 @@ function fakeTools(root: string): string {
     '  https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip)',
     '    printf "curl:archive\\n" >> "$RR_EVENT_LOG"',
     '    [ "${RR_FAIL_ARCHIVE_DOWNLOAD:-0}" != 1 ] || exit 56',
-    '    printf "%s/unpacked/Runtime Raiders Agent.app\\n" "${output%/*}" > "$RR_EXPECT_CANDIDATE"',
+    '    printf "%s/unpacked/Runtime Raiders.app\\n" "${output%/*}" > "$RR_EXPECT_CANDIDATE"',
     '    cp "$RR_ARCHIVE" "$output"; printf 200;;',
     '  https://raiders.redlattice.com/api/raiders/enroll)',
     '    printf "curl:enroll\\n" >> "$RR_EVENT_LOG"',
@@ -385,12 +391,12 @@ function fixture() {
   const support = join(home, 'Library/Application Support/Runtime Raiders');
   const state = join(support, 'state');
   const outbox = join(support, 'outbox');
-  const app = join(support, 'Runtime Raiders Agent.app');
+  const app = join(support, 'Runtime Raiders.app');
   const plistPath = join(home, 'Library/LaunchAgents', `${label}.plist`);
   const shim = join(support, 'raiders');
   const command = join(home, '.local/bin/raiders');
   const archiveTree = join(root, 'archive-tree');
-  const candidate = join(archiveTree, 'Runtime Raiders Agent.app');
+  const candidate = join(archiveTree, 'Runtime Raiders.app');
   const eventLog = join(root, 'events.log');
   const argvLog = join(root, 'argv.log');
   const enrollmentStdin = join(root, 'enrollment-stdin.json');
@@ -399,8 +405,10 @@ function fixture() {
   const enrollmentResponse = join(root, 'enrollment-response.json');
   const tty = join(root, 'tty');
   mkdirSync(join(candidate, 'Contents/MacOS'), { recursive: true });
+  mkdirSync(join(candidate, 'Contents/Resources'));
   mkdirSync(home);
   writeFileSync(join(candidate, 'Contents/Info.plist'), plist());
+  cpSync(iconResource, join(candidate, 'Contents/Resources/RuntimeRaiders.icns'));
   executable(join(candidate, 'Contents/MacOS/runtime-raiders-agent'), [
     'printf "agent:%s\\n" "$*" >> "$RR_EVENT_LOG"',
     '[ "${RR_FAIL_STATUS:-0}" != 1 ] || exit 78',
@@ -661,6 +669,24 @@ describe('Runtime Raiders release build', () => {
     expect(readFileSync(value.log, 'utf8')).toBe('');
   });
 
+  it('release build refuses a malformed icon before invoking any build tool', () => {
+    const value = buildFixture();
+    writeFileSync(join(value.repository, 'companion/packaging/RuntimeRaiders.icns'), 'not an icon\n');
+    for (const args of [
+      ['add', 'companion/packaging/RuntimeRaiders.icns'],
+      ['commit', '-qm', 'malformed icon fixture'],
+    ]) {
+      const result = spawnSync('/usr/bin/git', args, { cwd: value.repository, encoding: 'utf8' });
+      expect(result.status, result.stderr).toBe(0);
+    }
+
+    const result = runBuild(value);
+    expect(result.status).toBe(64);
+    expect(result.stderr).toContain('Runtime Raiders icon resource is invalid');
+    expect(readFileSync(value.log, 'utf8')).toBe('');
+    expect(existsSync(value.output)).toBe(false);
+  });
+
   it('release build production mode ignores PATH-shadowed Apple tools', () => {
     const value = buildFixture();
     const environment = { ...value.environment };
@@ -715,11 +741,15 @@ describe('Runtime Raiders release build', () => {
       '-x', '-k', join(value.output, 'runtime-raiders-agent.zip'), extracted,
     ], { encoding: 'utf8' });
     expect(unpacked.status, unpacked.stderr).toBe(0);
-    expect(readdirSync(extracted)).toEqual(['Runtime Raiders Agent.app']);
-    const info = join(extracted, 'Runtime Raiders Agent.app/Contents/Info.plist');
+    expect(readdirSync(extracted)).toEqual(['Runtime Raiders.app']);
+    const application = join(extracted, 'Runtime Raiders.app');
+    const info = join(application, 'Contents/Info.plist');
     for (const [key, expected] of [
       ['CFBundleIdentifier', 'com.redlattice.runtime-raiders-agent'],
       ['CFBundleExecutable', 'runtime-raiders-agent'],
+      ['CFBundleName', 'Runtime Raiders'],
+      ['CFBundleDisplayName', 'Runtime Raiders'],
+      ['CFBundleIconFile', 'RuntimeRaiders'],
       ['CFBundleShortVersionString', '0.4.0'],
       ['CFBundleVersion', '0.4.0'],
     ]) {
@@ -727,6 +757,8 @@ describe('Runtime Raiders release build', () => {
       expect(checked.status, checked.stderr).toBe(0);
       expect(checked.stdout.trim()).toBe(expected);
     }
+    expect(readFileSync(join(application, 'Contents/Resources/RuntimeRaiders.icns')).byteLength)
+      .toBeGreaterThan(0);
     for (const key of [
       'RuntimeRaidersReleaseSequence',
       'RuntimeRaidersReleaseSHA',
@@ -1074,6 +1106,17 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(log.indexOf('spctl:assess')).toBeLessThan(log.findIndex((line) => line.startsWith('launchctl:bootout ')));
   });
 
+  it('fails clearly and without mutation when the disposable 0.4.0 app path remains', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    renameSync(value.app, join(value.support, 'Runtime Raiders Agent.app'));
+    const result = run(value);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('obsolete Runtime Raiders Agent.app canary must be removed');
+    expectNoBootout(value);
+    expect(events(value).some((line) => line.startsWith('curl:'))).toBe(false);
+  });
+
   it.each([
     ['bad signature', (value: Fixture) => { value.environment.RR_FAIL_SIGNATURE = '1'; }],
     ['bad Gatekeeper assessment', (value: Fixture) => { value.environment.RR_FAIL_SPCTL = '1'; }],
@@ -1082,6 +1125,9 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     }],
     ['wrong version', (value: Fixture) => {
       writeFileSync(join(value.candidate, 'Contents/Info.plist'), plist('9.9.9'));
+    }],
+    ['malformed icon resource', (value: Fixture) => {
+      writeFileSync(join(value.candidate, 'Contents/Resources/RuntimeRaiders.icns'), 'not an icns file\n');
     }],
     ['missing executable', (value: Fixture) => {
       rmSync(join(value.candidate, 'Contents/MacOS/runtime-raiders-agent'));
@@ -1111,7 +1157,13 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     const result = run(value);
     expect(result.status, result.stderr + result.stdout).toBe(0);
     expect(readFileSync(join(value.app, 'Contents/Info.plist'), 'utf8')).toBe(plist());
-    expect(readFileSync(value.plist, 'utf8')).toContain(join(value.app, 'Contents/MacOS/runtime-raiders-agent'));
+    const installedPlist = readFileSync(value.plist, 'utf8');
+    expect(installedPlist).toContain(join(value.app, 'Contents/MacOS/runtime-raiders-agent'));
+    const association = spawnSync('/usr/bin/plutil', [
+      '-extract', 'AssociatedBundleIdentifiers', 'json', '-o', '-', value.plist,
+    ], { encoding: 'utf8' });
+    expect(association.status, association.stderr).toBe(0);
+    expect(JSON.parse(association.stdout)).toEqual([label]);
     expect(readFileSync(value.shim, 'utf8')).not.toContain('old shim');
     expect(events(value).filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(1);
     expect(existsSync(value.running)).toBe(true);

@@ -556,7 +556,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         [
             "CFBundleExecutable": "runtime-raiders-agent",
             "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
-            "CFBundleName": "Runtime Raiders Agent",
+            "CFBundleName": "Runtime Raiders",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": "1.2.3",
             "CFBundleVersion": "1.2.3",

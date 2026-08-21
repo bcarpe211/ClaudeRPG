@@ -4,6 +4,10 @@
 <dict>
   <key>Label</key>
   <string>com.redlattice.runtime-raiders-agent</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>com.redlattice.runtime-raiders-agent</string>
+  </array>
   <key>ProgramArguments</key>
   <array>
     <string>__RUNTIME_RAIDERS_AGENT_EXECUTABLE__</string>

@@ -554,24 +554,28 @@ Acceptance gate:
 
 The signed `0.4.0` canary is functionally correct, but its app bundle currently
 appears as **Runtime Raiders Agent** and has no bundled icon. macOS also shows
-**Software from “Bryan Carpenter”** in the App Background Activity notification
-because the app is signed as `Developer ID Application: Bryan Carpenter`; the
-live Background Task record repeats that value as both Developer Name and Parent
-Identifier. Before the wider employee rollout, make the user-facing background
-item consistently appear as **Runtime Raiders** while retaining
-`com.redlattice.runtime-raiders-agent` as the internal LaunchAgent label. Bundle
-name and icon changes alone cannot remove the personal signer name from that
-notification.
+**Software from “Bryan Carpenter”** in the App Background Activity notification;
+the live Background Task record repeats that value as both Developer Name and
+Parent Identifier. The developer identity may remain Bryan Carpenter, but the
+software/background-item identity must be **Runtime Raiders**. Before the wider
+employee rollout, verify that association between the LaunchAgent and hidden app
+prevents the developer name from replacing the product name while retaining
+`com.redlattice.runtime-raiders-agent` as the internal LaunchAgent label.
+
+The unsigned `0.4.1` source now uses `Runtime Raiders.app`, the visible name
+`Runtime Raiders`, an associated-bundle declaration, and a validated branded
+`.icns` resource. The checklist remains open until a fresh signed clean install
+proves the actual macOS UI behavior.
 
 - [ ] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
       remove the retired `Runtime Raiders Launcher` / `Runtime Raiders Agent`
       wording from visible system UI.
 - [ ] Ship one approved Runtime Raiders `.icns` resource and bind it through the
       app bundle metadata.
-- [ ] Sign the employee release with an approved organization-facing Apple
-      Developer ID, or use another reviewed Apple-supported registration design,
-      so the background-activity notification does not identify the software as
-      coming from `Bryan Carpenter`.
+- [ ] Confirm the signed association keeps **Runtime Raiders** as the product or
+      parent identity while correctly retaining Bryan Carpenter as the developer;
+      if not, review an organization-facing certificate or another documented
+      Apple-supported registration design.
 - [ ] After a clean signed install, verify the actual Background Items entry in
       System Settings, the first-run App Background Activity notification, and
       the corresponding `sfltool dumpbtm` record show the intended name, icon,

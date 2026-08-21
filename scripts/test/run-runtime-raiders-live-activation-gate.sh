@@ -93,7 +93,7 @@ HOME_PHYSICAL="$(cd "$HOME" && pwd -P)"
 
 SESSION_ROOT="$HOME/.codex/sessions"
 SUPPORT_ROOT="$HOME/Library/Application Support/Runtime Raiders"
-AGENT_APP="$SUPPORT_ROOT/Runtime Raiders Agent.app"
+AGENT_APP="$SUPPORT_ROOT/Runtime Raiders.app"
 [ -d "$SESSION_ROOT" ] && [ ! -L "$SESSION_ROOT" ] &&
   [ "$(/usr/bin/stat -f '%u' "$SESSION_ROOT")" = "$OWNER" ] || {
   echo "Runtime Raiders live gate requires an owner-controlled Codex session directory" >&2

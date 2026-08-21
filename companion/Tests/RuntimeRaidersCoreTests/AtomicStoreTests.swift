@@ -139,7 +139,7 @@ final class AtomicStoreTests: XCTestCase {
             )
             XCTAssertEqual(
                 paths.agentApplication,
-                support.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true)
+                support.appendingPathComponent("Runtime Raiders.app", isDirectory: true)
             )
             XCTAssertFalse(FileManager.default.fileExists(atPath: support.path))
         }

@@ -27,7 +27,8 @@ OWNER="$(/usr/bin/id -u)"
 SUPPORT="$HOME/Library/Application Support/Runtime Raiders"
 STATE="$SUPPORT/state"
 OUTBOX="$SUPPORT/outbox"
-APP="$SUPPORT/Runtime Raiders Agent.app"
+APP="$SUPPORT/Runtime Raiders.app"
+LEGACY_APP="$SUPPORT/Runtime Raiders Agent.app"
 AGENT="$APP/Contents/MacOS/runtime-raiders-agent"
 SHIM="$SUPPORT/raiders"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
@@ -48,7 +49,7 @@ refuse_symlink() {
 
 for owned_path in \
   "$HOME/Library" "$HOME/Library/Application Support" "$SUPPORT" "$STATE" "$OUTBOX" \
-  "$APP" "$LAUNCH_AGENTS" "$PLIST" "$SHIM" "$HOME/.local" "$COMMAND_DIRECTORY" \
+  "$APP" "$LEGACY_APP" "$LAUNCH_AGENTS" "$PLIST" "$SHIM" "$HOME/.local" "$COMMAND_DIRECTORY" \
   "$RELEASES" "$INSTALLATION" "$LAUNCHER"; do
   refuse_symlink "$owned_path"
 done
@@ -60,6 +61,10 @@ if [ -d "$RELEASES" ] &&
 fi
 if [ -e "$RELEASES" ] || [ -e "$INSTALLATION" ] || [ -e "$LAUNCHER" ]; then
   echo 'Runtime Raiders refuses an obsolete versioned installation; perform the approved one-time cleanup first.' >&2
+  exit 1
+fi
+if [ -e "$LEGACY_APP" ]; then
+  echo 'The obsolete Runtime Raiders Agent.app canary must be removed before installing Runtime Raiders.' >&2
   exit 1
 fi
 
@@ -321,9 +326,10 @@ download_status="$(/usr/bin/curl --fail --silent --show-error --proto '=https' -
 UNPACKED="$WORK/unpacked"
 /bin/mkdir "$UNPACKED"
 /usr/bin/ditto -x -k "$ARCHIVE" "$UNPACKED"
-CANDIDATE_APP="$UNPACKED/Runtime Raiders Agent.app"
+CANDIDATE_APP="$UNPACKED/Runtime Raiders.app"
 CANDIDATE_INFO="$CANDIDATE_APP/Contents/Info.plist"
 CANDIDATE_AGENT="$CANDIDATE_APP/Contents/MacOS/runtime-raiders-agent"
+CANDIDATE_ICON="$CANDIDATE_APP/Contents/Resources/RuntimeRaiders.icns"
 [ "$(/usr/bin/find "$UNPACKED" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 1 ] &&
   [ -d "$CANDIDATE_APP" ] && [ ! -L "$CANDIDATE_APP" ] &&
   [ -z "$(/usr/bin/find "$UNPACKED" -name __MACOSX -print -quit)" ] &&
@@ -335,19 +341,34 @@ CANDIDATE_AGENT="$CANDIDATE_APP/Contents/MacOS/runtime-raiders-agent"
 }
 candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CANDIDATE_INFO")" &&
   candidate_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$CANDIDATE_INFO")" &&
-  candidate_executable="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$CANDIDATE_INFO")" || {
+  candidate_executable="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$CANDIDATE_INFO")" &&
+  candidate_name="$(/usr/bin/plutil -extract CFBundleName raw -o - "$CANDIDATE_INFO")" &&
+  candidate_display_name="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$CANDIDATE_INFO")" &&
+  candidate_icon_file="$(/usr/bin/plutil -extract CFBundleIconFile raw -o - "$CANDIDATE_INFO")" || {
     echo 'Runtime Raiders app metadata is invalid.' >&2
     exit 1
   }
 [ "$candidate_bundle_id" = "$LABEL" ] &&
   [ "$candidate_version" = "$COMPANION_VERSION" ] &&
-  [ "$candidate_executable" = runtime-raiders-agent ] || {
+  [ "$candidate_executable" = runtime-raiders-agent ] &&
+  [ "$candidate_name" = 'Runtime Raiders' ] &&
+  [ "$candidate_display_name" = 'Runtime Raiders' ] &&
+  [ "$candidate_icon_file" = RuntimeRaiders ] &&
+  [ -f "$CANDIDATE_ICON" ] && [ ! -L "$CANDIDATE_ICON" ] && [ -s "$CANDIDATE_ICON" ] || {
   echo 'Runtime Raiders app identity is invalid.' >&2
   exit 1
 }
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$CANDIDATE_APP"
 /usr/bin/codesign --verify --strict "-R=$AGENT_REQUIREMENT" "$CANDIDATE_APP"
 /usr/sbin/spctl --assess --type execute --verbose=2 "$CANDIDATE_APP"
+CANDIDATE_ICONSET="$WORK/candidate-icon.iconset"
+/usr/bin/iconutil -c iconset "$CANDIDATE_ICON" -o "$CANDIDATE_ICONSET" >/dev/null 2>&1 &&
+  [ -f "$CANDIDATE_ICONSET/icon_512x512@2x.png" ] &&
+  [ ! -L "$CANDIDATE_ICONSET/icon_512x512@2x.png" ] &&
+  [ -s "$CANDIDATE_ICONSET/icon_512x512@2x.png" ] || {
+  echo 'Runtime Raiders icon resource is invalid.' >&2
+  exit 1
+}
 
 if [ "$has_enrollment" -eq 0 ]; then
   [ -r /dev/tty ] && [ -w /dev/tty ] || usage
@@ -411,6 +432,10 @@ cat > "$STAGED_PLIST" <<EOF
 <dict>
   <key>Label</key>
   <string>$LABEL</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>$LABEL</string>
+  </array>
   <key>ProgramArguments</key>
   <array>
     <string>$AGENT</string>
@@ -428,7 +453,7 @@ STAGED_SHIM="$(/usr/bin/mktemp "$SUPPORT/.runtime-raiders-shim.XXXXXX")"
 cat > "$STAGED_SHIM" <<'EOF'
 #!/bin/sh
 set -eu
-exec "$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent" "$@"
+exec "$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders.app/Contents/MacOS/runtime-raiders-agent" "$@"
 EOF
 /bin/chmod 700 "$STAGED_SHIM"
 

@@ -299,24 +299,32 @@ ARCHIVE_SHA256="$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { pr
 EXTRACTED="$WORK/extracted"
 /bin/mkdir "$EXTRACTED"
 /usr/bin/ditto -x -k "$ARCHIVE" "$EXTRACTED"
-AGENT_APP="$EXTRACTED/Runtime Raiders Agent.app"
+AGENT_APP="$EXTRACTED/Runtime Raiders.app"
 AGENT_INFO="$AGENT_APP/Contents/Info.plist"
 AGENT_EXECUTABLE="$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
+AGENT_ICON="$AGENT_APP/Contents/Resources/RuntimeRaiders.icns"
 [ "$(/usr/bin/find "$EXTRACTED" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 1 ] &&
   [ -d "$AGENT_APP" ] && [ ! -L "$AGENT_APP" ] &&
   [ -z "$(/usr/bin/find "$EXTRACTED" -type l -print -quit)" ] &&
   [ -f "$AGENT_INFO" ] && [ ! -L "$AGENT_INFO" ] &&
+  [ -f "$AGENT_ICON" ] && [ ! -L "$AGENT_ICON" ] && [ -s "$AGENT_ICON" ] &&
   [ -x "$AGENT_EXECUTABLE" ] && [ ! -L "$AGENT_EXECUTABLE" ] || {
-  echo "archive does not contain exactly one safe Runtime Raiders Agent.app" >&2
+  echo "archive does not contain exactly one safe Runtime Raiders.app" >&2
   exit 1
 }
 
 BUNDLE_ID="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$AGENT_INFO")"
 BUNDLE_EXECUTABLE="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$AGENT_INFO")"
+BUNDLE_NAME="$(/usr/bin/plutil -extract CFBundleName raw -o - "$AGENT_INFO")"
+BUNDLE_DISPLAY_NAME="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$AGENT_INFO")"
+BUNDLE_ICON_FILE="$(/usr/bin/plutil -extract CFBundleIconFile raw -o - "$AGENT_INFO")"
 BUNDLE_SHORT_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$AGENT_INFO")"
 BUNDLE_VERSION="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$AGENT_INFO")"
 [ "$BUNDLE_ID" = com.redlattice.runtime-raiders-agent ] &&
   [ "$BUNDLE_EXECUTABLE" = runtime-raiders-agent ] &&
+  [ "$BUNDLE_NAME" = 'Runtime Raiders' ] &&
+  [ "$BUNDLE_DISPLAY_NAME" = 'Runtime Raiders' ] &&
+  [ "$BUNDLE_ICON_FILE" = RuntimeRaiders ] &&
   [ "$BUNDLE_SHORT_VERSION" = "$COMPANION_VERSION" ] &&
   [ "$BUNDLE_VERSION" = "$COMPANION_VERSION" ] || {
   echo "archive bundle identity or version is invalid" >&2
@@ -336,6 +344,14 @@ AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor 
 "$CODESIGN_TOOL" --verify --strict "-R=$AGENT_REQUIREMENT" "$AGENT_APP"
 "$SPCTL_TOOL" --assess --type execute --verbose=2 "$AGENT_APP"
 "$XCRUN_TOOL" stapler validate "$AGENT_APP"
+VERIFIED_ICONSET="$WORK/verified-icon.iconset"
+/usr/bin/iconutil -c iconset "$AGENT_ICON" -o "$VERIFIED_ICONSET" >/dev/null 2>&1 &&
+  [ -f "$VERIFIED_ICONSET/icon_512x512@2x.png" ] &&
+  [ ! -L "$VERIFIED_ICONSET/icon_512x512@2x.png" ] &&
+  [ -s "$VERIFIED_ICONSET/icon_512x512@2x.png" ] || {
+  echo "archive icon resource is invalid" >&2
+  exit 1
+}
 VERIFIED_EXECUTABLE_SHA256="$(/usr/bin/shasum -a 256 "$AGENT_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')"
 
 PRIVATE_TMP="$(cd /private/tmp && pwd -P)"
@@ -402,7 +418,7 @@ cat > "$SMOKE_BIN/codesign" <<'EOF'
 set -eu
 last=''; for last in "$@"; do :; done
 case "$last" in
-  "$RR_VERIFY_SMOKE_HOME"'/Library/Application Support/Runtime Raiders/.runtime-raiders-install.'*'/unpacked/Runtime Raiders Agent.app') : ;;
+  "$RR_VERIFY_SMOKE_HOME"'/Library/Application Support/Runtime Raiders/.runtime-raiders-install.'*'/unpacked/Runtime Raiders.app') : ;;
   *) exit 65 ;;
 esac
 if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --deep ] && [ "$3" = --strict ] && [ "$4" = --verbose=2 ]; then
@@ -421,7 +437,7 @@ cat > "$SMOKE_BIN/spctl" <<'EOF'
 #!/bin/sh
 set -eu
 last=''; for last in "$@"; do :; done
-case "$last" in *'/unpacked/Runtime Raiders Agent.app') : ;; *) exit 65 ;; esac
+case "$last" in *'/unpacked/Runtime Raiders.app') : ;; *) exit 65 ;; esac
 EOF
 cat > "$SMOKE_BIN/launchctl" <<'EOF'
 #!/bin/sh
@@ -456,7 +472,7 @@ SMOKE_ENV=(
 )
 /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin "${SMOKE_ENV[@]}" /bin/sh "$SMOKE_INSTALLER" >/dev/null
 INSTALLED_COMMAND="$SMOKE_HOME/.local/bin/raiders"
-INSTALLED_EXECUTABLE="$SMOKE_HOME/Library/Application Support/Runtime Raiders/Runtime Raiders Agent.app/Contents/MacOS/runtime-raiders-agent"
+INSTALLED_EXECUTABLE="$SMOKE_HOME/Library/Application Support/Runtime Raiders/Runtime Raiders.app/Contents/MacOS/runtime-raiders-agent"
 [ -x "$INSTALLED_COMMAND" ] &&
   [ ! -e "$SMOKE_HOME/Library/Application Support/Runtime Raiders/state/collector-state.json" ] &&
   [ "$(/usr/bin/shasum -a 256 "$INSTALLED_EXECUTABLE" | /usr/bin/awk 'NR == 1 { print $1 }')" = "$VERIFIED_EXECUTABLE_SHA256" ] || {

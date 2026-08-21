@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="224" fill="#160f20"/>
+  <rect x="54" y="54" width="916" height="916" rx="184"
+        fill="none" stroke="#54282b" stroke-width="76"/>
+  <rect x="108" y="108" width="808" height="808" rx="140"
+        fill="none" stroke="#e8c96a" stroke-width="18"/>
+  <circle cx="512" cy="512" r="288" fill="#221631" stroke="#2e2140" stroke-width="28"/>
+  <image x="192" y="192" width="640" height="640"
+         image-rendering="pixelated"
+         xlink:href="../../src/web/public/landing/sword.png"/>
+</svg>

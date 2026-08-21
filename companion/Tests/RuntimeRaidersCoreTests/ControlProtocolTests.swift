@@ -9,7 +9,7 @@ final class ControlProtocolTests: XCTestCase {
         let paths = AgentPaths(applicationSupportDirectory: root)
         let support = root.appendingPathComponent("Runtime Raiders", isDirectory: true)
         let application = support.appendingPathComponent(
-            "Runtime Raiders Agent.app",
+            "Runtime Raiders.app",
             isDirectory: true
         )
 

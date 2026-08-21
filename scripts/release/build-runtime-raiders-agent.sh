@@ -23,6 +23,7 @@ fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 RELEASE_FILE="$ROOT/companion/RELEASE"
 INSTALLER_TEMPLATE="$ROOT/companion/packaging/install.sh"
+ICON_RESOURCE="$ROOT/companion/packaging/RuntimeRaiders.icns"
 ARCHIVE_MAX_BYTES=8388608
 
 invalid_test_tools() {
@@ -96,6 +97,10 @@ esac
   echo "installer template is required" >&2
   exit 64
 }
+[ -f "$ICON_RESOURCE" ] && [ ! -L "$ICON_RESOURCE" ] && [ -s "$ICON_RESOURCE" ] || {
+  echo "Runtime Raiders icon resource is required" >&2
+  exit 64
+}
 
 GIT_STATUS="$(/usr/bin/git -C "$ROOT" status --porcelain --untracked-files=no)" || {
   echo "unable to inspect Git worktree" >&2
@@ -145,6 +150,15 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+SOURCE_ICONSET="$WORK/source-icon.iconset"
+/usr/bin/iconutil -c iconset "$ICON_RESOURCE" -o "$SOURCE_ICONSET" >/dev/null 2>&1 &&
+  [ -f "$SOURCE_ICONSET/icon_512x512@2x.png" ] &&
+  [ ! -L "$SOURCE_ICONSET/icon_512x512@2x.png" ] &&
+  [ -s "$SOURCE_ICONSET/icon_512x512@2x.png" ] || {
+  echo "Runtime Raiders icon resource is invalid" >&2
+  exit 64
+}
+
 SWIFT_SCRATCH="$WORK/swift"
 for arch in arm64 x86_64; do
   (
@@ -163,10 +177,12 @@ UNIVERSAL_AGENT="$WORK/runtime-raiders-agent"
 "$LIPO_TOOL" -create "$WORK/raiders-arm64" "$WORK/raiders-x86_64" -output "$UNIVERSAL_AGENT"
 "$LIPO_TOOL" "$UNIVERSAL_AGENT" -verify_arch arm64 x86_64
 
-AGENT_APP="$WORK/Runtime Raiders Agent.app"
-/bin/mkdir -p "$AGENT_APP/Contents/MacOS"
+AGENT_APP="$WORK/Runtime Raiders.app"
+/bin/mkdir -p "$AGENT_APP/Contents/MacOS" "$AGENT_APP/Contents/Resources"
 /bin/mv "$UNIVERSAL_AGENT" "$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
 /bin/chmod 755 "$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
+/bin/cp "$ICON_RESOURCE" "$AGENT_APP/Contents/Resources/RuntimeRaiders.icns"
+/bin/chmod 644 "$AGENT_APP/Contents/Resources/RuntimeRaiders.icns"
 cat > "$AGENT_APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -174,7 +190,9 @@ cat > "$AGENT_APP/Contents/Info.plist" <<EOF
 <dict>
   <key>CFBundleExecutable</key><string>runtime-raiders-agent</string>
   <key>CFBundleIdentifier</key><string>com.redlattice.runtime-raiders-agent</string>
-  <key>CFBundleName</key><string>Runtime Raiders Agent</string>
+  <key>CFBundleName</key><string>Runtime Raiders</string>
+  <key>CFBundleDisplayName</key><string>Runtime Raiders</string>
+  <key>CFBundleIconFile</key><string>RuntimeRaiders</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$COMPANION_VERSION</string>
   <key>CFBundleVersion</key><string>$COMPANION_VERSION</string>
@@ -185,15 +203,24 @@ EOF
 
 validate_bundle_version() {
   local application="$1" info="$1/Contents/Info.plist"
-  local bundle_id executable short_version bundle_version
+  local bundle_id executable bundle_name display_name icon_file short_version bundle_version
   bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$info")" &&
     executable="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$info")" &&
+    bundle_name="$(/usr/bin/plutil -extract CFBundleName raw -o - "$info")" &&
+    display_name="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$info")" &&
+    icon_file="$(/usr/bin/plutil -extract CFBundleIconFile raw -o - "$info")" &&
     short_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$info")" &&
     bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$info")" || return 1
   [ "$bundle_id" = com.redlattice.runtime-raiders-agent ] &&
     [ "$executable" = runtime-raiders-agent ] &&
+    [ "$bundle_name" = 'Runtime Raiders' ] &&
+    [ "$display_name" = 'Runtime Raiders' ] &&
+    [ "$icon_file" = RuntimeRaiders ] &&
     [ "$short_version" = "$COMPANION_VERSION" ] &&
-    [ "$bundle_version" = "$COMPANION_VERSION" ]
+    [ "$bundle_version" = "$COMPANION_VERSION" ] &&
+    [ -f "$application/Contents/Resources/RuntimeRaiders.icns" ] &&
+    [ ! -L "$application/Contents/Resources/RuntimeRaiders.icns" ] &&
+    [ -s "$application/Contents/Resources/RuntimeRaiders.icns" ]
 }
 
 validate_bundle_version "$AGENT_APP" || {
@@ -243,14 +270,16 @@ ARCHIVE_CREATED_BYTES="$(/usr/bin/wc -c < "$ARCHIVE" | /usr/bin/tr -d ' ')"
 EXTRACTED="$WORK/extracted"
 /bin/mkdir "$EXTRACTED"
 /usr/bin/ditto -x -k "$ARCHIVE" "$EXTRACTED"
-PACKAGED_APP="$EXTRACTED/Runtime Raiders Agent.app"
+PACKAGED_APP="$EXTRACTED/Runtime Raiders.app"
 [ "$(/usr/bin/find "$EXTRACTED" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 1 ] &&
   [ -d "$PACKAGED_APP" ] && [ ! -L "$PACKAGED_APP" ] &&
   [ -z "$(/usr/bin/find "$EXTRACTED" -type l -print -quit)" ] &&
   [ -f "$PACKAGED_APP/Contents/Info.plist" ] && [ ! -L "$PACKAGED_APP/Contents/Info.plist" ] &&
+  [ -f "$PACKAGED_APP/Contents/Resources/RuntimeRaiders.icns" ] &&
+  [ ! -L "$PACKAGED_APP/Contents/Resources/RuntimeRaiders.icns" ] &&
   [ -x "$PACKAGED_APP/Contents/MacOS/runtime-raiders-agent" ] &&
   [ ! -L "$PACKAGED_APP/Contents/MacOS/runtime-raiders-agent" ] || {
-  echo "release archive must contain exactly one Runtime Raiders Agent.app" >&2
+  echo "release archive must contain exactly one Runtime Raiders.app" >&2
   exit 1
 }
 validate_bundle_version "$PACKAGED_APP" || {

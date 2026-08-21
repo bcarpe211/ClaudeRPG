@@ -8,7 +8,7 @@ final class CompanionReleaseTests: XCTestCase {
             .appendingPathComponent("rr-version-only-bundle-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bundle = try makeBundle(
-            at: root.appendingPathComponent("Runtime Raiders Agent.app", isDirectory: true),
+            at: root.appendingPathComponent("Runtime Raiders.app", isDirectory: true),
             infoDictionary: installedVersionInfoDictionary()
         )
 
@@ -53,6 +53,10 @@ final class CompanionReleaseTests: XCTestCase {
         XCTAssertEqual(
             plist["ProgramArguments"] as? [String],
             ["__RUNTIME_RAIDERS_AGENT_EXECUTABLE__", "daemon"]
+        )
+        XCTAssertEqual(
+            plist["AssociatedBundleIdentifiers"] as? [String],
+            ["com.redlattice.runtime-raiders-agent"]
         )
     }
 
