@@ -1,5 +1,10 @@
 # Runtime Raiders internal cutover and rollback
 
+> **Historical pre-0.4.0 procedure.** The sequence-based companion release and
+> cutover workflow below is retired and must not be run. The current companion
+> procedure is
+> [`docs/runtime-raiders/employee-beta.md`](runtime-raiders/employee-beta.md).
+
 This is the human-driven procedure for the first internal Runtime Raiders
 release. It preserves the production SQLite database, changes scoring once, and
 keeps `clauderpg.redlattice.com` as a compatibility name. It does not authorize

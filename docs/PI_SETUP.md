@@ -69,48 +69,11 @@ use the exact reviewed config, reload command, and Cloudflare environment path;
 that environment must be a root-owned, root-group, single-link regular file at
 mode `0600`. Publishing does not run `raiders on` for anyone.
 
-### Historical release notes retained until cleanup
+### Historical companion procedures
 
-Fresh Pi setup does not authorize Runtime Raiders cutover, artifact publication,
-companion installation, or activation. The pre-0.4.0 sequence procedure below
-is retained temporarily for historical evidence and is not the active beta
-runbook. Its source files are `docs/RUNTIME_RAIDERS_CUTOVER.md` and
-`docs/runtime-raiders/companion-operations.md`.
-
-Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence and
-never reuse, reselect, modify, delete, or repackage it. The historical companion
-procedure is retained at `docs/runtime-raiders/companion-operations.md`; it is
-not the employee-beta release authority.
-
-1. Caddy preparation approval;
-2. sequence-2 publication approval;
-3. installed-off sequence-2 canary acceptance;
-4. clean sequence-3 build, review, and signing;
-5. separate sequence-3 publication;
-6. deterministic off-state notification and `raiders status` proof;
-7. manual `raiders update` proof;
-8. separately approved bounded `raiders on` proof with one official Codex Desktop
-   and one official Codex CLI root Run;
-9. `raiders off` proof; and
-10. separate office activation approval.
-
-Only after all ten gates pass may onboarding begin. Each teammate registers a character at
-`http://raiders.local:8080/`. Registration provides a hardened installer command
-and a separate private one-time code for that Raider. The owner runs the command
-on their Mac and enters the code only at the installer's private prompt. The
-installer starts collection **off** and never edits shell or provider
-configuration.
-
-Before opting in, run `raiders status` (and `raiders doctor` if it reports a
-problem) and confirm collection is disabled. Routine onboarding is not a
-canary: no participant runs `raiders on` until a future separately authorized
-office collection decision. The bounded canary above must already have finished
-its Desktop/CLI proof and `raiders off` check.
-
-Only Codex Desktop and Codex CLI are available in this release. Claude Code and
-Omp are unavailable and unsupported. Manually remove the legacy Claude OTel
-shell configuration and old `rpg_*` commands, then start a fresh shell. The
-companion installer does not remove or change legacy shell configuration for you.
+The retired pre-0.4.0 sequence, launcher, and canary procedures remain in Git
+history and in clearly marked historical documents. Do not use them for beta
+installation, publication, updates, or activation.
 
 ## On-Pi verification checklist
 - [ ] `systemctl status claude-rpg` → **active (running)**.
@@ -118,11 +81,11 @@ companion installer does not remove or change legacy shell configuration for you
 - [ ] From a laptop on the internal network: `ping raiders.local` resolves and
       `https://raiders.redlattice.com` loads.
 - [ ] The TV shows the kiosk (dungeon + leaderboard), no desktop/cursor/bars.
-- [ ] Do not register/onboard until the ten ordered release gates above have
-      accepted the two-sequence canary and `raiders off` proof.
-- [ ] Register a character; run the one-time companion installer and confirm
-      `raiders status` reports collection disabled. Office activation is a
-      separate authority after routine onboarding.
+- [ ] Follow only the employee beta runbook for companion publication,
+      installation, verification, and activation.
+- [ ] Register a character; run the one-line companion installer and confirm
+      `raiders status` reports collection disabled before any separate office
+      activation decision.
 - [ ] Confirm Claude Code and Omp remain unavailable; do not configure or probe
       either provider.
 - [ ] Reboot the Pi → it returns to the kiosk unattended.

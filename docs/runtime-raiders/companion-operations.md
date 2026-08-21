@@ -1,5 +1,9 @@
 # Runtime Raiders companion operations
 
+> **Historical pre-0.4.0 procedure.** The quartet, sequence, launcher, and
+> canary system below is retired and must not be run. Use
+> [`employee-beta.md`](employee-beta.md) for the active one-app beta procedure.
+
 This is the companion-release procedure. Every mutable action is pending until
 its separately named approval. It does not authorize signing, publication,
 Caddy reload, installation, collection, or office rollout.

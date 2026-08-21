@@ -1,5 +1,9 @@
 # Runtime Raiders cutover authorization packet
 
+> **Historical pre-0.4.0 evidence.** This sequence/canary authorization packet
+> is retired and authorizes no current action. Use
+> [`employee-beta.md`](employee-beta.md) for the active beta procedure.
+
 Status: **NO-GO — preparation only**
 
 Evidence status: **pending fresh verification against the final release SHA**

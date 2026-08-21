@@ -162,7 +162,7 @@ public final class UpdateStateStore: @unchecked Sendable {
 
     private static func valid(_ state: UpdateStateV1) -> Bool {
         guard state.version == 1,
-              state.lastCheckAttemptMS.map({ (0...ReleaseContractValidation.maximumSafeInteger).contains($0) }) ?? true,
+              state.lastCheckAttemptMS.map({ (0...9_007_199_254_740_991).contains($0) }) ?? true,
               state.lastNotifiedVersion.map(validVersion) ?? true,
               state.availableVersion.map(validVersion) ?? true else {
             return false
