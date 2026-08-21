@@ -62,6 +62,9 @@ different `user@host`; its user must exactly match
 `RUNTIME_RAIDERS_RELEASE_USER`. Use the same release-user setting for the
 one-time bootstrap and every later `prepare` or `publish` command.
 
+If the selected release host requires the corporate network, stop and ask the
+operator to connect the corporate VPN. Do not start or stop a VPN automatically.
+
 ### One-time Pi bootstrap
 
 Before the first 0.4.0 publication, Task 7 requires a separate authorization to
@@ -146,3 +149,27 @@ separate worktree, restore its retained release directory at the matching
 deterministic `dist` path, and run `publish`. The verifier must accept the prior
 directory before it can be republished. Rollback still does not enable anyone's
 collector.
+
+## Employee beta result — GO (2026-08-20)
+
+- Version `0.4.0` was built from Git SHA
+  `932bfbc210beeffe550c02be23cb6c759695a55d` as one signed app. Apple
+  notarization, stapling, designated-requirement validation, and Gatekeeper
+  acceptance passed.
+- The public installer, ZIP, and `/version` bytes matched the verified local
+  release. Required no-store and content-type headers passed, and `/health`
+  returned the expected response.
+- The exact employee command completed a flat reinstall at the stable app path.
+  Enrollment and collector state were preserved, the outbox remained empty,
+  and no installer residue remained.
+- The live acceptance gate scanned 858 existing provider-history records,
+  uploaded no history, scored exactly one synthetic completion as one Run, and
+  turned collection off. This exceeds the 816-record acceptance requirement.
+- Installed `status`, `doctor`, `update`, and `off` passed. With the server path
+  unavailable, `doctor` returned a valid report with `serverHealthy=false`
+  instead of timing out. Final state was disabled with zero active Runs and
+  zero queued events.
+- Employee installation is **GO**. Publishing and installation did not enable
+  collection or mutate the game database. Background-item branding and Apple
+  developer-identity presentation remain separate follow-up work before a
+  wider polished rollout.
