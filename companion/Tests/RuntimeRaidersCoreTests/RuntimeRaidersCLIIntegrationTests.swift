@@ -25,6 +25,13 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             )
             XCTAssertEqual(runtimeInputs.exitStatus, 0, runtimeInputs.stderr)
             XCTAssertEqual(runtimeInputs.stdout, "1.2.3\n")
+
+            let registration = try runCLI(
+                fixture,
+                arguments: ["__runtime-raiders-register-application"]
+            )
+            XCTAssertEqual(registration.exitStatus, 0, registration.stderr)
+            XCTAssertEqual(registration.stdout, "")
             XCTAssertEqual(try treeFingerprint(fixture.paths.supportDirectory), before)
 
             let ungated = try runCLI(
@@ -33,6 +40,13 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 includeVerificationGate: false
             )
             XCTAssertNotEqual(ungated.exitStatus, 0)
+
+            let ungatedRegistration = try runCLI(
+                fixture,
+                arguments: ["__runtime-raiders-register-application"],
+                includeVerificationGate: false
+            )
+            XCTAssertNotEqual(ungatedRegistration.exitStatus, 0)
         }
     }
 

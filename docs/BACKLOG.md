@@ -562,15 +562,19 @@ employee rollout, verify that association between the LaunchAgent and hidden app
 prevents the developer name from replacing the product name while retaining
 `com.redlattice.runtime-raiders-agent` as the internal LaunchAgent label.
 
-The unsigned `0.4.1` source now uses `Runtime Raiders.app`, the visible name
-`Runtime Raiders`, an associated-bundle declaration, and a validated branded
-`.icns` resource. The checklist remains open until a fresh signed clean install
-proves the actual macOS UI behavior.
+The signed `0.4.1` canary proved the app name, service name, associated-bundle
+declaration, and branded icon, but System Settings still grouped the service
+under **Bryan Carpenter**. The LaunchAgent plist was installed at 19:04:38 and
+Launch Services registered the app at 19:04:40, after the service record had
+already selected its parent. The `0.4.2` source repair explicitly registers the
+final installed app before installing or bootstrapping the LaunchAgent and
+rolls back if registration fails. The checklist remains open until a fresh
+signed installed-off canary proves the actual macOS UI behavior.
 
-- [ ] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
+- [x] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
       remove the retired `Runtime Raiders Launcher` / `Runtime Raiders Agent`
       wording from visible system UI.
-- [ ] Ship one approved Runtime Raiders `.icns` resource and bind it through the
+- [x] Ship one approved Runtime Raiders `.icns` resource and bind it through the
       app bundle metadata.
 - [ ] Confirm the signed association keeps **Runtime Raiders** as the product or
       parent identity while correctly retaining Bryan Carpenter as the developer;

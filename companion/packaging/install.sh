@@ -466,6 +466,10 @@ if [ -e "$PLIST" ]; then /bin/mv "$PLIST" "$PLIST_BACKUP_DIRECTORY/old.plist"; f
 if [ -e "$SHIM" ]; then /bin/mv "$SHIM" "$WORK/old.shim"; fi
 
 /bin/mv "$CANDIDATE_APP" "$APP"
+"$AGENT" __runtime-raiders-register-application || {
+  echo 'Runtime Raiders could not register its background-item identity.' >&2
+  exit 1
+}
 /bin/mv "$STAGED_PLIST" "$PLIST"
 /bin/mv "$STAGED_SHIM" "$SHIM"
 

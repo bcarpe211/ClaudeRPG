@@ -111,6 +111,7 @@ function buildFixture() {
     'case "${1:-status}" in',
     '  status) printf \'{"activationState":"disabled","availableCompanionVersion":null,"installedCompanionVersion":"0.4.0","updateCommand":null}\\n\';;',
     '  daemon) exit 0;;',
+    '  __runtime-raiders-register-application) exit 0;;',
     '  update)',
     '    response=${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-}',
     '    [ -n "$response" ] && [ "$(cat "$response")" = \'{"version":"0.4.0"}\' ] || exit 70',
@@ -411,6 +412,10 @@ function fixture() {
   cpSync(iconResource, join(candidate, 'Contents/Resources/RuntimeRaiders.icns'));
   executable(join(candidate, 'Contents/MacOS/runtime-raiders-agent'), [
     'printf "agent:%s\\n" "$*" >> "$RR_EVENT_LOG"',
+    'if [ "${1:-}" = __runtime-raiders-register-application ]; then',
+    '  [ "${RR_FAIL_REGISTRATION:-0}" != 1 ] || exit 79',
+    '  exit 0',
+    'fi',
     '[ "${RR_FAIL_STATUS:-0}" != 1 ] || exit 78',
     '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
     'printf "candidate-status\\n"',
@@ -629,21 +634,25 @@ describe('Runtime Raiders release build', () => {
     expect(result.status, result.stderr + result.stdout).toBe(0);
 
     const invocations = readFileSync(value.agentLog, 'utf8').trim().split('\n');
-    expect(invocations).toHaveLength(3);
+    expect(invocations).toHaveLength(4);
     expect(invocations.map((line) => line.split(' ')[0])).toEqual([
+      'agent:__runtime-raiders-register-application',
       'agent:status',
       'agent:status',
       'agent:update',
     ]);
     for (const line of invocations) {
-      const matched = line.match(/^agent:(?:status|update) home=([^ ]+) verify=1 support=(.+) response=/);
+      const matched = line.match(
+        /^agent:(?:__runtime-raiders-register-application|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
+      );
       expect(matched, line).not.toBeNull();
       expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
       expect(matched![2]).toBe(`${matched![1]}/Library/Application Support`);
     }
     expect(invocations[0]).toContain('response=unset');
     expect(invocations[1]).toContain('response=unset');
-    expect(invocations[2]).not.toContain('response=unset');
+    expect(invocations[2]).toContain('response=unset');
+    expect(invocations[3]).not.toContain('response=unset');
   });
 
   it.each([
@@ -1166,6 +1175,40 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(JSON.parse(association.stdout)).toEqual([label]);
     expect(readFileSync(value.shim, 'utf8')).not.toContain('old shim');
     expect(events(value).filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(1);
+    expect(existsSync(value.running)).toBe(true);
+  });
+
+  it('registers the final app before installing or bootstrapping the LaunchAgent', () => {
+    const value = fixture();
+    const result = run(value);
+    const log = events(value);
+    const appReplacement = log.indexOf('mv:replace-app');
+    const appRegistration = log.indexOf('agent:__runtime-raiders-register-application');
+    const plistReplacement = log.indexOf('mv:replace-plist');
+    const serviceBootstrap = log.findIndex((line) => line.startsWith('launchctl:bootstrap '));
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(appReplacement).toBeGreaterThanOrEqual(0);
+    expect(appRegistration).toBeGreaterThan(appReplacement);
+    expect(plistReplacement).toBeGreaterThan(appRegistration);
+    expect(serviceBootstrap).toBeGreaterThan(appRegistration);
+  });
+
+  it('an app registration failure restores the previous install and restarts its service', () => {
+    const value = fixture();
+    writeExistingInstall(value, true);
+    const before = installedTargets(value);
+    value.environment.RR_FAIL_REGISTRATION = '1';
+
+    const result = run(value);
+    const log = events(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('could not register its background-item identity');
+    expect(installedTargets(value)).toEqual(before);
+    expect(log).toContain('agent:__runtime-raiders-register-application');
+    expect(log).not.toContain('mv:replace-plist');
+    expect(log.filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(1);
     expect(existsSync(value.running)).toBe(true);
   });
 

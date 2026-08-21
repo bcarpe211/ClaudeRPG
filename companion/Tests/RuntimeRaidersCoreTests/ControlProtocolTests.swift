@@ -64,6 +64,19 @@ final class ControlProtocolTests: XCTestCase {
             executableURL: otherExecutable,
             paths: paths
         ))
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["__runtime-raiders-register-application"],
+                executableURL: stableExecutable,
+                paths: paths
+            ),
+            .registerApplication
+        )
+        XCTAssertNil(CompanionCommandRouter.route(
+            arguments: ["__runtime-raiders-register-application"],
+            executableURL: otherExecutable,
+            paths: paths
+        ))
         for command in [
             ControlCommand.on,
             .off,

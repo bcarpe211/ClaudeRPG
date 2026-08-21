@@ -4,6 +4,7 @@ import RuntimeRaidersCore
 import Security
 
 private let runtimeInputsVerificationArgument = "__runtime-raiders-verify-runtime-inputs"
+private let applicationRegistrationArgument = "__runtime-raiders-register-application"
 private let runtimeInputsVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS"
 private let applicationSupportVerificationEnvironment =
     "RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY"
@@ -384,6 +385,12 @@ private func run() throws {
                 from: verificationPaths.stateDirectory.appendingPathComponent("enrollment.json")
             )
             print(try RuntimeInputs(enrollment: enrollment).companionVersion)
+        case [applicationRegistrationArgument]:
+            guard let executableURL = Bundle.main.executableURL,
+                  executableURL.standardizedFileURL.path ==
+                    verificationPaths.agentExecutable.standardizedFileURL.path else {
+                throw CLIError.usage
+            }
         default:
             throw CLIError.usage
         }
@@ -406,6 +413,9 @@ private func run() throws {
             from: paths.stateDirectory.appendingPathComponent("enrollment.json")
         )
         try DaemonRuntime(inputs: RuntimeInputs(enrollment: enrollment)).run()
+        return
+    case .registerApplication:
+        try ApplicationRegistration.live.register(bundleURL: Bundle.main.bundleURL)
         return
     case .updateCheck:
         try runUpdateCheck(paths: paths, environment: environment)

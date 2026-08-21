@@ -15,6 +15,7 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
 
 public enum CompanionCommandRoute: Equatable, Sendable {
     case daemon
+    case registerApplication
     case control(ControlCommand)
     case updateCheck
 }
@@ -37,6 +38,9 @@ public enum CompanionCommandRouter {
         case ["daemon"]:
             guard exactExecutable(executableURL, equals: paths.agentExecutable) else { return nil }
             return .daemon
+        case ["__runtime-raiders-register-application"]:
+            guard exactExecutable(executableURL, equals: paths.agentExecutable) else { return nil }
+            return .registerApplication
         default:
             return nil
         }
