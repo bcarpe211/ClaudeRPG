@@ -583,7 +583,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
     private func versionInfo() -> [String: Any] {
         [
             "CFBundleExecutable": "runtime-raiders-agent",
-            "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
+            "CFBundleIdentifier": "com.redlattice.runtime-raiders",
             "CFBundleName": "Runtime Raiders",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": "1.2.3",

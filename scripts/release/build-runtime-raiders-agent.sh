@@ -24,6 +24,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 RELEASE_FILE="$ROOT/companion/RELEASE"
 INSTALLER_TEMPLATE="$ROOT/companion/packaging/install.sh"
 ICON_RESOURCE="$ROOT/companion/packaging/RuntimeRaiders.icns"
+MANAGED_AGENT_PLIST="$ROOT/companion/packaging/com.redlattice.runtime-raiders.agent.plist"
 ARCHIVE_MAX_BYTES=8388608
 
 invalid_test_tools() {
@@ -99,6 +100,10 @@ esac
 }
 [ -f "$ICON_RESOURCE" ] && [ ! -L "$ICON_RESOURCE" ] && [ -s "$ICON_RESOURCE" ] || {
   echo "Runtime Raiders icon resource is required" >&2
+  exit 64
+}
+[ -f "$MANAGED_AGENT_PLIST" ] && [ ! -L "$MANAGED_AGENT_PLIST" ] || {
+  echo "managed agent plist is required" >&2
   exit 64
 }
 
@@ -178,18 +183,23 @@ UNIVERSAL_AGENT="$WORK/runtime-raiders-agent"
 "$LIPO_TOOL" "$UNIVERSAL_AGENT" -verify_arch arm64 x86_64
 
 AGENT_APP="$WORK/Runtime Raiders.app"
-/bin/mkdir -p "$AGENT_APP/Contents/MacOS" "$AGENT_APP/Contents/Resources"
+/bin/mkdir -p "$AGENT_APP/Contents/MacOS" "$AGENT_APP/Contents/Resources" \
+  "$AGENT_APP/Contents/Library/LaunchAgents"
 /bin/mv "$UNIVERSAL_AGENT" "$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
 /bin/chmod 755 "$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
 /bin/cp "$ICON_RESOURCE" "$AGENT_APP/Contents/Resources/RuntimeRaiders.icns"
 /bin/chmod 644 "$AGENT_APP/Contents/Resources/RuntimeRaiders.icns"
+/bin/cp "$MANAGED_AGENT_PLIST" \
+  "$AGENT_APP/Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist"
+/bin/chmod 644 \
+  "$AGENT_APP/Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist"
 cat > "$AGENT_APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>runtime-raiders-agent</string>
-  <key>CFBundleIdentifier</key><string>com.redlattice.runtime-raiders-agent</string>
+  <key>CFBundleIdentifier</key><string>com.redlattice.runtime-raiders</string>
   <key>CFBundleName</key><string>Runtime Raiders</string>
   <key>CFBundleDisplayName</key><string>Runtime Raiders</string>
   <key>CFBundleIconFile</key><string>RuntimeRaiders</string>
@@ -201,17 +211,27 @@ cat > "$AGENT_APP/Contents/Info.plist" <<EOF
 EOF
 /usr/bin/plutil -lint "$AGENT_APP/Contents/Info.plist" >/dev/null
 
-validate_bundle_version() {
+validate_bundle_contract() {
   local application="$1" info="$1/Contents/Info.plist"
+  local managed_plist="$1/Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist"
   local bundle_id executable bundle_name display_name icon_file short_version bundle_version
+  local plist_key_count managed_label bundle_program program_arguments run_at_load keep_alive process_type
   bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$info")" &&
     executable="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$info")" &&
     bundle_name="$(/usr/bin/plutil -extract CFBundleName raw -o - "$info")" &&
     display_name="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$info")" &&
     icon_file="$(/usr/bin/plutil -extract CFBundleIconFile raw -o - "$info")" &&
     short_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$info")" &&
-    bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$info")" || return 1
-  [ "$bundle_id" = com.redlattice.runtime-raiders-agent ] &&
+    bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$info")" &&
+    [ -f "$managed_plist" ] && [ ! -L "$managed_plist" ] &&
+    plist_key_count="$(/usr/bin/plutil -p "$managed_plist" | /usr/bin/grep -E '^  "[^"]+" =>' | /usr/bin/wc -l | /usr/bin/tr -d ' ')" &&
+    managed_label="$(/usr/bin/plutil -extract Label raw -o - "$managed_plist")" &&
+    bundle_program="$(/usr/bin/plutil -extract BundleProgram raw -o - "$managed_plist")" &&
+    program_arguments="$(/usr/bin/plutil -extract ProgramArguments json -o - "$managed_plist")" &&
+    run_at_load="$(/usr/bin/plutil -extract RunAtLoad raw -o - "$managed_plist")" &&
+    keep_alive="$(/usr/bin/plutil -extract KeepAlive raw -o - "$managed_plist")" &&
+    process_type="$(/usr/bin/plutil -extract ProcessType raw -o - "$managed_plist")" || return 1
+  [ "$bundle_id" = com.redlattice.runtime-raiders ] &&
     [ "$executable" = runtime-raiders-agent ] &&
     [ "$bundle_name" = 'Runtime Raiders' ] &&
     [ "$display_name" = 'Runtime Raiders' ] &&
@@ -220,17 +240,24 @@ validate_bundle_version() {
     [ "$bundle_version" = "$COMPANION_VERSION" ] &&
     [ -f "$application/Contents/Resources/RuntimeRaiders.icns" ] &&
     [ ! -L "$application/Contents/Resources/RuntimeRaiders.icns" ] &&
-    [ -s "$application/Contents/Resources/RuntimeRaiders.icns" ]
+    [ -s "$application/Contents/Resources/RuntimeRaiders.icns" ] &&
+    [ "$plist_key_count" -eq 6 ] &&
+    [ "$managed_label" = com.redlattice.runtime-raiders.agent ] &&
+    [ "$bundle_program" = Contents/MacOS/runtime-raiders-agent ] &&
+    [ "$program_arguments" = '["runtime-raiders-agent","daemon"]' ] &&
+    [ "$run_at_load" = true ] &&
+    [ "$keep_alive" = true ] &&
+    [ "$process_type" = Background ]
 }
 
-validate_bundle_version "$AGENT_APP" || {
-  echo "bundle version does not match companion/RELEASE" >&2
+validate_bundle_contract "$AGENT_APP" || {
+  echo "app bundle contract is invalid" >&2
   exit 1
 }
 
 "$CODESIGN_TOOL" --force --options runtime --timestamp --sign "$RUNTIME_RAIDERS_CODESIGN_IDENTITY" "$AGENT_APP"
-validate_bundle_version "$AGENT_APP" || {
-  echo "bundle version does not match companion/RELEASE" >&2
+validate_bundle_contract "$AGENT_APP" || {
+  echo "app bundle contract is invalid" >&2
   exit 1
 }
 CODESIGN_FACTS="$("$CODESIGN_TOOL" -dv --verbose=4 "$AGENT_APP" 2>&1)"
@@ -282,8 +309,8 @@ PACKAGED_APP="$EXTRACTED/Runtime Raiders.app"
   echo "release archive must contain exactly one Runtime Raiders.app" >&2
   exit 1
 }
-validate_bundle_version "$PACKAGED_APP" || {
-  echo "bundle version does not match companion/RELEASE" >&2
+validate_bundle_contract "$PACKAGED_APP" || {
+  echo "app bundle contract is invalid" >&2
   exit 1
 }
 "$LIPO_TOOL" "$PACKAGED_APP/Contents/MacOS/runtime-raiders-agent" -verify_arch arm64 x86_64
@@ -329,7 +356,8 @@ VERSION_SHA256="$(file_sha256 "$STAGED_OUTPUT/version")"
 cat > "$STAGED_OUTPUT/release-summary.txt" <<EOF
 git_sha=$GIT_SHA
 companion_version=$COMPANION_VERSION
-bundle_identifier=com.redlattice.runtime-raiders-agent
+bundle_identifier=com.redlattice.runtime-raiders
+managed_agent_label=com.redlattice.runtime-raiders.agent
 team_id=$RUNTIME_RAIDERS_TEAM_ID
 codesign_verified=true
 hardened_runtime=true

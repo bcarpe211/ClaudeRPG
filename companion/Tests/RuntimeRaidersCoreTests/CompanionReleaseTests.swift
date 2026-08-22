@@ -21,6 +21,10 @@ final class CompanionReleaseTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let invalidDictionaries: [[String: Any]] = [
             replacingInstalledVersion("CFBundleIdentifier", with: "com.example.other"),
+            replacingInstalledVersion(
+                "CFBundleIdentifier",
+                with: "com.redlattice.runtime-raiders-agent"
+            ),
             installedVersionInfoDictionary(version: "1.2"),
             installedVersionInfoDictionary(version: "01.2.3"),
             replacingInstalledVersion("CFBundleVersion", with: "1.2.4"),
@@ -41,9 +45,9 @@ final class CompanionReleaseTests: XCTestCase {
         }
     }
 
-    func testLaunchAgentTemplateRunsStableAgentExecutableAsDaemon() throws {
+    func testEmbeddedLaunchAgentUsesExactManagedAgentContract() throws {
         let data = try Data(contentsOf: packageDirectory.appendingPathComponent(
-            "packaging/com.redlattice.runtime-raiders-agent.plist.template",
+            "packaging/com.redlattice.runtime-raiders.agent.plist",
             isDirectory: false
         ))
         let plist = try XCTUnwrap(
@@ -51,13 +55,28 @@ final class CompanionReleaseTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            plist["ProgramArguments"] as? [String],
-            ["__RUNTIME_RAIDERS_AGENT_EXECUTABLE__", "daemon"]
+            Set(plist.keys),
+            Set([
+                "Label",
+                "BundleProgram",
+                "ProgramArguments",
+                "RunAtLoad",
+                "KeepAlive",
+                "ProcessType",
+            ])
+        )
+        XCTAssertEqual(plist["Label"] as? String, "com.redlattice.runtime-raiders.agent")
+        XCTAssertEqual(
+            plist["BundleProgram"] as? String,
+            "Contents/MacOS/runtime-raiders-agent"
         )
         XCTAssertEqual(
-            plist["AssociatedBundleIdentifiers"] as? [String],
-            ["com.redlattice.runtime-raiders-agent"]
+            plist["ProgramArguments"] as? [String],
+            ["runtime-raiders-agent", "daemon"]
         )
+        XCTAssertEqual(plist["RunAtLoad"] as? Bool, true)
+        XCTAssertEqual(plist["KeepAlive"] as? Bool, true)
+        XCTAssertEqual(plist["ProcessType"] as? String, "Background")
     }
 
     private var packageDirectory: URL {
@@ -69,7 +88,7 @@ final class CompanionReleaseTests: XCTestCase {
 
     private func installedVersionInfoDictionary(version: String = "1.2.3") -> [String: Any] {
         [
-            "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
+            "CFBundleIdentifier": "com.redlattice.runtime-raiders",
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,
         ]

@@ -245,7 +245,7 @@ summary_value() {
   /usr/bin/awk -F= -v key="$key" '$1 == key { count += 1; value = substr($0, length(key) + 2) } END { if (count == 1) print value; else exit 1 }' "$SUMMARY"
 }
 for key in \
-  git_sha companion_version bundle_identifier team_id codesign_verified hardened_runtime \
+  git_sha companion_version bundle_identifier managed_agent_label team_id codesign_verified hardened_runtime \
   secure_timestamp notarization stapled gatekeeper archive_shape install.sh_bytes \
   install.sh_sha256 runtime-raiders-agent.zip_bytes runtime-raiders-agent.zip_sha256 \
   version_bytes version_sha256; do
@@ -254,7 +254,7 @@ for key in \
     exit 1
   }
 done
-[ "$(/usr/bin/wc -l < "$SUMMARY" | /usr/bin/tr -d ' ')" -eq 17 ] || {
+[ "$(/usr/bin/wc -l < "$SUMMARY" | /usr/bin/tr -d ' ')" -eq 18 ] || {
   echo "release-summary.txt contains unexpected fields" >&2
   exit 1
 }
@@ -263,7 +263,8 @@ done
   exit 1
 }
 [ "$(summary_value companion_version)" = "$COMPANION_VERSION" ] &&
-  [ "$(summary_value bundle_identifier)" = com.redlattice.runtime-raiders-agent ] &&
+  [ "$(summary_value bundle_identifier)" = com.redlattice.runtime-raiders ] &&
+  [ "$(summary_value managed_agent_label)" = com.redlattice.runtime-raiders.agent ] &&
   [ "$(summary_value team_id)" = "$TEAM_ID" ] &&
   [ "$(summary_value codesign_verified)" = true ] &&
   [ "$(summary_value hardened_runtime)" = true ] &&
@@ -320,7 +321,7 @@ BUNDLE_DISPLAY_NAME="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$A
 BUNDLE_ICON_FILE="$(/usr/bin/plutil -extract CFBundleIconFile raw -o - "$AGENT_INFO")"
 BUNDLE_SHORT_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$AGENT_INFO")"
 BUNDLE_VERSION="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$AGENT_INFO")"
-[ "$BUNDLE_ID" = com.redlattice.runtime-raiders-agent ] &&
+[ "$BUNDLE_ID" = com.redlattice.runtime-raiders ] &&
   [ "$BUNDLE_EXECUTABLE" = runtime-raiders-agent ] &&
   [ "$BUNDLE_NAME" = 'Runtime Raiders' ] &&
   [ "$BUNDLE_DISPLAY_NAME" = 'Runtime Raiders' ] &&
@@ -339,7 +340,7 @@ printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -F "TeamIdentifier=$TEAM_ID" >/d
   echo "archive signing facts are invalid" >&2
   exit 1
 }
-AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
+AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
 "$CODESIGN_TOOL" --verify --deep --strict --verbose=2 "$AGENT_APP"
 "$CODESIGN_TOOL" --verify --strict "-R=$AGENT_REQUIREMENT" "$AGENT_APP"
 "$SPCTL_TOOL" --assess --type execute --verbose=2 "$AGENT_APP"
@@ -426,7 +427,7 @@ if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --deep ] && [ "$3" = --stri
   exit 0
 fi
 if [ "$#" -eq 4 ] && [ "$1" = --verify ] && [ "$2" = --strict ]; then
-  expected_requirement='-R=identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RR_VERIFY_TEAM_ID"'"'
+  expected_requirement='-R=identifier "com.redlattice.runtime-raiders" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RR_VERIFY_TEAM_ID"'"'
   [ "$3" = "$expected_requirement" ] || exit 65
   printf 'codesign:requirement\n' >> "$RR_VERIFY_SMOKE_LOG"
   exit 0

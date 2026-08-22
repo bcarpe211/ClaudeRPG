@@ -8,7 +8,8 @@ ARCHIVE_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'
 ENROLL_URL='https://raiders.redlattice.com/api/raiders/enroll'
 ORIGIN='https://raiders.redlattice.com'
 LABEL='com.redlattice.runtime-raiders-agent'
-AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
+APP_BUNDLE_ID='com.redlattice.runtime-raiders'
+AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
 
 usage() {
   echo 'usage: curl -fsSL https://raiders.redlattice.com/install.sh | sh' >&2
@@ -348,7 +349,7 @@ candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CA
     echo 'Runtime Raiders app metadata is invalid.' >&2
     exit 1
   }
-[ "$candidate_bundle_id" = "$LABEL" ] &&
+[ "$candidate_bundle_id" = "$APP_BUNDLE_ID" ] &&
   [ "$candidate_version" = "$COMPANION_VERSION" ] &&
   [ "$candidate_executable" = runtime-raiders-agent ] &&
   [ "$candidate_name" = 'Runtime Raiders' ] &&
