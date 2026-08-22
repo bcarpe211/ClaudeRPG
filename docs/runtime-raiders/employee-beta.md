@@ -56,10 +56,10 @@ values in the repository or this document:
 - `RUNTIME_RAIDERS_TEAM_ID`
 
 The release account defaults to `rluser`. Set `RUNTIME_RAIDERS_RELEASE_USER` if
-the Pi uses a different existing POSIX account. The Pi target defaults to that
-user at `raiders.local`. If necessary, set `RUNTIME_RAIDERS_RELEASE_HOST` to a
-different `user@host`; its user must exactly match
-`RUNTIME_RAIDERS_RELEASE_USER`. Use the same release-user setting for the
+the Pi uses a different existing POSIX account. The release target defaults to
+that user at `raiders.redlattice.com`. If necessary, set
+`RUNTIME_RAIDERS_RELEASE_HOST` to a different `user@host`; its user must exactly
+match `RUNTIME_RAIDERS_RELEASE_USER`. Use the same release-user setting for the
 one-time bootstrap and every later `prepare` or `publish` command.
 
 If the selected release host requires the corporate network, stop and ask the

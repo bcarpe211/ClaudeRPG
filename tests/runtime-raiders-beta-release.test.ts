@@ -337,6 +337,22 @@ describe('Runtime Raiders beta release entry point', () => {
     expect(result.stdout).toContain('Employee collection remains off.');
   });
 
+  it('defaults publication to the release user at the corporate FQDN', () => {
+    const value = makeReleaseFixture();
+    const environment = { ...value.env };
+    delete environment.RUNTIME_RAIDERS_RELEASE_HOST;
+
+    const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {
+      cwd: value.repository,
+      env: environment,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(value.sshLog, 'utf8')).toContain(
+      'release-user@raiders.redlattice.com /usr/bin/sudo -n /usr/local/sbin/runtime-raiders-publish ',
+    );
+  });
+
   it('refuses mutation after private verification before opening SSH', () => {
     const value = makeReleaseFixture();
     const result = run('/bin/bash', ['scripts/release/release-runtime-raiders-beta.sh', 'publish'], {

@@ -279,7 +279,7 @@ RELEASE_USER="${RUNTIME_RAIDERS_RELEASE_USER:-rluser}"
   echo "RUNTIME_RAIDERS_RELEASE_USER is invalid" >&2
   exit 64
 }
-RELEASE_HOST="${RUNTIME_RAIDERS_RELEASE_HOST:-$RELEASE_USER@raiders.local}"
+RELEASE_HOST="${RUNTIME_RAIDERS_RELEASE_HOST:-$RELEASE_USER@raiders.redlattice.com}"
 [[ "$RELEASE_HOST" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || {
   echo "RUNTIME_RAIDERS_RELEASE_HOST is invalid" >&2
   exit 64
