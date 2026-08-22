@@ -7,8 +7,11 @@ ARCHIVE_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'
 
 ENROLL_URL='https://raiders.redlattice.com/api/raiders/enroll'
 ORIGIN='https://raiders.redlattice.com'
-LABEL='com.redlattice.runtime-raiders-agent'
-AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
+APP_BUNDLE_ID='com.redlattice.runtime-raiders'
+MANAGED_LABEL='com.redlattice.runtime-raiders.agent'
+MANAGED_PLIST_NAME="$MANAGED_LABEL.plist"
+LEGACY_LABEL='com.redlattice.runtime-raiders-agent'
+APP_REQUIREMENT='identifier "com.redlattice.runtime-raiders" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
 
 usage() {
   echo 'usage: curl -fsSL https://raiders.redlattice.com/install.sh | sh' >&2
@@ -32,7 +35,7 @@ LEGACY_APP="$SUPPORT/Runtime Raiders Agent.app"
 AGENT="$APP/Contents/MacOS/runtime-raiders-agent"
 SHIM="$SUPPORT/raiders"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-PLIST="$LAUNCH_AGENTS/$LABEL.plist"
+LEGACY_PLIST="$LAUNCH_AGENTS/$LEGACY_LABEL.plist"
 COMMAND_DIRECTORY="$HOME/.local/bin"
 COMMAND="$COMMAND_DIRECTORY/raiders"
 ENROLLMENT="$STATE/enrollment.json"
@@ -49,7 +52,7 @@ refuse_symlink() {
 
 for owned_path in \
   "$HOME/Library" "$HOME/Library/Application Support" "$SUPPORT" "$STATE" "$OUTBOX" \
-  "$APP" "$LEGACY_APP" "$LAUNCH_AGENTS" "$PLIST" "$SHIM" "$HOME/.local" "$COMMAND_DIRECTORY" \
+  "$APP" "$LEGACY_APP" "$LAUNCH_AGENTS" "$LEGACY_PLIST" "$SHIM" "$HOME/.local" "$COMMAND_DIRECTORY" \
   "$RELEASES" "$INSTALLATION" "$LAUNCHER"; do
   refuse_symlink "$owned_path"
 done
@@ -85,7 +88,7 @@ if [ -e "$APP" ] && {
   echo "Runtime Raiders refuses unsafe app path: $APP" >&2
   exit 1
 fi
-for owned_file in "$PLIST" "$SHIM"; do
+for owned_file in "$LEGACY_PLIST" "$SHIM"; do
   if [ -e "$owned_file" ] && {
     [ ! -f "$owned_file" ] ||
       [ "$(/usr/bin/stat -f %u "$owned_file")" != "$OWNER" ];
@@ -100,19 +103,6 @@ if [ -e "$COMMAND" ] || [ -L "$COMMAND" ]; then
     exit 1
   }
 fi
-
-existing_count=0
-[ ! -e "$APP" ] || existing_count=$((existing_count + 1))
-[ ! -e "$PLIST" ] || existing_count=$((existing_count + 1))
-[ ! -e "$SHIM" ] || existing_count=$((existing_count + 1))
-case "$existing_count" in
-  0) reinstall=0;;
-  3) reinstall=1;;
-  *) echo 'Runtime Raiders refuses a partial existing installation.' >&2; exit 1;;
-esac
-
-/bin/mkdir -p "$STATE" "$OUTBOX" "$LAUNCH_AGENTS" "$COMMAND_DIRECTORY"
-[ -e "$SUPPORT" ] || exit 1
 
 plist_has_exact_keys() {
   schema_file=$1
@@ -133,6 +123,65 @@ plist_value_has_type() {
   type_xml="$(/usr/bin/plutil -extract "$type_key" xml1 -o - "$type_file")" || return 1
   printf '%s\n' "$type_xml" | /usr/bin/grep -F "<$type_name>" >/dev/null
 }
+
+valid_legacy_plist() {
+  legacy_plist=$1
+  plist_has_exact_keys "$legacy_plist" 6 \
+    Label AssociatedBundleIdentifiers ProgramArguments RunAtLoad KeepAlive ProcessType &&
+    [ "$(/usr/bin/plutil -extract Label raw -o - "$legacy_plist")" = "$LEGACY_LABEL" ] &&
+    [ "$(/usr/bin/plutil -extract AssociatedBundleIdentifiers.0 raw -o - "$legacy_plist")" = \
+      "$LEGACY_LABEL" ] &&
+    ! /usr/bin/plutil -extract AssociatedBundleIdentifiers.1 raw -o - "$legacy_plist" >/dev/null 2>&1 &&
+    [ "$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$legacy_plist")" = "$AGENT" ] &&
+    [ "$(/usr/bin/plutil -extract ProgramArguments.1 raw -o - "$legacy_plist")" = daemon ] &&
+    ! /usr/bin/plutil -extract ProgramArguments.2 raw -o - "$legacy_plist" >/dev/null 2>&1 &&
+    [ "$(/usr/bin/plutil -extract RunAtLoad raw -expect bool -o - "$legacy_plist")" = true ] &&
+    [ "$(/usr/bin/plutil -extract KeepAlive raw -expect bool -o - "$legacy_plist")" = true ] &&
+    [ "$(/usr/bin/plutil -extract ProcessType raw -o - "$legacy_plist")" = Background ]
+}
+
+reject_existing_layout() {
+  echo 'Runtime Raiders refuses a partial, mixed, or unsupported existing installation.' >&2
+  exit 1
+}
+
+app_present=0
+legacy_plist_present=0
+shim_present=0
+existing_bundle_version=''
+[ ! -e "$APP" ] || app_present=1
+[ ! -e "$LEGACY_PLIST" ] || legacy_plist_present=1
+[ ! -e "$SHIM" ] || shim_present=1
+
+if [ "$app_present" -eq 0 ] && [ "$legacy_plist_present" -eq 0 ] && [ "$shim_present" -eq 0 ]; then
+  existing_form=fresh
+elif [ "$app_present" -eq 1 ] && [ "$legacy_plist_present" -eq 1 ] && [ "$shim_present" -eq 1 ]; then
+  existing_info="$APP/Contents/Info.plist"
+  [ -f "$existing_info" ] && [ ! -L "$existing_info" ] &&
+    [ -f "$AGENT" ] && [ ! -L "$AGENT" ] && [ -x "$AGENT" ] &&
+    [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$existing_info")" = "$LEGACY_LABEL" ] &&
+    [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$existing_info")" = 0.4.2 ] &&
+    [ "$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$existing_info")" = 0.4.2 ] &&
+    valid_legacy_plist "$LEGACY_PLIST" || reject_existing_layout
+  existing_bundle_version=0.4.2
+  existing_form=legacy
+elif [ "$app_present" -eq 1 ] && [ "$legacy_plist_present" -eq 0 ] && [ "$shim_present" -eq 1 ]; then
+  existing_info="$APP/Contents/Info.plist"
+  [ -f "$existing_info" ] && [ ! -L "$existing_info" ] &&
+    [ -f "$AGENT" ] && [ ! -L "$AGENT" ] && [ -x "$AGENT" ] &&
+    [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$existing_info")" = "$APP_BUNDLE_ID" ] &&
+    existing_bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$existing_info")" &&
+    [ -n "$existing_bundle_version" ] ||
+    reject_existing_layout
+  existing_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || reject_existing_layout
+  [ "$existing_managed_status" = enabled ] || reject_existing_layout
+  existing_form=managed
+else
+  reject_existing_layout
+fi
+
+/bin/mkdir -p "$STATE" "$OUTBOX" "$COMMAND_DIRECTORY"
+[ -e "$SUPPORT" ] || exit 1
 
 is_bounded_json_dictionary() {
   json_file=$1
@@ -211,6 +260,70 @@ validate_enrollment_response() {
     plist_value_has_type "$response_file" enabled_surfaces array
 }
 
+collection_is_conclusively_disabled() {
+  collection_status_file=$1
+  [ -f "$collection_status_file" ] && [ ! -L "$collection_status_file" ] &&
+    is_bounded_json_dictionary "$collection_status_file" || return 1
+  collection_enabled="$(/usr/bin/plutil -extract enabled raw -expect bool -o - \
+    "$collection_status_file")" &&
+    collection_activation="$(/usr/bin/plutil -extract activationState raw -expect string -o - \
+      "$collection_status_file")" &&
+    collection_persisted="$(/usr/bin/plutil -extract persistedState raw -expect string -o - \
+      "$collection_status_file")" || return 1
+  [ "$collection_enabled" = false ] || return 1
+  [ "$collection_activation" = disabled ] || return 1
+  case "$collection_persisted" in
+    missing|disabled) return 0;;
+    *) return 1;;
+  esac
+}
+
+installation_status_is_ready() {
+  readiness_status_file=$1
+  readiness_expected_version=$2
+  readiness_expected_daemon=$3
+  collection_is_conclusively_disabled "$readiness_status_file" || return 1
+  readiness_daemon="$(/usr/bin/plutil -extract daemonRunning raw -expect bool -o - \
+    "$readiness_status_file")" &&
+    readiness_version="$(/usr/bin/plutil -extract installedCompanionVersion raw -expect string -o - \
+      "$readiness_status_file")" || return 1
+  [ "$readiness_daemon" = "$readiness_expected_daemon" ] &&
+    [ "$readiness_version" = "$readiness_expected_version" ]
+}
+
+wait_for_installation_status() {
+  readiness_command=$1
+  readiness_output=$2
+  readiness_expected_version=$3
+  readiness_expected_daemon=$4
+  readiness_attempt=1
+  while [ "$readiness_attempt" -le 5 ]; do
+    if "$readiness_command" status > "$readiness_output" &&
+       installation_status_is_ready "$readiness_output" \
+         "$readiness_expected_version" "$readiness_expected_daemon"; then
+      return 0
+    fi
+    [ "$readiness_attempt" -lt 5 ] || return 1
+    /bin/sleep 1 || return 1
+    readiness_attempt=$((readiness_attempt + 1))
+  done
+  return 1
+}
+
+legacy_job_registration_state() {
+  if /bin/launchctl print "gui/$OWNER/$LEGACY_LABEL" >/dev/null 2>&1; then
+    printf 'registered\n'
+    return 0
+  else
+    legacy_inspection_status=$?
+  fi
+  if [ "$legacy_inspection_status" -eq 113 ]; then
+    printf 'absent\n'
+    return 0
+  fi
+  return 1
+}
+
 has_enrollment=0
 if [ -e "$ENROLLMENT" ] || [ -L "$ENROLLMENT" ]; then
   refuse_symlink "$ENROLLMENT"
@@ -224,15 +337,21 @@ if [ -e "$ENROLLMENT" ] || [ -L "$ENROLLMENT" ]; then
 fi
 
 WORK="$(/usr/bin/mktemp -d "$SUPPORT/.runtime-raiders-install.XXXXXX")"
-PLIST_BACKUP_DIRECTORY=''
 transaction_active=0
 transaction_committed=0
+legacy_stop_attempted=0
+legacy_initial_registration_known=0
+legacy_was_registered=0
+old_managed_unregister_attempted=0
+new_managed_register_attempted=0
+rollback_new_unregister_attempted=0
+rollback_old_register_attempted=0
 original_app=0
-original_plist=0
+original_legacy_plist=0
 original_shim=0
 original_command=0
 [ ! -e "$APP" ] || original_app=1
-[ ! -e "$PLIST" ] || original_plist=1
+[ ! -e "$LEGACY_PLIST" ] || original_legacy_plist=1
 [ ! -e "$SHIM" ] || original_shim=1
 [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ] || original_command=1
 tty_changed=0
@@ -273,36 +392,115 @@ rollback() {
   trap - EXIT HUP INT TERM
   restore_tty
   restoration_complete=1
+  original_registration_restored=0
   if [ "$transaction_active" -eq 1 ] && [ "$transaction_committed" -eq 0 ]; then
-    /bin/launchctl bootout "gui/$OWNER/$LABEL" 2>/dev/null || true
+    new_registration_compensated=1
+    if [ "$new_managed_register_attempted" -eq 1 ]; then
+      new_registration_compensated=0
+      rollback_new_unregister_attempted=1
+      if rollback_managed_result="$("$AGENT" __runtime-raiders-managed-agent unregister)"; then
+        if [ "$rollback_managed_result" = not-registered ]; then
+          new_registration_compensated=1
+        fi
+      fi
+      [ "$new_registration_compensated" -eq 1 ] || restoration_complete=0
+    fi
+    app_restored=1
     if ! restore_target "$APP" "$WORK/old.app" "$WORK/failed.app" "$original_app"; then
       restoration_complete=0
+      app_restored=0
     fi
-    if ! restore_target "$PLIST" "$PLIST_BACKUP_DIRECTORY/old.plist" \
-      "$PLIST_BACKUP_DIRECTORY/failed.plist" "$original_plist"; then
+    if [ "$original_legacy_plist" -eq 1 ] && [ -e "$WORK/old.plist" ]; then
+      /bin/mkdir -p "$LAUNCH_AGENTS" || restoration_complete=0
+    fi
+    legacy_plist_restored=1
+    if ! restore_target "$LEGACY_PLIST" "$WORK/old.plist" \
+      "$WORK/failed.plist" "$original_legacy_plist"; then
       restoration_complete=0
+      legacy_plist_restored=0
     fi
+    shim_restored=1
     if ! restore_target "$SHIM" "$WORK/old.shim" "$WORK/failed.shim" "$original_shim"; then
       restoration_complete=0
+      shim_restored=0
     fi
+    command_restored=1
     if [ "$original_command" -eq 0 ] && { [ -e "$COMMAND" ] || [ -L "$COMMAND" ]; }; then
-      /bin/rm -f "$COMMAND" || restoration_complete=0
-    fi
-    if [ "$restoration_complete" -eq 1 ] && [ "$reinstall" -eq 1 ]; then
-      if ! /bin/launchctl bootstrap "gui/$OWNER" "$PLIST" >/dev/null 2>&1; then
+      if ! /bin/rm -f "$COMMAND"; then
         restoration_complete=0
+        command_restored=0
       fi
+    elif [ "$original_command" -eq 1 ]; then
+      [ -L "$COMMAND" ] && [ "$(/usr/bin/readlink "$COMMAND")" = "$SHIM" ] ||
+        {
+          restoration_complete=0
+          command_restored=0
+        }
     fi
+    prior_service_restored=1
+    case "$existing_form" in
+      legacy)
+        prior_service_restored=0
+        if [ "$legacy_initial_registration_known" -eq 1 ] &&
+           restored_legacy_state="$(legacy_job_registration_state)"; then
+          if [ "$legacy_was_registered" -eq 1 ]; then
+            if [ "$restored_legacy_state" = absent ] &&
+               [ "$app_restored" -eq 1 ] && [ "$legacy_plist_restored" -eq 1 ] &&
+               /bin/launchctl bootstrap "gui/$OWNER" "$LEGACY_PLIST" >/dev/null 2>&1; then
+              restored_legacy_state="$(legacy_job_registration_state)" || restored_legacy_state=unknown
+            fi
+            [ "$restored_legacy_state" = registered ] && prior_service_restored=1
+          elif [ "$restored_legacy_state" = absent ]; then
+            prior_service_restored=1
+          fi
+        fi;;
+      managed)
+        if [ "$old_managed_unregister_attempted" -eq 1 ]; then
+          prior_service_restored=0
+          if [ "$app_restored" -eq 1 ] && [ -x "$AGENT" ]; then
+            rollback_old_register_attempted=1
+            if restored_managed_result="$("$AGENT" __runtime-raiders-managed-agent register)" &&
+               [ "$restored_managed_result" = enabled ]; then
+              restored_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" ||
+                restored_managed_status=''
+              [ "$restored_managed_status" = enabled ] && prior_service_restored=1
+            fi
+          fi
+        fi;;
+    esac
+    [ "$prior_service_restored" -eq 1 ] || restoration_complete=0
+
+    restored_collection_disabled=1
+    if [ "$existing_form" != fresh ]; then
+      restored_collection_disabled=0
+      restored_status_file="$WORK/restored-status.json"
+      restored_expected_daemon=true
+      if [ "$existing_form" = legacy ] && [ "$legacy_was_registered" -eq 0 ]; then
+        restored_expected_daemon=false
+      fi
+      if [ "$app_restored" -eq 1 ] && [ "$shim_restored" -eq 1 ] &&
+         wait_for_installation_status "$SHIM" "$restored_status_file" \
+           "$existing_bundle_version" "$restored_expected_daemon"; then
+        restored_collection_disabled=1
+      fi
+      [ "$restored_collection_disabled" -eq 1 ] || restoration_complete=0
+    fi
+
+    if [ "$app_restored" -eq 1 ] && [ "$legacy_plist_restored" -eq 1 ] &&
+       [ "$shim_restored" -eq 1 ] && [ "$command_restored" -eq 1 ] &&
+       [ "$new_registration_compensated" -eq 1 ] &&
+       [ "$prior_service_restored" -eq 1 ] &&
+       [ "$restored_collection_disabled" -eq 1 ]; then
+      original_registration_restored=1
+    fi
+  else
+    original_registration_restored=1
   fi
-  if [ "$restoration_complete" -eq 1 ]; then
+  if [ "$restoration_complete" -eq 1 ] && [ "$original_registration_restored" -eq 1 ]; then
     /bin/rm -rf "$WORK"
-    if [ -n "$PLIST_BACKUP_DIRECTORY" ]; then /bin/rm -rf "$PLIST_BACKUP_DIRECTORY"; fi
   else
     echo 'Runtime Raiders rollback was incomplete; do not retry until recovery is reviewed.' >&2
     [ ! -e "$WORK" ] || echo "Runtime Raiders recovery material preserved at: $WORK" >&2
-    if [ -n "$PLIST_BACKUP_DIRECTORY" ] && [ -e "$PLIST_BACKUP_DIRECTORY" ]; then
-      echo "Runtime Raiders recovery material preserved at: $PLIST_BACKUP_DIRECTORY" >&2
-    fi
   fi
   exit "$rollback_status"
 }
@@ -310,6 +508,15 @@ trap rollback EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+if [ "$existing_form" != fresh ]; then
+  existing_status_file="$WORK/existing-status.json"
+  if ! "$SHIM" status > "$existing_status_file" ||
+     ! collection_is_conclusively_disabled "$existing_status_file"; then
+    echo 'Runtime Raiders requires collection to be conclusively disabled before reinstall.' >&2
+    exit 1
+  fi
+fi
 
 ARCHIVE="$WORK/runtime-raiders-agent.zip"
 download_status="$(/usr/bin/curl --fail --silent --show-error --proto '=https' --proto-redir '=https' \
@@ -330,17 +537,20 @@ CANDIDATE_APP="$UNPACKED/Runtime Raiders.app"
 CANDIDATE_INFO="$CANDIDATE_APP/Contents/Info.plist"
 CANDIDATE_AGENT="$CANDIDATE_APP/Contents/MacOS/runtime-raiders-agent"
 CANDIDATE_ICON="$CANDIDATE_APP/Contents/Resources/RuntimeRaiders.icns"
+CANDIDATE_MANAGED_PLIST="$CANDIDATE_APP/Contents/Library/LaunchAgents/$MANAGED_PLIST_NAME"
 [ "$(/usr/bin/find "$UNPACKED" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 1 ] &&
   [ -d "$CANDIDATE_APP" ] && [ ! -L "$CANDIDATE_APP" ] &&
   [ -z "$(/usr/bin/find "$UNPACKED" -name __MACOSX -print -quit)" ] &&
   [ -z "$(/usr/bin/find "$UNPACKED" -type l -print -quit)" ] &&
   [ -f "$CANDIDATE_INFO" ] && [ ! -L "$CANDIDATE_INFO" ] &&
-  [ -f "$CANDIDATE_AGENT" ] && [ ! -L "$CANDIDATE_AGENT" ] && [ -x "$CANDIDATE_AGENT" ] || {
+  [ -f "$CANDIDATE_AGENT" ] && [ ! -L "$CANDIDATE_AGENT" ] && [ -x "$CANDIDATE_AGENT" ] &&
+  [ -f "$CANDIDATE_MANAGED_PLIST" ] && [ ! -L "$CANDIDATE_MANAGED_PLIST" ] || {
   echo 'Runtime Raiders archive shape or executable is invalid.' >&2
   exit 1
 }
 candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CANDIDATE_INFO")" &&
   candidate_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$CANDIDATE_INFO")" &&
+  candidate_bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$CANDIDATE_INFO")" &&
   candidate_executable="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$CANDIDATE_INFO")" &&
   candidate_name="$(/usr/bin/plutil -extract CFBundleName raw -o - "$CANDIDATE_INFO")" &&
   candidate_display_name="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$CANDIDATE_INFO")" &&
@@ -348,8 +558,9 @@ candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CA
     echo 'Runtime Raiders app metadata is invalid.' >&2
     exit 1
   }
-[ "$candidate_bundle_id" = "$LABEL" ] &&
+[ "$candidate_bundle_id" = "$APP_BUNDLE_ID" ] &&
   [ "$candidate_version" = "$COMPANION_VERSION" ] &&
+  [ "$candidate_bundle_version" = "$COMPANION_VERSION" ] &&
   [ "$candidate_executable" = runtime-raiders-agent ] &&
   [ "$candidate_name" = 'Runtime Raiders' ] &&
   [ "$candidate_display_name" = 'Runtime Raiders' ] &&
@@ -358,8 +569,28 @@ candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CA
   echo 'Runtime Raiders app identity is invalid.' >&2
   exit 1
 }
+candidate_managed_label="$(/usr/bin/plutil -extract Label raw -o - "$CANDIDATE_MANAGED_PLIST")" &&
+  candidate_bundle_program="$(/usr/bin/plutil -extract BundleProgram raw -o - "$CANDIDATE_MANAGED_PLIST")" &&
+  candidate_program_arguments="$(/usr/bin/plutil -extract ProgramArguments json -o - "$CANDIDATE_MANAGED_PLIST")" &&
+  candidate_run_at_load="$(/usr/bin/plutil -extract RunAtLoad raw -expect bool -o - "$CANDIDATE_MANAGED_PLIST")" &&
+  candidate_keep_alive="$(/usr/bin/plutil -extract KeepAlive raw -expect bool -o - "$CANDIDATE_MANAGED_PLIST")" &&
+  candidate_process_type="$(/usr/bin/plutil -extract ProcessType raw -o - "$CANDIDATE_MANAGED_PLIST")" || {
+    echo 'Runtime Raiders managed agent metadata is invalid.' >&2
+    exit 1
+  }
+plist_has_exact_keys "$CANDIDATE_MANAGED_PLIST" 6 \
+    Label BundleProgram ProgramArguments RunAtLoad KeepAlive ProcessType &&
+  [ "$candidate_managed_label" = "$MANAGED_LABEL" ] &&
+  [ "$candidate_bundle_program" = Contents/MacOS/runtime-raiders-agent ] &&
+  [ "$candidate_program_arguments" = '["runtime-raiders-agent","daemon"]' ] &&
+  [ "$candidate_run_at_load" = true ] &&
+  [ "$candidate_keep_alive" = true ] &&
+  [ "$candidate_process_type" = Background ] || {
+  echo 'Runtime Raiders managed agent identity is invalid.' >&2
+  exit 1
+}
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$CANDIDATE_APP"
-/usr/bin/codesign --verify --strict "-R=$AGENT_REQUIREMENT" "$CANDIDATE_APP"
+/usr/bin/codesign --verify --strict "-R=$APP_REQUIREMENT" "$CANDIDATE_APP"
 /usr/sbin/spctl --assess --type execute --verbose=2 "$CANDIDATE_APP"
 CANDIDATE_ICONSET="$WORK/candidate-icon.iconset"
 /usr/bin/iconutil -c iconset "$CANDIDATE_ICON" -o "$CANDIDATE_ICONSET" >/dev/null 2>&1 &&
@@ -369,6 +600,15 @@ CANDIDATE_ICONSET="$WORK/candidate-icon.iconset"
   echo 'Runtime Raiders icon resource is invalid.' >&2
   exit 1
 }
+
+if [ "$existing_form" = legacy ]; then
+  legacy_registration_state="$(legacy_job_registration_state)" || {
+    echo 'Runtime Raiders could not inspect the existing legacy background agent.' >&2
+    exit 1
+  }
+  legacy_initial_registration_known=1
+  if [ "$legacy_registration_state" = registered ]; then legacy_was_registered=1; fi
+fi
 
 if [ "$has_enrollment" -eq 0 ]; then
   [ -r /dev/tty ] && [ -w /dev/tty ] || usage
@@ -424,65 +664,89 @@ if [ "$has_enrollment" -eq 0 ]; then
   /bin/mv "$staged_enrollment" "$ENROLLMENT"
 fi
 
-STAGED_PLIST="$(/usr/bin/mktemp "$LAUNCH_AGENTS/.runtime-raiders-plist.XXXXXX")"
-cat > "$STAGED_PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$LABEL</string>
-  <key>AssociatedBundleIdentifiers</key>
-  <array>
-    <string>$LABEL</string>
-  </array>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$AGENT</string>
-    <string>daemon</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ProcessType</key><string>Background</string>
-</dict>
-</plist>
-EOF
-/bin/chmod 600 "$STAGED_PLIST"
-
-STAGED_SHIM="$(/usr/bin/mktemp "$SUPPORT/.runtime-raiders-shim.XXXXXX")"
+STAGED_SHIM="$WORK/staged.shim"
 cat > "$STAGED_SHIM" <<'EOF'
 #!/bin/sh
 set -eu
 exec "$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders.app/Contents/MacOS/runtime-raiders-agent" "$@"
 EOF
 /bin/chmod 700 "$STAGED_SHIM"
+STAGED_COMMAND=''
+if [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ]; then
+  STAGED_COMMAND="$WORK/staged.command"
+  /bin/ln -s "$SHIM" "$STAGED_COMMAND"
+fi
 
-PLIST_BACKUP_DIRECTORY="$(/usr/bin/mktemp -d "$LAUNCH_AGENTS/.runtime-raiders-backup.XXXXXX")"
 transaction_active=1
-/bin/launchctl bootout "gui/$OWNER/$LABEL" 2>/dev/null || true
+case "$existing_form" in
+  legacy)
+    if [ "$legacy_was_registered" -eq 1 ]; then
+      legacy_stop_attempted=1
+      /bin/launchctl bootout "gui/$OWNER/$LEGACY_LABEL" 2>/dev/null || {
+        echo 'Runtime Raiders could not stop the existing legacy background agent.' >&2
+        exit 1
+      }
+      stopped_legacy_state="$(legacy_job_registration_state)" || {
+        echo 'Runtime Raiders could not verify the legacy background agent stopped.' >&2
+        exit 1
+      }
+      [ "$stopped_legacy_state" = absent ] || {
+        echo 'Runtime Raiders could not verify the legacy background agent stopped.' >&2
+        exit 1
+      }
+    fi
+    ;;
+  managed)
+    old_managed_unregister_attempted=1
+    if old_managed_result="$("$AGENT" __runtime-raiders-managed-agent unregister)"; then
+      [ "$old_managed_result" = not-registered ] || {
+        echo 'Runtime Raiders could not unregister the existing managed agent.' >&2
+        exit 1
+      }
+    else
+      echo 'Runtime Raiders could not unregister the existing managed agent.' >&2
+      exit 1
+    fi
+    ;;
+esac
 
 if [ -e "$APP" ]; then /bin/mv "$APP" "$WORK/old.app"; fi
-if [ -e "$PLIST" ]; then /bin/mv "$PLIST" "$PLIST_BACKUP_DIRECTORY/old.plist"; fi
+if [ -e "$LEGACY_PLIST" ]; then /bin/mv "$LEGACY_PLIST" "$WORK/old.plist"; fi
 if [ -e "$SHIM" ]; then /bin/mv "$SHIM" "$WORK/old.shim"; fi
 
 /bin/mv "$CANDIDATE_APP" "$APP"
-"$AGENT" __runtime-raiders-register-application || {
-  echo 'Runtime Raiders could not register its background-item identity.' >&2
-  exit 1
-}
-/bin/mv "$STAGED_PLIST" "$PLIST"
 /bin/mv "$STAGED_SHIM" "$SHIM"
 
-if [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ]; then
-  staged_command="$COMMAND_DIRECTORY/.raiders.$$"
-  /bin/ln -s "$SHIM" "$staged_command"
-  /bin/mv "$staged_command" "$COMMAND"
+if [ -n "$STAGED_COMMAND" ]; then
+  /bin/mv "$STAGED_COMMAND" "$COMMAND"
 fi
 
-/bin/launchctl bootstrap "gui/$OWNER" "$PLIST"
-"$COMMAND" status >/dev/null
+new_managed_register_attempted=1
+if managed_result="$("$AGENT" __runtime-raiders-managed-agent register)"; then
+  [ "$managed_result" = enabled ] || {
+    echo 'Runtime Raiders could not register its managed background agent.' >&2
+    exit 1
+  }
+else
+  echo 'Runtime Raiders could not register its managed background agent.' >&2
+  exit 1
+fi
+installed_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || {
+  echo 'Runtime Raiders could not verify its managed background agent.' >&2
+  exit 1
+}
+[ "$installed_managed_status" = enabled ] || {
+  echo 'Runtime Raiders could not verify its managed background agent.' >&2
+  exit 1
+}
+installed_status_file="$WORK/installed-status.json"
+if ! wait_for_installation_status "$COMMAND" "$installed_status_file" \
+  "$COMPANION_VERSION" true; then
+  echo 'Runtime Raiders could not prove its registered agent was healthy with collection disabled.' >&2
+  exit 1
+fi
 
 transaction_committed=1
 trap - EXIT HUP INT TERM
-/bin/rm -rf "$WORK" "$PLIST_BACKUP_DIRECTORY"
+/bin/rm -rf "$WORK"
 echo "Runtime Raiders installed. Run 'raiders status' to check it."

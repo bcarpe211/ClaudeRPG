@@ -13,6 +13,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 with: Data(status.stdout.utf8)
             )) as? [String: Any]
             XCTAssertEqual(statusObject?["installedCompanionVersion"] as? String, "1.2.3")
+            XCTAssertEqual(statusObject?["daemonRunning"] as? Bool, true)
             XCTAssertNil(statusObject?["installedReleaseSequence"])
 
             let update = try runCLI(fixture, arguments: ["update"])
@@ -28,10 +29,22 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
 
             let registration = try runCLI(
                 fixture,
-                arguments: ["__runtime-raiders-register-application"]
+                arguments: ["__runtime-raiders-managed-agent", "register"]
             )
             XCTAssertEqual(registration.exitStatus, 0, registration.stderr)
-            XCTAssertEqual(registration.stdout, "")
+            XCTAssertEqual(registration.stdout, "enabled\n")
+            let managedStatus = try runCLI(
+                fixture,
+                arguments: ["__runtime-raiders-managed-agent", "status"]
+            )
+            XCTAssertEqual(managedStatus.exitStatus, 0, managedStatus.stderr)
+            XCTAssertEqual(managedStatus.stdout, "enabled\n")
+            let unregistration = try runCLI(
+                fixture,
+                arguments: ["__runtime-raiders-managed-agent", "unregister"]
+            )
+            XCTAssertEqual(unregistration.exitStatus, 0, unregistration.stderr)
+            XCTAssertEqual(unregistration.stdout, "not-registered\n")
             XCTAssertEqual(try treeFingerprint(fixture.paths.supportDirectory), before)
 
             let ungated = try runCLI(
@@ -41,12 +54,14 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             )
             XCTAssertNotEqual(ungated.exitStatus, 0)
 
-            let ungatedRegistration = try runCLI(
-                fixture,
-                arguments: ["__runtime-raiders-register-application"],
-                includeVerificationGate: false
-            )
-            XCTAssertNotEqual(ungatedRegistration.exitStatus, 0)
+            for action in ["register", "status", "unregister"] {
+                let ungatedManagedAgent = try runCLI(
+                    fixture,
+                    arguments: ["__runtime-raiders-managed-agent", action],
+                    includeVerificationGate: false
+                )
+                XCTAssertNotEqual(ungatedManagedAgent.exitStatus, 0)
+            }
         }
     }
 
@@ -569,7 +584,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
     private func versionInfo() -> [String: Any] {
         [
             "CFBundleExecutable": "runtime-raiders-agent",
-            "CFBundleIdentifier": "com.redlattice.runtime-raiders-agent",
+            "CFBundleIdentifier": "com.redlattice.runtime-raiders",
             "CFBundleName": "Runtime Raiders",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": "1.2.3",

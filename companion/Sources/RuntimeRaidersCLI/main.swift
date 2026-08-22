@@ -4,7 +4,7 @@ import RuntimeRaidersCore
 import Security
 
 private let runtimeInputsVerificationArgument = "__runtime-raiders-verify-runtime-inputs"
-private let applicationRegistrationArgument = "__runtime-raiders-register-application"
+private let managedAgentArgument = "__runtime-raiders-managed-agent"
 private let runtimeInputsVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS"
 private let applicationSupportVerificationEnvironment =
     "RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY"
@@ -373,7 +373,11 @@ private func run() throws {
     if let verificationPaths = try verificationPaths(environment: environment) {
         switch arguments {
         case ["status"]:
-            print(try localStatus(paths: verificationPaths, readCachedUpdateState: false).description)
+            print(try localStatus(
+                paths: verificationPaths,
+                readCachedUpdateState: false,
+                daemonRunning: true
+            ).description)
         case ["update"]:
             try runUpdateCheck(
                 paths: verificationPaths,
@@ -385,12 +389,14 @@ private func run() throws {
                 from: verificationPaths.stateDirectory.appendingPathComponent("enrollment.json")
             )
             print(try RuntimeInputs(enrollment: enrollment).companionVersion)
-        case [applicationRegistrationArgument]:
+        case let arguments where arguments.count == 2 && arguments.first == managedAgentArgument:
             guard let executableURL = Bundle.main.executableURL,
                   executableURL.standardizedFileURL.path ==
-                    verificationPaths.agentExecutable.standardizedFileURL.path else {
+                    verificationPaths.agentExecutable.standardizedFileURL.path,
+                  let action = ManagedAgentAction(rawValue: arguments[1]) else {
                 throw CLIError.usage
             }
+            print(verificationManagedAgentStatus(for: action).rawValue)
         default:
             throw CLIError.usage
         }
@@ -414,14 +420,25 @@ private func run() throws {
         )
         try DaemonRuntime(inputs: RuntimeInputs(enrollment: enrollment)).run()
         return
-    case .registerApplication:
-        try ApplicationRegistration.live.register(bundleURL: Bundle.main.bundleURL)
+    case let .managedAgent(action):
+        print(try ManagedAgentServiceController.live.perform(action).rawValue)
         return
     case .updateCheck:
         try runUpdateCheck(paths: paths, environment: environment)
         return
     case let .control(command):
         try runUserControlCommand(command, paths: paths)
+    }
+}
+
+private func verificationManagedAgentStatus(
+    for action: ManagedAgentAction
+) -> ManagedAgentStatus {
+    switch action {
+    case .register, .status:
+        return .enabled
+    case .unregister:
+        return .notRegistered
     }
 }
 
@@ -525,7 +542,8 @@ private func daemonIsUnavailable(_ error: Error) -> Bool {
 
 private func localStatus(
     paths: AgentPaths,
-    readCachedUpdateState: Bool = true
+    readCachedUpdateState: Bool = true,
+    daemonRunning: Bool = false
 ) throws -> AgentStatus {
     let enrollment = try? EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
@@ -563,7 +581,7 @@ private func localStatus(
     )) ?? PersistedAdapterFacts(activeRunCount: 0, compatibilityReasons: [])
     return AgentStatus(
         enabled: persistedState == .enabled,
-        daemonRunning: false,
+        daemonRunning: daemonRunning,
         persistedState: persistedState,
         serverEnabledSurfaces: surfaces.sorted { $0.rawValue < $1.rawValue },
         compiledAdapters: health,

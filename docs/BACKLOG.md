@@ -576,8 +576,10 @@ agent embedded in the signed app and registered using Apple's `SMAppService`.
 It uses distinct new parent-app and managed-agent identifiers so macOS cannot
 reuse the stale legacy relationship. See
 `docs/superpowers/specs/2026-08-21-runtime-raiders-smappservice-branding-design.md`.
-The checklist remains open until the fresh signed installed-off canary passes
-the actual visible UI gate.
+The reviewed 0.4.3 source is ready for a separately approved signed canary; no
+artifact has been signed, notarized, published, or installed by this offline
+implementation step. The checklist remains open until the fresh signed
+installed-off canary passes the actual visible UI gate.
 
 - [x] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
       remove the retired `Runtime Raiders Launcher` / `Runtime Raiders Agent`

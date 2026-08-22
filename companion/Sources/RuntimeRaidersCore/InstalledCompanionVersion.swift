@@ -15,7 +15,7 @@ public enum InstalledCompanionVersion {
                   format: nil
               ) as? [String: Any],
               infoDictionary["CFBundleIdentifier"] as? String ==
-                "com.redlattice.runtime-raiders-agent",
+                "com.redlattice.runtime-raiders",
               let shortVersion = infoDictionary["CFBundleShortVersionString"] as? String,
               let bundleVersion = infoDictionary["CFBundleVersion"] as? String,
               bundleVersion == shortVersion,

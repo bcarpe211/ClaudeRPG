@@ -245,7 +245,7 @@ summary_value() {
   /usr/bin/awk -F= -v key="$key" '$1 == key { count += 1; value = substr($0, length(key) + 2) } END { if (count == 1) print value; else exit 1 }' "$SUMMARY"
 }
 for key in \
-  git_sha companion_version bundle_identifier team_id codesign_verified hardened_runtime \
+  git_sha companion_version bundle_identifier managed_agent_label team_id codesign_verified hardened_runtime \
   secure_timestamp notarization stapled gatekeeper archive_shape install.sh_bytes \
   install.sh_sha256 runtime-raiders-agent.zip_bytes runtime-raiders-agent.zip_sha256 \
   version_bytes version_sha256; do
@@ -254,7 +254,7 @@ for key in \
     exit 1
   }
 done
-[ "$(/usr/bin/wc -l < "$SUMMARY" | /usr/bin/tr -d ' ')" -eq 17 ] || {
+[ "$(/usr/bin/wc -l < "$SUMMARY" | /usr/bin/tr -d ' ')" -eq 18 ] || {
   echo "release-summary.txt contains unexpected fields" >&2
   exit 1
 }
@@ -262,8 +262,11 @@ done
   echo "release summary does not match reviewed HEAD" >&2
   exit 1
 }
+SUMMARY_BUNDLE_IDENTIFIER="$(summary_value bundle_identifier)"
+SUMMARY_MANAGED_AGENT_LABEL="$(summary_value managed_agent_label)"
 [ "$(summary_value companion_version)" = "$COMPANION_VERSION" ] &&
-  [ "$(summary_value bundle_identifier)" = com.redlattice.runtime-raiders-agent ] &&
+  [ "$SUMMARY_BUNDLE_IDENTIFIER" = com.redlattice.runtime-raiders ] &&
+  [ "$SUMMARY_MANAGED_AGENT_LABEL" = com.redlattice.runtime-raiders.agent ] &&
   [ "$(summary_value team_id)" = "$TEAM_ID" ] &&
   [ "$(summary_value codesign_verified)" = true ] &&
   [ "$(summary_value hardened_runtime)" = true ] &&
@@ -303,13 +306,44 @@ AGENT_APP="$EXTRACTED/Runtime Raiders.app"
 AGENT_INFO="$AGENT_APP/Contents/Info.plist"
 AGENT_EXECUTABLE="$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
 AGENT_ICON="$AGENT_APP/Contents/Resources/RuntimeRaiders.icns"
+AGENT_MANAGED_PLIST="$AGENT_APP/Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist"
 [ "$(/usr/bin/find "$EXTRACTED" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 1 ] &&
   [ -d "$AGENT_APP" ] && [ ! -L "$AGENT_APP" ] &&
-  [ -z "$(/usr/bin/find "$EXTRACTED" -type l -print -quit)" ] &&
   [ -f "$AGENT_INFO" ] && [ ! -L "$AGENT_INFO" ] &&
   [ -f "$AGENT_ICON" ] && [ ! -L "$AGENT_ICON" ] && [ -s "$AGENT_ICON" ] &&
   [ -x "$AGENT_EXECUTABLE" ] && [ ! -L "$AGENT_EXECUTABLE" ] || {
   echo "archive does not contain exactly one safe Runtime Raiders.app" >&2
+  exit 1
+}
+[ -f "$AGENT_MANAGED_PLIST" ] && [ ! -L "$AGENT_MANAGED_PLIST" ] &&
+  [ "$(/usr/bin/stat -f '%u:%l:%Lp' "$AGENT_MANAGED_PLIST")" = "$OWNER:1:644" ] || {
+  echo "archive embedded managed agent metadata is invalid" >&2
+  exit 1
+}
+[ -z "$(/usr/bin/find "$EXTRACTED" -type l -print -quit)" ] || {
+  echo "archive does not contain exactly one safe Runtime Raiders.app" >&2
+  exit 1
+}
+
+MANAGED_PLIST_KEY_COUNT="$(
+  /usr/bin/plutil -convert xml1 -o - "$AGENT_MANAGED_PLIST" |
+    /usr/bin/xmllint --xpath 'count(/plist/dict/key)' -
+)" &&
+  MANAGED_AGENT_LABEL="$(/usr/bin/plutil -extract Label raw -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_BUNDLE_PROGRAM="$(/usr/bin/plutil -extract BundleProgram raw -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_PROGRAM_ARGUMENTS="$(/usr/bin/plutil -extract ProgramArguments json -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_RUN_AT_LOAD="$(/usr/bin/plutil -extract RunAtLoad raw -expect bool -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_KEEP_ALIVE="$(/usr/bin/plutil -extract KeepAlive raw -expect bool -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_PROCESS_TYPE="$(/usr/bin/plutil -extract ProcessType raw -o - "$AGENT_MANAGED_PLIST")" &&
+  [ "$MANAGED_PLIST_KEY_COUNT" -eq 6 ] &&
+  [ "$MANAGED_AGENT_LABEL" = "$SUMMARY_MANAGED_AGENT_LABEL" ] &&
+  [ "$MANAGED_BUNDLE_PROGRAM" = Contents/MacOS/runtime-raiders-agent ] &&
+  [ "$MANAGED_PROGRAM_ARGUMENTS" = '["runtime-raiders-agent","daemon"]' ] &&
+  [ "$MANAGED_RUN_AT_LOAD" = true ] &&
+  [ "$MANAGED_KEEP_ALIVE" = true ] &&
+  [ "$MANAGED_PROCESS_TYPE" = Background ] &&
+  ! /usr/bin/plutil -extract AssociatedBundleIdentifiers json -o - "$AGENT_MANAGED_PLIST" >/dev/null 2>&1 || {
+  echo "archive embedded managed agent metadata is invalid" >&2
   exit 1
 }
 
@@ -320,7 +354,7 @@ BUNDLE_DISPLAY_NAME="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$A
 BUNDLE_ICON_FILE="$(/usr/bin/plutil -extract CFBundleIconFile raw -o - "$AGENT_INFO")"
 BUNDLE_SHORT_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$AGENT_INFO")"
 BUNDLE_VERSION="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$AGENT_INFO")"
-[ "$BUNDLE_ID" = com.redlattice.runtime-raiders-agent ] &&
+[ "$BUNDLE_ID" = "$SUMMARY_BUNDLE_IDENTIFIER" ] &&
   [ "$BUNDLE_EXECUTABLE" = runtime-raiders-agent ] &&
   [ "$BUNDLE_NAME" = 'Runtime Raiders' ] &&
   [ "$BUNDLE_DISPLAY_NAME" = 'Runtime Raiders' ] &&
@@ -339,7 +373,7 @@ printf '%s\n' "$CODESIGN_FACTS" | /usr/bin/grep -F "TeamIdentifier=$TEAM_ID" >/d
   echo "archive signing facts are invalid" >&2
   exit 1
 }
-AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
+AGENT_REQUIREMENT='identifier "com.redlattice.runtime-raiders" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$TEAM_ID"'"'
 "$CODESIGN_TOOL" --verify --deep --strict --verbose=2 "$AGENT_APP"
 "$CODESIGN_TOOL" --verify --strict "-R=$AGENT_REQUIREMENT" "$AGENT_APP"
 "$SPCTL_TOOL" --assess --type execute --verbose=2 "$AGENT_APP"
@@ -426,7 +460,7 @@ if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --deep ] && [ "$3" = --stri
   exit 0
 fi
 if [ "$#" -eq 4 ] && [ "$1" = --verify ] && [ "$2" = --strict ]; then
-  expected_requirement='-R=identifier "com.redlattice.runtime-raiders-agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RR_VERIFY_TEAM_ID"'"'
+  expected_requirement='-R=identifier "com.redlattice.runtime-raiders" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "'"$RR_VERIFY_TEAM_ID"'"'
   [ "$3" = "$expected_requirement" ] || exit 65
   printf 'codesign:requirement\n' >> "$RR_VERIFY_SMOKE_LOG"
   exit 0
