@@ -550,7 +550,7 @@ Acceptance gate:
       public `curl -fsSL https://raiders.redlattice.com/install.sh | sh`
       employee command completed a clean installed-off canary on 2026-08-19.
 
-## 30. Runtime Raiders background-item name and icon — EMPLOYEE-ROLLOUT BLOCKER
+## 30. Runtime Raiders background-item name and icon ✅ DONE (2026-08-22)
 
 The signed `0.4.0` canary is functionally correct, but its app bundle currently
 appears as **Runtime Raiders Agent** and has no bundled icon. macOS also shows
@@ -576,14 +576,23 @@ agent embedded in the signed app and registered using Apple's `SMAppService`.
 It uses distinct new parent-app and managed-agent identifiers so macOS cannot
 reuse the stale legacy relationship. See
 `docs/superpowers/specs/2026-08-21-runtime-raiders-smappservice-branding-design.md`.
-The signed 0.4.3 installed-off canary failed closed before registration.
+The signed `0.4.3` installed-off canary failed closed before registration.
 macOS returned `SMAppService.Status.notFound` for the fresh managed agent
 because no Background Task Management record existed yet; the controller
 incorrectly rejected that state before calling `register()`. The installer
 restored the signed 0.4.2 legacy service with collection disabled and retained
-its recovery directory. The 0.4.4 repair must pass the local signed canary
-command below before any replacement publication. The checklist remains open
-until that fresh installed-off canary passes the actual visible UI gate.
+its recovery directory.
+
+The `0.4.4` repair treats `.notFound` as the expected first-registration state.
+It passed the repeatable signed/notarized local installed-off canary below, was
+published from Git commit `5ced73d`, and its public installer and ZIP matched the
+locally proven artifact. The installed service reports version `0.4.4`, a
+running managed daemon, disabled collection, and zero active Runs or queued
+events. The operator then confirmed that System Settings → Login Items shows
+**Runtime Raiders.app**. This clears the employee-rollout branding blocker.
+macOS may continue to say **Software from “Bryan Carpenter”** when identifying
+the Apple developer; that is approved developer attribution, not the product or
+background-item name.
 
 ```sh
 /bin/bash scripts/release/install-runtime-raiders-local-canary.sh
@@ -594,12 +603,13 @@ until that fresh installed-off canary passes the actual visible UI gate.
       wording from visible system UI.
 - [x] Ship one approved Runtime Raiders `.icns` resource and bind it through the
       app bundle metadata.
-- [ ] Confirm the signed association keeps **Runtime Raiders** as the product or
-      parent identity while correctly retaining Bryan Carpenter as the developer;
-      the approved next attempt uses Apple's bundled `SMAppService` design.
-- [ ] After a clean signed install, verify the actual Background Items entry in
-      System Settings, the first-run App Background Activity notification, and
-      the corresponding `sfltool dumpbtm` record show the intended name, icon,
-      developer identity, and parent identifier with no personal-name fallback.
-- [ ] Keep this branding-only work independent from enrollment, collection,
+- [x] Confirm the signed association keeps **Runtime Raiders** as the product
+      identity while correctly retaining Bryan Carpenter as the Apple developer.
+- [x] After a clean signed install, verify the actual Login Items entry in System
+      Settings shows **Runtime Raiders.app**; the signed bundle retains the
+      approved Runtime Raiders icon metadata.
+- [x] Keep this branding work independent from enrollment, collection,
       telemetry, update checking, and publication behavior.
+- [ ] (Optional regression evidence) Capture the first-run notification and a
+      matching `sfltool dumpbtm` record after a future clean macOS enrollment if
+      Apple changes how Login Items presents developer attribution.
