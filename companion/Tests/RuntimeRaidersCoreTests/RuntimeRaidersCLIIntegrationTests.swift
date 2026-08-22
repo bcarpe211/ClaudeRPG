@@ -13,6 +13,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 with: Data(status.stdout.utf8)
             )) as? [String: Any]
             XCTAssertEqual(statusObject?["installedCompanionVersion"] as? String, "1.2.3")
+            XCTAssertEqual(statusObject?["daemonRunning"] as? Bool, true)
             XCTAssertNil(statusObject?["installedReleaseSequence"])
 
             let update = try runCLI(fixture, arguments: ["update"])

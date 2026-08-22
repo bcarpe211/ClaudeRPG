@@ -46,6 +46,8 @@ function agentStatus(overrides: Partial<{
   enabled: boolean;
   activationState: ActivationState;
   persistedState: PersistedState;
+  daemonRunning: boolean;
+  installedCompanionVersion: string;
 }> = {}): string {
   return JSON.stringify({
     activationState: 'disabled',
@@ -67,6 +69,12 @@ function agentStatus(overrides: Partial<{
     updateCommand: null,
     ...overrides,
   });
+}
+
+function agentStatusWithout(field: 'daemonRunning' | 'installedCompanionVersion'): string {
+  const value = JSON.parse(agentStatus()) as Record<string, unknown>;
+  delete value[field];
+  return JSON.stringify(value);
 }
 
 const nonDisabledStatuses = [
@@ -345,7 +353,7 @@ function commitAllFixtureChanges(value: BuildFixture, message: string): void {
   }
 }
 
-function plist(bundleVersion = version, bundleId = appBundleId): string {
+function plist(shortVersion = version, bundleId = appBundleId, bundleVersion = shortVersion): string {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<plist version="1.0"><dict>',
@@ -354,7 +362,8 @@ function plist(bundleVersion = version, bundleId = appBundleId): string {
     '<key>CFBundleName</key><string>Runtime Raiders</string>',
     '<key>CFBundleDisplayName</key><string>Runtime Raiders</string>',
     '<key>CFBundleIconFile</key><string>RuntimeRaiders</string>',
-    `<key>CFBundleShortVersionString</key><string>${bundleVersion}</string>`,
+    `<key>CFBundleShortVersionString</key><string>${shortVersion}</string>`,
+    `<key>CFBundleVersion</key><string>${bundleVersion}</string>`,
     '</dict></plist>',
     '',
   ].join('\n');
@@ -418,6 +427,9 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ...(identity === 'candidate' ? [`[ "${statusFailure}" != 1 ] || exit 78`] : []),
     '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
     ...(identity === 'candidate' ? [
+      'status_calls=0',
+      'if [ -e "$RR_STATUS_CALLS" ]; then status_calls=$(/bin/cat "$RR_STATUS_CALLS"); fi',
+      'status_calls=$((status_calls + 1)); printf "%s\\n" "$status_calls" > "$RR_STATUS_CALLS"',
       'if [ -n "${RR_NEW_COLLECTION_STATUS:-}" ]; then',
       '  printf "%s\\n" "$RR_NEW_COLLECTION_STATUS"',
       'elif [ -e "$RR_COLLECTOR_STATE" ]; then',
@@ -428,9 +440,9 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ] : [
       'if [ -e "$RR_SERVICE_STOPPED" ]; then',
       `  [ "${statusFailure}" != 1 ] || exit 78`,
-      '  printf "%s\\n" "${RR_RESTORED_COLLECTION_STATUS:-$RR_DISABLED_STATUS}"',
+      '  printf "%s\\n" "${RR_RESTORED_COLLECTION_STATUS:-$RR_OLD_DISABLED_STATUS}"',
       'else',
-      '  printf "%s\\n" "${RR_EXISTING_COLLECTION_STATUS:-$RR_DISABLED_STATUS}"',
+      '  printf "%s\\n" "${RR_EXISTING_COLLECTION_STATUS:-$RR_OLD_DISABLED_STATUS}"',
       'fi',
     ]),
   ];
@@ -521,15 +533,24 @@ function fakeTools(root: string): string {
   executable(join(bin, 'launchctl'), [
     'printf "launchctl:%s\\n" "$*" >> "$RR_EVENT_LOG"',
     'case "${1:-}" in',
+    '  print)',
+    '    [ "$#" -eq 2 ] && [ "$2" = "gui/$RR_OWNER/com.redlattice.runtime-raiders-agent" ] || exit 64',
+    '    [ "${RR_FAIL_LEGACY_INSPECTION:-0}" != 1 ] || exit 75',
+    '    if [ -e "$RR_SERVICE_STOPPED" ] && [ "${RR_FAIL_POST_BOOTOUT_INSPECTION:-0}" = 1 ]; then exit 75; fi',
+    '    [ -e "$RR_LEGACY_JOB" ] || exit 113',
+    '    printf "state = running\\n"; exit 0;;',
     '  bootout)',
     '    [ "$#" -eq 2 ] && [ "$2" = "gui/$RR_OWNER/com.redlattice.runtime-raiders-agent" ] || exit 64',
-    '    : > "$RR_SERVICE_STOPPED"; rm -f "$RR_RUNNING"',
+    '    [ "${RR_FAIL_LEGACY_BOOTOUT:-0}" != 1 ] || exit 75',
+    '    [ -e "$RR_LEGACY_JOB" ] || exit 113',
+    '    : > "$RR_SERVICE_STOPPED"',
+    '    if [ "${RR_LEGACY_STILL_PRESENT_AFTER_BOOTOUT:-0}" != 1 ]; then rm -f "$RR_LEGACY_JOB" "$RR_RUNNING"; fi',
     '    if [ "${RR_SIGNAL_AFTER_OLD_STOP:-0}" = 1 ]; then kill -TERM "$PPID"; fi',
     '    exit 0;;',
     '  bootstrap)',
     '    [ "$#" -eq 3 ] && [ "$2" = "gui/$RR_OWNER" ] && [ "$3" = "$RR_LEGACY_PLIST" ] || exit 64',
     '    if [ "${RR_FAIL_ROLLBACK_BOOTSTRAP:-0}" = 1 ]; then exit 76; fi',
-    '    : > "$RR_RUNNING"; exit 0;;',
+    '    : > "$RR_LEGACY_JOB"; : > "$RR_RUNNING"; exit 0;;',
     '  *) exit 64;;',
     'esac',
   ]);
@@ -538,6 +559,7 @@ function fakeTools(root: string): string {
     '[ "${1:-}" != -g ] || printf saved',
   ]);
   executable(join(bin, 'uuidgen'), ['printf "%s\\n" "${RR_UUID:-00000000-0000-4000-8000-000000000001}"']);
+  executable(join(bin, 'sleep'), ['exit 0']);
   executable(join(bin, 'mv'), [
     '[ "$#" -eq 2 ] || exec /bin/mv "$@"',
     'source=$1; destination=$2; boundary=',
@@ -586,6 +608,8 @@ function fixture() {
   const enrollmentStdin = join(root, 'enrollment-stdin.json');
   const running = join(root, 'running');
   const managedState = join(root, 'managed-state');
+  const legacyJob = join(root, 'legacy-job');
+  const statusCalls = join(root, 'status-calls');
   const archive = join(root, 'runtime-raiders-agent.zip');
   const enrollmentResponse = join(root, 'enrollment-response.json');
   const tty = join(root, 'tty');
@@ -619,6 +643,7 @@ function fixture() {
   return {
     root, home, support, state, outbox, app, plist: plistPath, shim, command,
     candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running, managedState,
+    legacyJob, statusCalls,
     environment: {
       ...process.env,
       HOME: home,
@@ -633,6 +658,13 @@ function fixture() {
       RR_MANAGED_STATE: managedState,
       RR_DISABLED_STATUS: agentStatus(),
       RR_MISSING_STATUS: agentStatus({ persistedState: 'missing' }),
+      RR_OLD_DISABLED_STATUS: agentStatus({ installedCompanionVersion: '0.4.2' }),
+      RR_OLD_STOPPED_STATUS: agentStatus({
+        daemonRunning: false,
+        installedCompanionVersion: '0.4.2',
+      }),
+      RR_LEGACY_JOB: legacyJob,
+      RR_STATUS_CALLS: statusCalls,
       RR_COLLECTOR_STATE: join(state, 'collector-state.json'),
       RR_APP: app,
       RR_PLIST: plistPath,
@@ -668,6 +700,7 @@ function renderInstaller(value: Fixture, mutate: (source: string) => string = (s
     .replaceAll('/usr/bin/codesign', join(fake, 'codesign'))
     .replaceAll('/usr/sbin/spctl', join(fake, 'spctl'))
     .replaceAll('/bin/launchctl', join(fake, 'launchctl'))
+    .replaceAll('/bin/sleep', join(fake, 'sleep'))
     .replaceAll('/bin/mv', join(fake, 'mv'))
     .replaceAll('/usr/bin/stty', join(fake, 'stty'))
     .replaceAll('/usr/bin/uuidgen', join(fake, 'uuidgen'))
@@ -694,9 +727,13 @@ function writeExistingInstall(value: Fixture, enabled: boolean): void {
     'printf "agent:legacy:%s\\n" "$*" >> "$RR_EVENT_LOG"',
     'if [ -e "$RR_SERVICE_STOPPED" ]; then',
     '  [ "${RR_FAIL_RESTORED_STATUS:-0}" != 1 ] || exit 78',
-    '  printf "%s\\n" "${RR_RESTORED_COLLECTION_STATUS:-$RR_DISABLED_STATUS}"',
+    '  if [ -e "$RR_LEGACY_JOB" ]; then',
+    '    printf "%s\\n" "${RR_RESTORED_COLLECTION_STATUS:-$RR_OLD_DISABLED_STATUS}"',
+    '  else',
+    '    printf "%s\\n" "${RR_RESTORED_COLLECTION_STATUS:-$RR_OLD_STOPPED_STATUS}"',
+    '  fi',
     'else',
-    '  printf "%s\\n" "${RR_EXISTING_COLLECTION_STATUS:-$RR_DISABLED_STATUS}"',
+    '  printf "%s\\n" "${RR_EXISTING_COLLECTION_STATUS:-$RR_OLD_DISABLED_STATUS}"',
     'fi',
   ]);
   writeFileSync(
@@ -718,6 +755,7 @@ function writeExistingInstall(value: Fixture, enabled: boolean): void {
   writeFileSync(join(value.state, 'opaque-state.bin'), Buffer.from([0, 1, 2, 255]), { mode: 0o600 });
   writeFileSync(join(value.outbox, 'event.json'), '{"opaque":"queued"}\n', { mode: 0o600 });
   writeFileSync(value.running, 'old daemon running\n');
+  writeFileSync(value.legacyJob, 'registered\n');
 }
 
 function writeManagedInstall(value: Fixture): void {
@@ -1565,6 +1603,24 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(existsSync(join(value.state, 'collector-state.json'))).toBe(false);
   });
 
+  it.each([
+    ['a stopped daemon', agentStatus({ daemonRunning: false })],
+    ['the wrong installed version', agentStatus({ installedCompanionVersion: '0.4.2' })],
+    ['a missing installed version', agentStatusWithout('installedCompanionVersion')],
+  ] as const)('post-register readiness rejects %s after bounded retries', (_state, wire) => {
+    const value = fixture();
+    value.environment.RR_NEW_COLLECTION_STATUS = wire;
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(value.statusCalls, 'utf8')).toBe('5\n');
+    expect(installedTargets(value)).toEqual({ app: {}, plist: null, shim: null, command: null });
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(false);
+    expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
   it('legacy 0.4.2 migration replaces the retired plist with the managed service', () => {
     const value = fixture();
     writeExistingInstall(value, false);
@@ -1588,6 +1644,57 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
     expect(existsSync(value.running)).toBe(true);
     expect(readFileSync(join(value.state, 'collector-state.json'), 'utf8')).toContain('"enabled":false');
+  });
+
+  it('migrates an initially unregistered legacy job without bootout or bootstrap', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    rmSync(value.legacyJob);
+    rmSync(value.running);
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value).some((line) => line.startsWith('launchctl:bootout '))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('launchctl:bootstrap '))).toBe(false);
+    expect(existsSync(value.legacyJob)).toBe(false);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+  });
+
+  it.each([
+    ['hard inspection failure', 'RR_FAIL_LEGACY_INSPECTION'],
+    ['hard bootout failure', 'RR_FAIL_LEGACY_BOOTOUT'],
+    ['job still present after bootout', 'RR_LEGACY_STILL_PRESENT_AFTER_BOOTOUT'],
+  ] as const)('%s stops legacy migration before replacement', (_failure, seam) => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const before = installedTargets(value);
+    value.environment[seam] = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(events(value).some((line) => line.startsWith('mv:backup-'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:replace-'))).toBe(false);
+    expect(existsSync(value.legacyJob)).toBe(true);
+    expect(existsSync(value.running)).toBe(true);
+  });
+
+  it('preserves recovery when post-bootout launchd inspection cannot prove absence', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const before = installedTargets(value);
+    value.environment.RR_FAIL_POST_BOOTOUT_INSPECTION = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(existsSync(value.legacyJob)).toBe(false);
+    expect(existsSync(value.running)).toBe(false);
+    expectRecoveryPreserved(value, result);
   });
 
   it('managed service reinstall unregisters the old app and registers the replacement without bootstrap', () => {
@@ -1672,6 +1779,29 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(installedTargets(value)).toEqual(before);
     expect(readFileSync(value.managedState, 'utf8')).toBe(form === 'managed' ? 'enabled\n' : 'not-registered\n');
     expect(existsSync(value.running)).toBe(true);
+    expectRecoveryPreserved(value, result);
+  });
+
+  it.each(
+    (['legacy', 'managed'] as const).flatMap((form) => [
+      [form, 'a stopped daemon', agentStatus({
+        daemonRunning: false,
+        installedCompanionVersion: '0.4.2',
+      })] as const,
+      [form, 'the wrong installed version', agentStatus({ installedCompanionVersion: version })] as const,
+      [form, 'a missing installed version', agentStatusWithout('installedCompanionVersion')] as const,
+    ]),
+  )('rollback from %s preserves recovery when restored readiness reports %s', (form, _state, wire) => {
+    const value = fixture();
+    writeInstallForm(value, form);
+    const before = installedTargets(value);
+    value.environment.RR_FAIL_STATUS = '1';
+    value.environment.RR_RESTORED_COLLECTION_STATUS = wire;
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
     expectRecoveryPreserved(value, result);
   });
 
@@ -1891,6 +2021,9 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     ['wrong version', (value: Fixture) => {
       writeFileSync(join(value.candidate, 'Contents/Info.plist'), plist('9.9.9'));
     }],
+    ['wrong bundle version', (value: Fixture) => {
+      writeFileSync(join(value.candidate, 'Contents/Info.plist'), plist(version, appBundleId, '9.9.9'));
+    }],
     ['malformed icon resource', (value: Fixture) => {
       writeFileSync(join(value.candidate, 'Contents/Resources/RuntimeRaiders.icns'), 'not an icns file\n');
     }],
@@ -2019,6 +2152,25 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(treeSnapshot(value.state)).toEqual(stateBefore);
     expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
     expect(existsSync(value.running)).toBe(true);
+    expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
+  it('rollback keeps an initially unregistered legacy job absent and accepts its stopped daemon', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    rmSync(value.legacyJob);
+    rmSync(value.running);
+    const before = installedTargets(value);
+    value.environment.RR_FAIL_STATUS = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(events(value).some((line) => line.startsWith('launchctl:bootout '))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('launchctl:bootstrap '))).toBe(false);
+    expect(existsSync(value.legacyJob)).toBe(false);
+    expect(existsSync(value.running)).toBe(false);
     expect(recoveryDirectories(value)).toHaveLength(0);
   });
 

@@ -148,6 +148,7 @@ reject_existing_layout() {
 app_present=0
 legacy_plist_present=0
 shim_present=0
+existing_bundle_version=''
 [ ! -e "$APP" ] || app_present=1
 [ ! -e "$LEGACY_PLIST" ] || legacy_plist_present=1
 [ ! -e "$SHIM" ] || shim_present=1
@@ -160,13 +161,17 @@ elif [ "$app_present" -eq 1 ] && [ "$legacy_plist_present" -eq 1 ] && [ "$shim_p
     [ -f "$AGENT" ] && [ ! -L "$AGENT" ] && [ -x "$AGENT" ] &&
     [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$existing_info")" = "$LEGACY_LABEL" ] &&
     [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$existing_info")" = 0.4.2 ] &&
+    [ "$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$existing_info")" = 0.4.2 ] &&
     valid_legacy_plist "$LEGACY_PLIST" || reject_existing_layout
+  existing_bundle_version=0.4.2
   existing_form=legacy
 elif [ "$app_present" -eq 1 ] && [ "$legacy_plist_present" -eq 0 ] && [ "$shim_present" -eq 1 ]; then
   existing_info="$APP/Contents/Info.plist"
   [ -f "$existing_info" ] && [ ! -L "$existing_info" ] &&
     [ -f "$AGENT" ] && [ ! -L "$AGENT" ] && [ -x "$AGENT" ] &&
-    [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$existing_info")" = "$APP_BUNDLE_ID" ] ||
+    [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$existing_info")" = "$APP_BUNDLE_ID" ] &&
+    existing_bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$existing_info")" &&
+    [ -n "$existing_bundle_version" ] ||
     reject_existing_layout
   existing_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || reject_existing_layout
   [ "$existing_managed_status" = enabled ] || reject_existing_layout
@@ -273,6 +278,52 @@ collection_is_conclusively_disabled() {
   esac
 }
 
+installation_status_is_ready() {
+  readiness_status_file=$1
+  readiness_expected_version=$2
+  readiness_expected_daemon=$3
+  collection_is_conclusively_disabled "$readiness_status_file" || return 1
+  readiness_daemon="$(/usr/bin/plutil -extract daemonRunning raw -expect bool -o - \
+    "$readiness_status_file")" &&
+    readiness_version="$(/usr/bin/plutil -extract installedCompanionVersion raw -expect string -o - \
+      "$readiness_status_file")" || return 1
+  [ "$readiness_daemon" = "$readiness_expected_daemon" ] &&
+    [ "$readiness_version" = "$readiness_expected_version" ]
+}
+
+wait_for_installation_status() {
+  readiness_command=$1
+  readiness_output=$2
+  readiness_expected_version=$3
+  readiness_expected_daemon=$4
+  readiness_attempt=1
+  while [ "$readiness_attempt" -le 5 ]; do
+    if "$readiness_command" status > "$readiness_output" &&
+       installation_status_is_ready "$readiness_output" \
+         "$readiness_expected_version" "$readiness_expected_daemon"; then
+      return 0
+    fi
+    [ "$readiness_attempt" -lt 5 ] || return 1
+    /bin/sleep 1 || return 1
+    readiness_attempt=$((readiness_attempt + 1))
+  done
+  return 1
+}
+
+legacy_job_registration_state() {
+  if /bin/launchctl print "gui/$OWNER/$LEGACY_LABEL" >/dev/null 2>&1; then
+    printf 'registered\n'
+    return 0
+  else
+    legacy_inspection_status=$?
+  fi
+  if [ "$legacy_inspection_status" -eq 113 ]; then
+    printf 'absent\n'
+    return 0
+  fi
+  return 1
+}
+
 has_enrollment=0
 if [ -e "$ENROLLMENT" ] || [ -L "$ENROLLMENT" ]; then
   refuse_symlink "$ENROLLMENT"
@@ -289,6 +340,8 @@ WORK="$(/usr/bin/mktemp -d "$SUPPORT/.runtime-raiders-install.XXXXXX")"
 transaction_active=0
 transaction_committed=0
 legacy_stop_attempted=0
+legacy_initial_registration_known=0
+legacy_was_registered=0
 old_managed_unregister_attempted=0
 new_managed_register_attempted=0
 rollback_new_unregister_attempted=0
@@ -387,10 +440,17 @@ rollback() {
     prior_service_restored=1
     case "$existing_form" in
       legacy)
-        if [ "$legacy_stop_attempted" -eq 1 ]; then
-          prior_service_restored=0
-          if [ "$app_restored" -eq 1 ] && [ "$legacy_plist_restored" -eq 1 ] &&
-             /bin/launchctl bootstrap "gui/$OWNER" "$LEGACY_PLIST" >/dev/null 2>&1; then
+        prior_service_restored=0
+        if [ "$legacy_initial_registration_known" -eq 1 ] &&
+           restored_legacy_state="$(legacy_job_registration_state)"; then
+          if [ "$legacy_was_registered" -eq 1 ]; then
+            if [ "$restored_legacy_state" = absent ] &&
+               [ "$app_restored" -eq 1 ] && [ "$legacy_plist_restored" -eq 1 ] &&
+               /bin/launchctl bootstrap "gui/$OWNER" "$LEGACY_PLIST" >/dev/null 2>&1; then
+              restored_legacy_state="$(legacy_job_registration_state)" || restored_legacy_state=unknown
+            fi
+            [ "$restored_legacy_state" = registered ] && prior_service_restored=1
+          elif [ "$restored_legacy_state" = absent ]; then
             prior_service_restored=1
           fi
         fi;;
@@ -414,9 +474,13 @@ rollback() {
     if [ "$existing_form" != fresh ]; then
       restored_collection_disabled=0
       restored_status_file="$WORK/restored-status.json"
+      restored_expected_daemon=true
+      if [ "$existing_form" = legacy ] && [ "$legacy_was_registered" -eq 0 ]; then
+        restored_expected_daemon=false
+      fi
       if [ "$app_restored" -eq 1 ] && [ "$shim_restored" -eq 1 ] &&
-         "$SHIM" status > "$restored_status_file" &&
-         collection_is_conclusively_disabled "$restored_status_file"; then
+         wait_for_installation_status "$SHIM" "$restored_status_file" \
+           "$existing_bundle_version" "$restored_expected_daemon"; then
         restored_collection_disabled=1
       fi
       [ "$restored_collection_disabled" -eq 1 ] || restoration_complete=0
@@ -486,6 +550,7 @@ CANDIDATE_MANAGED_PLIST="$CANDIDATE_APP/Contents/Library/LaunchAgents/$MANAGED_P
 }
 candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CANDIDATE_INFO")" &&
   candidate_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$CANDIDATE_INFO")" &&
+  candidate_bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$CANDIDATE_INFO")" &&
   candidate_executable="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$CANDIDATE_INFO")" &&
   candidate_name="$(/usr/bin/plutil -extract CFBundleName raw -o - "$CANDIDATE_INFO")" &&
   candidate_display_name="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$CANDIDATE_INFO")" &&
@@ -495,6 +560,7 @@ candidate_bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$CA
   }
 [ "$candidate_bundle_id" = "$APP_BUNDLE_ID" ] &&
   [ "$candidate_version" = "$COMPANION_VERSION" ] &&
+  [ "$candidate_bundle_version" = "$COMPANION_VERSION" ] &&
   [ "$candidate_executable" = runtime-raiders-agent ] &&
   [ "$candidate_name" = 'Runtime Raiders' ] &&
   [ "$candidate_display_name" = 'Runtime Raiders' ] &&
@@ -534,6 +600,15 @@ CANDIDATE_ICONSET="$WORK/candidate-icon.iconset"
   echo 'Runtime Raiders icon resource is invalid.' >&2
   exit 1
 }
+
+if [ "$existing_form" = legacy ]; then
+  legacy_registration_state="$(legacy_job_registration_state)" || {
+    echo 'Runtime Raiders could not inspect the existing legacy background agent.' >&2
+    exit 1
+  }
+  legacy_initial_registration_known=1
+  if [ "$legacy_registration_state" = registered ]; then legacy_was_registered=1; fi
+fi
 
 if [ "$has_enrollment" -eq 0 ]; then
   [ -r /dev/tty ] && [ -w /dev/tty ] || usage
@@ -605,8 +680,21 @@ fi
 transaction_active=1
 case "$existing_form" in
   legacy)
-    legacy_stop_attempted=1
-    /bin/launchctl bootout "gui/$OWNER/$LEGACY_LABEL" 2>/dev/null || true
+    if [ "$legacy_was_registered" -eq 1 ]; then
+      legacy_stop_attempted=1
+      /bin/launchctl bootout "gui/$OWNER/$LEGACY_LABEL" 2>/dev/null || {
+        echo 'Runtime Raiders could not stop the existing legacy background agent.' >&2
+        exit 1
+      }
+      stopped_legacy_state="$(legacy_job_registration_state)" || {
+        echo 'Runtime Raiders could not verify the legacy background agent stopped.' >&2
+        exit 1
+      }
+      [ "$stopped_legacy_state" = absent ] || {
+        echo 'Runtime Raiders could not verify the legacy background agent stopped.' >&2
+        exit 1
+      }
+    fi
     ;;
   managed)
     old_managed_unregister_attempted=1
@@ -652,9 +740,9 @@ installed_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" ||
   exit 1
 }
 installed_status_file="$WORK/installed-status.json"
-if ! "$COMMAND" status > "$installed_status_file" ||
-   ! collection_is_conclusively_disabled "$installed_status_file"; then
-  echo 'Runtime Raiders could not prove collection remained disabled after registration.' >&2
+if ! wait_for_installation_status "$COMMAND" "$installed_status_file" \
+  "$COMPANION_VERSION" true; then
+  echo 'Runtime Raiders could not prove its registered agent was healthy with collection disabled.' >&2
   exit 1
 fi
 

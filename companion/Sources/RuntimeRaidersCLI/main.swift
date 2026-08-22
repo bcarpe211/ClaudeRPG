@@ -373,7 +373,11 @@ private func run() throws {
     if let verificationPaths = try verificationPaths(environment: environment) {
         switch arguments {
         case ["status"]:
-            print(try localStatus(paths: verificationPaths, readCachedUpdateState: false).description)
+            print(try localStatus(
+                paths: verificationPaths,
+                readCachedUpdateState: false,
+                daemonRunning: true
+            ).description)
         case ["update"]:
             try runUpdateCheck(
                 paths: verificationPaths,
@@ -538,7 +542,8 @@ private func daemonIsUnavailable(_ error: Error) -> Bool {
 
 private func localStatus(
     paths: AgentPaths,
-    readCachedUpdateState: Bool = true
+    readCachedUpdateState: Bool = true,
+    daemonRunning: Bool = false
 ) throws -> AgentStatus {
     let enrollment = try? EnrollmentConfiguration.loadExisting(
         from: paths.stateDirectory.appendingPathComponent("enrollment.json")
@@ -576,7 +581,7 @@ private func localStatus(
     )) ?? PersistedAdapterFacts(activeRunCount: 0, compatibilityReasons: [])
     return AgentStatus(
         enabled: persistedState == .enabled,
-        daemonRunning: false,
+        daemonRunning: daemonRunning,
         persistedState: persistedState,
         serverEnabledSurfaces: surfaces.sorted { $0.rawValue < $1.rawValue },
         compiledAdapters: health,
