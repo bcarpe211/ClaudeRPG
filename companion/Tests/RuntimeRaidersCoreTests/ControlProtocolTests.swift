@@ -64,19 +64,36 @@ final class ControlProtocolTests: XCTestCase {
             executableURL: otherExecutable,
             paths: paths
         ))
-        XCTAssertEqual(
-            CompanionCommandRouter.route(
-                arguments: ["__runtime-raiders-register-application"],
+        for action in [
+            ManagedAgentAction.register,
+            .unregister,
+            .status,
+        ] {
+            XCTAssertEqual(
+                CompanionCommandRouter.route(
+                    arguments: ["__runtime-raiders-managed-agent", action.rawValue],
+                    executableURL: stableExecutable,
+                    paths: paths
+                ),
+                .managedAgent(action)
+            )
+            XCTAssertNil(CompanionCommandRouter.route(
+                arguments: ["__runtime-raiders-managed-agent", action.rawValue],
+                executableURL: otherExecutable,
+                paths: paths
+            ))
+        }
+        for arguments in [
+            ["__runtime-raiders-managed-agent"],
+            ["__runtime-raiders-managed-agent", "unknown"],
+            ["__runtime-raiders-managed-agent", "status", "extra"],
+        ] {
+            XCTAssertNil(CompanionCommandRouter.route(
+                arguments: arguments,
                 executableURL: stableExecutable,
                 paths: paths
-            ),
-            .registerApplication
-        )
-        XCTAssertNil(CompanionCommandRouter.route(
-            arguments: ["__runtime-raiders-register-application"],
-            executableURL: otherExecutable,
-            paths: paths
-        ))
+            ))
+        }
         for command in [
             ControlCommand.on,
             .off,
@@ -108,6 +125,7 @@ final class ControlProtocolTests: XCTestCase {
             [retiredPrepare],
             [retiredResume],
             ["__self-check"],
+            ["__runtime-raiders-register-application"],
             ["__runtime-raiders-installer-lease"],
             ["__runtime-raiders-legacy-prepare"],
             ["__runtime-raiders-installer-validate-legacy"],

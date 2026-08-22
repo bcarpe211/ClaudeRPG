@@ -15,7 +15,7 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
 
 public enum CompanionCommandRoute: Equatable, Sendable {
     case daemon
-    case registerApplication
+    case managedAgent(ManagedAgentAction)
     case control(ControlCommand)
     case updateCheck
 }
@@ -38,9 +38,11 @@ public enum CompanionCommandRouter {
         case ["daemon"]:
             guard exactExecutable(executableURL, equals: paths.agentExecutable) else { return nil }
             return .daemon
-        case ["__runtime-raiders-register-application"]:
+        case let arguments where arguments.count == 2 &&
+            arguments.first == "__runtime-raiders-managed-agent":
             guard exactExecutable(executableURL, equals: paths.agentExecutable) else { return nil }
-            return .registerApplication
+            guard let action = ManagedAgentAction(rawValue: arguments[1]) else { return nil }
+            return .managedAgent(action)
         default:
             return nil
         }
