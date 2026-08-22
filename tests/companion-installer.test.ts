@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
@@ -283,6 +284,47 @@ function runSignedVerifier(value: BuildFixture, environment: NodeJS.ProcessEnv =
     env: environment,
     encoding: 'utf8',
   });
+}
+
+function replaceReleaseSummaryField(
+  value: BuildFixture,
+  key: string,
+  replacement: string | null,
+): void {
+  const summaryPath = join(value.output, 'release-summary.txt');
+  const summary = readFileSync(summaryPath, 'utf8');
+  const line = new RegExp(`^${key}=.*\\n`, 'm');
+  expect(summary).toMatch(line);
+  writeFileSync(summaryPath, summary.replace(line, replacement === null ? '' : `${key}=${replacement}\n`));
+}
+
+function refreshArchiveSummaryEvidence(value: BuildFixture): void {
+  const archive = join(value.output, 'runtime-raiders-agent.zip');
+  const bytes = readFileSync(archive);
+  replaceReleaseSummaryField(value, 'runtime-raiders-agent.zip_bytes', String(bytes.byteLength));
+  replaceReleaseSummaryField(
+    value,
+    'runtime-raiders-agent.zip_sha256',
+    createHash('sha256').update(bytes).digest('hex'),
+  );
+}
+
+function mutateSignedArchive(value: BuildFixture, mutate: (application: string) => void): void {
+  const extracted = join(value.root, 'signed-archive-mutation');
+  mkdirSync(extracted);
+  const archive = join(value.output, 'runtime-raiders-agent.zip');
+  const unpacked = spawnSync('/usr/bin/ditto', ['-x', '-k', archive, extracted], { encoding: 'utf8' });
+  expect(unpacked.status, unpacked.stderr).toBe(0);
+  const application = join(extracted, 'Runtime Raiders.app');
+  mutate(application);
+  rmSync(archive);
+  const repacked = spawnSync(
+    '/usr/bin/ditto',
+    ['-c', '-k', '--keepParent', application, archive],
+    { encoding: 'utf8' },
+  );
+  expect(repacked.status, repacked.stderr).toBe(0);
+  refreshArchiveSummaryEvidence(value);
 }
 
 function commitFixture(value: BuildFixture, message: string): string {
@@ -887,6 +929,157 @@ describe('Runtime Raiders release build', () => {
     expect(invocations[2]).toContain('response=unset');
     expect(invocations[3]).toContain('response=unset');
     expect(invocations[4]).not.toContain('response=unset');
+  });
+
+  it.each([
+    ['missing', null],
+    ['wrong', legacyLabel],
+  ] as const)('signed verifier rejects a %s managed_agent_label summary field', (_case, replacement) => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    replaceReleaseSummaryField(value, 'managed_agent_label', replacement);
+
+    const result = runSignedVerifier(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      replacement === null
+        ? 'release-summary.txt is incomplete'
+        : 'release-summary.txt trust facts are invalid',
+    );
+  });
+
+  it.each([
+    ['different parent bundle identifier', (application: string) => {
+      const info = join(application, 'Contents/Info.plist');
+      writeFileSync(
+        info,
+        readFileSync(info, 'utf8').replace(
+          '<string>com.redlattice.runtime-raiders</string>',
+          '<string>com.redlattice.runtime-raiders-agent</string>',
+        ),
+      );
+    }, 'archive bundle identity or version is invalid'],
+    ['missing embedded plist', (application: string) => {
+      rmSync(join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      ));
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['symlinked embedded plist', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      rmSync(embedded);
+      symlinkSync('../../Info.plist', embedded);
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['writable embedded plist', (application: string) => {
+      chmodSync(
+        join(application, 'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist'),
+        0o666,
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['extra embedded plist key', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        embedded,
+        readFileSync(embedded, 'utf8').replace(
+          '</dict>',
+          '<key>Unexpected</key><string>value</string>\n</dict>',
+        ),
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['different embedded label', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        embedded,
+        readFileSync(embedded, 'utf8').replace(managedLabel, legacyLabel),
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['different embedded BundleProgram', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        embedded,
+        readFileSync(embedded, 'utf8').replace(
+          '<string>Contents/MacOS/runtime-raiders-agent</string>',
+          '<string>Contents/MacOS/other-agent</string>',
+        ),
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['different embedded daemon argument', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        embedded,
+        readFileSync(embedded, 'utf8').replace('<string>daemon</string>', '<string>status</string>'),
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['string-typed embedded RunAtLoad', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        embedded,
+        readFileSync(embedded, 'utf8').replace(
+          '<key>RunAtLoad</key><true/>',
+          '<key>RunAtLoad</key><string>true</string>',
+        ),
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['string-typed embedded KeepAlive', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        embedded,
+        readFileSync(embedded, 'utf8').replace(
+          '<key>KeepAlive</key><true/>',
+          '<key>KeepAlive</key><string>true</string>',
+        ),
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+    ['retired AssociatedBundleIdentifiers key', (application: string) => {
+      const embedded = join(
+        application,
+        'Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        embedded,
+        readFileSync(embedded, 'utf8').replace(
+          '</dict>',
+          [
+            '<key>AssociatedBundleIdentifiers</key>',
+            '<array><string>com.redlattice.runtime-raiders</string></array>',
+            '</dict>',
+          ].join('\n'),
+        ),
+      );
+    }, 'archive embedded managed agent metadata is invalid'],
+  ] as const)('signed verifier rejects a %s', (_name, mutate, expectedError) => {
+    const value = buildFixture();
+    expect(runBuild(value).status).toBe(0);
+    writeFileSync(value.agentLog, '');
+    mutateSignedArchive(value, mutate);
+
+    const result = runSignedVerifier(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(expectedError);
+    expect(readFileSync(value.agentLog, 'utf8')).toBe('');
   });
 
   it.each([

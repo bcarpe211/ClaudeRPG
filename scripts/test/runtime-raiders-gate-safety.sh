@@ -438,6 +438,7 @@ gate_fingerprint_migration_surface() {
   [ ! -e "$temporary" ] && [ ! -L "$temporary" ] || return 1
   {
     gate_emit_surface_path "$home" "$support" &&
+    printf 'RETIRED-MIGRATION-INPUT ' &&
     gate_emit_surface_path "$home" "$home/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist" &&
     gate_emit_surface_path "$home" "$home/.local" &&
     gate_emit_surface_path "$home" "$home/.zprofile" &&

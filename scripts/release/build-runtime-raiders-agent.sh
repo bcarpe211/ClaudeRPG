@@ -224,6 +224,7 @@ validate_bundle_contract() {
     short_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$info")" &&
     bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$info")" &&
     [ -f "$managed_plist" ] && [ ! -L "$managed_plist" ] &&
+    [ "$(/usr/bin/stat -f '%u:%l:%Lp' "$managed_plist")" = "$(/usr/bin/id -u):1:644" ] &&
     plist_key_count="$(/usr/bin/plutil -convert xml1 -o - "$managed_plist" | /usr/bin/xmllint --xpath 'count(/plist/dict/key)' -)" &&
     managed_label="$(/usr/bin/plutil -extract Label raw -o - "$managed_plist")" &&
     bundle_program="$(/usr/bin/plutil -extract BundleProgram raw -o - "$managed_plist")" &&
@@ -247,7 +248,8 @@ validate_bundle_contract() {
     [ "$program_arguments" = '["runtime-raiders-agent","daemon"]' ] &&
     [ "$run_at_load" = true ] &&
     [ "$keep_alive" = true ] &&
-    [ "$process_type" = Background ]
+    [ "$process_type" = Background ] &&
+    ! /usr/bin/plutil -extract AssociatedBundleIdentifiers json -o - "$managed_plist" >/dev/null 2>&1
 }
 
 validate_bundle_contract "$AGENT_APP" || {

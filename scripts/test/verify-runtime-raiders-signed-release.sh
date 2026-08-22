@@ -262,9 +262,11 @@ done
   echo "release summary does not match reviewed HEAD" >&2
   exit 1
 }
+SUMMARY_BUNDLE_IDENTIFIER="$(summary_value bundle_identifier)"
+SUMMARY_MANAGED_AGENT_LABEL="$(summary_value managed_agent_label)"
 [ "$(summary_value companion_version)" = "$COMPANION_VERSION" ] &&
-  [ "$(summary_value bundle_identifier)" = com.redlattice.runtime-raiders ] &&
-  [ "$(summary_value managed_agent_label)" = com.redlattice.runtime-raiders.agent ] &&
+  [ "$SUMMARY_BUNDLE_IDENTIFIER" = com.redlattice.runtime-raiders ] &&
+  [ "$SUMMARY_MANAGED_AGENT_LABEL" = com.redlattice.runtime-raiders.agent ] &&
   [ "$(summary_value team_id)" = "$TEAM_ID" ] &&
   [ "$(summary_value codesign_verified)" = true ] &&
   [ "$(summary_value hardened_runtime)" = true ] &&
@@ -304,13 +306,44 @@ AGENT_APP="$EXTRACTED/Runtime Raiders.app"
 AGENT_INFO="$AGENT_APP/Contents/Info.plist"
 AGENT_EXECUTABLE="$AGENT_APP/Contents/MacOS/runtime-raiders-agent"
 AGENT_ICON="$AGENT_APP/Contents/Resources/RuntimeRaiders.icns"
+AGENT_MANAGED_PLIST="$AGENT_APP/Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist"
 [ "$(/usr/bin/find "$EXTRACTED" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 1 ] &&
   [ -d "$AGENT_APP" ] && [ ! -L "$AGENT_APP" ] &&
-  [ -z "$(/usr/bin/find "$EXTRACTED" -type l -print -quit)" ] &&
   [ -f "$AGENT_INFO" ] && [ ! -L "$AGENT_INFO" ] &&
   [ -f "$AGENT_ICON" ] && [ ! -L "$AGENT_ICON" ] && [ -s "$AGENT_ICON" ] &&
   [ -x "$AGENT_EXECUTABLE" ] && [ ! -L "$AGENT_EXECUTABLE" ] || {
   echo "archive does not contain exactly one safe Runtime Raiders.app" >&2
+  exit 1
+}
+[ -f "$AGENT_MANAGED_PLIST" ] && [ ! -L "$AGENT_MANAGED_PLIST" ] &&
+  [ "$(/usr/bin/stat -f '%u:%l:%Lp' "$AGENT_MANAGED_PLIST")" = "$OWNER:1:644" ] || {
+  echo "archive embedded managed agent metadata is invalid" >&2
+  exit 1
+}
+[ -z "$(/usr/bin/find "$EXTRACTED" -type l -print -quit)" ] || {
+  echo "archive does not contain exactly one safe Runtime Raiders.app" >&2
+  exit 1
+}
+
+MANAGED_PLIST_KEY_COUNT="$(
+  /usr/bin/plutil -convert xml1 -o - "$AGENT_MANAGED_PLIST" |
+    /usr/bin/xmllint --xpath 'count(/plist/dict/key)' -
+)" &&
+  MANAGED_AGENT_LABEL="$(/usr/bin/plutil -extract Label raw -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_BUNDLE_PROGRAM="$(/usr/bin/plutil -extract BundleProgram raw -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_PROGRAM_ARGUMENTS="$(/usr/bin/plutil -extract ProgramArguments json -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_RUN_AT_LOAD="$(/usr/bin/plutil -extract RunAtLoad raw -expect bool -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_KEEP_ALIVE="$(/usr/bin/plutil -extract KeepAlive raw -expect bool -o - "$AGENT_MANAGED_PLIST")" &&
+  MANAGED_PROCESS_TYPE="$(/usr/bin/plutil -extract ProcessType raw -o - "$AGENT_MANAGED_PLIST")" &&
+  [ "$MANAGED_PLIST_KEY_COUNT" -eq 6 ] &&
+  [ "$MANAGED_AGENT_LABEL" = "$SUMMARY_MANAGED_AGENT_LABEL" ] &&
+  [ "$MANAGED_BUNDLE_PROGRAM" = Contents/MacOS/runtime-raiders-agent ] &&
+  [ "$MANAGED_PROGRAM_ARGUMENTS" = '["runtime-raiders-agent","daemon"]' ] &&
+  [ "$MANAGED_RUN_AT_LOAD" = true ] &&
+  [ "$MANAGED_KEEP_ALIVE" = true ] &&
+  [ "$MANAGED_PROCESS_TYPE" = Background ] &&
+  ! /usr/bin/plutil -extract AssociatedBundleIdentifiers json -o - "$AGENT_MANAGED_PLIST" >/dev/null 2>&1 || {
+  echo "archive embedded managed agent metadata is invalid" >&2
   exit 1
 }
 
@@ -321,7 +354,7 @@ BUNDLE_DISPLAY_NAME="$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$A
 BUNDLE_ICON_FILE="$(/usr/bin/plutil -extract CFBundleIconFile raw -o - "$AGENT_INFO")"
 BUNDLE_SHORT_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$AGENT_INFO")"
 BUNDLE_VERSION="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$AGENT_INFO")"
-[ "$BUNDLE_ID" = com.redlattice.runtime-raiders ] &&
+[ "$BUNDLE_ID" = "$SUMMARY_BUNDLE_IDENTIFIER" ] &&
   [ "$BUNDLE_EXECUTABLE" = runtime-raiders-agent ] &&
   [ "$BUNDLE_NAME" = 'Runtime Raiders' ] &&
   [ "$BUNDLE_DISPLAY_NAME" = 'Runtime Raiders' ] &&
