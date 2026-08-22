@@ -564,12 +564,20 @@ prevents the developer name from replacing the product name while retaining
 
 The signed `0.4.1` canary proved the app name, service name, associated-bundle
 declaration, and branded icon, but System Settings still grouped the service
-under **Bryan Carpenter**. The LaunchAgent plist was installed at 19:04:38 and
-Launch Services registered the app at 19:04:40, after the service record had
-already selected its parent. The `0.4.2` source repair explicitly registers the
-final installed app before installing or bootstrapping the LaunchAgent and
-rolls back if registration fails. The checklist remains open until a fresh
-signed installed-off canary proves the actual macOS UI behavior.
+under **Bryan Carpenter**. The `0.4.2` repair registered the final installed app
+before installing or bootstrapping the LaunchAgent. Its signed installed-off
+canary still displayed **Bryan Carpenter** in the actual App Background
+Activity list. The corresponding record had service name `Runtime Raiders` but
+Developer Name and Parent Identifier `Bryan Carpenter`; metadata registration
+was therefore not sufficient.
+
+The approved 0.4.3 design replaces the copied legacy property list with an
+agent embedded in the signed app and registered using Apple's `SMAppService`.
+It uses distinct new parent-app and managed-agent identifiers so macOS cannot
+reuse the stale legacy relationship. See
+`docs/superpowers/specs/2026-08-21-runtime-raiders-smappservice-branding-design.md`.
+The checklist remains open until the fresh signed installed-off canary passes
+the actual visible UI gate.
 
 - [x] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
       remove the retired `Runtime Raiders Launcher` / `Runtime Raiders Agent`
@@ -578,8 +586,7 @@ signed installed-off canary proves the actual macOS UI behavior.
       app bundle metadata.
 - [ ] Confirm the signed association keeps **Runtime Raiders** as the product or
       parent identity while correctly retaining Bryan Carpenter as the developer;
-      if not, review an organization-facing certificate or another documented
-      Apple-supported registration design.
+      the approved next attempt uses Apple's bundled `SMAppService` design.
 - [ ] After a clean signed install, verify the actual Background Items entry in
       System Settings, the first-run App Background Activity notification, and
       the corresponding `sfltool dumpbtm` record show the intended name, icon,
