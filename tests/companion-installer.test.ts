@@ -937,6 +937,7 @@ describe('Runtime Raiders release build', () => {
   ] as const)('signed verifier rejects a %s managed_agent_label summary field', (_case, replacement) => {
     const value = buildFixture();
     expect(runBuild(value).status).toBe(0);
+    writeFileSync(value.agentLog, '');
     replaceReleaseSummaryField(value, 'managed_agent_label', replacement);
 
     const result = runSignedVerifier(value);
@@ -947,6 +948,7 @@ describe('Runtime Raiders release build', () => {
         ? 'release-summary.txt is incomplete'
         : 'release-summary.txt trust facts are invalid',
     );
+    expect(readFileSync(value.agentLog, 'utf8')).toBe('');
   });
 
   it.each([
