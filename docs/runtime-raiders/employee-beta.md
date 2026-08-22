@@ -13,6 +13,13 @@ raiders update
 Turn collection off:
 raiders off
 
+Before a first install, open
+`https://raiders.redlattice.com/register`, choose a Raider name, class, and
+gender, and keep the result page open. The installer asks privately for the
+one-time enrollment code shown there; the code expires after 10 minutes and is
+separate from the persistent Raider Key. A reinstall with valid existing
+enrollment does not require another code.
+
 # Runtime Raiders employee beta
 
 The installer starts a new employee with collection off. A reinstall keeps that
@@ -166,26 +173,28 @@ deterministic `dist` path, and run `publish`. The verifier must accept the prior
 directory before it can be republished. Rollback still does not enable anyone's
 collector.
 
-## Employee beta result — GO (2026-08-20)
+## Employee beta result — GO (2026-08-22)
 
-- Version `0.4.0` was built from Git SHA
-  `932bfbc210beeffe550c02be23cb6c759695a55d` as one signed app. Apple
+- Version `0.4.4` was built and published from Git SHA
+  `5ced73d6cc0a0eff10889e63889af4d3f0e2869f` as one signed app. Apple
   notarization, stapling, designated-requirement validation, and Gatekeeper
   acceptance passed.
-- The public installer, ZIP, and `/version` bytes matched the verified local
-  release. Required no-store and content-type headers passed, and `/health`
-  returned the expected response.
-- The exact employee command completed a flat reinstall at the stable app path.
-  Enrollment and collector state were preserved, the outbox remained empty,
-  and no installer residue remained.
-- The live acceptance gate scanned 858 existing provider-history records,
-  uploaded no history, scored exactly one synthetic completion as one Run, and
-  turned collection off. This exceeds the 816-record acceptance requirement.
-- Installed `status`, `doctor`, `update`, and `off` passed. With the server path
-  unavailable, `doctor` returned a valid report with `serverHealthy=false`
-  instead of timing out. Final state was disabled with zero active Runs and
-  zero queued events.
-- Employee installation is **GO**. Publishing and installation did not enable
-  collection or mutate the game database. Background-item branding and Apple
-  developer-identity presentation remain separate follow-up work before a
-  wider polished rollout.
+- The repeatable local canary installed the exact prepared ZIP before
+  publication. The managed service registered successfully, the daemon ran
+  with collection disabled, and status reported zero active Runs and queued
+  events.
+- The public installer and ZIP hashes matched the locally proven release.
+  `/version` returned `0.4.4`; required no-store, content-type, and nosniff
+  headers passed.
+- System Settings → Login Items showed **Runtime Raiders.app**. Bryan Carpenter
+  remains acceptable as the Apple developer attribution, not the product name.
+- The public registration page and installer both returned HTTP 200. Each
+  employee creates a Raider and receives a separate one-time 10-minute
+  enrollment code; no administrator-generated batch of codes is required.
+- The earlier live acceptance gate scanned 858 existing provider-history
+  records, uploaded no history, scored exactly one synthetic completion as one
+  Run, and turned collection off. The `0.4.4` release changed service lifecycle
+  and release mechanics, not scoring or telemetry behavior.
+- Final verification passed 2,056 Node tests and 219 Swift tests. Employee
+  installation is **GO**. Installation and publication do not enable collection;
+  each employee explicitly starts it with `raiders on`.
