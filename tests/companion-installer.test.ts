@@ -28,9 +28,10 @@ const managedAgentPlist = join(
 );
 const releaseBuilder = join(process.cwd(), 'scripts/release/build-runtime-raiders-agent.sh');
 const signedReleaseVerifier = join(process.cwd(), 'scripts/test/verify-runtime-raiders-signed-release.sh');
-const label = 'com.redlattice.runtime-raiders-agent';
+const legacyLabel = 'com.redlattice.runtime-raiders-agent';
+const managedLabel = 'com.redlattice.runtime-raiders.agent';
 const appBundleId = 'com.redlattice.runtime-raiders';
-const version = '1.2.3';
+const version = '0.4.3';
 const teamId = 'ABCDE12345';
 const enrollmentCode = 'E'.repeat(43);
 const token = 'T'.repeat(43);
@@ -109,9 +110,21 @@ function buildFixture() {
     'cat > "$output" <<\'AGENT\'',
     '#!/bin/sh',
     'set -eu',
-    `printf 'agent:%s home=%s verify=%s support=%s response=%s\\n' "\${1:-status}" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" >> '${agentLog}'`,
+    'operation=${1:-status}',
+    '[ "$operation" != __runtime-raiders-managed-agent ] || operation="$operation:${2:-}"',
+    `printf 'agent:%s home=%s verify=%s support=%s response=%s\\n' "$operation" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" >> '${agentLog}'`,
     'expected_support="$HOME/Library/Application Support"',
     '[ "${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-}" = 1 ] && [ "${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-}" = "$expected_support" ] || { echo unsafeVerificationEnvironment >&2; exit 79; }',
+    'managed_state="$HOME/Library/Application Support/Runtime Raiders/state/managed-service-state"',
+    'managed_running="$HOME/Library/Application Support/Runtime Raiders/managed-running"',
+    'case "${1:-} ${2:-}" in',
+    '  "__runtime-raiders-managed-agent status") cat "$managed_state";;',
+    '  "__runtime-raiders-managed-agent register")',
+    '    printf "enabled\\n" > "$managed_state"; : > "$managed_running"; printf "enabled\\n";;',
+    '  "__runtime-raiders-managed-agent unregister")',
+    '    printf "not-registered\\n" > "$managed_state"; rm -f "$managed_running"; printf "not-registered\\n";;',
+    'esac',
+    'case "${1:-}" in __runtime-raiders-managed-agent) exit 0;; esac',
     'case "${1:-status}" in',
     '  status|update)',
     '    socket_path="$HOME/Library/Application Support/Runtime Raiders/agent.sock"',
@@ -120,7 +133,6 @@ function buildFixture() {
     'case "${1:-status}" in',
     '  status) printf \'{"activationState":"disabled","availableCompanionVersion":null,"installedCompanionVersion":"0.4.0","updateCommand":null}\\n\';;',
     '  daemon) exit 0;;',
-    '  __runtime-raiders-register-application) exit 0;;',
     '  update)',
     '    response=${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-}',
     '    [ -n "$response" ] && [ "$(cat "$response")" = \'{"version":"0.4.0"}\' ] || exit 70',
@@ -267,6 +279,59 @@ function plist(bundleVersion = version, bundleId = appBundleId): string {
   ].join('\n');
 }
 
+function legacyLaunchAgentPlist(agent: string): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<plist version="1.0"><dict>',
+    `<key>Label</key><string>${legacyLabel}</string>`,
+    '<key>AssociatedBundleIdentifiers</key>',
+    `<array><string>${legacyLabel}</string></array>`,
+    '<key>ProgramArguments</key>',
+    `<array><string>${agent}</string><string>daemon</string></array>`,
+    '<key>RunAtLoad</key><true/>',
+    '<key>KeepAlive</key><true/>',
+    '<key>ProcessType</key><string>Background</string>',
+    '</dict></plist>',
+    '',
+  ].join('\n');
+}
+
+function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
+  const registerFailure = identity === 'candidate'
+    ? '${RR_FAIL_NEW_MANAGED_REGISTER:-${RR_FAIL_MANAGED_REGISTER:-0}}'
+    : '${RR_FAIL_OLD_MANAGED_REGISTER:-0}';
+  const unregisterFailure = identity === 'candidate'
+    ? '${RR_FAIL_ROLLBACK_MANAGED_UNREGISTER:-0}'
+    : '${RR_FAIL_OLD_MANAGED_UNREGISTER:-${RR_FAIL_MANAGED_UNREGISTER:-0}}';
+  const statusFailure = identity === 'candidate'
+    ? '${RR_FAIL_STATUS:-0}'
+    : '${RR_FAIL_RESTORED_STATUS:-0}';
+  return [
+    `printf "agent:${identity}:%s\\n" "$*" >> "$RR_EVENT_LOG"`,
+    'case "${1:-} ${2:-}" in',
+    '  "__runtime-raiders-managed-agent status")',
+    ...(identity === 'candidate' ? [
+      '    if [ -n "${RR_NEW_MANAGED_STATUS:-}" ]; then printf "%s\\n" "$RR_NEW_MANAGED_STATUS"; exit 0; fi',
+    ] : []),
+    '    /bin/cat "$RR_MANAGED_STATE"; exit 0;;',
+    '  "__runtime-raiders-managed-agent register")',
+    `    [ "${registerFailure}" != 1 ] || exit 79`,
+    '    printf "enabled\\n" > "$RR_MANAGED_STATE"',
+    '    : > "$RR_RUNNING"',
+    '    printf "enabled\\n"; exit 0;;',
+    '  "__runtime-raiders-managed-agent unregister")',
+    `    [ "${unregisterFailure}" != 1 ] || exit 80`,
+    '    printf "not-registered\\n" > "$RR_MANAGED_STATE"',
+    '    /bin/rm -f "$RR_RUNNING"',
+    '    : > "$RR_SERVICE_STOPPED"',
+    '    printf "not-registered\\n"; exit 0;;',
+    'esac',
+    `[ "${statusFailure}" != 1 ] || exit 78`,
+    '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
+    `printf "${identity}-status\\n"`,
+  ];
+}
+
 function enrollmentObject(): Record<string, unknown> {
   return {
     version: 1,
@@ -354,13 +419,12 @@ function fakeTools(root: string): string {
     'case "${1:-}" in',
     '  bootout)',
     '    [ "$#" -eq 2 ] && [ "$2" = "gui/$RR_OWNER/com.redlattice.runtime-raiders-agent" ] || exit 64',
-    '    : > "$RR_BOOTOUT_OK"; rm -f "$RR_RUNNING"; exit 0;;',
+    '    : > "$RR_SERVICE_STOPPED"; rm -f "$RR_RUNNING"',
+    '    if [ "${RR_SIGNAL_AFTER_OLD_STOP:-0}" = 1 ]; then kill -TERM "$PPID"; fi',
+    '    exit 0;;',
     '  bootstrap)',
-    '    [ "$#" -eq 3 ] && [ "$2" = "gui/$RR_OWNER" ] && [ "$3" = "$RR_PLIST" ] || exit 64',
-    '    if [ "${RR_FAIL_FIRST_BOOTSTRAP:-0}" = 1 ] && [ ! -e "$RR_BOOTSTRAP_FAILED" ]; then',
-    '      : > "$RR_BOOTSTRAP_FAILED"; exit 75',
-    '    fi',
-    '    if [ "${RR_FAIL_ROLLBACK_BOOTSTRAP:-0}" = 1 ] && [ -e "$RR_BOOTSTRAP_FAILED" ]; then exit 76; fi',
+    '    [ "$#" -eq 3 ] && [ "$2" = "gui/$RR_OWNER" ] && [ "$3" = "$RR_LEGACY_PLIST" ] || exit 64',
+    '    if [ "${RR_FAIL_ROLLBACK_BOOTSTRAP:-0}" = 1 ]; then exit 76; fi',
     '    : > "$RR_RUNNING"; exit 0;;',
     '  *) exit 64;;',
     'esac',
@@ -381,16 +445,14 @@ function fakeTools(root: string): string {
     'if [ "$source" != "$destination" ]; then',
     '  case "$source:$destination" in',
     '    */old.app:"$RR_APP") boundary=restore-app;;',
-    '    */old.plist:"$RR_PLIST") boundary=restore-plist;;',
+    '    */old.plist:"$RR_LEGACY_PLIST") boundary=restore-plist;;',
     '    */old.shim:"$RR_SHIM") boundary=restore-shim;;',
     '    *:"$RR_APP") boundary=replace-app;;',
-    '    *:"$RR_PLIST") boundary=replace-plist;;',
     '    *:"$RR_SHIM") boundary=replace-shim;;',
     '  esac',
     'fi',
     'if [ -n "$boundary" ]; then',
     '  printf "mv:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
-    '  [ -e "$RR_BOOTOUT_OK" ] || exit 66',
     'fi',
     'if [ -n "$boundary" ] && { [ "${RR_FAIL_MV_BOUNDARY:-}" = "$boundary" ] || [ "${RR_FAIL_RESTORE_BOUNDARY:-}" = "$boundary" ]; }; then exit 74; fi',
     '/bin/mv "$source" "$destination"',
@@ -409,7 +471,7 @@ function fixture() {
   const state = join(support, 'state');
   const outbox = join(support, 'outbox');
   const app = join(support, 'Runtime Raiders.app');
-  const plistPath = join(home, 'Library/LaunchAgents', `${label}.plist`);
+  const plistPath = join(home, 'Library/LaunchAgents', `${legacyLabel}.plist`);
   const shim = join(support, 'raiders');
   const command = join(home, '.local/bin/raiders');
   const archiveTree = join(root, 'archive-tree');
@@ -418,24 +480,24 @@ function fixture() {
   const argvLog = join(root, 'argv.log');
   const enrollmentStdin = join(root, 'enrollment-stdin.json');
   const running = join(root, 'running');
+  const managedState = join(root, 'managed-state');
   const archive = join(root, 'runtime-raiders-agent.zip');
   const enrollmentResponse = join(root, 'enrollment-response.json');
   const tty = join(root, 'tty');
   mkdirSync(join(candidate, 'Contents/MacOS'), { recursive: true });
   mkdirSync(join(candidate, 'Contents/Resources'));
+  mkdirSync(join(candidate, 'Contents/Library/LaunchAgents'), { recursive: true });
   mkdirSync(home);
   writeFileSync(join(candidate, 'Contents/Info.plist'), plist());
   cpSync(iconResource, join(candidate, 'Contents/Resources/RuntimeRaiders.icns'));
-  executable(join(candidate, 'Contents/MacOS/runtime-raiders-agent'), [
-    'printf "agent:%s\\n" "$*" >> "$RR_EVENT_LOG"',
-    'if [ "${1:-}" = __runtime-raiders-register-application ]; then',
-    '  [ "${RR_FAIL_REGISTRATION:-0}" != 1 ] || exit 79',
-    '  exit 0',
-    'fi',
-    '[ "${RR_FAIL_STATUS:-0}" != 1 ] || exit 78',
-    '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
-    'printf "candidate-status\\n"',
-  ]);
+  cpSync(
+    managedAgentPlist,
+    join(candidate, 'Contents/Library/LaunchAgents', `${managedLabel}.plist`),
+  );
+  executable(
+    join(candidate, 'Contents/MacOS/runtime-raiders-agent'),
+    managedAgentLines('candidate'),
+  );
   writeFileSync(archive, 'fake archive bytes\n');
   writeFileSync(enrollmentResponse, JSON.stringify({
     device_token: token,
@@ -447,10 +509,11 @@ function fixture() {
   writeFileSync(tty, `${enrollmentCode}\n`);
   writeFileSync(eventLog, '');
   writeFileSync(argvLog, '');
+  writeFileSync(managedState, 'not-registered\n');
   const bin = fakeTools(root);
   return {
     root, home, support, state, outbox, app, plist: plistPath, shim, command,
-    candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running,
+    candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running, managedState,
     environment: {
       ...process.env,
       HOME: home,
@@ -462,13 +525,14 @@ function fixture() {
       RR_EVENT_LOG: eventLog,
       RR_ARGV_LOG: argvLog,
       RR_RUNNING: running,
+      RR_MANAGED_STATE: managedState,
       RR_APP: app,
       RR_PLIST: plistPath,
+      RR_LEGACY_PLIST: plistPath,
       RR_SHIM: shim,
       RR_OWNER: String(process.getuid!()),
-      RR_BOOTOUT_OK: join(root, 'bootout-ok'),
+      RR_SERVICE_STOPPED: join(root, 'service-stopped'),
       RR_EXPECT_CANDIDATE: join(root, 'expected-candidate'),
-      RR_BOOTSTRAP_FAILED: join(root, 'bootstrap-failed'),
       RR_TEAM_ID: teamId,
       RR_TTY: tty,
       RR_FAKE_BIN: bin,
@@ -516,10 +580,21 @@ function writeExistingInstall(value: Fixture, enabled: boolean): void {
   mkdirSync(value.state, { recursive: true });
   mkdirSync(value.outbox, { recursive: true });
   mkdirSync(join(value.home, '.local/bin'), { recursive: true });
-  writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.9.0', label));
-  executable(join(value.app, 'Contents/MacOS/runtime-raiders-agent'), ['printf "old-status\\n"']);
-  writeFileSync(value.plist, 'old plist bytes\n', { mode: 0o600 });
-  executable(value.shim, ['printf "old shim\\n"']);
+  writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.4.2', legacyLabel));
+  executable(join(value.app, 'Contents/MacOS/runtime-raiders-agent'), [
+    'printf "agent:legacy:%s\\n" "$*" >> "$RR_EVENT_LOG"',
+    '[ "${RR_FAIL_RESTORED_STATUS:-0}" != 1 ] || exit 78',
+    'printf "old-status\\n"',
+  ]);
+  writeFileSync(
+    value.plist,
+    legacyLaunchAgentPlist(join(value.app, 'Contents/MacOS/runtime-raiders-agent')),
+    { mode: 0o600 },
+  );
+  executable(value.shim, [
+    '# old legacy shim',
+    'exec "$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders.app/Contents/MacOS/runtime-raiders-agent" "$@"',
+  ]);
   symlinkSync(value.shim, value.command);
   writeFileSync(join(value.state, 'enrollment.json'), enrollment(), { mode: 0o600 });
   writeFileSync(
@@ -530,6 +605,33 @@ function writeExistingInstall(value: Fixture, enabled: boolean): void {
   writeFileSync(join(value.state, 'opaque-state.bin'), Buffer.from([0, 1, 2, 255]), { mode: 0o600 });
   writeFileSync(join(value.outbox, 'event.json'), '{"opaque":"queued"}\n', { mode: 0o600 });
   writeFileSync(value.running, 'old daemon running\n');
+}
+
+function writeManagedInstall(value: Fixture): void {
+  mkdirSync(join(value.app, 'Contents/MacOS'), { recursive: true });
+  mkdirSync(value.state, { recursive: true });
+  mkdirSync(value.outbox, { recursive: true });
+  mkdirSync(join(value.home, '.local/bin'), { recursive: true });
+  writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.4.2'));
+  executable(
+    join(value.app, 'Contents/MacOS/runtime-raiders-agent'),
+    managedAgentLines('old-managed'),
+  );
+  executable(value.shim, [
+    '# old managed shim',
+    'exec "$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders.app/Contents/MacOS/runtime-raiders-agent" "$@"',
+  ]);
+  symlinkSync(value.shim, value.command);
+  writeFileSync(join(value.state, 'enrollment.json'), enrollment(), { mode: 0o600 });
+  writeFileSync(
+    join(value.state, 'collector-state.json'),
+    '{"enabled":false,"files":{"opaque":"preserve"},"version":1}\n',
+    { mode: 0o600 },
+  );
+  writeFileSync(join(value.state, 'opaque-state.bin'), Buffer.from([0, 1, 2, 255]), { mode: 0o600 });
+  writeFileSync(join(value.outbox, 'event.json'), '{"opaque":"queued"}\n', { mode: 0o600 });
+  writeFileSync(value.managedState, 'enabled\n');
+  writeFileSync(value.running, 'old managed daemon running\n');
 }
 
 function treeSnapshot(root: string): Record<string, string> {
@@ -566,7 +668,18 @@ function installedTargets(value: Fixture): Record<string, unknown> {
     app: treeSnapshot(value.app),
     plist: existsSync(value.plist) ? readFileSync(value.plist).toString('base64') : null,
     shim: existsSync(value.shim) ? readFileSync(value.shim).toString('base64') : null,
+    command: existsSync(value.command) || lstatIfPresent(value.command)?.isSymbolicLink()
+      ? `L:${readlinkSync(value.command)}`
+      : null,
   };
+}
+
+function lstatIfPresent(path: string) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
 }
 
 function recoveryDirectories(value: Fixture): string[] {
@@ -579,6 +692,17 @@ function recoveryDirectories(value: Fixture): string[] {
       ? readdirSync(launchAgents).filter((name) => name.startsWith('.runtime-raiders-backup.')).map((name) => join(launchAgents, name))
       : []),
   ];
+}
+
+function expectRecoveryPreserved(
+  value: Fixture,
+  result: ReturnType<typeof run>,
+): string[] {
+  const recovery = recoveryDirectories(value);
+  expect(recovery.length).toBeGreaterThan(0);
+  expect(recovery.some((path) => result.stderr.includes(path))).toBe(true);
+  expect(result.stderr).toContain('rollback was incomplete; do not retry');
+  return recovery;
 }
 
 afterEach(() => {
@@ -650,16 +774,17 @@ describe('Runtime Raiders release build', () => {
     expect(result.status, result.stderr + result.stdout).toBe(0);
 
     const invocations = readFileSync(value.agentLog, 'utf8').trim().split('\n');
-    expect(invocations).toHaveLength(4);
+    expect(invocations).toHaveLength(5);
     expect(invocations.map((line) => line.split(' ')[0])).toEqual([
-      'agent:__runtime-raiders-register-application',
+      'agent:__runtime-raiders-managed-agent:register',
+      'agent:__runtime-raiders-managed-agent:status',
       'agent:status',
       'agent:status',
       'agent:update',
     ]);
     for (const line of invocations) {
       const matched = line.match(
-        /^agent:(?:__runtime-raiders-register-application|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
+        /^agent:(?:__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
       );
       expect(matched, line).not.toBeNull();
       expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
@@ -668,7 +793,8 @@ describe('Runtime Raiders release build', () => {
     expect(invocations[0]).toContain('response=unset');
     expect(invocations[1]).toContain('response=unset');
     expect(invocations[2]).toContain('response=unset');
-    expect(invocations[3]).not.toContain('response=unset');
+    expect(invocations[3]).toContain('response=unset');
+    expect(invocations[4]).not.toContain('response=unset');
   });
 
   it.each([
@@ -1128,6 +1254,77 @@ describe('Runtime Raiders release build', () => {
 });
 
 describe('Runtime Raiders reinstall-safe installer', () => {
+  it('fresh install uses the managed service without creating a legacy LaunchAgent plist', () => {
+    const value = fixture();
+
+    const result = run(value);
+    const log = events(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(existsSync(value.app)).toBe(true);
+    expect(existsSync(value.shim)).toBe(true);
+    expect(existsSync(value.plist)).toBe(false);
+    expect(existsSync(join(value.home, 'Library/LaunchAgents'))).toBe(false);
+    expect(log.filter((line) => line === 'agent:candidate:__runtime-raiders-managed-agent register')).toHaveLength(1);
+    expect(log.indexOf('mv:replace-app')).toBeLessThan(
+      log.indexOf('agent:candidate:__runtime-raiders-managed-agent register'),
+    );
+    expect(log.indexOf('mv:replace-shim')).toBeLessThan(
+      log.indexOf('agent:candidate:__runtime-raiders-managed-agent register'),
+    );
+    expect(log.some((line) => line.startsWith('launchctl:bootstrap '))).toBe(false);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(existsSync(join(value.state, 'collector-state.json'))).toBe(false);
+  });
+
+  it('legacy 0.4.2 migration replaces the retired plist with the managed service', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+
+    const result = run(value);
+    const log = events(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(log).toContain(`launchctl:bootout gui/${process.getuid!()}/${legacyLabel}`);
+    expect(log).toContain('mv:backup-plist');
+    expect(existsSync(value.plist)).toBe(false);
+    expect(readFileSync(join(value.app, 'Contents/Info.plist'), 'utf8')).toBe(plist());
+    expect(log.filter((line) => line === 'agent:candidate:__runtime-raiders-managed-agent register')).toHaveLength(1);
+    expect(log.indexOf(`launchctl:bootout gui/${process.getuid!()}/${legacyLabel}`)).toBeLessThan(
+      log.indexOf('mv:backup-app'),
+    );
+    expect(log.indexOf('mv:backup-shim')).toBeLessThan(
+      log.indexOf('agent:candidate:__runtime-raiders-managed-agent register'),
+    );
+    expect(log.some((line) => line.startsWith('launchctl:bootstrap '))).toBe(false);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(readFileSync(join(value.state, 'collector-state.json'), 'utf8')).toContain('"enabled":false');
+  });
+
+  it('managed service reinstall unregisters the old app and registers the replacement without bootstrap', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+
+    const result = run(value);
+    const log = events(value);
+    const oldUnregister = log.indexOf('agent:old-managed:__runtime-raiders-managed-agent unregister');
+    const appBackup = log.indexOf('mv:backup-app');
+    const newRegister = log.indexOf('agent:candidate:__runtime-raiders-managed-agent register');
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(oldUnregister).toBeGreaterThanOrEqual(0);
+    expect(appBackup).toBeGreaterThan(oldUnregister);
+    expect(newRegister).toBeGreaterThan(appBackup);
+    expect(newRegister).toBeGreaterThan(log.indexOf('mv:replace-shim'));
+    expect(log.some((line) => line.startsWith('launchctl:bootstrap '))).toBe(false);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(existsSync(value.plist)).toBe(false);
+    expect(readFileSync(join(value.state, 'collector-state.json'), 'utf8')).toContain('"enabled":false');
+  });
+
   it('passes one exact inline designated requirement to codesign', () => {
     const value = fixture();
     const result = run(value);
@@ -1251,9 +1448,10 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(existsSync(join(value.state, 'enrollment.json'))).toBe(false);
   });
 
-  it.each([false, true])('reinstall preserves state, outbox, and enabled=%s byte-for-byte', (enabled) => {
+  it.each(['legacy', 'managed'] as const)('%s reinstall preserves disabled state and outbox byte-for-byte', (form) => {
     const value = fixture();
-    writeExistingInstall(value, enabled);
+    if (form === 'legacy') writeExistingInstall(value, false);
+    else writeManagedInstall(value);
     const stateBefore = treeSnapshot(value.state);
     const outboxBefore = treeSnapshot(value.outbox);
     const result = run(value);
@@ -1265,12 +1463,12 @@ describe('Runtime Raiders reinstall-safe installer', () => {
 
   it('verifies archive identity and Apple trust before prompt or bootout', () => {
     const value = fixture();
+    writeExistingInstall(value, false);
     const result = run(value);
     const log = events(value);
     expect(result.status, result.stderr + result.stdout).toBe(0);
     expect(log.indexOf('codesign:deep')).toBeLessThan(log.indexOf('codesign:requirement'));
     expect(log.indexOf('codesign:requirement')).toBeLessThan(log.indexOf('spctl:assess'));
-    expect(log.indexOf('spctl:assess')).toBeLessThan(log.findIndex((line) => line.startsWith('tty:')));
     expect(log.indexOf('spctl:assess')).toBeLessThan(log.findIndex((line) => line.startsWith('launchctl:bootout ')));
   });
 
@@ -1283,6 +1481,55 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(result.stderr).toContain('obsolete Runtime Raiders Agent.app canary must be removed');
     expectNoBootout(value);
     expect(events(value).some((line) => line.startsWith('curl:'))).toBe(false);
+  });
+
+  it.each([
+    ['app only', (value: Fixture) => {
+      writeExistingInstall(value, false);
+      rmSync(value.plist);
+      rmSync(value.shim);
+    }],
+    ['legacy app and shim without plist', (value: Fixture) => {
+      writeExistingInstall(value, false);
+      rmSync(value.plist);
+    }],
+    ['legacy plist only', (value: Fixture) => {
+      writeExistingInstall(value, false);
+      rmSync(value.app, { recursive: true });
+      rmSync(value.shim);
+    }],
+    ['wrong legacy version', (value: Fixture) => {
+      writeExistingInstall(value, false);
+      writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.4.1', legacyLabel));
+    }],
+    ['new parent ID mixed with legacy plist', (value: Fixture) => {
+      writeExistingInstall(value, false);
+      writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.4.2'));
+    }],
+    ['corrupt legacy plist', (value: Fixture) => {
+      writeExistingInstall(value, false);
+      writeFileSync(value.plist, 'not a plist\n');
+    }],
+    ['managed requires approval', (value: Fixture) => {
+      writeManagedInstall(value);
+      writeFileSync(value.managedState, 'requires-approval\n');
+    }],
+    ['managed registration not found', (value: Fixture) => {
+      writeManagedInstall(value);
+      writeFileSync(value.managedState, 'not-found\n');
+    }],
+  ] as const)('%s layout fails before download or service mutation', (_, arrange) => {
+    const value = fixture();
+    arrange(value);
+    const before = treeSnapshot(value.home);
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(treeSnapshot(value.home)).toEqual(before);
+    expect(events(value).some((line) => line.startsWith('curl:'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('launchctl:'))).toBe(false);
+    expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
   });
 
   it.each([
@@ -1299,6 +1546,32 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     }],
     ['missing executable', (value: Fixture) => {
       rmSync(join(value.candidate, 'Contents/MacOS/runtime-raiders-agent'));
+    }],
+    ['missing embedded managed plist', (value: Fixture) => {
+      rmSync(join(value.candidate, 'Contents/Library/LaunchAgents', `${managedLabel}.plist`));
+    }],
+    ['symlinked embedded managed plist', (value: Fixture) => {
+      const path = join(value.candidate, 'Contents/Library/LaunchAgents', `${managedLabel}.plist`);
+      rmSync(path);
+      symlinkSync(managedAgentPlist, path);
+    }],
+    ['wrong embedded managed label', (value: Fixture) => {
+      const path = join(value.candidate, 'Contents/Library/LaunchAgents', `${managedLabel}.plist`);
+      writeFileSync(path, readFileSync(path, 'utf8').replace(managedLabel, 'example.invalid'));
+    }],
+    ['extra embedded managed key', (value: Fixture) => {
+      const path = join(value.candidate, 'Contents/Library/LaunchAgents', `${managedLabel}.plist`);
+      writeFileSync(path, readFileSync(path, 'utf8').replace(
+        '</dict>',
+        '<key>AssociatedBundleIdentifiers</key><array><string>example.invalid</string></array></dict>',
+      ));
+    }],
+    ['wrong embedded BundleProgram', (value: Fixture) => {
+      const path = join(value.candidate, 'Contents/Library/LaunchAgents', `${managedLabel}.plist`);
+      writeFileSync(path, readFileSync(path, 'utf8').replace(
+        'Contents/MacOS/runtime-raiders-agent',
+        '/tmp/runtime-raiders-agent',
+      ));
     }],
     ['extra top-level archive entry', (value: Fixture) => {
       writeFileSync(join(value.root, 'archive-tree/extra.txt'), 'extra\n');
@@ -1319,152 +1592,245 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(value.running, 'utf8')).toBe('old daemon running\n');
   });
 
-  it('success replaces app, plist, and shim and restarts exactly once', () => {
+  it('old managed unregister failure leaves the enabled install untouched', () => {
     const value = fixture();
-    writeExistingInstall(value, false);
-    const result = run(value);
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    expect(readFileSync(join(value.app, 'Contents/Info.plist'), 'utf8')).toBe(plist());
-    const installedPlist = readFileSync(value.plist, 'utf8');
-    expect(installedPlist).toContain(join(value.app, 'Contents/MacOS/runtime-raiders-agent'));
-    const association = spawnSync('/usr/bin/plutil', [
-      '-extract', 'AssociatedBundleIdentifiers', 'json', '-o', '-', value.plist,
-    ], { encoding: 'utf8' });
-    expect(association.status, association.stderr).toBe(0);
-    expect(JSON.parse(association.stdout)).toEqual([label]);
-    expect(readFileSync(value.shim, 'utf8')).not.toContain('old shim');
-    expect(events(value).filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(1);
-    expect(existsSync(value.running)).toBe(true);
-  });
-
-  it('registers the final app before installing or bootstrapping the LaunchAgent', () => {
-    const value = fixture();
-    const result = run(value);
-    const log = events(value);
-    const appReplacement = log.indexOf('mv:replace-app');
-    const appRegistration = log.indexOf('agent:__runtime-raiders-register-application');
-    const plistReplacement = log.indexOf('mv:replace-plist');
-    const serviceBootstrap = log.findIndex((line) => line.startsWith('launchctl:bootstrap '));
-
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    expect(appReplacement).toBeGreaterThanOrEqual(0);
-    expect(appRegistration).toBeGreaterThan(appReplacement);
-    expect(plistReplacement).toBeGreaterThan(appRegistration);
-    expect(serviceBootstrap).toBeGreaterThan(appRegistration);
-  });
-
-  it('an app registration failure restores the previous install and restarts its service', () => {
-    const value = fixture();
-    writeExistingInstall(value, true);
+    writeManagedInstall(value);
     const before = installedTargets(value);
-    value.environment.RR_FAIL_REGISTRATION = '1';
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_FAIL_OLD_MANAGED_UNREGISTER = '1';
 
     const result = run(value);
-    const log = events(value);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('could not register its background-item identity');
     expect(installedTargets(value)).toEqual(before);
-    expect(log).toContain('agent:__runtime-raiders-register-application');
-    expect(log).not.toContain('mv:replace-plist');
-    expect(log.filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(1);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
     expect(existsSync(value.running)).toBe(true);
+    expect(events(value)).not.toContain('mv:backup-app');
+    expect(recoveryDirectories(value)).toHaveLength(0);
   });
-
-  it('a post-stop failure restores the old app, plist, and shim and restarts it', () => {
-    const value = fixture();
-    writeExistingInstall(value, true);
-    const appBefore = treeSnapshot(value.app);
-    const plistBefore = readFileSync(value.plist);
-    const shimBefore = readFileSync(value.shim);
-    value.environment.RR_FAIL_FIRST_BOOTSTRAP = '1';
-    const result = run(value);
-    expect(result.status).not.toBe(0);
-    expect(treeSnapshot(value.app)).toEqual(appBefore);
-    expect(readFileSync(value.plist)).toEqual(plistBefore);
-    expect(readFileSync(value.shim)).toEqual(shimBefore);
-    expect(events(value).filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(2);
-    expect(existsSync(value.running)).toBe(true);
-  });
-
-  it.each(['backup-app', 'backup-plist', 'backup-shim'] as const)(
-    'a %s move failure leaves untouched targets intact, restores moved targets, and restarts the old app',
-    (boundary) => {
-      const value = fixture();
-      writeExistingInstall(value, true);
-      const before = installedTargets(value);
-      value.environment.RR_FAIL_MV_BOUNDARY = boundary;
-      const result = run(value);
-      expect(result.status).not.toBe(0);
-      expect(installedTargets(value)).toEqual(before);
-      expect(existsSync(value.running)).toBe(true);
-      expect(recoveryDirectories(value)).toHaveLength(0);
-    },
-  );
-
-  it.each(['replace-app', 'replace-plist', 'replace-shim'] as const)(
-    'a %s move failure restores every old target and restarts the old app',
-    (boundary) => {
-      const value = fixture();
-      writeExistingInstall(value, true);
-      const before = installedTargets(value);
-      value.environment.RR_FAIL_MV_BOUNDARY = boundary;
-      const result = run(value);
-      expect(result.status).not.toBe(0);
-      expect(installedTargets(value)).toEqual(before);
-      expect(existsSync(value.running)).toBe(true);
-      expect(recoveryDirectories(value)).toHaveLength(0);
-    },
-  );
 
   it.each([
-    'backup-app', 'backup-plist', 'backup-shim',
-    'replace-app', 'replace-plist', 'replace-shim',
-  ] as const)('SIGTERM immediately after %s rolls back without a flag-update race', (boundary) => {
+    'backup-app', 'backup-plist', 'backup-shim', 'replace-app', 'replace-shim',
+  ] as const)('%s failure restores the exact legacy registration form with collection off', (boundary) => {
     const value = fixture();
-    writeExistingInstall(value, true);
+    writeExistingInstall(value, false);
     const before = installedTargets(value);
-    value.environment.RR_SIGNAL_AFTER_MV_BOUNDARY = boundary;
+    const stateBefore = treeSnapshot(value.state);
+    const outboxBefore = treeSnapshot(value.outbox);
+    value.environment.RR_FAIL_MV_BOUNDARY = boundary;
+
     const result = run(value);
-    expect(result.status).toBe(143);
+
+    expect(result.status).not.toBe(0);
     expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(treeSnapshot(value.outbox)).toEqual(outboxBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(events(value).filter((line) => line.startsWith('launchctl:bootstrap '))).toHaveLength(1);
+    expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
+  it('new managed register failure restores the exact legacy install', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const before = installedTargets(value);
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_FAIL_NEW_MANAGED_REGISTER = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
     expect(existsSync(value.running)).toBe(true);
     expect(recoveryDirectories(value)).toHaveLength(0);
   });
 
-  it.each(['restore-app', 'restore-plist', 'restore-shim'] as const)(
-    'a %s failure keeps the old backup and reports recovery material instead of deleting it',
-    (boundary) => {
+  it.each(['requires-approval', 'not-found'] as const)(
+    'new managed status %s rolls back to the exact legacy install',
+    (managedStatus) => {
       const value = fixture();
-      writeExistingInstall(value, true);
-      value.environment.RR_FAIL_FIRST_BOOTSTRAP = '1';
-      value.environment.RR_FAIL_RESTORE_BOUNDARY = boundary;
+      writeExistingInstall(value, false);
+      const before = installedTargets(value);
+      const stateBefore = treeSnapshot(value.state);
+      value.environment.RR_NEW_MANAGED_STATUS = managedStatus;
+
       const result = run(value);
-      const recovery = recoveryDirectories(value);
+
       expect(result.status).not.toBe(0);
-      expect(existsSync(value.running)).toBe(false);
-      expect(recovery.length).toBeGreaterThan(0);
-      expect(recovery.some((path) => result.stderr.includes(path))).toBe(true);
-      const expectedBackup = boundary === 'restore-app' ? 'old.app'
-        : boundary === 'restore-plist' ? 'old.plist'
-          : 'old.shim';
-      expect(recovery.some((path) => existsSync(join(path, expectedBackup)))).toBe(true);
+      expect(installedTargets(value)).toEqual(before);
+      expect(treeSnapshot(value.state)).toEqual(stateBefore);
+      expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+      expect(existsSync(value.running)).toBe(true);
+      expect(recoveryDirectories(value)).toHaveLength(0);
     },
   );
 
-  it('a rollback bootstrap failure is reported and preserves recovery material', () => {
+  it('post-register raiders status failure restores legacy bytes and disabled collection', () => {
     const value = fixture();
-    writeExistingInstall(value, true);
+    writeExistingInstall(value, false);
     const before = installedTargets(value);
-    value.environment.RR_FAIL_FIRST_BOOTSTRAP = '1';
-    value.environment.RR_FAIL_ROLLBACK_BOOTSTRAP = '1';
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_FAIL_STATUS = '1';
+
     const result = run(value);
-    const recovery = recoveryDirectories(value);
+
     expect(result.status).not.toBe(0);
     expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
+  it('TERM after the old service stops restores legacy bytes and exits 143', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const before = installedTargets(value);
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_SIGNAL_AFTER_OLD_STOP = '1';
+
+    const result = run(value);
+
+    expect(result.status).toBe(143);
+    expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
+  it.each([
+    'backup-app', 'backup-plist', 'backup-shim', 'replace-app', 'replace-shim',
+  ] as const)('TERM immediately after %s restores the exact legacy install', (boundary) => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const before = installedTargets(value);
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_SIGNAL_AFTER_MV_BOUNDARY = boundary;
+
+    const result = run(value);
+
+    expect(result.status).toBe(143);
+    expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
+  it('rollback new managed unregister failure restores old managed bytes and preserves recovery', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const before = installedTargets(value);
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_FAIL_STATUS = '1';
+    value.environment.RR_FAIL_ROLLBACK_MANAGED_UNREGISTER = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+    expectRecoveryPreserved(value, result);
+  });
+
+  it.each(['restore-app', 'restore-plist', 'restore-shim'] as const)(
+    'rollback %s failure preserves the exact missing backup and recovery material',
+    (boundary) => {
+      const value = fixture();
+      writeExistingInstall(value, false);
+      const before = installedTargets(value);
+      const stateBefore = treeSnapshot(value.state);
+      value.environment.RR_FAIL_STATUS = '1';
+      value.environment.RR_FAIL_RESTORE_BOUNDARY = boundary;
+
+      const result = run(value);
+      const recovery = expectRecoveryPreserved(value, result);
+      const work = recovery.find((path) => existsSync(join(path, 'old.app')) ||
+        existsSync(join(path, 'old.plist')) || existsSync(join(path, 'old.shim')))!;
+      const after = installedTargets(value);
+
+      expect(result.status).not.toBe(0);
+      expect(treeSnapshot(value.state)).toEqual(stateBefore);
+      expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+      expect(existsSync(value.running)).toBe(false);
+      if (boundary === 'restore-app') {
+        expect(after.app).toEqual({});
+        expect(after.plist).toEqual(before.plist);
+        expect(after.shim).toEqual(before.shim);
+        expect(treeSnapshot(join(work, 'old.app'))).toEqual(before.app);
+      } else if (boundary === 'restore-plist') {
+        expect(after.app).toEqual(before.app);
+        expect(after.plist).toBe(null);
+        expect(after.shim).toEqual(before.shim);
+        expect(readFileSync(join(work, 'old.plist')).toString('base64')).toBe(before.plist);
+      } else {
+        expect(after.app).toEqual(before.app);
+        expect(after.plist).toEqual(before.plist);
+        expect(after.shim).toBe(null);
+        expect(readFileSync(join(work, 'old.shim')).toString('base64')).toBe(before.shim);
+      }
+    },
+  );
+
+  it('rollback legacy bootstrap failure restores exact bytes and preserves recovery material', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const before = installedTargets(value);
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_FAIL_STATUS = '1';
+    value.environment.RR_FAIL_ROLLBACK_BOOTSTRAP = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
     expect(existsSync(value.running)).toBe(false);
-    expect(recovery.length).toBeGreaterThan(0);
-    expect(recovery.some((path) => result.stderr.includes(path))).toBe(true);
+    expectRecoveryPreserved(value, result);
+  });
+
+  it('rollback old managed re-register failure restores bytes but preserves recovery unregistered', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const before = installedTargets(value);
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_FAIL_STATUS = '1';
+    value.environment.RR_FAIL_OLD_MANAGED_REGISTER = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(false);
+    expectRecoveryPreserved(value, result);
+  });
+
+  it('rollback restored raiders status failure restores enabled managed form and preserves recovery', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const before = installedTargets(value);
+    const stateBefore = treeSnapshot(value.state);
+    value.environment.RR_FAIL_STATUS = '1';
+    value.environment.RR_FAIL_RESTORED_STATUS = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+    expectRecoveryPreserved(value, result);
   });
 
   it.each([
@@ -1476,37 +1842,14 @@ describe('Runtime Raiders reinstall-safe installer', () => {
       '/usr/sbin/spctl --assess --type execute --verbose=2 "$CANDIDATE_APP"',
       '/usr/sbin/spctl --assess --type execute --verbose=2 "$APP"',
     )],
-    ['launchctl bootout label', (source: string) => source.replaceAll(
-      'bootout "gui/$OWNER/$LABEL"', 'bootout "gui/$OWNER/wrong-label"',
-    )],
-    ['launchctl bootout domain', (source: string) => source.replaceAll(
-      'bootout "gui/$OWNER/$LABEL"', 'bootout "gui/99999/$LABEL"',
-    )],
   ] as const)('a mutated wrong-target %s call fails before destructive replacement', (_, mutate) => {
     const value = fixture();
-    writeExistingInstall(value, true);
+    writeExistingInstall(value, false);
     const before = installedTargets(value);
     const result = run(value, '/bin/sh', mutate);
     expect(result.status).not.toBe(0);
     expect(installedTargets(value)).toEqual(before);
     expect(events(value).some((line) => line.startsWith('mv:replace-'))).toBe(false);
-  });
-
-  it.each([
-    ['plist', (source: string) => source.replaceAll(
-      'bootstrap "gui/$OWNER" "$PLIST"', 'bootstrap "gui/$OWNER" "$SHIM"',
-    )],
-    ['domain', (source: string) => source.replaceAll(
-      'bootstrap "gui/$OWNER" "$PLIST"', 'bootstrap "gui/99999" "$PLIST"',
-    )],
-  ] as const)('a mutated wrong-%s launchctl bootstrap fails and rolls all targets back', (_, mutate) => {
-    const value = fixture();
-    writeExistingInstall(value, true);
-    const before = installedTargets(value);
-    const result = run(value, '/bin/sh', mutate);
-    expect(result.status).not.toBe(0);
-    expect(installedTargets(value)).toEqual(before);
-    expect(existsSync(value.running)).toBe(false);
   });
 
   it('the canonical command executes the flat stable app executable', () => {
@@ -1585,7 +1928,7 @@ describe('Runtime Raiders reinstall-safe installer', () => {
 
   it('an archive network failure leaves the existing install running and unchanged', () => {
     const value = fixture();
-    writeExistingInstall(value, true);
+    writeExistingInstall(value, false);
     const before = treeSnapshot(value.home);
     value.environment.RR_FAIL_ARCHIVE_DOWNLOAD = '1';
     const result = run(value);
