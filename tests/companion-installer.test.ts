@@ -1914,6 +1914,20 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollment());
   });
 
+  it('first install explains how new and existing Raiders obtain the one-time code', () => {
+    const value = fixture();
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(result.stderr).toContain('New Raider: https://raiders.redlattice.com/register');
+    expect(result.stderr).toContain('Existing Raider: https://raiders.redlattice.com/character');
+    expect(result.stderr).toContain('This is not your Raider Key.');
+    expect(result.stderr.indexOf('New Raider:')).toBeLessThan(
+      result.stderr.indexOf('Runtime Raiders one-time enrollment code:'),
+    );
+  });
+
   it('reinstall reuses valid enrollment without asking for a code', () => {
     const value = fixture();
     writeExistingInstall(value, false);
