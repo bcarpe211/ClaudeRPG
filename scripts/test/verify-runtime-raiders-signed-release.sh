@@ -222,17 +222,21 @@ COMPANION_VERSION="$REVIEWED_VERSION"
 
 INSTALLER_VERSION="$(/usr/bin/sed -n "s/^COMPANION_VERSION='\([^']*\)'$/\1/p" "$INSTALLER")"
 TEAM_ID="$(/usr/bin/sed -n "s/^TEAM_ID='\([^']*\)'$/\1/p" "$INSTALLER")"
-[ "$INSTALLER_VERSION" = "$COMPANION_VERSION" ] && [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || {
-  echo "installer version or Team ID is invalid" >&2
+ARCHIVE_SHA256="$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { print $1 }')"
+INSTALLER_ARCHIVE_SHA256="$(/usr/bin/sed -n "s/^ARCHIVE_SHA256='\([^']*\)'$/\1/p" "$INSTALLER")"
+[ "$INSTALLER_VERSION" = "$COMPANION_VERSION" ] && [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] &&
+  [ "$INSTALLER_ARCHIVE_SHA256" = "$ARCHIVE_SHA256" ] || {
+  echo "installer version, Team ID, or archive SHA-256 is invalid" >&2
   exit 1
 }
 EXPECTED_INSTALLER="$WORK/expected-install.sh"
 /usr/bin/sed \
   -e "s/__RUNTIME_RAIDERS_COMPANION_VERSION__/$COMPANION_VERSION/g" \
   -e "s/__RUNTIME_RAIDERS_TEAM_ID__/$TEAM_ID/g" \
+  -e "s/__RUNTIME_RAIDERS_ARCHIVE_SHA256__/$ARCHIVE_SHA256/g" \
   "$ROOT/companion/packaging/install.sh" > "$EXPECTED_INSTALLER"
 /usr/bin/cmp -s "$INSTALLER" "$EXPECTED_INSTALLER" || {
-  echo "install.sh is not the exact two-value template rendering" >&2
+  echo "install.sh is not the exact three-value template rendering" >&2
   exit 1
 }
 if /usr/bin/grep -F '__RUNTIME_RAIDERS_' "$INSTALLER" >/dev/null; then
@@ -297,8 +301,6 @@ ARCHIVE_BYTES="$(/usr/bin/wc -c < "$ARCHIVE" | /usr/bin/tr -d ' ')"
   echo "release archive exceeds $ARCHIVE_MAX_BYTES bytes" >&2
   exit 1
 }
-ARCHIVE_SHA256="$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { print $1 }')"
-
 EXTRACTED="$WORK/extracted"
 /bin/mkdir "$EXTRACTED"
 /usr/bin/ditto -x -k "$ARCHIVE" "$EXTRACTED"

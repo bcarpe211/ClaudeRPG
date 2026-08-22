@@ -52,20 +52,20 @@ public struct ManagedAgentServiceController: Sendable {
             switch initialStatus {
             case .enabled:
                 return .enabled
-            case .notRegistered:
+            case .notRegistered, .notFound:
                 try operations.register()
                 let finalStatus = operations.status()
                 guard finalStatus == .enabled else {
                     throw ManagedAgentServiceError.unexpectedStatus(finalStatus)
                 }
                 return finalStatus
-            case .requiresApproval, .notFound:
+            case .requiresApproval:
                 throw ManagedAgentServiceError.unexpectedStatus(initialStatus)
             }
         case .unregister:
             let initialStatus = operations.status()
             switch initialStatus {
-            case .notRegistered:
+            case .notRegistered, .notFound:
                 return .notRegistered
             case .enabled, .requiresApproval:
                 try operations.unregister()
@@ -74,8 +74,6 @@ public struct ManagedAgentServiceController: Sendable {
                     throw ManagedAgentServiceError.unexpectedStatus(finalStatus)
                 }
                 return finalStatus
-            case .notFound:
-                throw ManagedAgentServiceError.unexpectedStatus(initialStatus)
             }
         }
     }

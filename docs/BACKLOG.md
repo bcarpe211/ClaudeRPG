@@ -576,10 +576,18 @@ agent embedded in the signed app and registered using Apple's `SMAppService`.
 It uses distinct new parent-app and managed-agent identifiers so macOS cannot
 reuse the stale legacy relationship. See
 `docs/superpowers/specs/2026-08-21-runtime-raiders-smappservice-branding-design.md`.
-The reviewed 0.4.3 source is ready for a separately approved signed canary; no
-artifact has been signed, notarized, published, or installed by this offline
-implementation step. The checklist remains open until the fresh signed
-installed-off canary passes the actual visible UI gate.
+The signed 0.4.3 installed-off canary failed closed before registration.
+macOS returned `SMAppService.Status.notFound` for the fresh managed agent
+because no Background Task Management record existed yet; the controller
+incorrectly rejected that state before calling `register()`. The installer
+restored the signed 0.4.2 legacy service with collection disabled and retained
+its recovery directory. The 0.4.4 repair must pass the local signed canary
+command below before any replacement publication. The checklist remains open
+until that fresh installed-off canary passes the actual visible UI gate.
+
+```sh
+/bin/bash scripts/release/install-runtime-raiders-local-canary.sh
+```
 
 - [x] Set the user-facing bundle/display name to exactly `Runtime Raiders` and
       remove the retired `Runtime Raiders Launcher` / `Runtime Raiders Agent`

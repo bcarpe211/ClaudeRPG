@@ -3,7 +3,9 @@ set -eu
 
 COMPANION_VERSION='__RUNTIME_RAIDERS_COMPANION_VERSION__'
 TEAM_ID='__RUNTIME_RAIDERS_TEAM_ID__'
+ARCHIVE_SHA256='__RUNTIME_RAIDERS_ARCHIVE_SHA256__'
 ARCHIVE_URL='https://raiders.redlattice.com/downloads/runtime-raiders-agent.zip'
+LOCAL_ARCHIVE="${RUNTIME_RAIDERS_LOCAL_ARCHIVE:-}"
 
 ENROLL_URL='https://raiders.redlattice.com/api/raiders/enroll'
 ORIGIN='https://raiders.redlattice.com'
@@ -24,6 +26,8 @@ usage() {
 case "$TEAM_ID" in *[!A-Z0-9]*|'') exit 1;; esac
 [ "$(printf '%s' "$TEAM_ID" | /usr/bin/wc -c | /usr/bin/tr -d ' ')" -eq 10 ] || exit 1
 case "$COMPANION_VERSION" in *[!0-9A-Za-z._-]*|'') exit 1;; esac
+case "$ARCHIVE_SHA256" in *[!0-9a-f]*|'') exit 1;; esac
+[ "$(printf '%s' "$ARCHIVE_SHA256" | /usr/bin/wc -c | /usr/bin/tr -d ' ')" -eq 64 ] || exit 1
 
 umask 077
 OWNER="$(/usr/bin/id -u)"
@@ -519,14 +523,39 @@ if [ "$existing_form" != fresh ]; then
 fi
 
 ARCHIVE="$WORK/runtime-raiders-agent.zip"
-download_status="$(/usr/bin/curl --fail --silent --show-error --proto '=https' --proto-redir '=https' \
-  --max-redirs 0 --connect-timeout 10 --max-time 120 --max-filesize 8388608 --output "$ARCHIVE" \
-  --write-out '%{http_code}' "$ARCHIVE_URL")" || {
-  echo 'Runtime Raiders download failed.' >&2
-  exit 1
-}
-[ "$download_status" = 200 ] && [ -f "$ARCHIVE" ] && [ ! -L "$ARCHIVE" ] || {
-  echo 'Runtime Raiders download was invalid.' >&2
+if [ -n "$LOCAL_ARCHIVE" ]; then
+  case "$LOCAL_ARCHIVE" in /*) ;; *) echo 'Runtime Raiders local archive is unsafe.' >&2; exit 1;; esac
+  local_archive_mode="$(/usr/bin/stat -f '%Lp' "$LOCAL_ARCHIVE" 2>/dev/null || true)"
+  case "$local_archive_mode" in *[!0-7]*|'') local_archive_mode='' ;; esac
+  [ -f "$LOCAL_ARCHIVE" ] && [ ! -L "$LOCAL_ARCHIVE" ] &&
+    [ "$(/usr/bin/stat -f '%u' "$LOCAL_ARCHIVE")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f '%l' "$LOCAL_ARCHIVE")" = 1 ] &&
+    [ "$(/usr/bin/stat -f '%z' "$LOCAL_ARCHIVE")" -le 8388608 ] &&
+    [ -n "$local_archive_mode" ] &&
+    [ $((0$local_archive_mode & 022)) -eq 0 ] || {
+    echo 'Runtime Raiders local archive is unsafe.' >&2
+    exit 1
+  }
+  /bin/cp "$LOCAL_ARCHIVE" "$ARCHIVE"
+else
+  download_status="$(/usr/bin/curl --fail --silent --show-error --proto '=https' --proto-redir '=https' \
+    --max-redirs 0 --connect-timeout 10 --max-time 120 --max-filesize 8388608 --output "$ARCHIVE" \
+    --write-out '%{http_code}' "$ARCHIVE_URL")" || {
+    echo 'Runtime Raiders download failed.' >&2
+    exit 1
+  }
+  [ "$download_status" = 200 ] && [ -f "$ARCHIVE" ] && [ ! -L "$ARCHIVE" ] || {
+    echo 'Runtime Raiders download was invalid.' >&2
+    exit 1
+  }
+fi
+actual_archive_sha256="$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { print $1 }')"
+[ "$actual_archive_sha256" = "$ARCHIVE_SHA256" ] || {
+  if [ -n "$LOCAL_ARCHIVE" ]; then
+    echo 'Runtime Raiders local archive does not match this installer.' >&2
+  else
+    echo 'Runtime Raiders download was invalid.' >&2
+  fi
   exit 1
 }
 
@@ -608,6 +637,11 @@ if [ "$existing_form" = legacy ]; then
   }
   legacy_initial_registration_known=1
   if [ "$legacy_registration_state" = registered ]; then legacy_was_registered=1; fi
+fi
+
+if [ -n "$LOCAL_ARCHIVE" ] && [ "$has_enrollment" -eq 0 ]; then
+  echo 'Runtime Raiders local canary requires valid existing enrollment.' >&2
+  exit 1
 fi
 
 if [ "$has_enrollment" -eq 0 ]; then

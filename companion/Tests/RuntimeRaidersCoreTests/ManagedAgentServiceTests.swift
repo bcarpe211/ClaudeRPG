@@ -23,18 +23,27 @@ final class ManagedAgentServiceTests: XCTestCase {
         XCTAssertEqual(try controller.perform(.register), .enabled)
     }
 
-    func testRegisterRejectsApprovalAndNotFoundStates() {
-        for status in [ManagedAgentStatus.requiresApproval, .notFound] {
-            let controller = ManagedAgentServiceController(operations: .init(
-                register: {}, unregister: {}, status: { status }
-            ))
+    func testRegisterCreatesFreshServiceWhenNoBackgroundTaskRecordExists() throws {
+        var status = ManagedAgentStatus.notFound
+        let controller = ManagedAgentServiceController(operations: .init(
+            register: { status = .enabled },
+            unregister: {},
+            status: { status }
+        ))
 
-            XCTAssertThrowsError(try controller.perform(.register)) { error in
-                XCTAssertEqual(
-                    error as? ManagedAgentServiceError,
-                    .unexpectedStatus(status)
-                )
-            }
+        XCTAssertEqual(try controller.perform(.register), .enabled)
+    }
+
+    func testRegisterStillRejectsServiceThatRequiresUserApproval() {
+        let controller = ManagedAgentServiceController(operations: .init(
+            register: {}, unregister: {}, status: { .requiresApproval }
+        ))
+
+        XCTAssertThrowsError(try controller.perform(.register)) { error in
+            XCTAssertEqual(
+                error as? ManagedAgentServiceError,
+                .unexpectedStatus(.requiresApproval)
+            )
         }
     }
 
@@ -61,6 +70,18 @@ final class ManagedAgentServiceTests: XCTestCase {
 
         XCTAssertEqual(try controller.perform(.unregister), .notRegistered)
         XCTAssertEqual(try controller.perform(.unregister), .notRegistered)
+    }
+
+    func testUnregisterTreatsMissingBackgroundTaskRecordAsAlreadyAbsent() throws {
+        var unregisterCalled = false
+        let controller = ManagedAgentServiceController(operations: .init(
+            register: {},
+            unregister: { unregisterCalled = true },
+            status: { .notFound }
+        ))
+
+        XCTAssertEqual(try controller.perform(.unregister), .notRegistered)
+        XCTAssertFalse(unregisterCalled)
     }
 
     func testUnregisterRejectsOperationThatDoesNotReachNotRegistered() {

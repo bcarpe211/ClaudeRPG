@@ -65,6 +65,22 @@ one-time bootstrap and every later `prepare` or `publish` command.
 If the selected release host requires the corporate network, stop and ask the
 operator to connect the corporate VPN. Do not start or stop a VPN automatically.
 
+Before every publication, prove the exact candidate locally without SSH, Caddy,
+or a public download:
+
+```sh
+/bin/bash scripts/release/install-runtime-raiders-local-canary.sh
+```
+
+This command runs the normal local `prepare`, installs its exact ZIP through the
+production installer, and requires the expected version, enabled managed
+service, running daemon, disabled collection, zero active Runs, and zero queued
+events. It requires valid existing enrollment so it cannot enroll or contact the
+enrollment endpoint, and collection remains off so it cannot upload telemetry.
+It never publishes or validates the public server paths. The installed service
+retains its normal informational once-daily `/version` check. Do not run
+`publish` until this command passes.
+
 ### One-time Pi bootstrap
 
 Before the first 0.4.0 publication, Task 7 requires a separate authorization to

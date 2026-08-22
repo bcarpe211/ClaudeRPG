@@ -6,6 +6,7 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -32,7 +33,7 @@ const signedReleaseVerifier = join(process.cwd(), 'scripts/test/verify-runtime-r
 const legacyLabel = 'com.redlattice.runtime-raiders-agent';
 const managedLabel = 'com.redlattice.runtime-raiders.agent';
 const appBundleId = 'com.redlattice.runtime-raiders';
-const version = '0.4.3';
+const version = '0.4.4';
 const teamId = 'ABCDE12345';
 const enrollmentCode = 'E'.repeat(43);
 const token = 'T'.repeat(43);
@@ -306,13 +307,12 @@ function replaceReleaseSummaryField(
   writeFileSync(summaryPath, summary.replace(line, replacement === null ? '' : `${key}=${replacement}\n`));
 }
 
-function refreshArchiveSummaryEvidence(value: BuildFixture): void {
-  const archive = join(value.output, 'runtime-raiders-agent.zip');
-  const bytes = readFileSync(archive);
-  replaceReleaseSummaryField(value, 'runtime-raiders-agent.zip_bytes', String(bytes.byteLength));
+function refreshReleaseFileSummaryEvidence(value: BuildFixture, name: string): void {
+  const bytes = readFileSync(join(value.output, name));
+  replaceReleaseSummaryField(value, `${name}_bytes`, String(bytes.byteLength));
   replaceReleaseSummaryField(
     value,
-    'runtime-raiders-agent.zip_sha256',
+    `${name}_sha256`,
     createHash('sha256').update(bytes).digest('hex'),
   );
 }
@@ -332,7 +332,17 @@ function mutateSignedArchive(value: BuildFixture, mutate: (application: string) 
     { encoding: 'utf8' },
   );
   expect(repacked.status, repacked.stderr).toBe(0);
-  refreshArchiveSummaryEvidence(value);
+  const archiveSha256 = createHash('sha256').update(readFileSync(archive)).digest('hex');
+  const installer = join(value.output, 'install.sh');
+  writeFileSync(
+    installer,
+    readFileSync(installer, 'utf8').replace(
+      /^ARCHIVE_SHA256='[^']*'$/m,
+      `ARCHIVE_SHA256='${archiveSha256}'`,
+    ),
+  );
+  refreshReleaseFileSummaryEvidence(value, 'install.sh');
+  refreshReleaseFileSummaryEvidence(value, 'runtime-raiders-agent.zip');
 }
 
 function commitFixture(value: BuildFixture, message: string): string {
@@ -499,6 +509,7 @@ function fakeTools(root: string): string {
     'printf "ditto:%s\\n" "$*" >> "$RR_EVENT_LOG"',
     'if [ "${1:-}" = -x ] && [ "${2:-}" = -k ]; then',
     '  destination="$4"; mkdir -p "$destination"; cp -R "$RR_ARCHIVE_TREE/." "$destination/"',
+    '  printf "%s/Runtime Raiders.app\\n" "$destination" > "$RR_EXPECT_CANDIDATE"',
     'elif [ "$#" -eq 2 ]; then',
     '  cp -R "$1" "$2"',
     'else',
@@ -687,9 +698,13 @@ function renderInstaller(value: Fixture, mutate: (source: string) => string = (s
   const rendered = join(value.root, 'install-rendered.sh');
   const validator = join(value.root, 'old-validator');
   executable(validator, ['exit 0']);
+  const archiveSha256 = createHash('sha256')
+    .update(readFileSync(value.environment.RR_ARCHIVE!))
+    .digest('hex');
   const source = mutate(readFileSync(installerTemplate, 'utf8'))
     .replaceAll('__RUNTIME_RAIDERS_COMPANION_VERSION__', version)
     .replaceAll('__RUNTIME_RAIDERS_TEAM_ID__', teamId)
+    .replaceAll('__RUNTIME_RAIDERS_ARCHIVE_SHA256__', archiveSha256)
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_SEQUENCE__', '16')
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_SHA__', 'b'.repeat(40))
     .replaceAll('__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__', '2')
@@ -1319,7 +1334,7 @@ describe('Runtime Raiders release build', () => {
     expect(existsSync(value.output)).toBe(false);
   });
 
-  it('release build rejects any installer placeholder left after the two allowed substitutions', () => {
+  it('release build rejects any installer placeholder left after the three allowed substitutions', () => {
     const value = buildFixture();
     writeFileSync(
       join(value.repository, 'companion/packaging/install.sh'),
@@ -1579,6 +1594,82 @@ describe('Runtime Raiders release build', () => {
 });
 
 describe('Runtime Raiders reinstall-safe installer', () => {
+  it('installs the exact local archive without downloading release or enrollment bytes', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    chmodSync(value.environment.RR_ARCHIVE!, 0o600);
+    value.environment.RUNTIME_RAIDERS_LOCAL_ARCHIVE = value.environment.RR_ARCHIVE;
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value)).not.toContain('curl:archive');
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+  });
+
+  it('rejects a different local archive before stopping the installed service', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    const wrongArchive = join(value.root, 'wrong-runtime-raiders-agent.zip');
+    writeFileSync(wrongArchive, 'different signed release bytes\n', { mode: 0o600 });
+    value.environment.RUNTIME_RAIDERS_LOCAL_ARCHIVE = wrongArchive;
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('local archive does not match this installer');
+    expectNoBootout(value);
+    expect(events(value)).not.toContain('curl:archive');
+  });
+
+  it.each([
+    ['relative path', (value: Fixture) => {
+      value.environment.RUNTIME_RAIDERS_LOCAL_ARCHIVE = 'runtime-raiders-agent.zip';
+    }],
+    ['symlink', (value: Fixture) => {
+      const path = join(value.root, 'archive-link.zip');
+      symlinkSync(value.environment.RR_ARCHIVE!, path);
+      value.environment.RUNTIME_RAIDERS_LOCAL_ARCHIVE = path;
+    }],
+    ['extra hard link', (value: Fixture) => {
+      const path = join(value.root, 'archive-hard-link.zip');
+      linkSync(value.environment.RR_ARCHIVE!, path);
+      value.environment.RUNTIME_RAIDERS_LOCAL_ARCHIVE = path;
+    }],
+    ['group-writable mode', (value: Fixture) => {
+      chmodSync(value.environment.RR_ARCHIVE!, 0o620);
+      value.environment.RUNTIME_RAIDERS_LOCAL_ARCHIVE = value.environment.RR_ARCHIVE;
+    }],
+  ] as const)('rejects an unsafe local archive with %s before stopping service', (_case, arrange) => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    arrange(value);
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Runtime Raiders local archive is unsafe.');
+    expectNoBootout(value);
+    expect(events(value)).not.toContain('curl:archive');
+  });
+
+  it('local install refuses enrollment network when existing enrollment is invalid', () => {
+    const value = fixture();
+    writeExistingInstall(value, false);
+    writeFileSync(join(value.state, 'enrollment.json'), '{}\n', { mode: 0o600 });
+    chmodSync(value.environment.RR_ARCHIVE!, 0o600);
+    value.environment.RUNTIME_RAIDERS_LOCAL_ARCHIVE = value.environment.RR_ARCHIVE;
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Runtime Raiders local canary requires valid existing enrollment.');
+    expect(events(value)).not.toContain('curl:archive');
+    expect(events(value)).not.toContain('curl:enroll');
+    expectNoBootout(value);
+  });
+
   it('fresh install uses the managed service without creating a legacy LaunchAgent plist', () => {
     const value = fixture();
 

@@ -320,15 +320,19 @@ validate_bundle_contract "$PACKAGED_APP" || {
 "$SPCTL_TOOL" --assess --type execute --verbose=2 "$PACKAGED_APP"
 "$XCRUN_TOOL" stapler validate "$PACKAGED_APP"
 
+ARCHIVE_SHA256="$(/usr/bin/shasum -a 256 "$ARCHIVE" | /usr/bin/awk 'NR == 1 { print $1 }')"
 VERSION_PLACEHOLDERS="$(/usr/bin/grep -o '__RUNTIME_RAIDERS_COMPANION_VERSION__' "$INSTALLER_TEMPLATE" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
 TEAM_PLACEHOLDERS="$(/usr/bin/grep -o '__RUNTIME_RAIDERS_TEAM_ID__' "$INSTALLER_TEMPLATE" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
-[ "$VERSION_PLACEHOLDERS" -eq 1 ] && [ "$TEAM_PLACEHOLDERS" -eq 1 ] || {
+ARCHIVE_SHA256_PLACEHOLDERS="$(/usr/bin/grep -o '__RUNTIME_RAIDERS_ARCHIVE_SHA256__' "$INSTALLER_TEMPLATE" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+[ "$VERSION_PLACEHOLDERS" -eq 1 ] && [ "$TEAM_PLACEHOLDERS" -eq 1 ] &&
+  [ "$ARCHIVE_SHA256_PLACEHOLDERS" -eq 1 ] || {
   echo "installer template placeholders are invalid" >&2
   exit 1
 }
 /usr/bin/sed \
   -e "s/__RUNTIME_RAIDERS_COMPANION_VERSION__/$COMPANION_VERSION/g" \
   -e "s/__RUNTIME_RAIDERS_TEAM_ID__/$RUNTIME_RAIDERS_TEAM_ID/g" \
+  -e "s/__RUNTIME_RAIDERS_ARCHIVE_SHA256__/$ARCHIVE_SHA256/g" \
   "$INSTALLER_TEMPLATE" > "$STAGED_OUTPUT/install.sh"
 /bin/chmod 755 "$STAGED_OUTPUT/install.sh"
 if /usr/bin/grep -F '__RUNTIME_RAIDERS_' "$STAGED_OUTPUT/install.sh" >/dev/null; then
@@ -336,8 +340,9 @@ if /usr/bin/grep -F '__RUNTIME_RAIDERS_' "$STAGED_OUTPUT/install.sh" >/dev/null;
   exit 1
 fi
 /usr/bin/grep -F -x "COMPANION_VERSION='$COMPANION_VERSION'" "$STAGED_OUTPUT/install.sh" >/dev/null &&
-  /usr/bin/grep -F -x "TEAM_ID='$RUNTIME_RAIDERS_TEAM_ID'" "$STAGED_OUTPUT/install.sh" >/dev/null || {
-  echo "rendered installer version or Team ID is invalid" >&2
+  /usr/bin/grep -F -x "TEAM_ID='$RUNTIME_RAIDERS_TEAM_ID'" "$STAGED_OUTPUT/install.sh" >/dev/null &&
+  /usr/bin/grep -F -x "ARCHIVE_SHA256='$ARCHIVE_SHA256'" "$STAGED_OUTPUT/install.sh" >/dev/null || {
+  echo "rendered installer version, Team ID, or archive SHA-256 is invalid" >&2
   exit 1
 }
 
