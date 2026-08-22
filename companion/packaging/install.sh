@@ -255,6 +255,24 @@ validate_enrollment_response() {
     plist_value_has_type "$response_file" enabled_surfaces array
 }
 
+collection_is_conclusively_disabled() {
+  collection_status_file=$1
+  [ -f "$collection_status_file" ] && [ ! -L "$collection_status_file" ] &&
+    is_bounded_json_dictionary "$collection_status_file" || return 1
+  collection_enabled="$(/usr/bin/plutil -extract enabled raw -expect bool -o - \
+    "$collection_status_file")" &&
+    collection_activation="$(/usr/bin/plutil -extract activationState raw -expect string -o - \
+      "$collection_status_file")" &&
+    collection_persisted="$(/usr/bin/plutil -extract persistedState raw -expect string -o - \
+      "$collection_status_file")" || return 1
+  [ "$collection_enabled" = false ] || return 1
+  [ "$collection_activation" = disabled ] || return 1
+  case "$collection_persisted" in
+    missing|disabled) return 0;;
+    *) return 1;;
+  esac
+}
+
 has_enrollment=0
 if [ -e "$ENROLLMENT" ] || [ -L "$ENROLLMENT" ]; then
   refuse_symlink "$ENROLLMENT"
@@ -270,8 +288,11 @@ fi
 WORK="$(/usr/bin/mktemp -d "$SUPPORT/.runtime-raiders-install.XXXXXX")"
 transaction_active=0
 transaction_committed=0
-old_service_stopped=0
-new_managed_registered=0
+legacy_stop_attempted=0
+old_managed_unregister_attempted=0
+new_managed_register_attempted=0
+rollback_new_unregister_attempted=0
+rollback_old_register_attempted=0
 original_app=0
 original_legacy_plist=0
 original_shim=0
@@ -318,51 +339,100 @@ rollback() {
   trap - EXIT HUP INT TERM
   restore_tty
   restoration_complete=1
+  original_registration_restored=0
   if [ "$transaction_active" -eq 1 ] && [ "$transaction_committed" -eq 0 ]; then
-    if [ "$new_managed_registered" -eq 1 ]; then
+    new_registration_compensated=1
+    if [ "$new_managed_register_attempted" -eq 1 ]; then
+      new_registration_compensated=0
+      rollback_new_unregister_attempted=1
       if rollback_managed_result="$("$AGENT" __runtime-raiders-managed-agent unregister)"; then
-        [ "$rollback_managed_result" = not-registered ] || restoration_complete=0
-      else
-        restoration_complete=0
+        if [ "$rollback_managed_result" = not-registered ]; then
+          new_registration_compensated=1
+        fi
       fi
+      [ "$new_registration_compensated" -eq 1 ] || restoration_complete=0
     fi
+    app_restored=1
     if ! restore_target "$APP" "$WORK/old.app" "$WORK/failed.app" "$original_app"; then
       restoration_complete=0
+      app_restored=0
     fi
     if [ "$original_legacy_plist" -eq 1 ] && [ -e "$WORK/old.plist" ]; then
       /bin/mkdir -p "$LAUNCH_AGENTS" || restoration_complete=0
     fi
+    legacy_plist_restored=1
     if ! restore_target "$LEGACY_PLIST" "$WORK/old.plist" \
       "$WORK/failed.plist" "$original_legacy_plist"; then
       restoration_complete=0
+      legacy_plist_restored=0
     fi
+    shim_restored=1
     if ! restore_target "$SHIM" "$WORK/old.shim" "$WORK/failed.shim" "$original_shim"; then
       restoration_complete=0
+      shim_restored=0
     fi
+    command_restored=1
     if [ "$original_command" -eq 0 ] && { [ -e "$COMMAND" ] || [ -L "$COMMAND" ]; }; then
-      /bin/rm -f "$COMMAND" || restoration_complete=0
+      if ! /bin/rm -f "$COMMAND"; then
+        restoration_complete=0
+        command_restored=0
+      fi
     elif [ "$original_command" -eq 1 ]; then
       [ -L "$COMMAND" ] && [ "$(/usr/bin/readlink "$COMMAND")" = "$SHIM" ] ||
-        restoration_complete=0
+        {
+          restoration_complete=0
+          command_restored=0
+        }
     fi
-    if [ "$restoration_complete" -eq 1 ] && [ "$old_service_stopped" -eq 1 ]; then
-      case "$existing_form" in
-        legacy)
-          /bin/launchctl bootstrap "gui/$OWNER" "$LEGACY_PLIST" >/dev/null 2>&1 ||
-            restoration_complete=0;;
-        managed)
-          if restored_managed_result="$("$AGENT" __runtime-raiders-managed-agent register)"; then
-            [ "$restored_managed_result" = enabled ] || restoration_complete=0
-          else
-            restoration_complete=0
-          fi;;
-      esac
+    prior_service_restored=1
+    case "$existing_form" in
+      legacy)
+        if [ "$legacy_stop_attempted" -eq 1 ]; then
+          prior_service_restored=0
+          if [ "$app_restored" -eq 1 ] && [ "$legacy_plist_restored" -eq 1 ] &&
+             /bin/launchctl bootstrap "gui/$OWNER" "$LEGACY_PLIST" >/dev/null 2>&1; then
+            prior_service_restored=1
+          fi
+        fi;;
+      managed)
+        if [ "$old_managed_unregister_attempted" -eq 1 ]; then
+          prior_service_restored=0
+          if [ "$app_restored" -eq 1 ] && [ -x "$AGENT" ]; then
+            rollback_old_register_attempted=1
+            if restored_managed_result="$("$AGENT" __runtime-raiders-managed-agent register)" &&
+               [ "$restored_managed_result" = enabled ]; then
+              restored_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" ||
+                restored_managed_status=''
+              [ "$restored_managed_status" = enabled ] && prior_service_restored=1
+            fi
+          fi
+        fi;;
+    esac
+    [ "$prior_service_restored" -eq 1 ] || restoration_complete=0
+
+    restored_collection_disabled=1
+    if [ "$existing_form" != fresh ]; then
+      restored_collection_disabled=0
+      restored_status_file="$WORK/restored-status.json"
+      if [ "$app_restored" -eq 1 ] && [ "$shim_restored" -eq 1 ] &&
+         "$SHIM" status > "$restored_status_file" &&
+         collection_is_conclusively_disabled "$restored_status_file"; then
+        restored_collection_disabled=1
+      fi
+      [ "$restored_collection_disabled" -eq 1 ] || restoration_complete=0
     fi
-    if [ "$restoration_complete" -eq 1 ] && [ "$existing_form" != fresh ]; then
-      "$COMMAND" status >/dev/null || restoration_complete=0
+
+    if [ "$app_restored" -eq 1 ] && [ "$legacy_plist_restored" -eq 1 ] &&
+       [ "$shim_restored" -eq 1 ] && [ "$command_restored" -eq 1 ] &&
+       [ "$new_registration_compensated" -eq 1 ] &&
+       [ "$prior_service_restored" -eq 1 ] &&
+       [ "$restored_collection_disabled" -eq 1 ]; then
+      original_registration_restored=1
     fi
+  else
+    original_registration_restored=1
   fi
-  if [ "$restoration_complete" -eq 1 ]; then
+  if [ "$restoration_complete" -eq 1 ] && [ "$original_registration_restored" -eq 1 ]; then
     /bin/rm -rf "$WORK"
   else
     echo 'Runtime Raiders rollback was incomplete; do not retry until recovery is reviewed.' >&2
@@ -374,6 +444,15 @@ trap rollback EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+if [ "$existing_form" != fresh ]; then
+  existing_status_file="$WORK/existing-status.json"
+  if ! "$SHIM" status > "$existing_status_file" ||
+     ! collection_is_conclusively_disabled "$existing_status_file"; then
+    echo 'Runtime Raiders requires collection to be conclusively disabled before reinstall.' >&2
+    exit 1
+  fi
+fi
 
 ARCHIVE="$WORK/runtime-raiders-agent.zip"
 download_status="$(/usr/bin/curl --fail --silent --show-error --proto '=https' --proto-redir '=https' \
@@ -510,21 +589,27 @@ if [ "$has_enrollment" -eq 0 ]; then
   /bin/mv "$staged_enrollment" "$ENROLLMENT"
 fi
 
-STAGED_SHIM="$(/usr/bin/mktemp "$SUPPORT/.runtime-raiders-shim.XXXXXX")"
+STAGED_SHIM="$WORK/staged.shim"
 cat > "$STAGED_SHIM" <<'EOF'
 #!/bin/sh
 set -eu
 exec "$HOME/Library/Application Support/Runtime Raiders/Runtime Raiders.app/Contents/MacOS/runtime-raiders-agent" "$@"
 EOF
 /bin/chmod 700 "$STAGED_SHIM"
+STAGED_COMMAND=''
+if [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ]; then
+  STAGED_COMMAND="$WORK/staged.command"
+  /bin/ln -s "$SHIM" "$STAGED_COMMAND"
+fi
 
 transaction_active=1
 case "$existing_form" in
   legacy)
-    old_service_stopped=1
+    legacy_stop_attempted=1
     /bin/launchctl bootout "gui/$OWNER/$LEGACY_LABEL" 2>/dev/null || true
     ;;
   managed)
+    old_managed_unregister_attempted=1
     if old_managed_result="$("$AGENT" __runtime-raiders-managed-agent unregister)"; then
       [ "$old_managed_result" = not-registered ] || {
         echo 'Runtime Raiders could not unregister the existing managed agent.' >&2
@@ -534,7 +619,7 @@ case "$existing_form" in
       echo 'Runtime Raiders could not unregister the existing managed agent.' >&2
       exit 1
     fi
-    old_service_stopped=1;;
+    ;;
 esac
 
 if [ -e "$APP" ]; then /bin/mv "$APP" "$WORK/old.app"; fi
@@ -544,12 +629,11 @@ if [ -e "$SHIM" ]; then /bin/mv "$SHIM" "$WORK/old.shim"; fi
 /bin/mv "$CANDIDATE_APP" "$APP"
 /bin/mv "$STAGED_SHIM" "$SHIM"
 
-if [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ]; then
-  staged_command="$COMMAND_DIRECTORY/.raiders.$$"
-  /bin/ln -s "$SHIM" "$staged_command"
-  /bin/mv "$staged_command" "$COMMAND"
+if [ -n "$STAGED_COMMAND" ]; then
+  /bin/mv "$STAGED_COMMAND" "$COMMAND"
 fi
 
+new_managed_register_attempted=1
 if managed_result="$("$AGENT" __runtime-raiders-managed-agent register)"; then
   [ "$managed_result" = enabled ] || {
     echo 'Runtime Raiders could not register its managed background agent.' >&2
@@ -559,7 +643,6 @@ else
   echo 'Runtime Raiders could not register its managed background agent.' >&2
   exit 1
 fi
-new_managed_registered=1
 installed_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || {
   echo 'Runtime Raiders could not verify its managed background agent.' >&2
   exit 1
@@ -568,7 +651,12 @@ installed_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" ||
   echo 'Runtime Raiders could not verify its managed background agent.' >&2
   exit 1
 }
-"$COMMAND" status >/dev/null
+installed_status_file="$WORK/installed-status.json"
+if ! "$COMMAND" status > "$installed_status_file" ||
+   ! collection_is_conclusively_disabled "$installed_status_file"; then
+  echo 'Runtime Raiders could not prove collection remained disabled after registration.' >&2
+  exit 1
+fi
 
 transaction_committed=1
 trap - EXIT HUP INT TERM
