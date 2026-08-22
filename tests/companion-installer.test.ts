@@ -950,6 +950,32 @@ describe('Runtime Raiders release build', () => {
         readFileSync(path, 'utf8').replace('<string>daemon</string>', '<string>status</string>'),
       );
     }],
+    ['string-typed RunAtLoad Boolean', (value: BuildFixture) => {
+      const path = join(
+        value.repository,
+        'companion/packaging/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        path,
+        readFileSync(path, 'utf8').replace(
+          '<key>RunAtLoad</key><true/>',
+          '<key>RunAtLoad</key><string>true</string>',
+        ),
+      );
+    }],
+    ['string-typed KeepAlive Boolean', (value: BuildFixture) => {
+      const path = join(
+        value.repository,
+        'companion/packaging/com.redlattice.runtime-raiders.agent.plist',
+      );
+      writeFileSync(
+        path,
+        readFileSync(path, 'utf8').replace(
+          '<key>KeepAlive</key><true/>',
+          '<key>KeepAlive</key><string>true</string>',
+        ),
+      );
+    }],
     ['AssociatedBundleIdentifiers', (value: BuildFixture) => {
       const path = join(
         value.repository,

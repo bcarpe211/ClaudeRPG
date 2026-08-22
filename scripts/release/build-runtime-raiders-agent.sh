@@ -224,12 +224,12 @@ validate_bundle_contract() {
     short_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$info")" &&
     bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$info")" &&
     [ -f "$managed_plist" ] && [ ! -L "$managed_plist" ] &&
-    plist_key_count="$(/usr/bin/plutil -p "$managed_plist" | /usr/bin/grep -E '^  "[^"]+" =>' | /usr/bin/wc -l | /usr/bin/tr -d ' ')" &&
+    plist_key_count="$(/usr/bin/plutil -convert xml1 -o - "$managed_plist" | /usr/bin/xmllint --xpath 'count(/plist/dict/key)' -)" &&
     managed_label="$(/usr/bin/plutil -extract Label raw -o - "$managed_plist")" &&
     bundle_program="$(/usr/bin/plutil -extract BundleProgram raw -o - "$managed_plist")" &&
     program_arguments="$(/usr/bin/plutil -extract ProgramArguments json -o - "$managed_plist")" &&
-    run_at_load="$(/usr/bin/plutil -extract RunAtLoad raw -o - "$managed_plist")" &&
-    keep_alive="$(/usr/bin/plutil -extract KeepAlive raw -o - "$managed_plist")" &&
+    run_at_load="$(/usr/bin/plutil -extract RunAtLoad raw -expect bool -o - "$managed_plist")" &&
+    keep_alive="$(/usr/bin/plutil -extract KeepAlive raw -expect bool -o - "$managed_plist")" &&
     process_type="$(/usr/bin/plutil -extract ProcessType raw -o - "$managed_plist")" || return 1
   [ "$bundle_id" = com.redlattice.runtime-raiders ] &&
     [ "$executable" = runtime-raiders-agent ] &&
