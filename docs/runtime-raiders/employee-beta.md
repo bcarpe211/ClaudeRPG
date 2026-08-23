@@ -13,12 +13,13 @@ raiders update
 Turn collection off:
 raiders off
 
-Before a first install, open
-`https://raiders.redlattice.com/register`, choose a Raider name, class, and
-gender, and keep the result page open. The installer asks privately for the
-one-time enrollment code shown there; the code expires after 10 minutes and is
-separate from the persistent Raider Key. A reinstall with valid existing
-enrollment does not require another code.
+Before a first install, a new player opens
+`https://raiders.redlattice.com/register` and creates a Raider. An existing
+player opens `https://raiders.redlattice.com/character`, signs in with their
+Raider Key, then opens **Raider settings → Companion Setup** and generates a
+fresh installer and code. The installer asks privately for that one-time code;
+it expires after 10 minutes and is not the persistent Raider Key. A reinstall
+with valid existing enrollment does not require another code.
 
 # Runtime Raiders employee beta
 
@@ -173,28 +174,30 @@ deterministic `dist` path, and run `publish`. The verifier must accept the prior
 directory before it can be republished. Rollback still does not enable anyone's
 collector.
 
-## Employee beta result — GO (2026-08-22)
+## Employee beta result — GO (2026-08-23)
 
-- Version `0.4.4` was built and published from Git SHA
-  `5ced73d6cc0a0eff10889e63889af4d3f0e2869f` as one signed app. Apple
+- Version `0.4.5` was built and published from Git SHA
+  `1e1f01540e924ec723b10e7ecec9aec1b5f8bb8f` as one signed app. Apple
   notarization, stapling, designated-requirement validation, and Gatekeeper
   acceptance passed.
 - The repeatable local canary installed the exact prepared ZIP before
   publication. The managed service registered successfully, the daemon ran
   with collection disabled, and status reported zero active Runs and queued
   events.
-- The public installer and ZIP hashes matched the locally proven release.
-  `/version` returned `0.4.4`; required no-store, content-type, and nosniff
+- The public installer and ZIP matched the locally proven release byte for byte.
+  `/version` returned `0.4.5`; required no-store, content-type, and nosniff
   headers passed.
 - System Settings → Login Items showed **Runtime Raiders.app**. Bryan Carpenter
   remains acceptable as the Apple developer attribution, not the product name.
-- The public registration page and installer both returned HTTP 200. Each
-  employee creates a Raider and receives a separate one-time 10-minute
-  enrollment code; no administrator-generated batch of codes is required.
+- The public registration page and installer both returned HTTP 200. New
+  employees create a Raider; existing employees sign in with their Raider Key.
+  Both flows issue a separate one-time 10-minute enrollment code, and the
+  public installer now explains both paths before its private prompt. No
+  administrator-generated batch of codes is required.
 - The earlier live acceptance gate scanned 858 existing provider-history
   records, uploaded no history, scored exactly one synthetic completion as one
-  Run, and turned collection off. The `0.4.4` release changed service lifecycle
-  and release mechanics, not scoring or telemetry behavior.
-- Final verification passed 2,056 Node tests and 219 Swift tests. Employee
+  Run, and turned collection off. The `0.4.5` release changed only release
+  identity and first-install guidance, not scoring or telemetry behavior.
+- Final verification passed 2,057 Node tests and 219 Swift tests. Employee
   installation is **GO**. Installation and publication do not enable collection;
   each employee explicitly starts it with `raiders on`.
