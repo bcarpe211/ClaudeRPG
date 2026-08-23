@@ -1,11 +1,15 @@
 # Player Shop — Phase 0 (foundation) + Cosmetics Tier 1 (clothing color)
 
 - **Date:** 2026-07-21
-- **Status:** Design (awaiting review → plan)
+- **Status:** Implemented and deployed; this first-slice design is historical.
 - **Backlog:** #22 (the player-shop program). This spec is the **first slice** only.
 - **Spike:** feasibility proven 2026-07-21 — programmatic clothing recolor of the
   oryx class sprites works and looks good. Result:
   https://claude.ai/code/artifact/ee20a55e-d4de-40ec-9cee-481014aa5084
+
+The shipped program later expanded this slice with three wardrobe tiers, class
+slot maps, material/tone controls, and Tier 1 potions with inventory. Higher
+potion strengths, equipment/gems, and pets remain future work in BACKLOG #22.
 
 ---
 

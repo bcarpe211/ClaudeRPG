@@ -1,5 +1,11 @@
 # Player Shop — Phase 0 + Cosmetics T1 Implementation Plan
 
+> **Implementation status (2026-08-23): COMPLETE AND DEPLOYED.** This first
+> shop slice and its later Phase 1/Tier 1 extensions shipped and were verified
+> on the Pi at commit `4caebd4`. Unchecked boxes below are preserved as
+> historical implementation instructions, not current todo. See BACKLOG #22 for
+> higher potion tiers, equipment/gems, and pets.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship the shop foundation (atomic gold-spending purchase spine) and its first product — a cosmetic "dye wheel" that recolors a character's dominant clothing hue, shown everywhere via a cached server-side sprite tint referenced by URL.

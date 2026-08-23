@@ -1,11 +1,52 @@
-# ClaudeRPG — Backlog
+# Runtime Raiders — Backlog
 
-Observed-in-play items to tackle one by one. Logged 2026-06-27 after the
-Phase B (token ingestion) checkpoint confirmed the dungeon wakes and spawns
-encounters from token credit.
+Observed-in-play items to tackle one by one. This file is the current product
+roadmap; dated specs and plans preserve design and implementation history.
+The backlog began on 2026-06-27 under the original ClaudeRPG name.
 
 Reference: the oryx 16-bit fantasy tileset under
 `assets/oryx_16-bit_fantasy_1.1/` (loaded at runtime via `spritesDir`).
+
+---
+
+## Current priority view (2026-08-23)
+
+**Importance** is the product/operational urgency. **Impact** and **effort** use
+a 1–5 scale, where 5 is highest. A quick win is useful work estimated at effort
+1–2 with no unresolved design dependency. Completed work remains in the dated
+sections below for history but is not repeated here.
+
+| Backlog | Current work | Importance | Impact | Effort | Quick win |
+|---|---|---:|---:|---:|:---:|
+| #31 | Onboard the employee beta and observe first-install, opt-in, and Run behavior | High | 5 | 2 | Yes |
+| #22 | Audit Potion Lab evidence against the higher-tier launch threshold | High | 4 | 2 | Yes |
+| #9/#20 | Recheck real fight pacing and economy before changing balance | High | 4 | 2 | Yes |
+| #27 | Verify the direct-office `raiders.local` network path | Medium | 3 | 2 | Yes |
+| #32 | Add and calibrate the Omp adapter after a credentialed privacy canary | High | 4 | 5 | No |
+| #22 | Design and build Phase 3 loot, equipment, parts, and gems | High | 5 | 5 | No |
+| #22 | Design stronger potion tiers only after the evidence threshold is met | Medium | 3 | 3 | Blocked |
+| #22 | Design Phase 4 pets after the gems/equipment economy exists | Medium | 4 | 5 | Blocked |
+| #19 | Turn the balance ledger prototype into a live daily-stats page | Medium | 3 | 3 | No |
+| #25 | Build a denser personal watch view with player interaction | Medium | 4 | 5 | No |
+| #4 | Add class-specific attack visuals | Medium | 3 | 4 | No |
+| #1/#7/#14/#16/#17/#24 | Curate and polish creature names, floors, cracks, rooms, and decor | Medium | 3 | 3 | No |
+| #15 | Make the rare Gold Glow floor grant a visible bonus | Medium | 3 | 3 | No |
+| #20/#21 | Reassess long fights, then choose a backstop or cosmetic reskin | Medium | 4 | 4 | No |
+| #12 | Clamp or shrink long monster titles on the TV | Medium | 2 | 1 | Yes |
+| #14 | Validate floor-data JSON shapes at load time | Medium | 3 | 2 | Yes |
+| #23 | Make idle heroes face the monster | Medium | 2 | 2 | Yes |
+| #11 | Extend hard server validation to the remaining admin settings | Medium | 3 | 2 | Yes |
+| #8 | Surface more of the already-computed leaderboards | Low | 2 | 2 | Yes |
+| #18 | Give admin and developer tools bespoke dungeon-shell layouts | Low | 2 | 3 | No |
+| #28 | Add a branded, fail-closed Runtime Raiders 404 page | Low | 2 | 2 | Yes |
+| #32 | Add Claude Code only after a credentialed privacy and scoring canary | Medium | 4 | 5 | No |
+| #32 | Reconsider Composer only after a safe record contract exists | Low | 2 | 5 | No |
+| #28/#30/#32 | Optional audit metadata, UI evidence, and internal-name cleanup | Optional | 1–2 | 1–5 | No |
+
+**Recommended quick-win order:** employee-beta observation → Potion Lab evidence
+audit → fight/economy snapshot → direct-office network verification → monster
+title clamp → floor-data validation. Do not start higher potion tiers, provider
+expansion, equipment, or pets until their stated evidence/dependency gates pass.
 
 ---
 
@@ -29,9 +70,9 @@ lists animation frames as near-duplicate entries, and it omits the 18 class
 B-frames (files 19–36). Phase-2 fix: pin names to the **frame-A files** visually
 via the catalog (treat B-frames as animation dupes, not separate creatures), then
 fix `MONSTER_TIERS`/`BOSSES` against the corrected mapping.
-- [ ] Phase 2: teach the catalog about A/B frames (label/dim B-frames, show the
-      `+18` animation partner) so only the ~198 real creatures need naming
-- [ ] Phase 2: correct `spritenames.ts` / the name→file mapping to frame-A files
+- [x] Phase 2: teach the catalog about A/B frames (label/dim B-frames, show the
+      `+18` animation partner) so only the ~198 real creatures need naming.
+- [x] Phase 2: correct `spritenames.ts` / the name→file mapping to frame-A files.
 - [x] Phase 2: fix creature indices — DONE (2026-07-12). `MONSTER_TIERS`/`BOSSES`
       REMOVED entirely and replaced by `src/domain/bestiary.ts` (117 monsters with
       correct frame-A indices) + `src/domain/dungeonthemes.ts` (theme-gated
@@ -71,7 +112,7 @@ group. Controller visual-verified live. Spec/plan:
 `docs/superpowers/{specs,plans}/2026-07-13-combat-feel-pass*`.
 - [x] Monster retaliates against a random player
 - [x] Consequence: random gold loss OR damage-mod debuff (non-HP, minor)
-- [ ] (Enabled by the log) future "most-battered player" leaderboard view — ties into #8.
+- [x] The durable log now drives the rotating **Most Battered** leaderboard in #8.
 
 ## 6. Dungeon decorations ✅ ALL BUILDS DONE (2026-07-12)
 Themed decor now renders in `/tv`. Spec/plan/reference:
@@ -149,21 +190,20 @@ Grew into a full **combat & reward economy redesign** (spec/plan
       `level_curve_slope`, `baseline_battle_minutes` — pacing shifted (active
       office kills fast, quiet grinds).
 
-## 10. Public landing page ✅ DONE (2026-07-14)
-A full dungeon-corridor landing page at `/` (commit `3e05096`,
-`src/web/views/landing.ejs` + `static/landing.css`): torch-lit wall border, live
-boss snapshot card, nine-class picker, a 3-step "how to join" with the shell
-snippet, and the scope clarification in two places.
-- [x] Landing page with game description + "what this does / doesn't do" — the
-      **"What it sees — and what it doesn't"** trust section (sees token
-      counts/model/timestamps; never prompts/code/conversations; `rpg_off` pause).
-- [x] Clarify scope: affects only Claude Code usage; how to join/register — the
-      **"Claude Code only"** callout (CLI only, not API tokens or desktop/web app)
-      + the 3-step register/snippet/code flow.
-- [ ] (Follow-on) roll the landing design language (torch-lit wall border,
-      background, torch glow, side loot-float — but *not behind content*) across
-      the other pages: character login, character sheet, registration, admin,
-      eventual shop/character editor. Tracked as #18.
+## 10. Public Runtime Raiders landing page ✅ DONE (updated 2026-08-23)
+The original 2026-07-14 dungeon-corridor landing page was superseded by the
+completed Runtime Raiders product rebrand. The current page uses the approved
+Runs, Raiders, Raid Power, one-time enrollment, and content-free privacy
+language for Codex Desktop and CLI. It no longer instructs players to configure
+Claude OTel or use the retired `rpg_off` command.
+- [x] Preserve the dungeon-corridor art direction, live boss card, class picker,
+      and trust section under the Runtime Raiders name.
+- [x] Explain new-Raider registration, existing-Raider login, the private local
+      companion, one-time enrollment code, and `raiders on|off|status` controls.
+- [x] State the exact content-free boundary and advertise only server-enabled
+      provider surfaces.
+- [x] Roll the shared shell across the player cohort and the Gilded Mimic shop.
+- [ ] Bespoke admin and developer-tool shell work remains tracked in #18.
 
 ## 11. Admin settings: human-readable descriptions ✅ DONE (2026-07-12)
 Grouped, self-describing admin settings page. Spec/plan
@@ -206,48 +246,31 @@ frame A until the partner image loads). Spec: docs/superpowers/specs/2026-07-12-
 - [x] Renderer toggles A/B on a ~0.6s timer, staggered per sprite (monster incl.
       pack duplicates + battlefield heroes). Leaderboard avatars + defeat popup
       stay static (scope decision).
-- [ ] **Decor animation still OPEN** (deferred): dungeon2 renders no decor yet
-      (#6). Animated decor needs its own WORLD-sheet frame-pair map (torches etc.
-      — the `+18` rule is creatures-sheet only) AND decor drawn per-frame in
-      `render()` instead of baked into the `bg` canvas in `buildBackground()`.
-      Do this alongside #6.
+- [x] Animated world decor uses explicit per-tile partners and renders on the
+      shared live animation clock; creature `+18` frame rules are not reused for
+      the world sheet. The duplicate pre-implementation checklist was removed
+      during the 2026-08-23 roadmap reconciliation.
 
-## 13. Animate sprites (two-frame loop) for a livelier dungeon
-Every creature/class sprite in `creatures_24x24` ships as a **two-frame animation
-pair**: frame A at file index N, frame B at **N + 18** (see the #1 finding). The TV
-renderer currently shows a single static frame. Alternating A/B on a slow timer
-would make monsters and heroes look alive. Pairs with #6/#7 (lively dungeon) and
-depends on the #1 frame-A/B mapping being curated.
-- [ ] Record each creature's animation partner (frame-A index + 18)
-- [ ] Renderer toggles A/B frames on a timer (e.g. ~0.5–1s), independent per
-      sprite or globally
-- [ ] Confirm world-tile/decor sprites for any animated tiles (torches, etc.)
-
-## 14. Modular flooring — palette tuning (data-only)
-The modular flooring system (merged 2026-07-10, preview-only via `/dungeon-preview`)
-works and is compat-matched, but a roster render surfaced floor-palette taste items.
-All are **data edits** in `src/domain/floordata/*.json` (or the `ACCENT_RATE`/`GLOW_RATE`
-constants in `src/domain/floorgroups.ts`) — no generator changes. Not player-facing yet
-(live `/tv` still runs the old `dungeon.ts`); tune before/with the eventual `/tv` swap.
-- [ ] `cinder_rock`'s two mains blend ~50/50 and its 2nd main ("subtle ember slab") is
-      high-contrast → busy/noisy floor (seen under Oakenvault). Demote the ember slab
-      from a 2nd MAIN to a sparse ACCENT.
-- [ ] `crimson_mosaic` (single "checkerboard" tile) is loud as a whole-room fill and its
-      compat bridges it to grey dungeons (e.g. Rustpipe Sewers). Drop it as a main, or
-      restrict its compat to crimson-family dungeons only.
+## 14. Modular flooring — palette tuning and validation
+The modular flooring system now drives live `/tv` through `dungeon2` and remains
+compat-matched. Most follow-ups are data edits in `src/domain/floordata/*.json`
+or small validation/selection changes in `src/domain/floorgroups.ts`.
+- [x] Demote `cinder_rock`'s high-contrast ember slab from main to accent.
+- [x] Restrict `crimson_mosaic` compatibility to appropriate crimson-family
+      dungeons.
 - [ ] Generous `good`-tier compat lists put warm floors (e.g. `oaken_flag` red slab) under
       cool/green walls (e.g. Thornwind Ruins). Tighten `good` lists if you want stricter
       per-theme color coherence.
-- [ ] Many floors read dark & flat (charcoal) — ties into #7 "wallpaper-quality floor".
-      Consider bumping `ACCENT_RATE`, adding accents to flat single-main groups, or biasing
-      selection toward multi-main groups for within-room variation.
+- [x] Raise `ACCENT_RATE` to 11% and add conservative accents to several flat
+      groups. Remaining empty-accent groups and visual taste work stay in #7.
 - [ ] (Optional) Floor choice is purely seed-driven, so two same-class dungeons at the same
       seed pick the identical floor. Cosmetic in play (each dungeon has its own seed); if
       dungeons are ever shown side-by-side, mix the dungeon id/name into the floor-pick rng.
-- [ ] Follow-ups from the final code review (non-blocking): restore the spec-promised
-      load-time JSON shape validation in `floorgroups.ts` (currently a test-time guard);
-      the `dungeon2` decor block is dormant (all dungeons `decor:[]`); latent `pickCell`
-      accent-rate quirk if a group ever has BOTH glow and normal accents.
+- [ ] Restore the spec-promised load-time JSON shape validation in
+      `floorgroups.ts` (currently a test-time guard).
+- [x] Activate themed `dungeon2` decor and animated world tiles.
+- [ ] Resolve the latent `pickCell` accent-rate quirk if a group ever has both
+      glow and normal accents.
 
 ## 15. Gold Glow floor → bonus gold reward
 When the `auric_glow` floor (the emissive gold slab, a rare `feature`-tier floor) is the
@@ -295,7 +318,7 @@ Spec 1: `docs/superpowers/specs/2026-07-14-dungeon-shell-design-language-design.
 - [ ] **Spec 2 (follow-up)** — admin cohort bespoke redesign (login/players/
       player-edit/settings).
 - [ ] **Spec 3 (follow-up)** — dev-tools cohort (catalog, dungeon-preview).
-- [ ] (Free) eventual shop / character-editor inherit the shell when built.
+- [x] The Gilded Mimic shop and Raider Hub Wardrobe inherit the shared shell.
 
 ## 19. Daily-stats page — permanent "balance ledger" for players
 Turn the one-off balance dashboard (built 2026-07-19 for the gold/damage tuning
@@ -378,11 +401,10 @@ per dungeon (`tvlayout.ts` / `dungeon2`), so this is a periodic re-roll of the
       jumping) — keep positions, swap only wall/floor/decor theme
 
 ## 22. Player shop — a multi-phase PROGRAM (spend gold; the missing gold sink) 🔥
-**Branch status 2026-07-30:** Phases 0 and 1 plus the Tier 1 launch of Phase 2
-are implemented and locally approved on `feat/player-shop-cosmetics`. The
-remaining gate for that release is Pi visual/performance verification followed
-by a separately authorized idle-only deployment. Phase 2 higher strengths and
-Phases 3–4 remain future projects.
+**Current status 2026-08-23:** Phases 0 and 1 plus the Tier 1 launch of Phase 2
+are implemented on `main`. The shop release was deployed and verified on the Pi
+at commit `4caebd4`; later Runtime Raiders and release work preserved it. Phase
+2 higher strengths and Phases 3–4 remain future projects.
 
 Most-requested feature, and the **missing gold sink**: the 2026-07-19 balance
 review found gold only inflates (38M+ in circulation, ~6.7M/day minted, near-zero
@@ -613,3 +635,41 @@ background-item name.
 - [ ] (Optional regression evidence) Capture the first-run notification and a
       matching `sfltool dumpbtm` record after a future clean macOS enrollment if
       Apple changes how Login Items presents developer attribution.
+
+## 31. Runtime Raiders employee beta adoption and observation
+
+Runtime Raiders `0.4.5` is signed, notarized, publicly available, and verified
+with collection off. This is ordinary employee rollout work, not another release
+engineering project. Each employee chooses when to run `raiders on`.
+
+- [ ] Share the short employee instructions as Codex subscriptions become
+      available.
+- [ ] Confirm the new-Raider and existing-Raider enrollment paths are clear on
+      at least one employee-owned Mac that did not participate in development.
+- [ ] Confirm ordinary `raiders status`, one real post-opt-in Run, and expected
+      game credit without repeating the synthetic release gate for every user.
+- [ ] Record only concrete onboarding failures, privacy questions, or scoring
+      surprises for a short follow-up review; do not add release ceremony without
+      evidence that employees need it.
+
+## 32. Future provider expansion and optional internal cleanup
+
+The Runtime Raiders event contract is provider-neutral, but `0.4.5` enables only
+Codex Desktop and Codex CLI. A provider name in an enum or status response is
+not support. Every added surface requires a real local-record contract, strict
+content-free fixtures, privacy review, scoring calibration, server allowlist
+change, controlled canary, and explicit release approval.
+
+- [ ] **Omp — next candidate.** Validate its local SDK/RPC session and usage
+      records, implement the adapter, calibrate a new scoring-policy version,
+      and keep it disabled until every gate passes.
+- [ ] **Claude Code — planned.** Use a credentialed machine to validate the
+      current local record contract. Do not revive or require the legacy Claude
+      OTel enrollment path.
+- [ ] **Composer/Cursor — deferred.** Reconsider only if a safe, stable record
+      contract exists; asynchronous administrative polling is not assumed to be
+      acceptable employee telemetry.
+- [ ] **Optional internal rename.** After multi-provider behavior is stable,
+      consider replacing compatibility names such as `token_events` and
+      `effective_tokens`. This must preserve history and is not required for
+      player-facing Runtime Raiders behavior.

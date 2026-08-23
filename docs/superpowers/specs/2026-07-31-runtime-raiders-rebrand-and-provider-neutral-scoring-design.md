@@ -5,6 +5,11 @@
 **Status:** Approved for implementation planning; staged provider activation
 amended 2026-08-01
 
+**Implementation result (2026-08-23):** Runtime Raiders product language,
+Codex Desktop/CLI collection, provider-neutral scoring, and enrollment shipped;
+the signed `0.4.5` employee beta is live. Omp, Claude Code, Composer, and the
+optional internal terminology cleanup remain future work in BACKLOG #32.
+
 **Scope:** Runtime Raiders product language and visual direction, passive local
 Run collection, provider-neutral Raid Power scoring, compatibility migration,
 and internal deployment naming

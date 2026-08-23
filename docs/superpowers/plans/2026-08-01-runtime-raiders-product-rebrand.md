@@ -1,5 +1,11 @@
 # Runtime Raiders Product Rebrand Implementation Plan
 
+> **Implementation status (2026-08-23): COMPLETE.** The product rebrand was
+> implemented on `main` through the Runtime Raiders copy, enrollment, player
+> hub, TV, admin, and provider-neutral Run work. The player-copy guard passes.
+> Unchecked boxes below are preserved as historical TDD instructions, not the
+> current todo list; current work is tracked in `docs/BACKLOG.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rebrand every current player-facing surface as Runtime Raiders while preserving the existing fantasy artwork, palette, routes, game mechanics, and compatibility-oriented internal identifiers.
