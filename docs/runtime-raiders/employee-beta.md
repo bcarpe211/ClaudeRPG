@@ -201,3 +201,27 @@ collector.
 - Final verification passed 2,057 Node tests and 219 Swift tests. Employee
   installation is **GO**. Installation and publication do not enable collection;
   each employee explicitly starts it with `raiders on`.
+
+## Employee beta patch 0.4.6 (2026-08-24)
+
+- The first employee attempt exposed a real fresh-install blocker: current
+  macOS provides `stty` at `/bin/stty`, while the public `0.4.5` installer used
+  nonexistent `/usr/bin/stty` for its private enrollment-code prompt.
+- Patch `0.4.6` at Git SHA
+  `886ac4036927c5375b418494f96a30460da2dd76` uses `/bin/stty` for capture,
+  echo suppression, and terminal restoration. A regression runs the private
+  prompt through that exact path.
+- The repeatable local canary signed, notarized, stapled, verified, and installed
+  the exact `0.4.6` ZIP. Status proved the managed daemon running with collection
+  disabled, zero active Runs, and zero queued events before publication.
+- The public installer, ZIP, and version checks passed; `/version` returns
+  `0.4.6`. Publication left employee collection off.
+- The game server was fast-forwarded while paused with its updater held. New and
+  existing Raider enrollment now display only
+  `curl -fsSL https://raiders.redlattice.com/install.sh | sh`, not the retired
+  long-form wrapper.
+- Direct office-network verification proved `raiders.local` resolution, trusted
+  SSH login, Avahi activity, mDNS and loopback health, and the loopback TV route.
+  The internal IP is intentionally not retained here.
+- Verification passed 2,058 Node tests, the 225-case installer transaction
+  suite, TypeScript type checking, and both `/bin/sh` and `/bin/zsh` parsers.

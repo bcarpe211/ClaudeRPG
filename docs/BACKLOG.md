@@ -21,7 +21,6 @@ sections below for history but is not repeated here.
 | #31 | Onboard the employee beta and observe first-install, opt-in, and Run behavior | High | 5 | 2 | Yes |
 | #22 | Audit Potion Lab evidence against the higher-tier launch threshold | High | 4 | 2 | Yes |
 | #9/#20 | Recheck real fight pacing and economy before changing balance | High | 4 | 2 | Yes |
-| #27 | Verify the direct-office `raiders.local` network path | Medium | 3 | 2 | Yes |
 | #32 | Add and calibrate the Omp adapter after a credentialed privacy canary | High | 4 | 5 | No |
 | #22 | Design and build Phase 3 loot, equipment, parts, and gems | High | 5 | 5 | No |
 | #22 | Design stronger potion tiers only after the evidence threshold is met | Medium | 3 | 3 | Blocked |
@@ -44,8 +43,8 @@ sections below for history but is not repeated here.
 | #28/#30/#32 | Optional audit metadata, UI evidence, and internal-name cleanup | Optional | 1–2 | 1–5 | No |
 
 **Recommended quick-win order:** employee-beta observation → Potion Lab evidence
-audit → fight/economy snapshot → direct-office network verification → monster
-title clamp → floor-data validation. Do not start higher potion tiers, provider
+audit → fight/economy snapshot → monster title clamp → floor-data
+validation. Do not start higher potion tiers, provider
 expansion, equipment, or pets until their stated evidence/dependency gates pass.
 
 ---
@@ -494,17 +493,19 @@ activity resumes after an idle gap but before the delayed tick runs, the engine
 credits the old and resumed active windows without filling the gap. Regression
 tests cover both cases across the 15-minute boundary.
 
-## 27. Verify `raiders.local` from a direct network path
+## 27. Verify `raiders.local` from a direct network path ✅ DONE (2026-08-24)
 
-Fresh verification against the final release remains pending. Record only the
-network-path class, result, and UTC date in the restricted cutover evidence; do
-not commit the internal IP.
+Verified from a Mac directly on the office network without VPN. The committed
+record intentionally omits the internal IP.
 
-- [ ] Confirm `raiders.local` resolves to the same Pi as the internal FQDN.
-- [ ] Verify SSH host identity and login through `raiders.local`.
-- [ ] Verify `http://raiders.local:8080/health` and the loopback kiosk route on
+- [x] Confirm `raiders.local` resolves to the same Pi as the internal FQDN.
+- [x] Verify SSH host identity and login through `raiders.local`, binding the
+      alias to the already-trusted internal-FQDN host key rather than accepting
+      a new key blindly.
+- [x] Verify `http://raiders.local:8080/health` and the loopback kiosk route on
       that same network path.
-- [ ] Verify the Pi-side advertisement, loopback health, and kiosk route without
+- [x] Verify the Pi-side Avahi advertisement, loopback health, and kiosk route
+      without
       treating a remote process that cannot receive multicast as office-path
       evidence.
 
@@ -638,12 +639,17 @@ background-item name.
 
 ## 31. Runtime Raiders employee beta adoption and observation
 
-Runtime Raiders `0.4.5` is signed, notarized, publicly available, and verified
+Runtime Raiders `0.4.6` is signed, notarized, publicly available, and verified
 with collection off. This is ordinary employee rollout work, not another release
 engineering project. Each employee chooses when to run `raiders on`.
 
-- [ ] Share the short employee instructions as Codex subscriptions become
+- [x] Share the short employee instructions as Codex subscriptions become
       available.
+- [x] Record and repair the first employee blockers: the installer used the
+      nonexistent `/usr/bin/stty` instead of macOS `/bin/stty`, and production
+      still displayed the retired long-form download wrapper. Patch `0.4.6`
+      fixed the installer; the game server now returns only the one-line
+      `curl -fsSL https://raiders.redlattice.com/install.sh | sh` command.
 - [ ] Confirm the new-Raider and existing-Raider enrollment paths are clear on
       at least one employee-owned Mac that did not participate in development.
 - [ ] Confirm ordinary `raiders status`, one real post-opt-in Run, and expected
@@ -654,7 +660,7 @@ engineering project. Each employee chooses when to run `raiders on`.
 
 ## 32. Future provider expansion and optional internal cleanup
 
-The Runtime Raiders event contract is provider-neutral, but `0.4.5` enables only
+The Runtime Raiders event contract is provider-neutral, but `0.4.6` enables only
 Codex Desktop and Codex CLI. A provider name in an enum or status response is
 not support. Every added surface requires a real local-record contract, strict
 content-free fixtures, privacy review, scoring calibration, server allowlist
