@@ -161,6 +161,26 @@ describe('character sheet', () => {
     expect(response.text).toContain('11 input');
     expect(response.text).toContain('22 output');
     expect(response.text).toContain('321 Raid Power');
+    const bootstrapMatch = response.text.match(/window\.__PLAYER_HUB__ = (\{.*?\});<\/script>/s);
+    expect(bootstrapMatch).not.toBeNull();
+    const bootstrap = JSON.parse(bootstrapMatch![1]) as {
+      initialState: {
+        raidPower: number;
+        activeRuns: number;
+        latestRun: null | {
+          surface: string;
+          nativeUsage: { input: number; output: number };
+          raidPower: number;
+        };
+      };
+    };
+    expect(bootstrap.initialState.raidPower).toBe(0);
+    expect(bootstrap.initialState.activeRuns).toBe(2);
+    expect(bootstrap.initialState.latestRun).toMatchObject({
+      surface: 'codex_desktop',
+      nativeUsage: { input: 11, output: 22 },
+      raidPower: 321,
+    });
     const todayIndex = response.text.indexOf('class="hub-today-panel"');
     const runDetailsIndex = response.text.indexOf('class="hub-run-details"');
     expect(todayIndex).toBeLessThan(runDetailsIndex);
@@ -168,8 +188,8 @@ describe('character sheet', () => {
     expect(response.text).not.toContain('b'.repeat(64));
     expect(response.text).not.toContain('device_id');
     expect(response.text).not.toContain('run_key');
-    expect(response.text).not.toMatch(/model[^<]*(rank|rarity|multiplier)/i);
-    expect(response.text).not.toMatch(/effort[^<]*(rank|rarity|multiplier)/i);
+    expect(JSON.stringify(bootstrap.initialState.latestRun))
+      .not.toMatch(/rank|rarity|multiplier/i);
   });
 
   it.each([
@@ -233,8 +253,8 @@ describe('character sheet', () => {
     const response = await request(app).get('/character').query({ token: player.auth_token });
 
     expect(response.status).toBe(200);
-    expect(response.text).toContain(`<dt>Model</dt><dd>${expectedModel}</dd>`);
-    expect(response.text).toContain(`<dt>Effort</dt><dd>${expectedEffort}</dd>`);
+    expect(response.text).toContain(`<dt>Model</dt><dd id="hub-run-model">${expectedModel}</dd>`);
+    expect(response.text).toContain(`<dt>Effort</dt><dd id="hub-run-effort">${expectedEffort}</dd>`);
   });
 
   it('renders owned potion quantity as unavailable when current tuning is invalid', async () => {

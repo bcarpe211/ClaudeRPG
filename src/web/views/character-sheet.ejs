@@ -52,7 +52,7 @@
     </div>
     <div class="hub-stats" aria-label="Raider stats">
       <div class="hub-stat"><span class="hub-stat-label">Level</span><span class="hub-stat-value"><%= player.level %></span></div>
-      <div class="hub-stat"><span class="hub-stat-label">Raid Power</span><span class="hub-stat-value"><%= player.effective_tokens.toLocaleString('en-US') %></span></div>
+      <div class="hub-stat"><span class="hub-stat-label">Raid Power</span><span id="hub-raider-power" class="hub-stat-value"><%= raidPower.toLocaleString('en-US') %></span></div>
       <div class="hub-stat hub-stat-gold"><span class="hub-stat-label">Gold</span><span class="hub-stat-value" data-hub-gold><%= gold.toLocaleString('en-US') %></span></div>
       <div class="hub-stat"><span class="hub-stat-label">Momentum</span><span class="hub-stat-value"><%= activeRuns > 0 ? activeRuns + ' ' + (activeRuns === 1 ? 'Run' : 'Runs') + ' active' : collector.lastSeenAt != null ? 'Companion ready' : collector.devices > 0 ? 'Companion enrolled' : 'Setup needed' %></span></div>
     </div>
@@ -124,7 +124,10 @@
   </dialog>
 </div>
 
-<% const playerHubState = { gold, activationTiming, inventory, effects, today, currentFight }; %>
+<% const playerHubState = {
+  raidPower, activeRuns, latestRun, gold, activationTiming,
+  inventory, effects, today, currentFight,
+}; %>
 <% const playerHubClient = {
   playerId: player.id,
   token: player.auth_token,

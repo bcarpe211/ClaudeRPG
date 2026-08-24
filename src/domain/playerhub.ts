@@ -69,7 +69,27 @@ export interface PlayerHubEffect {
   progress?: { value: number; max: number };
 }
 
+export interface PlayerHubLatestRun {
+  provider: string;
+  surface: string;
+  model: string;
+  effort: string;
+  state: string;
+  elapsedMs: number;
+  nativeUsage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    reasoningOutput: number;
+  };
+  raidPower: number;
+}
+
 export interface PlayerHubState {
+  raidPower: number;
+  activeRuns: number;
+  latestRun: PlayerHubLatestRun | null;
   gold: number;
   activationTiming: 'starts_now' | 'waits_for_battle';
   inventory: PlayerHubInventoryItem[];
@@ -86,23 +106,6 @@ export type PlayerHubViewModel = PlayerHubState & {
   className: string;
   connected: boolean;
   dye: ReturnType<typeof dyeViewModel>;
-  activeRuns: number;
-  latestRun: {
-    provider: string;
-    surface: string;
-    model: string;
-    effort: string;
-    state: string;
-    elapsedMs: number;
-    nativeUsage: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      reasoningOutput: number;
-    };
-    raidPower: number;
-  } | null;
   collector: ReturnType<typeof collectorStatus>;
 };
 
@@ -234,6 +237,7 @@ export function buildPlayerHubState(
   now: number,
   timeZone: string,
 ): PlayerHubState {
+  const [run] = recentRuns(db, player.id, 1);
   const dayKey = officeDayKey(now, timeZone);
   const dayStart = officeDayStart(now, timeZone);
   const resetAt = nextOfficeMidnight(now, timeZone);
@@ -296,6 +300,24 @@ export function buildPlayerHubState(
   const balance = db.prepare('SELECT gold FROM players WHERE id=?').get(player.id) as { gold: number };
 
   return {
+    raidPower: player.effective_tokens,
+    activeRuns: activeRunCount(db, player.id, now, ACTIVE_RUN_STALE_AFTER_MS),
+    latestRun: run ? {
+      provider: run.provider,
+      surface: run.surface,
+      model: displayRunMetadata(run.model),
+      effort: displayRunMetadata(run.effort),
+      state: run.state,
+      elapsedMs: Math.max(0, (run.terminalAt ?? run.lastEventAt) - run.startedAt),
+      nativeUsage: {
+        input: run.usage.input,
+        output: run.usage.output,
+        cacheRead: run.usage.cache_read,
+        cacheWrite: run.usage.cache_write,
+        reasoningOutput: run.usage.reasoning_output,
+      },
+      raidPower: run.raidPower,
+    } : null,
     gold: balance.gold,
     activationTiming: potionActivationState(db, now) === 'active'
       ? 'starts_now'
@@ -323,7 +345,6 @@ export function buildPlayerHubViewModel(
   context: SkinAssetContext & { publicUrl: string },
 ): PlayerHubViewModel {
   const assets = { spritesDir: context.spritesDir, slotmapsDir: context.slotmapsDir };
-  const [run] = recentRuns(db, player.id, 1);
   return {
     ...buildPlayerHubState(db, player, now, timeZone),
     avatarA: cosmeticSkinUrlForPlayer(db, player, 'a', assets),
@@ -331,23 +352,6 @@ export function buildPlayerHubViewModel(
     className: getClass(player.class_key)?.name ?? player.class_key,
     connected: player.last_token_at !== null,
     dye: dyeViewModel(db, player, context.slotmapsDir),
-    activeRuns: activeRunCount(db, player.id, now, ACTIVE_RUN_STALE_AFTER_MS),
-    latestRun: run ? {
-      provider: run.provider,
-      surface: run.surface,
-      model: displayRunMetadata(run.model),
-      effort: displayRunMetadata(run.effort),
-      state: run.state,
-      elapsedMs: Math.max(0, (run.terminalAt ?? run.lastEventAt) - run.startedAt),
-      nativeUsage: {
-        input: run.usage.input,
-        output: run.usage.output,
-        cacheRead: run.usage.cache_read,
-        cacheWrite: run.usage.cache_write,
-        reasoningOutput: run.usage.reasoning_output,
-      },
-      raidPower: run.raidPower,
-    } : null,
     collector: collectorStatus(db, player.id),
   };
 }

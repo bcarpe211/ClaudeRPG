@@ -37,24 +37,21 @@
   <section class="hub-run-details" aria-labelledby="hub-run-details-title">
     <div class="hub-run-details-head">
       <h3 id="hub-run-details-title">Run Details</h3>
-      <span><%= activeRuns %> <%= activeRuns === 1 ? 'Run' : 'Runs' %> active</span>
+      <span id="hub-active-runs"><%= activeRuns %> <%= activeRuns === 1 ? 'Run' : 'Runs' %> active</span>
     </div>
-    <% if (latestRun) { %>
-      <article class="hub-latest-run">
+      <article id="hub-latest-run" class="hub-latest-run"<% if (!latestRun) { %> hidden<% } %>>
         <strong>Latest Run</strong>
         <dl>
-          <dt>Provider</dt><dd><%= latestRun.provider %></dd>
-          <dt>Surface</dt><dd><%= latestRun.surface %></dd>
-          <dt>Model</dt><dd><%= latestRun.model %></dd>
-          <dt>Effort</dt><dd><%= latestRun.effort %></dd>
-          <dt>State</dt><dd><%= latestRun.state[0].toUpperCase() + latestRun.state.slice(1) %></dd>
-          <dt>Elapsed</dt><dd><%= Math.floor(latestRun.elapsedMs / 60000) %>m <%= Math.floor((latestRun.elapsedMs % 60000) / 1000) %>s</dd>
-          <dt>Native usage</dt><dd><%= latestRun.nativeUsage.input.toLocaleString('en-US') %> input · <%= latestRun.nativeUsage.output.toLocaleString('en-US') %> output · <%= latestRun.nativeUsage.cacheRead.toLocaleString('en-US') %> cache read · <%= latestRun.nativeUsage.cacheWrite.toLocaleString('en-US') %> cache write · <%= latestRun.nativeUsage.reasoningOutput.toLocaleString('en-US') %> reasoning</dd>
-          <dt>Awarded</dt><dd><%= latestRun.raidPower.toLocaleString('en-US') %> Raid Power</dd>
+          <dt>Provider</dt><dd id="hub-run-provider"><%= latestRun?.provider ?? '—' %></dd>
+          <dt>Surface</dt><dd id="hub-run-surface"><%= latestRun?.surface ?? '—' %></dd>
+          <dt>Model</dt><dd id="hub-run-model"><%= latestRun?.model ?? '—' %></dd>
+          <dt>Effort</dt><dd id="hub-run-effort"><%= latestRun?.effort ?? '—' %></dd>
+          <dt>State</dt><dd id="hub-run-state"><%= latestRun ? latestRun.state[0].toUpperCase() + latestRun.state.slice(1) : '—' %></dd>
+          <dt>Elapsed</dt><dd id="hub-run-elapsed"><%= latestRun ? Math.floor(latestRun.elapsedMs / 60000) + 'm ' + Math.floor((latestRun.elapsedMs % 60000) / 1000) + 's' : '—' %></dd>
+          <dt>Native usage</dt><dd id="hub-run-native-usage"><%= latestRun ? latestRun.nativeUsage.input.toLocaleString('en-US') + ' input · ' + latestRun.nativeUsage.output.toLocaleString('en-US') + ' output · ' + latestRun.nativeUsage.cacheRead.toLocaleString('en-US') + ' cache read · ' + latestRun.nativeUsage.cacheWrite.toLocaleString('en-US') + ' cache write · ' + latestRun.nativeUsage.reasoningOutput.toLocaleString('en-US') + ' reasoning' : '—' %></dd>
+          <dt>Awarded</dt><dd id="hub-run-awarded"><%= latestRun ? latestRun.raidPower.toLocaleString('en-US') + ' Raid Power' : '—' %></dd>
         </dl>
       </article>
-    <% } else { %>
-      <p class="hub-empty-line">No Runs recorded yet.</p>
-    <% } %>
+      <p id="hub-no-runs" class="hub-empty-line"<% if (latestRun) { %> hidden<% } %>>No Runs recorded yet.</p>
   </section>
 </div>

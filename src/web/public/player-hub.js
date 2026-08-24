@@ -293,6 +293,38 @@
     leaders.scrollTop = Math.min(previousScrollTop, Math.max(0, leaders.scrollHeight - leaders.clientHeight));
   }
 
+  function renderRaiderAndLatestRun() {
+    setText('hub-raider-power', number.format(state.raidPower));
+    setText(
+      'hub-active-runs',
+      `${state.activeRuns} ${state.activeRuns === 1 ? 'Run' : 'Runs'} active`,
+    );
+    const latest = byId('hub-latest-run');
+    const empty = byId('hub-no-runs');
+    if (!state.latestRun) {
+      if (latest) latest.hidden = true;
+      if (empty) empty.hidden = false;
+      return;
+    }
+    if (latest) latest.hidden = false;
+    if (empty) empty.hidden = true;
+    const run = state.latestRun;
+    setText('hub-run-provider', run.provider);
+    setText('hub-run-surface', run.surface);
+    setText('hub-run-model', run.model);
+    setText('hub-run-effort', run.effort);
+    setText('hub-run-state', `${run.state[0].toUpperCase()}${run.state.slice(1)}`);
+    setText(
+      'hub-run-elapsed',
+      `${Math.floor(run.elapsedMs / 60_000)}m ${Math.floor((run.elapsedMs % 60_000) / 1_000)}s`,
+    );
+    setText(
+      'hub-run-native-usage',
+      `${number.format(run.nativeUsage.input)} input · ${number.format(run.nativeUsage.output)} output · ${number.format(run.nativeUsage.cacheRead)} cache read · ${number.format(run.nativeUsage.cacheWrite)} cache write · ${number.format(run.nativeUsage.reasoningOutput)} reasoning`,
+    );
+    setText('hub-run-awarded', `${number.format(run.raidPower)} Raid Power`);
+  }
+
   function renderState(nextState) {
     const nextPendingItem = pendingActivation
       ? nextState.inventory.find((item) => item.sku === pendingActivation.sku)
@@ -307,6 +339,7 @@
     state = nextState;
     renderInventory();
     renderEffects();
+    renderRaiderAndLatestRun();
     renderTodayAndFight();
     syncPotionAnimation();
   }

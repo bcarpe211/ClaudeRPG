@@ -97,6 +97,56 @@ function seedRun(playerId: number, input: {
 }
 
 describe('player hub state', () => {
+  it('includes current Raider totals and the latest safe Run in polling state', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Live Reader', class_key: 'wizard', gender: 'M' },
+      now - 20_000,
+    );
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'e'.repeat(64), now - 20_000);
+    db.prepare(
+      'UPDATE players SET effective_tokens=987654 WHERE id=?',
+    ).run(player.id);
+    seedRun(player.id, {
+      runKey: 'f'.repeat(64),
+      updatedAt: now - 1_000,
+      model: 'gpt-live',
+      effort: 'high',
+      raidPower: 321,
+    });
+
+    const state = buildPlayerHubState(
+      db,
+      getPlayerById(db, player.id)!,
+      now,
+      timeZone,
+    );
+
+    expect(state.raidPower).toBe(987_654);
+    expect(state.activeRuns).toBe(1);
+    expect(state.latestRun).toEqual({
+      provider: 'codex',
+      surface: 'codex_desktop',
+      model: 'gpt-live',
+      effort: 'high',
+      state: 'open',
+      elapsedMs: 4_000,
+      nativeUsage: {
+        input: 11,
+        output: 22,
+        cacheRead: 33,
+        cacheWrite: 44,
+        reasoningOutput: 55,
+      },
+      raidPower: 321,
+    });
+    const serialized = JSON.stringify(state);
+    expect(serialized).not.toContain('f'.repeat(64));
+    expect(serialized).not.toContain('runKey');
+  });
+
   it.each([
     {
       label: 'empty metadata',

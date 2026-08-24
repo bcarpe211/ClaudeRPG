@@ -183,6 +183,24 @@ function tabHarness() {
 }
 
 type HubState = {
+  raidPower: number;
+  activeRuns: number;
+  latestRun: null | {
+    provider: string;
+    surface: string;
+    model: string;
+    effort: string;
+    state: string;
+    elapsedMs: number;
+    nativeUsage: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      reasoningOutput: number;
+    };
+    raidPower: number;
+  };
   gold: number;
   activationTiming: 'starts_now' | 'waits_for_battle';
   inventory: Array<Record<string, any>>;
@@ -212,6 +230,9 @@ function interactionHarness(options: {
     'potion-confirm-inventory', 'potion-confirm-doses', 'hub-potion-feedback',
     'hub-bottle-burst', 'hub-leaders', 'hub-today-tokens', 'hub-today-damage',
     'hub-today-rank', 'hub-today-gold', 'hub-today-active', 'hub-today-potions',
+    'hub-raider-power', 'hub-active-runs', 'hub-latest-run', 'hub-no-runs',
+    'hub-run-provider', 'hub-run-surface', 'hub-run-model', 'hub-run-effort',
+    'hub-run-state', 'hub-run-elapsed', 'hub-run-native-usage', 'hub-run-awarded',
     'hub-potion-fx', 'hub-companion-generate', 'hub-companion-command', 'hub-companion-code',
     'hub-companion-status', 'hub-companion-error',
   ];
@@ -240,6 +261,14 @@ function interactionHarness(options: {
   );
 
   const initialState: HubState = {
+    raidPower: 0,
+    activeRuns: 1,
+    latestRun: {
+      provider: 'codex', surface: 'codex_desktop', model: 'gpt-live', effort: 'high',
+      state: 'open', elapsedMs: 1_000,
+      nativeUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0 },
+      raidPower: 0,
+    },
     gold: 450_000,
     activationTiming: options.activationTiming ?? 'starts_now',
     inventory: [
@@ -284,6 +313,17 @@ function interactionHarness(options: {
   }
   const refreshed: HubState = {
     ...initialState,
+    raidPower: 987_654,
+    activeRuns: 2,
+    latestRun: {
+      ...initialState.latestRun!,
+      state: 'complete',
+      elapsedMs: 125_000,
+      nativeUsage: {
+        input: 111, output: 222, cacheRead: 333, cacheWrite: 444, reasoningOutput: 555,
+      },
+      raidPower: 666,
+    },
     gold: 451_000,
     inventory: initialState.inventory.filter((item) => item.sku === 'potion_gold_t1'),
     effects: [...initialState.effects, {
@@ -835,6 +875,42 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(h.fetchCalls[0].url).toContain('/character/state');
+  });
+
+  it('replaces zero-filled Raider and latest Run statistics during polling', async () => {
+    const h = interactionHarness({ responses: [] });
+    h.document.getElementById('hub-raider-power')!.textContent = '0';
+    h.document.getElementById('hub-run-native-usage')!.textContent =
+      '0 input · 0 output · 0 cache read · 0 cache write · 0 reasoning';
+    h.document.getElementById('hub-run-awarded')!.textContent = '0 Raid Power';
+    h.responses.push({ ok: true, json: async () => h.refreshed });
+
+    await h.intervals[0].callback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(h.document.getElementById('hub-raider-power')!.textContent).toBe('987,654');
+    expect(h.document.getElementById('hub-active-runs')!.textContent).toBe('2 Runs active');
+    expect(h.document.getElementById('hub-run-state')!.textContent).toBe('Complete');
+    expect(h.document.getElementById('hub-run-elapsed')!.textContent).toBe('2m 5s');
+    expect(h.document.getElementById('hub-run-native-usage')!.textContent).toBe(
+      '111 input · 222 output · 333 cache read · 444 cache write · 555 reasoning',
+    );
+    expect(h.document.getElementById('hub-run-awarded')!.textContent).toBe('666 Raid Power');
+  });
+
+  it('clears stale Run details when polling reports no Runs', async () => {
+    const h = interactionHarness({ responses: [] });
+    h.responses.push({
+      ok: true,
+      json: async () => ({ ...h.refreshed, activeRuns: 0, latestRun: null }),
+    });
+
+    await h.intervals[0].callback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(h.document.getElementById('hub-latest-run')!.hidden).toBe(true);
+    expect(h.document.getElementById('hub-no-runs')!.hidden).toBe(false);
+    expect(h.document.getElementById('hub-active-runs')!.textContent).toBe('0 Runs active');
   });
 
   it('preserves the fight ledger scroll position across a polling refresh', async () => {
