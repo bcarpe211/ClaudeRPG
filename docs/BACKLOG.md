@@ -19,6 +19,8 @@ sections below for history but is not repeated here.
 | Backlog | Current work | Importance | Impact | Effort | Quick win |
 |---|---|---:|---:|---:|:---:|
 | #31 | Onboard the employee beta and observe first-install, opt-in, and Run behavior | High | 5 | 2 | Yes |
+| #33 | Add official re-enrollment, post-install guidance, and readable companion status | High | 5 | 3 | No |
+| #34 | Observe first-week Momentum, then tune its ramp from real office evidence | High | 4 | 2 | Yes |
 | #22 | Audit Potion Lab evidence against the higher-tier launch threshold | High | 4 | 2 | Yes |
 | #9/#20 | Recheck real fight pacing and economy before changing balance | High | 4 | 2 | Yes |
 | #32 | Add and calibrate the Omp adapter after a credentialed privacy canary | High | 4 | 5 | No |
@@ -42,9 +44,10 @@ sections below for history but is not repeated here.
 | #32 | Reconsider Composer only after a safe record contract exists | Low | 2 | 5 | No |
 | #28/#30/#32 | Optional audit metadata, UI evidence, and internal-name cleanup | Optional | 1–2 | 1–5 | No |
 
-**Recommended quick-win order:** employee-beta observation → Potion Lab evidence
-audit → fight/economy snapshot → monster title clamp → floor-data
-validation. Do not start higher potion tiers, provider
+**Recommended quick-win order:** employee-beta observation → the post-install
+guidance/status slice of #33 → first-week Momentum evidence → Potion Lab
+evidence audit → fight/economy snapshot → monster title clamp →
+floor-data validation. Do not start higher potion tiers, provider
 expansion, equipment, or pets until their stated evidence/dependency gates pass.
 
 ---
@@ -679,3 +682,81 @@ change, controlled canary, and explicit release approval.
       consider replacing compatibility names such as `token_events` and
       `effective_tokens`. This must preserve history and is not required for
       player-facing Runtime Raiders behavior.
+
+## 33. Official Raider re-enrollment and readable companion status
+
+**Observed during the employee beta (2026-08-24):** an employee can create a
+duplicate Level 1 Raider, then discover that browser login does not change the
+already-installed companion's device enrollment. The current `raiders uninstall`
+command safely stops collection but deliberately preserves enrollment, queued
+events, and cursors. It is therefore not a re-enrollment flow. Recovering today
+requires an operator to reason about device revocation, pending-event disposal,
+managed-agent removal, and local state cleanup. That is too easy to perform
+partially or to misunderstand.
+
+The same beta exposed that `raiders status` emits a correct but operator-oriented
+single-line JSON document. Employees need a concise answer to “is it on?”, “is
+it ready?”, “will it send work?”, and “what should I do next?” without exposing
+credentials, local paths, or provider-record content.
+
+- [ ] **Design and implement an explicit `raiders re-enroll` flow.** It must
+      require collection to be off, show only a content-free summary of the
+      current state, require an unambiguous confirmation, unregister the managed
+      background agent, and remove only Runtime Raiders-owned local state. It
+      must finish by prompting for a new short-lived enrollment code from the
+      Raider selected in **Raider settings → Companion Setup**. Browser login
+      alone must never silently retarget an installed device.
+- [ ] **Make pending-event disposition explicit.** Before replacing enrollment,
+      show the queued-event count and require either a deliberate, documented
+      delivery-to-current-Raider choice or a deliberate discard choice. Never
+      transfer queued work or already awarded points to another Raider. A
+      re-enrollment must revoke the prior device credential before the new one
+      can collect, and historical scores/Runs remain attached to their original
+      Raider.
+- [ ] **Provide a true, equally bounded removal option.** It must unregister the
+      managed agent and remove only the companion's app, launcher, owner-only
+      state, and outbox; it must not touch Codex sessions or unrelated user data.
+      Distinguish “stop and preserve state” from “remove local companion state”
+      in both command names and output.
+- [ ] **Make `raiders status` human-readable by default.** Render collection
+      state (`Off`, `Preparing`, or `Ready`), daemon/background-agent health,
+      supported surfaces, active Runs, queued events, installed/available
+      version, last successful upload when present, and one bounded next action.
+      Keep it content-free: no Raider Key, device token, native Run ID, local
+      path, cursor, prompt, response, or provider-record content.
+- [ ] **Preserve automation compatibility with `raiders status --json`.** Keep
+      the existing structured fields stable and sorted, and exercise both the
+      live-daemon and daemon-unavailable local-status paths. The pretty output
+      must be deterministic enough for snapshot tests but must not be parsed by
+      automation.
+- [ ] **Give a successful install a plain-language handoff.** Say that Runtime
+      Raiders is installed, collection starts off, `raiders status` checks the
+      setup, and `raiders on` opts into the game. Keep secondary commands behind
+      `raiders help` instead of printing an operator runbook after installation.
+- [ ] **Acceptance coverage:** test duplicate-account recovery, prior-device
+      rejection, re-enrollment onto the intended Raider, explicit queue
+      delivery/discard behavior, managed-agent cleanup, interrupted recovery,
+      no score transfer, and no secret/content leakage. Update the employee
+      runbook with the new supported commands; retire the undocumented cleanup
+      sequence only after the fresh install, reinstall, and recovery matrices
+      pass.
+
+## 34. First-week Raid Momentum observation and tuning
+
+The first multi-user activation produced a large but explainable initial wave:
+an active Codex conversation delivered about 3.15 million Raid Power in one
+flush and peaked near 158.54×. The configured 200× combat cap held, scoring did
+not duplicate the Run, and the five-minute hold plus five-minute linear decay
+worked. Raid Power is uncapped; only the combat Momentum multiplier is capped.
+
+- [ ] Observe two to three normal office workdays before changing tuning.
+- [ ] Record content-free aggregates: median, p95, and peak Momentum; number of
+      players reaching the 200× cap; fight duration; damage concentration; and
+      post-activity decay behavior.
+- [ ] Confirm whether already-running Codex conversations normally flush after a
+      newly completed task or sometimes require a Codex restart to emit records.
+- [ ] If the ramp remains too steep, raise `token_modifier_k` from its current
+      20,000 Raid Power per +1×. Preserve the 200× ceiling unless separate
+      evidence supports changing it.
+- [ ] Do not retroactively alter Raid Power, player history, or the scoring
+      policy merely to tune combat pacing.
