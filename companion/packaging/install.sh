@@ -300,18 +300,67 @@ wait_for_installation_status() {
   readiness_output=$2
   readiness_expected_version=$3
   readiness_expected_daemon=$4
-  readiness_attempt=1
-  while [ "$readiness_attempt" -le 5 ]; do
+  readiness_started="$(/bin/date +%s)" || return 1
+  readiness_deadline=$((readiness_started + 30))
+  while :; do
     if "$readiness_command" status > "$readiness_output" &&
        installation_status_is_ready "$readiness_output" \
          "$readiness_expected_version" "$readiness_expected_daemon"; then
       return 0
     fi
-    [ "$readiness_attempt" -lt 5 ] || return 1
+    readiness_now="$(/bin/date +%s)" || return 1
+    [ "$readiness_now" -lt "$readiness_deadline" ] || return 1
     /bin/sleep 1 || return 1
-    readiness_attempt=$((readiness_attempt + 1))
   done
-  return 1
+}
+
+print_installation_status_diagnostic() {
+  diagnostic_status_file=$1
+  diagnostic_expected_version=$2
+  diagnostic_collection=unknown
+  diagnostic_activation=unknown
+  diagnostic_persisted=unknown
+  diagnostic_daemon=unknown
+  diagnostic_version=unavailable
+
+  if diagnostic_enabled="$(/usr/bin/plutil -extract enabled raw -expect bool -o - \
+       "$diagnostic_status_file" 2>/dev/null)"; then
+    case "$diagnostic_enabled" in
+      false) diagnostic_collection=off;;
+      true) diagnostic_collection=on;;
+    esac
+  fi
+  if diagnostic_value="$(/usr/bin/plutil -extract activationState raw -expect string -o - \
+       "$diagnostic_status_file" 2>/dev/null)"; then
+    case "$diagnostic_value" in
+      disabled|preparing|ready) diagnostic_activation=$diagnostic_value;;
+    esac
+  fi
+  if diagnostic_value="$(/usr/bin/plutil -extract persistedState raw -expect string -o - \
+       "$diagnostic_status_file" 2>/dev/null)"; then
+    case "$diagnostic_value" in
+      missing|disabled|enabled|invalid) diagnostic_persisted=$diagnostic_value;;
+    esac
+  fi
+  if diagnostic_value="$(/usr/bin/plutil -extract daemonRunning raw -expect bool -o - \
+       "$diagnostic_status_file" 2>/dev/null)"; then
+    case "$diagnostic_value" in
+      true) diagnostic_daemon=running;;
+      false) diagnostic_daemon=stopped;;
+    esac
+  fi
+  if diagnostic_value="$(/usr/bin/plutil -extract installedCompanionVersion raw -expect string -o - \
+       "$diagnostic_status_file" 2>/dev/null)"; then
+    if [ "$diagnostic_value" = "$diagnostic_expected_version" ]; then
+      diagnostic_version=expected
+    else
+      diagnostic_version=unexpected
+    fi
+  fi
+
+  printf 'Runtime Raiders readiness at timeout: collection=%s activation=%s persisted=%s daemon=%s version=%s.\n' \
+    "$diagnostic_collection" "$diagnostic_activation" "$diagnostic_persisted" \
+    "$diagnostic_daemon" "$diagnostic_version"
 }
 
 legacy_job_registration_state() {
@@ -781,6 +830,7 @@ installed_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" ||
 installed_status_file="$WORK/installed-status.json"
 if ! wait_for_installation_status "$COMMAND" "$installed_status_file" \
   "$COMPANION_VERSION" true; then
+  print_installation_status_diagnostic "$installed_status_file" "$COMPANION_VERSION" >&2
   echo 'Runtime Raiders could not prove its registered agent was healthy with collection disabled.' >&2
   exit 1
 fi

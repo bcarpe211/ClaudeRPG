@@ -440,7 +440,9 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
       'status_calls=0',
       'if [ -e "$RR_STATUS_CALLS" ]; then status_calls=$(/bin/cat "$RR_STATUS_CALLS"); fi',
       'status_calls=$((status_calls + 1)); printf "%s\\n" "$status_calls" > "$RR_STATUS_CALLS"',
-      'if [ -n "${RR_NEW_COLLECTION_STATUS:-}" ]; then',
+      'if [ -n "${RR_READY_AFTER:-}" ] && [ "$status_calls" -lt "$RR_READY_AFTER" ]; then',
+      '  printf "%s\\n" "$RR_NEW_COLLECTION_STATUS_BEFORE_READY"',
+      'elif [ -n "${RR_NEW_COLLECTION_STATUS:-}" ]; then',
       '  printf "%s\\n" "$RR_NEW_COLLECTION_STATUS"',
       'elif [ -e "$RR_COLLECTOR_STATE" ]; then',
       '  printf "%s\\n" "$RR_DISABLED_STATUS"',
@@ -571,6 +573,13 @@ function fakeTools(root: string): string {
   ]);
   executable(join(bin, 'uuidgen'), ['printf "%s\\n" "${RR_UUID:-00000000-0000-4000-8000-000000000001}"']);
   executable(join(bin, 'sleep'), ['exit 0']);
+  executable(join(bin, 'date'), [
+    '[ "$#" -eq 1 ] && [ "$1" = +%s ] || exit 64',
+    'date_calls=0',
+    'if [ -e "$RR_DATE_CALLS" ]; then date_calls=$(/bin/cat "$RR_DATE_CALLS"); fi',
+    'date_calls=$((date_calls + 1)); printf "%s\\n" "$date_calls" > "$RR_DATE_CALLS"',
+    'printf "%s\\n" "$date_calls"',
+  ]);
   executable(join(bin, 'mv'), [
     '[ "$#" -eq 2 ] || exec /bin/mv "$@"',
     'source=$1; destination=$2; boundary=',
@@ -621,6 +630,7 @@ function fixture() {
   const managedState = join(root, 'managed-state');
   const legacyJob = join(root, 'legacy-job');
   const statusCalls = join(root, 'status-calls');
+  const dateCalls = join(root, 'date-calls');
   const archive = join(root, 'runtime-raiders-agent.zip');
   const enrollmentResponse = join(root, 'enrollment-response.json');
   const tty = join(root, 'tty');
@@ -654,7 +664,7 @@ function fixture() {
   return {
     root, home, support, state, outbox, app, plist: plistPath, shim, command,
     candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running, managedState,
-    legacyJob, statusCalls,
+    legacyJob, statusCalls, dateCalls,
     environment: {
       ...process.env,
       HOME: home,
@@ -676,6 +686,7 @@ function fixture() {
       }),
       RR_LEGACY_JOB: legacyJob,
       RR_STATUS_CALLS: statusCalls,
+      RR_DATE_CALLS: dateCalls,
       RR_COLLECTOR_STATE: join(state, 'collector-state.json'),
       RR_APP: app,
       RR_PLIST: plistPath,
@@ -716,6 +727,7 @@ function renderInstaller(value: Fixture, mutate: (source: string) => string = (s
     .replaceAll('/usr/sbin/spctl', join(fake, 'spctl'))
     .replaceAll('/bin/launchctl', join(fake, 'launchctl'))
     .replaceAll('/bin/sleep', join(fake, 'sleep'))
+    .replaceAll('/bin/date', join(fake, 'date'))
     .replaceAll('/bin/mv', join(fake, 'mv'))
     .replaceAll('/bin/stty', join(fake, 'stty'))
     .replaceAll('/usr/bin/uuidgen', join(fake, 'uuidgen'))
@@ -1705,11 +1717,45 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     const result = run(value);
 
     expect(result.status).not.toBe(0);
-    expect(readFileSync(value.statusCalls, 'utf8')).toBe('5\n');
+    expect(readFileSync(value.statusCalls, 'utf8')).toBe('30\n');
     expect(installedTargets(value)).toEqual({ app: {}, plist: null, shim: null, command: null });
     expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
     expect(existsSync(value.running)).toBe(false);
     expect(recoveryDirectories(value)).toHaveLength(0);
+  });
+
+  it('waits through delayed managed-agent startup while keeping collection disabled', () => {
+    const value = fixture();
+    value.environment.RR_READY_AFTER = '7';
+    value.environment.RR_NEW_COLLECTION_STATUS_BEFORE_READY = agentStatus({ daemonRunning: false });
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(readFileSync(value.statusCalls, 'utf8')).toBe('7\n');
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+  });
+
+  it('reports content-free readiness fields after the bounded deadline', () => {
+    const value = fixture();
+    const unsafeStatus = {
+      ...(JSON.parse(agentStatus({ daemonRunning: false })) as Record<string, unknown>),
+      device_token: token,
+      dedupe_secret: secret,
+    };
+    value.environment.RR_NEW_COLLECTION_STATUS = JSON.stringify(unsafeStatus);
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'Runtime Raiders readiness at timeout: collection=off activation=disabled persisted=disabled daemon=stopped version=expected.',
+    );
+    expect(result.stderr).not.toContain(token);
+    expect(result.stderr).not.toContain(secret);
+    expect(installedTargets(value)).toEqual({ app: {}, plist: null, shim: null, command: null });
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
   });
 
   it('legacy 0.4.2 migration replaces the retired plist with the managed service', () => {
