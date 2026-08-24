@@ -717,7 +717,7 @@ function renderInstaller(value: Fixture, mutate: (source: string) => string = (s
     .replaceAll('/bin/launchctl', join(fake, 'launchctl'))
     .replaceAll('/bin/sleep', join(fake, 'sleep'))
     .replaceAll('/bin/mv', join(fake, 'mv'))
-    .replaceAll('/usr/bin/stty', join(fake, 'stty'))
+    .replaceAll('/bin/stty', join(fake, 'stty'))
     .replaceAll('/usr/bin/uuidgen', join(fake, 'uuidgen'))
     .replaceAll('/dev/tty', tty);
   writeFileSync(rendered, source, { mode: 0o700 });
@@ -1912,6 +1912,18 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(existsSync(join(value.state, 'collector-state.json'))).toBe(false);
     expect(events(value).filter((line) => line === 'curl:enroll')).toHaveLength(1);
     expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollment());
+  });
+
+  it('fresh install uses the macOS /bin/stty path for the private code prompt', () => {
+    // Catches a return to /usr/bin/stty, which does not exist on current macOS.
+    const value = fixture();
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value)).toContain('tty:-g');
+    expect(events(value)).toContain('tty:-echo');
+    expect(events(value)).toContain('tty:saved');
   });
 
   it('first install explains how new and existing Raiders obtain the one-time code', () => {

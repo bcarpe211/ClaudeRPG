@@ -363,7 +363,7 @@ tty_state=''
 
 restore_tty() {
   if [ "$tty_changed" -eq 1 ]; then
-    /usr/bin/stty "$tty_state" < /dev/tty 2>/dev/null || true
+    /bin/stty "$tty_state" < /dev/tty 2>/dev/null || true
     tty_changed=0
   fi
 }
@@ -646,14 +646,14 @@ fi
 
 if [ "$has_enrollment" -eq 0 ]; then
   [ -r /dev/tty ] && [ -w /dev/tty ] || usage
-  tty_state="$(/usr/bin/stty -g < /dev/tty)" || usage
+  tty_state="$(/bin/stty -g < /dev/tty)" || usage
   printf '%s\n' \
     'Get a one-time enrollment code before continuing:' \
     '  New Raider: https://raiders.redlattice.com/register' \
     '  Existing Raider: https://raiders.redlattice.com/character' \
     'This is not your Raider Key. The code expires after 10 minutes.' >&2
   printf 'Runtime Raiders one-time enrollment code: ' >&2
-  /usr/bin/stty -echo < /dev/tty
+  /bin/stty -echo < /dev/tty
   tty_changed=1
   enrollment_code=''
   IFS= read -r enrollment_code < /dev/tty || usage
