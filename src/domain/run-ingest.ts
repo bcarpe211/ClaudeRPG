@@ -10,6 +10,7 @@ import {
   policyForRunStart,
   type RaidPowerPolicySchedule,
 } from './raid-power-policy-schedule';
+import { recordFreshRunPresence } from './run-presence';
 import type { RunEventV1, UsageCountersV1 } from './run-events';
 
 export interface RunIngestResult {
@@ -231,6 +232,10 @@ export function ingestRunEvents(
         }
         result.duplicate++;
         continue;
+      }
+
+      if (!player.disabled) {
+        recordFreshRunPresence(db, device.playerId, event.observed_at_ms, now);
       }
 
       const priorSequence = db.prepare(`

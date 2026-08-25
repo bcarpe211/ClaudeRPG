@@ -12,6 +12,7 @@ import type {
 } from '../src/domain/raid-power-policy';
 import { InvalidNestedUsageError } from '../src/domain/raid-power-policy';
 import { createRaidPowerPolicySchedule } from '../src/domain/raid-power-policy-schedule';
+import { lastRaiderActivityAt } from '../src/domain/run-presence';
 import type { RunEventV1, UsageCountersV1 } from '../src/domain/run-events';
 import { ingestRunEvents } from '../src/domain/run-ingest';
 import { createPlayer, getPlayerById, updatePlayer } from '../src/domain/players';
@@ -215,6 +216,84 @@ describe('applyActivityCredit compatibility projection', () => {
 });
 
 describe('ingestRunEvents', () => {
+  it('records receipt presence for a newly accepted fresh zero-credit event', () => {
+    const fresh = event({
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: ZERO_USAGE,
+    });
+
+    expect(ingestRunEvents(db, device, [fresh], SCHEDULE, NOW))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get())
+      .toEqual({ count: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get())
+      .toEqual({ count: 1 });
+    expect(tokenRows()).toEqual([]);
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(NOW);
+  });
+
+  it('does not extend presence for an exact event identity duplicate', () => {
+    const fresh = event({
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: ZERO_USAGE,
+    });
+
+    expect(ingestRunEvents(db, device, [fresh], SCHEDULE, NOW))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(NOW);
+
+    expect(ingestRunEvents(db, device, [fresh], SCHEDULE, NOW + 1))
+      .toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(NOW);
+  });
+
+  it.each([
+    {
+      name: 'an observation 120,001 ms before receipt',
+      observedAt: NOW,
+      receivedAt: NOW + 120_001,
+    },
+    {
+      name: 'an observation one millisecond after receipt',
+      observedAt: NOW + 1,
+      receivedAt: NOW,
+    },
+  ])('does not record presence for $name', ({ observedAt, receivedAt }) => {
+    const excluded = event({
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: NOW,
+      observed_at_ms: observedAt,
+      usage: ZERO_USAGE,
+    });
+
+    expect(ingestRunEvents(db, device, [excluded], SCHEDULE, receivedAt))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(0);
+  });
+
+  it('does not record presence for an authenticated disabled Raider', () => {
+    updatePlayer(db, player.id, { disabled: 1 });
+    const disabled = event({
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: ZERO_USAGE,
+    });
+
+    expect(ingestRunEvents(db, device, [disabled], SCHEDULE, NOW))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(0);
+  });
+
   it('keeps v1 additive scoring before the v2 boundary and applies nested scoring at it', () => {
     const usage = {
       input: 74_226,
@@ -315,6 +394,7 @@ describe('ingestRunEvents', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get()).toEqual({ count: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(0);
     expect(getPlayerById(db, player.id)).toMatchObject({
       effective_tokens: 0,
       total_tokens: 0,
@@ -338,11 +418,12 @@ describe('ingestRunEvents', () => {
       usage: { input: 100, cache_read: 101 },
     });
 
-    expect(() => ingestRunEvents(db, device, [valid, malformed], SCHEDULE, NOW))
+    expect(() => ingestRunEvents(db, device, [valid, malformed], SCHEDULE, NOW + 2))
       .toThrow(InvalidNestedUsageError);
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get()).toEqual({ count: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(0);
     expect(getPlayerById(db, player.id)).toMatchObject({
       effective_tokens: 0,
       total_tokens: 0,
@@ -394,8 +475,13 @@ describe('ingestRunEvents', () => {
     })));
   });
 
-  it('claims exact retries idempotently and retains lower reordered sequences at zero award', () => {
-    const higher = event({ sequence: 2, usage: { input: 200 } });
+  it('records fresh newly claimed lower sequences without awarding more credit', () => {
+    const higher = event({
+      sequence: 2,
+      event_time_ms: NOW - 100,
+      observed_at_ms: NOW - 100,
+      usage: { input: 200 },
+    });
     const lower = event({
       sequence: 1,
       event_time_ms: higher.event_time_ms - 1,
@@ -405,8 +491,7 @@ describe('ingestRunEvents', () => {
 
     expect(ingestRunEvents(db, device, [higher], SCHEDULE, NOW))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
-    expect(ingestRunEvents(db, device, [higher], SCHEDULE, NOW + 1))
-      .toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(NOW);
     expect(ingestRunEvents(db, device, [lower], SCHEDULE, NOW + 2))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
 
@@ -414,6 +499,7 @@ describe('ingestRunEvents', () => {
       .toEqual([{ sequence: 2, awarded_delta: 200 }, { sequence: 1, awarded_delta: 0 }]);
     expect(runRow()).toMatchObject({ usage_input: 200, raid_power: 200 });
     expect(tokenRows()).toHaveLength(1);
+    expect(lastRaiderActivityAt(db, player.id)).toBe(NOW + 2);
   });
 
   it('never rolls cumulative counters back on a later sequence', () => {
@@ -601,8 +687,18 @@ describe('ingestRunEvents', () => {
 
   it('rolls the whole batch back when the player projection would overflow', () => {
     updatePlayer(db, player.id, { effective_tokens: Number.MAX_SAFE_INTEGER - 10 });
-    const runA = event({ run_key: 'a'.repeat(64), usage: { input: 6 } });
-    const runB = event({ run_key: 'b'.repeat(64), usage: { input: 6 } });
+    const runA = event({
+      run_key: 'a'.repeat(64),
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: { input: 6 },
+    });
+    const runB = event({
+      run_key: 'b'.repeat(64),
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: { input: 6 },
+    });
 
     expect(() => ingestRunEvents(db, device, [runA, runB], SCHEDULE, NOW))
       .toThrow(RangeError);
@@ -615,6 +711,7 @@ describe('ingestRunEvents', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get()).toEqual({ count: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(0);
   });
 
   it('rolls back before persistence when combined Run credit is not a safe integer', () => {
@@ -623,7 +720,12 @@ describe('ingestRunEvents', () => {
       completion_credit: Number.MAX_SAFE_INTEGER,
       duration: { scale: 1, cap: 0 },
     };
-    const completed = event({ state: 'completed', usage: { input: 1 } });
+    const completed = event({
+      state: 'completed',
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: { input: 1 },
+    });
 
     expect(() => ingestRunEvents(
       db,
@@ -635,6 +737,7 @@ describe('ingestRunEvents', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get()).toEqual({ count: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(0);
   });
 
   it('retains disabled Raider events as a non-scoring baseline without later backfill', () => {
@@ -721,6 +824,7 @@ describe('ingestRunEvents', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get()).toEqual({ count: 0 });
+    expect(lastRaiderActivityAt(db, player.id)).toBe(0);
     expect(getPlayerById(db, player.id)).toMatchObject({
       effective_tokens: 0,
       total_tokens: 0,
