@@ -4,9 +4,13 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   durationCredit,
+  InvalidNestedUsageError,
   loadRaidPowerPolicy,
+  loadRaidPowerPolicyV2,
   usageCredit,
   type RaidPowerPolicy,
+  type RaidPowerPolicyV1,
+  type RaidPowerPolicyV2,
 } from '../src/domain/raid-power-policy';
 import {
   generateCalibration,
@@ -43,11 +47,30 @@ function policyDocument(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
-function loadDocument(document: unknown): RaidPowerPolicy {
+function loadDocument(document: unknown): RaidPowerPolicyV1 {
   const directory = mkdtempSync(join(tmpdir(), 'raid-power-policy-'));
   const path = join(directory, 'policy.json');
   writeFileSync(path, `${JSON.stringify(document)}\n`);
   return loadRaidPowerPolicy(path);
+}
+
+function policyV2Document(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    policy_version: 2,
+    enabled_providers: ['codex'],
+    usage_model: 'codex-nested-counters',
+    provider_multipliers: { codex: 1 },
+    completion_credit: 854,
+    duration: { scale: 270.0585121783796, cap: 3416 },
+    ...overrides,
+  };
+}
+
+function loadV2Document(document: unknown): RaidPowerPolicyV2 {
+  const directory = mkdtempSync(join(tmpdir(), 'raid-power-policy-v2-'));
+  const path = join(directory, 'policy.json');
+  writeFileSync(path, `${JSON.stringify(document)}\n`);
+  return loadRaidPowerPolicyV2(path);
 }
 
 const workloads: CalibrationWorkload[] = [
@@ -121,7 +144,7 @@ describe('Raid Power policy v1', () => {
       ...loadDocument(policyDocument()),
       policy_version: 2,
       provider_multipliers: { codex: 0.5 },
-    } as RaidPowerPolicy;
+    } as unknown as RaidPowerPolicy;
 
     const firstTarget = usageCredit(policy, 'codex', {
       input: 1, output: 0, cache_read: 0, cache_write: 0, reasoning_output: 0,
@@ -147,7 +170,7 @@ describe('Raid Power policy v1', () => {
         ...loadDocument(policyDocument()),
         enabled_providers: ['codex', provider],
         provider_multipliers: { codex: 1, [provider]: 1 },
-      } as RaidPowerPolicy;
+      } as unknown as RaidPowerPolicy;
 
       expect(() => usageCredit(forgedPolicy, provider, usage)).toThrow(
         `provider ${provider} is not enabled by Raid Power policy v1`,
@@ -161,7 +184,7 @@ describe('Raid Power policy v1', () => {
       policy_version: 2,
       enabled_providers: [],
       provider_multipliers: { codex: 0.5 },
-    } as RaidPowerPolicy;
+    } as unknown as RaidPowerPolicy;
 
     expect(() => usageCredit(laterPolicy, 'codex', usage)).toThrow(
       'provider codex is not enabled by Raid Power policy v2',
@@ -183,6 +206,88 @@ describe('Raid Power policy v1', () => {
     expect(policy.completion_credit).toBe(5);
     expect(usageCredit.length).toBe(3);
     expect(durationCredit.length).toBe(2);
+    expect(usageCredit(policy, 'codex', usage)).toBe(120);
+  });
+});
+
+describe('Raid Power policy v2', () => {
+  it('credits Codex usage after removing nested cache reads', () => {
+    const policy = loadV2Document(policyV2Document());
+
+    expect(usageCredit(policy, 'codex', {
+      input: 74_226,
+      output: 486,
+      cache_read: 71_424,
+      cache_write: 0,
+      reasoning_output: 284,
+    })).toBe(3_288);
+  });
+
+  it('rejects cache reads larger than input', () => {
+    const policy = loadV2Document(policyV2Document());
+
+    expect(() => usageCredit(policy, 'codex', {
+      input: 9,
+      output: 4,
+      cache_read: 10,
+      cache_write: 0,
+      reasoning_output: 1,
+    })).toThrow(InvalidNestedUsageError);
+  });
+
+  it('rejects reasoning output larger than output', () => {
+    const policy = loadV2Document(policyV2Document());
+
+    expect(() => usageCredit(policy, 'codex', {
+      input: 10,
+      output: 4,
+      cache_read: 9,
+      cache_write: 0,
+      reasoning_output: 5,
+    })).toThrow(InvalidNestedUsageError);
+  });
+
+  it('does not credit cache writes or reasoning output', () => {
+    const policy = loadV2Document(policyV2Document());
+    const baseline = {
+      input: 10,
+      output: 4,
+      cache_read: 9,
+      cache_write: 0,
+      reasoning_output: 4,
+    };
+
+    expect(usageCredit(policy, 'codex', baseline)).toBe(5);
+    expect(usageCredit(policy, 'codex', {
+      ...baseline,
+      cache_write: Number.MAX_SAFE_INTEGER,
+      reasoning_output: 0,
+    })).toBe(5);
+  });
+
+  it.each([
+    { ...policyV2Document(), model_multipliers: { test: 2 } },
+    { ...policyV2Document(), effort_multipliers: { high: 2 } },
+  ])('rejects model and effort fields in the strict schema', (document) => {
+    expect(() => loadV2Document(document)).toThrow();
+  });
+
+  it('loads a deeply immutable policy', () => {
+    const policy = loadV2Document(policyV2Document());
+
+    expect(Object.isFrozen(policy)).toBe(true);
+    expect(Object.isFrozen(policy.enabled_providers)).toBe(true);
+    expect(Object.isFrozen(policy.provider_multipliers)).toBe(true);
+    expect(Object.isFrozen(policy.duration)).toBe(true);
+    expect(() => {
+      (policy.duration as { cap: number }).cap = 999;
+    }).toThrow(TypeError);
+    expect(policy.duration.cap).toBe(3416);
+  });
+
+  it('leaves the historical additive v1 result unchanged', () => {
+    const policy: RaidPowerPolicyV1 = loadDocument(policyDocument());
+
     expect(usageCredit(policy, 'codex', usage)).toBe(120);
   });
 });

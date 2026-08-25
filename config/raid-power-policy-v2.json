@@ -1,0 +1,15 @@
+{
+  "policy_version": 2,
+  "enabled_providers": [
+    "codex"
+  ],
+  "usage_model": "codex-nested-counters",
+  "provider_multipliers": {
+    "codex": 1
+  },
+  "completion_credit": 854,
+  "duration": {
+    "scale": 270.0585121783796,
+    "cap": 3416
+  }
+}

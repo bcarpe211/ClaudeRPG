@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   durationCredit,
   type RaidPowerPolicy,
+  type RaidPowerPolicyV1,
 } from '../../src/domain/raid-power-policy';
 import type { UsageCountersV1 } from '../../src/domain/run-events';
 
@@ -75,7 +76,7 @@ const samplesDocumentSchema = z.object({
   samples: z.array(sampleSchema),
 }).strict();
 
-const usageWeights: RaidPowerPolicy['usage_weights'] = {
+const usageWeights: RaidPowerPolicyV1['usage_weights'] = {
   input: 1,
   output: 1,
   cache_read: 0,
