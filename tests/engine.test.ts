@@ -6,6 +6,8 @@ import { ingestTokenUsage } from '../src/domain/ingest';
 import { activityScore } from '../src/domain/activity';
 import { GameEngine } from '../src/domain/engine';
 import { combatActiveMs } from '../src/domain/gameclock';
+import { getGameState } from '../src/domain/gamestate';
+import { recordFreshRunPresence } from '../src/domain/run-presence';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -82,6 +84,51 @@ describe('engine: accumulate-modifier damage + token-share gold', () => {
 });
 
 describe('engine combat-active clock', () => {
+  it('wakes for presence through the exact idle boundary without creating work', () => {
+    const receivedAt = 100_000;
+    setSetting(db, 'pause_after_minutes', '15');
+    setSetting(db, 'attack_interval_ms', '1000000');
+    setSetting(db, 'attack_jitter_ms', '0');
+    setSetting(db, 'monster_attacks_enabled', '0');
+    const player = createPlayer(
+      db,
+      { name: 'Presence Only', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    expect(recordFreshRunPresence(db, player.id, receivedAt, receivedAt)).toBe(true);
+    const before = getPlayerById(db, player.id)!;
+
+    const eng = new GameEngine(db, {
+      rng: () => 0.5,
+      officeTimeZone: 'America/New_York',
+    });
+    eng.tick(receivedAt);
+
+    expect(getGameState(db).paused).toBe(0);
+    const encounter = db.prepare(
+      "SELECT id, current_hp FROM encounters WHERE status='active'",
+    ).get() as { id: number; current_hp: number };
+    expect(encounter).toBeTruthy();
+
+    eng.tick(receivedAt + 15 * 60_000);
+    expect(getGameState(db).paused).toBe(0);
+
+    eng.tick(receivedAt + 15 * 60_000 + 1);
+    expect(getGameState(db).paused).toBe(1);
+
+    const after = getPlayerById(db, player.id)!;
+    expect(after.effective_tokens).toBe(before.effective_tokens);
+    expect(after.total_tokens).toBe(before.total_tokens);
+    expect(after.level).toBe(before.level);
+    expect(after.gold).toBe(before.gold);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM encounter_damage').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT current_hp FROM encounters WHERE id=?').get(encounter.id))
+      .toEqual({ current_hp: encounter.current_hp });
+  });
+
   it('uses the first tick as a baseline and counts the interval before idle', () => {
     wakeOffice(100_000);
     const eng = new GameEngine(db, {

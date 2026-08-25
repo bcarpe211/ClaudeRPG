@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { lastRaiderActivityAt } from './run-presence';
 
 export interface GameState {
   id: number;
@@ -21,15 +22,12 @@ export function setPaused(db: Database.Database, paused: boolean, now: number): 
   ).run(paused ? 1 : 0, now);
 }
 
-/** Max last_token_at across all players (0 if none). */
+/** Latest enabled legacy or Run presence activity (0 if none). */
 export function lastActivityAt(db: Database.Database): number {
-  const row = db.prepare(
-    'SELECT COALESCE(MAX(last_token_at), 0) AS m FROM players',
-  ).get() as { m: number };
-  return row.m;
+  return lastRaiderActivityAt(db);
 }
 
-/** Office is idle if no tokens ever, or last activity is older than the window. */
+/** Office is idle if no activity exists, or last activity is older than the window. */
 export function isIdle(db: Database.Database, now: number, pauseAfterMinutes: number): boolean {
   const last = lastActivityAt(db);
   if (last === 0) return true;

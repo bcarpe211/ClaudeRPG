@@ -7,6 +7,7 @@ import {
   isCombatAcceptingWork,
 } from '../src/domain/gameclock';
 import { createPlayer } from '../src/domain/players';
+import { recordFreshRunPresence } from '../src/domain/run-presence';
 
 let db: ReturnType<typeof openDb>;
 
@@ -39,6 +40,37 @@ function seedActiveEncounter(now: number): void {
 }
 
 describe('combat-active game clock', () => {
+  it('accepts presence-only combat through the exact idle boundary without work events', () => {
+    const receivedAt = 100_000;
+    const player = createPlayer(
+      db,
+      { name: 'Presence Clock', class_key: 'knight', gender: 'M' },
+      1,
+    );
+    expect(recordFreshRunPresence(db, player.id, receivedAt, receivedAt)).toBe(true);
+    const dungeon = db.prepare(
+      `INSERT INTO dungeons
+       (level, theme, seed, regular_count, created_at)
+       VALUES (1, 'Ossuary Pale', 1, 2, ?)`,
+    ).run(receivedAt);
+    const encounter = db.prepare(
+      `INSERT INTO encounters
+       (dungeon_id, index_in_dungeon, kind, creature_index, footprint,
+        pack_count, max_hp, current_hp, status, started_at)
+       VALUES (?, 0, 'single', 1, 1, 1, 100, 100, 'active', ?)`,
+    ).run(Number(dungeon.lastInsertRowid), receivedAt);
+    db.prepare(
+      `UPDATE game_state
+       SET current_dungeon_id=?, current_encounter_id=? WHERE id=1`,
+    ).run(Number(dungeon.lastInsertRowid), Number(encounter.lastInsertRowid));
+
+    expect(isCombatAcceptingWork(db, receivedAt, 15)).toBe(true);
+    expect(isCombatAcceptingWork(db, receivedAt + 15 * 60_000, 15)).toBe(true);
+    expect(isCombatAcceptingWork(db, receivedAt + 15 * 60_000 + 1, 15)).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get())
+      .toEqual({ count: 0 });
+  });
+
   it('advances only by a non-negative integer delta', () => {
     expect(combatActiveMs(db)).toBe(0);
     advanceCombatClock(db, 1000, 1000, 'America/New_York');
