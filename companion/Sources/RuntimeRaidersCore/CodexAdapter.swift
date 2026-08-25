@@ -11,6 +11,10 @@ public enum CodexCompatibilityIssue: String, Codable, CaseIterable, Equatable, S
 }
 
 public struct CodexAdapter: ProviderAdapter {
+    private enum SessionSource {
+        case scoring(RunSurface)
+        case ignoredSubagent
+    }
     private struct PendingContext: Codable {
         let nativeID: String
         let model: String?
@@ -193,7 +197,7 @@ public struct CodexAdapter: ProviderAdapter {
                 reject(.unsupportedContract)
                 return []
             }
-            guard let surface = Self.sessionSurface(payload["source"]) else {
+            guard let source = Self.sessionSource(payload["source"]) else {
                 reject(Self.isUnknownStringSource(payload["source"])
                     ? .unsupportedSource : .unsupportedContract)
                 return []
@@ -213,14 +217,15 @@ public struct CodexAdapter: ProviderAdapter {
                 return []
             }
             sessionMetadataFingerprint = fingerprint
-            if surface == expectedSurface {
+            switch source {
+            case .scoring(let surface) where surface == expectedSurface:
                 verifiedSurface = surface
                 // A live metadata record at the beginning of a new provider
                 // file proves that its session-cumulative usage starts at zero.
                 // Bounded seeding clears this value before crossing to live data.
                 sessionTotalUsage = Self.zeroUsage
                 usesSessionTotalUsage = nil
-            } else {
+            case .scoring, .ignoredSubagent:
                 verifiedSurface = nil
                 sessionTotalUsage = nil
                 usesSessionTotalUsage = nil
@@ -589,15 +594,17 @@ public struct CodexAdapter: ProviderAdapter {
         return !value.isEmpty && value.utf8.count <= 100
     }
 
-    private static func sessionSurface(_ source: Any?) -> RunSurface? {
+    private static func sessionSource(_ source: Any?) -> SessionSource? {
         if let source = source as? String {
             switch source {
-            case "vscode": return .codexDesktop
-            case "exec": return .codexCLI
+            case "vscode": return .scoring(.codexDesktop)
+            case "exec": return .scoring(.codexCLI)
             default: return nil
             }
         }
-        return strictSubagentSurface(source)
+        if let surface = strictSubagentSurface(source) { return .scoring(surface) }
+        if isStrictIgnoredSubagent(source) { return .ignoredSubagent }
+        return nil
     }
 
     private static func isUnknownStringSource(_ source: Any?) -> Bool {
@@ -621,6 +628,17 @@ public struct CodexAdapter: ProviderAdapter {
             return nil
         }
         return .codexDesktop
+    }
+
+    private static func isStrictIgnoredSubagent(_ source: Any?) -> Bool {
+        guard let source = source as? [String: Any],
+              Set(source.keys) == ["subagent"],
+              let subagent = source["subagent"] as? [String: Any],
+              Set(subagent.keys) == ["other"],
+              validRequiredMarker(subagent["other"]) else {
+            return false
+        }
+        return true
     }
 
     private static func validOptionalIdentity(_ value: String?) -> Bool {

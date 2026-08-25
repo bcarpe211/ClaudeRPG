@@ -387,6 +387,77 @@ final class AgentControllerTests: XCTestCase {
         }
     }
 
+    func testReconciliationRecoversMissedAppendWithoutDuplicateEventsAndClearsLag() throws {
+        try withHarness { harness in
+            let file = try harness.makeFile("missed-notification.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [file])
+            try append(completedRun(nativeID: "missed-notification-run"), to: file)
+
+            let lagging = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil
+            )
+            XCTAssertEqual(lagging.laggingProviderFileCount, 1)
+            XCTAssertGreaterThan(lagging.providerLagBytes, 0)
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+
+            try harness.controller.reconcileProviderFiles([file])
+            while harness.controller.hasPendingReadWork {
+                try harness.controller.continuePendingWork()
+            }
+
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+            let caughtUp = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil
+            )
+            XCTAssertEqual(caughtUp.laggingProviderFileCount, 0)
+            XCTAssertEqual(caughtUp.providerLagBytes, 0)
+            let doctor = harness.controller.doctor(
+                codexRootReadable: true,
+                serverHealthy: true,
+                signingValid: true,
+                enrollmentAllowedSurfaces: [.codexCLI],
+                claudeOTelEnvironmentPresent: false
+            )
+            XCTAssertEqual(doctor.laggingProviderFileCount, 0)
+            XCTAssertEqual(doctor.providerLagBytes, 0)
+
+            try harness.controller.reconcileProviderFiles([file])
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+        }
+    }
+
+    func testDisabledReconciliationDoesNotReadOrReportIntentionalLag() throws {
+        try withHarness { harness in
+            let file = try harness.makeFile("disabled-reconciliation.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [file])
+            try harness.controller.turnOff()
+            try append(completedRun(nativeID: "disabled-run"), to: file)
+
+            try harness.controller.reconcileProviderFiles([file])
+
+            XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+            let status = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexCLI],
+                lastSuccessfulUploadMS: nil
+            )
+            XCTAssertEqual(status.laggingProviderFileCount, 0)
+            XCTAssertEqual(status.providerLagBytes, 0)
+        }
+    }
+
     func testLiveCreatedFileRetainsPreCallbackLifecycleForLaterCompletion() throws {
         try withHarness { harness in
             let boundaryFile = try harness.makeFile("boundary.jsonl", contents: Data())

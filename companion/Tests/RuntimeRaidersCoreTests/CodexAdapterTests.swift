@@ -132,6 +132,30 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertTrue(try startRun(adapter: &cli, payload: payload).isEmpty)
     }
 
+    func testCurrentNamedSubagentSourceIsRecognizedButNeverScoredSeparately() throws {
+        let payload: [String: Any] = [
+            "id": "session", "originator": "Codex Desktop", "cli_version": "1.0.0",
+            "source": ["subagent": ["other": "guardian"]],
+        ]
+        for surface in [RunSurface.codexDesktop, .codexCLI] {
+            var adapter = CodexAdapter(expectedSurface: surface)
+            XCTAssertTrue(try startRun(adapter: &adapter, payload: payload).isEmpty)
+            XCTAssertNil(adapter.compatibilityIssue)
+            XCTAssertFalse(adapter.hasActiveRun)
+            XCTAssertNoThrow(try CodexAdapter(snapshot: adapter.snapshot()))
+        }
+    }
+
+    func testNamedSubagentSourceWithExtraFieldsStillFailsClosed() throws {
+        let payload: [String: Any] = [
+            "id": "session", "originator": "Codex Desktop", "cli_version": "1.0.0",
+            "source": ["subagent": ["other": "guardian", "extra": true]],
+        ]
+        var adapter = CodexAdapter(expectedSurface: .codexDesktop)
+        XCTAssertTrue(try startRun(adapter: &adapter, payload: payload).isEmpty)
+        XCTAssertEqual(adapter.compatibilityIssue, .unsupportedContract)
+    }
+
     func testMalformedOrOversizedVersionFailsClosedWithContractReason() throws {
         let rejectedVersions: [Any?] = [nil, 146, "", String(repeating: "v", count: 101)]
         for version in rejectedVersions {

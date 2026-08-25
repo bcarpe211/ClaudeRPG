@@ -62,6 +62,7 @@ private final class CancellableDispatchTimer: @unchecked Sendable {
 }
 
 private final class DaemonRuntime: @unchecked Sendable {
+    private static let providerReconciliationInterval: TimeInterval = 5
     private let inputs: RuntimeInputs
     private let paths = AgentPaths()
     private let registry: AdapterRegistry
@@ -70,6 +71,7 @@ private final class DaemonRuntime: @unchecked Sendable {
     private let uploader: Uploader
     private let heartbeat: Heartbeat
     private var releaseChecker: ReleaseChecker?
+    private var providerReconciliationTimer: DispatchSourceTimer?
     private let workQueue = DispatchQueue(
         label: "com.redlattice.runtime-raiders.daemon",
         qos: .utility
@@ -200,10 +202,12 @@ private final class DaemonRuntime: @unchecked Sendable {
     func run() throws {
         do {
             try startup.start(persistedEnabled: controller.enabled)
+            startProviderReconciliation()
             while !stopLock.withLock({ stopping }) {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
             }
             versionCheckScheduler.stop()
+            stopProviderReconciliation()
             controller.pauseCollection()
             uploader.setEnabled(false)
             watcher.stop()
@@ -211,6 +215,7 @@ private final class DaemonRuntime: @unchecked Sendable {
             control.stop()
         } catch {
             versionCheckScheduler.stop()
+            stopProviderReconciliation()
             controller.pauseCollection()
             uploader.setEnabled(false)
             watcher.stop()
@@ -222,6 +227,28 @@ private final class DaemonRuntime: @unchecked Sendable {
 
     private func handleChangedFiles(_ files: [URL]) {
         activation.processChangedFiles(files)
+    }
+
+    private func startProviderReconciliation() {
+        guard providerReconciliationTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: workQueue)
+        timer.schedule(
+            deadline: .now() + Self.providerReconciliationInterval,
+            repeating: Self.providerReconciliationInterval,
+            leeway: .milliseconds(500)
+        )
+        timer.setEventHandler { [weak self] in
+            guard let self, controller.enabled,
+                  let files = try? watcher.discoverProviderFiles() else { return }
+            activation.reconcileProviderFiles(files)
+        }
+        providerReconciliationTimer = timer
+        timer.resume()
+    }
+
+    private func stopProviderReconciliation() {
+        providerReconciliationTimer?.cancel()
+        providerReconciliationTimer = nil
     }
 
     private func handle(_ request: ControlRequest) -> ControlResponse {

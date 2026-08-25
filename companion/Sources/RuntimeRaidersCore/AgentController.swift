@@ -42,6 +42,8 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
     public let queuedEventCount: Int
     public let lastSuccessfulUploadMS: Int64?
     public let activeRunCount: Int
+    public let laggingProviderFileCount: Int
+    public let providerLagBytes: Int64
     public let installedCompanionVersion: String
     public let availableCompanionVersion: String?
     public let updateCommand: String?
@@ -56,6 +58,8 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         queuedEventCount: Int,
         lastSuccessfulUploadMS: Int64?,
         activeRunCount: Int,
+        laggingProviderFileCount: Int = 0,
+        providerLagBytes: Int64 = 0,
         installedCompanionVersion: String,
         availableCompanionVersion: String?,
         updateCommand: String?
@@ -69,6 +73,8 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         self.queuedEventCount = queuedEventCount
         self.lastSuccessfulUploadMS = lastSuccessfulUploadMS
         self.activeRunCount = activeRunCount
+        self.laggingProviderFileCount = laggingProviderFileCount
+        self.providerLagBytes = providerLagBytes
         self.installedCompanionVersion = installedCompanionVersion
         self.availableCompanionVersion = availableCompanionVersion
         self.updateCommand = updateCommand
@@ -83,7 +89,9 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
         compiledAdapters: [RunSurface: AdapterHealth],
         queuedEventCount: Int,
         lastSuccessfulUploadMS: Int64?,
-        activeRunCount: Int
+        activeRunCount: Int,
+        laggingProviderFileCount: Int = 0,
+        providerLagBytes: Int64 = 0
     ) {
         self.init(
             enabled: enabled,
@@ -95,6 +103,8 @@ public struct AgentStatus: Codable, Equatable, CustomStringConvertible, Sendable
             queuedEventCount: queuedEventCount,
             lastSuccessfulUploadMS: lastSuccessfulUploadMS,
             activeRunCount: activeRunCount,
+            laggingProviderFileCount: laggingProviderFileCount,
+            providerLagBytes: providerLagBytes,
             installedCompanionVersion: "unknown",
             availableCompanionVersion: nil,
             updateCommand: nil
@@ -129,6 +139,8 @@ public struct DoctorReport: Codable, Equatable, CustomStringConvertible, Sendabl
     public let claudeOTelEnvironmentPresent: Bool
     public let compatibilityNeedsReview: Bool
     public let compatibilityReasons: [CodexCompatibilityIssue]
+    public let laggingProviderFileCount: Int
+    public let providerLagBytes: Int64
 
     public init(
         codexRootReadable: Bool,
@@ -137,7 +149,9 @@ public struct DoctorReport: Codable, Equatable, CustomStringConvertible, Sendabl
         enrollmentMatchesCompiledAdapters: Bool,
         claudeOTelEnvironmentPresent: Bool,
         compatibilityNeedsReview: Bool = false,
-        compatibilityReasons: [CodexCompatibilityIssue] = []
+        compatibilityReasons: [CodexCompatibilityIssue] = [],
+        laggingProviderFileCount: Int = 0,
+        providerLagBytes: Int64 = 0
     ) {
         self.codexRootReadable = codexRootReadable
         self.serverHealthy = serverHealthy
@@ -146,6 +160,8 @@ public struct DoctorReport: Codable, Equatable, CustomStringConvertible, Sendabl
         self.claudeOTelEnvironmentPresent = claudeOTelEnvironmentPresent
         self.compatibilityNeedsReview = compatibilityNeedsReview
         self.compatibilityReasons = compatibilityReasons.sorted { $0.rawValue < $1.rawValue }
+        self.laggingProviderFileCount = laggingProviderFileCount
+        self.providerLagBytes = providerLagBytes
     }
 
     public var description: String {
@@ -330,6 +346,8 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
 
 public final class AgentController: @unchecked Sendable {
     private static let maximumProvenanceBytes = 65_536
+    private static let maximumReconciliationFileChecks = 512
+    private static let maximumNewReconciliationFiles = 64
 
     private struct PersistedFileState: Codable {
         var cursor: JSONLCursor
@@ -402,6 +420,7 @@ public final class AgentController: @unchecked Sendable {
     private var acceptingCollection = false
     private var runRegistry = RunRegistry()
     private var pendingPaths: Set<String> = []
+    private var reconciliationIndex = 0
     public private(set) var lastCallbackBytesRead = 0
 
     public init(
@@ -721,6 +740,46 @@ public final class AgentController: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func reconcileProviderFiles(_ discoveredFiles: [URL]) throws -> Bool {
+        try lock.withLock {
+            guard state.enabled, isAcceptingCollection else {
+                lastCallbackBytesRead = 0
+                return false
+            }
+            let discovered = normalized(discoveredFiles)
+            let newFiles = Array(
+                discovered.lazy
+                    .filter { self.state.files[$0.path] == nil }
+                    .prefix(Self.maximumNewReconciliationFiles)
+            )
+            let tracked = discovered.filter { state.files[$0.path] != nil }
+            let selectedTracked: [URL]
+            if tracked.isEmpty {
+                selectedTracked = []
+                reconciliationIndex = 0
+            } else {
+                let count = min(Self.maximumReconciliationFileChecks, tracked.count)
+                let start = reconciliationIndex % tracked.count
+                selectedTracked = (0..<count).map { tracked[(start + $0) % tracked.count] }
+                reconciliationIndex = (start + count) % tracked.count
+            }
+            let changedTracked = selectedTracked.filter { file in
+                guard let fileState = state.files[file.path], !fileState.seeding,
+                      let approved = try? registry.approveProviderFile(file),
+                      let snapshot = try? approved.snapshot() else { return false }
+                return Self.needsReconciliation(fileState.cursor, snapshot: snapshot)
+            }
+            let candidates = normalized(newFiles + changedTracked)
+            guard !candidates.isEmpty else {
+                lastCallbackBytesRead = 0
+                return false
+            }
+            try processChangedFiles(candidates)
+            return true
+        }
+    }
+
     public func status(
         daemonRunning: Bool,
         serverEnabledSurfaces: [RunSurface],
@@ -751,6 +810,7 @@ public final class AgentController: @unchecked Sendable {
             ]
             for surface in registry.surfaces { health[surface] = .available }
             let persistedActiveRunCount = Self.snapshotFacts(in: state).activeRunCount
+            let lag = providerLag()
             return AgentStatus(
                 enabled: state.enabled,
                 activationState: activationState,
@@ -761,6 +821,8 @@ public final class AgentController: @unchecked Sendable {
                 queuedEventCount: try outbox.queuedCount(),
                 lastSuccessfulUploadMS: lastSuccessfulUploadMS,
                 activeRunCount: max(runRegistry.activeRunCount, persistedActiveRunCount),
+                laggingProviderFileCount: lag.fileCount,
+                providerLagBytes: lag.bytes,
                 installedCompanionVersion: installedCompanionVersion,
                 availableCompanionVersion: availableCompanionVersion,
                 updateCommand: availableCompanionVersion == nil ? nil : "raiders update"
@@ -795,6 +857,7 @@ public final class AgentController: @unchecked Sendable {
     ) -> DoctorReport {
         lock.withLock {
             let facts = Self.snapshotFacts(in: state)
+            let lag = providerLag()
             return DoctorReport(
                 codexRootReadable: codexRootReadable,
                 serverHealthy: serverHealthy,
@@ -802,9 +865,38 @@ public final class AgentController: @unchecked Sendable {
                 enrollmentMatchesCompiledAdapters: Set(enrollmentAllowedSurfaces) == Set(registry.surfaces),
                 claudeOTelEnvironmentPresent: claudeOTelEnvironmentPresent,
                 compatibilityNeedsReview: !facts.compatibilityReasons.isEmpty,
-                compatibilityReasons: facts.compatibilityReasons
+                compatibilityReasons: facts.compatibilityReasons,
+                laggingProviderFileCount: lag.fileCount,
+                providerLagBytes: lag.bytes
             )
         }
+    }
+
+    private func providerLag() -> (fileCount: Int, bytes: Int64) {
+        guard state.enabled, isAcceptingCollection else { return (0, 0) }
+        var fileCount = 0
+        var bytes: Int64 = 0
+        for (path, fileState) in state.files where !fileState.seeding {
+            let file = URL(fileURLWithPath: path)
+            guard let approved = try? registry.approveProviderFile(file),
+                  let snapshot = try? approved.snapshot(),
+                  Self.needsReconciliation(fileState.cursor, snapshot: snapshot) else {
+                continue
+            }
+            fileCount += 1
+            let unread = fileState.cursor.fileIdentity == snapshot.identity
+                ? max(0, snapshot.size - fileState.cursor.offset)
+                : snapshot.size
+            bytes = bytes > Int64.max - unread ? Int64.max : bytes + unread
+        }
+        return (fileCount, bytes)
+    }
+
+    private static func needsReconciliation(
+        _ cursor: JSONLCursor,
+        snapshot: (identity: JSONLFileIdentity, size: Int64)
+    ) -> Bool {
+        cursor.fileIdentity != snapshot.identity || cursor.offset != snapshot.size
     }
 
     private static func snapshotFacts(in state: PersistedState) -> PersistedAdapterFacts {

@@ -299,6 +299,8 @@ final class ControlProtocolTests: XCTestCase {
 
         XCTAssertEqual(object["enabled"] as? Bool, true)
         XCTAssertEqual(object["activationState"] as? String, "preparing")
+        XCTAssertEqual(object["laggingProviderFileCount"] as? Int, 0)
+        XCTAssertEqual(object["providerLagBytes"] as? Int, 0)
         XCTAssertNil(object["availableReleaseSequence"])
         XCTAssertNil(object["installedReleaseSequence"])
         XCTAssertNil(object["preparedForUpdate"])

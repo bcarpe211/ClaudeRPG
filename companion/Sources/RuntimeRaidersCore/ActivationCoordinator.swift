@@ -93,6 +93,21 @@ public final class ActivationCoordinator: @unchecked Sendable {
         }
     }
 
+    public func reconcileProviderFiles(_ files: [URL]) {
+        guard let activationGeneration = currentGenerationIfEnabled() else { return }
+        do {
+            guard try controller.reconcileProviderFiles(files) else { return }
+            scheduleUploadIfCurrent(generation: activationGeneration)
+            workerQueue.async { [weak self] in
+                self?.advance(generation: activationGeneration)
+            }
+        } catch {
+            workerQueue.async { [weak self] in
+                self?.failActivation(generation: activationGeneration)
+            }
+        }
+    }
+
     private func prepare(generation activationGeneration: UInt64) {
         do {
             guard isCurrent(activationGeneration) else { return }

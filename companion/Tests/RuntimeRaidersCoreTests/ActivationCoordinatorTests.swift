@@ -95,6 +95,43 @@ final class ActivationCoordinatorTests: XCTestCase {
         }
     }
 
+    func testReadyCoordinatorReconciliationSchedulesMissedAppendForUpload() throws {
+        try withHarness(readLimitBytes: 64) { harness in
+            let files = try harness.makeHistoricalFiles(count: 1)
+            let ready = expectation(description: "activation ready")
+            let upload = expectation(description: "upload scheduled")
+            upload.assertForOverFulfill = false
+            let coordinator = ActivationCoordinator(
+                controller: harness.controller,
+                workerQueue: DispatchQueue(label: "com.redlattice.runtime-raiders.tests.reconciliation"),
+                operations: ActivationOperations(
+                    startWatching: {},
+                    stopWatching: {},
+                    discoverProviderFiles: { files },
+                    scheduleUpload: { upload.fulfill() },
+                    becameReady: { ready.fulfill() },
+                    becameDisabled: {}
+                )
+            )
+            XCTAssertEqual(try coordinator.turnOn(), .preparing)
+            wait(for: [ready], timeout: 2)
+            try harness.appendDesktopCompletion(to: files[0])
+
+            coordinator.reconcileProviderFiles(files)
+
+            wait(for: [upload], timeout: 2)
+            let deadline = Date().addingTimeInterval(2)
+            while harness.controller.hasPendingReadWork, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .filter { $0.event.state == .completed }.count,
+                1
+            )
+        }
+    }
+
     func testTurnOffCannotBeOvertakenByAReadyNotificationAlreadyInFlight() throws {
         try withHarness { harness in
             let readyStarted = DispatchSemaphore(value: 0)
@@ -212,6 +249,15 @@ final class ActivationCoordinatorTests: XCTestCase {
             wait(for: [ready], timeout: 10)
             XCTAssertEqual(harness.controller.activationState, .ready)
             XCTAssertEqual(try harness.outbox.queuedCount(), 0)
+            let statusStarted = ContinuousClock.now
+            let status = try harness.controller.status(
+                daemonRunning: true,
+                serverEnabledSurfaces: [.codexDesktop],
+                lastSuccessfulUploadMS: nil
+            )
+            XCTAssertLessThan(ContinuousClock.now - statusStarted, .milliseconds(250))
+            XCTAssertEqual(status.laggingProviderFileCount, 0)
+            XCTAssertEqual(status.providerLagBytes, 0)
 
             try harness.appendDesktopCompletion(to: files[0])
             coordinator.processChangedFiles([files[0]])
