@@ -9,6 +9,7 @@ import { monsterByIndex } from '../src/domain/bestiary';
 import { applyGoldMutation } from '../src/domain/goldledger';
 import { purchaseConsumable } from '../src/domain/inventory';
 import { activatePotion } from '../src/domain/potions';
+import { recordFreshRunPresence } from '../src/domain/run-presence';
 
 let db: ReturnType<typeof openDb>;
 beforeEach(() => { db = openDb(':memory:'); seedSettings(db); });
@@ -77,17 +78,45 @@ describe('buildTvState', () => {
     ]));
   });
 
-  it('computes each Raider activity score once for both Momentum and active status', () => {
+  it('counts presence and legacy activity through the shared idle-window boundary', () => {
+    const now = 1_800_000;
+    const windowMs = 15 * 60_000;
+    const presence = createPlayer(db, { name: 'Presence', class_key: 'wizard', gender: 'M' }, 1);
+    const legacy = createPlayer(db, { name: 'Legacy', class_key: 'thief', gender: 'F' }, 1);
+    const expired = createPlayer(db, { name: 'Expired', class_key: 'knight', gender: 'M' }, 1);
+    const disabled = createPlayer(db, { name: 'Disabled', class_key: 'wizard', gender: 'F' }, 1);
+
+    expect(recordFreshRunPresence(db, presence.id, now - windowMs, now - windowMs)).toBe(true);
+    db.prepare('UPDATE players SET last_token_at=? WHERE id=?').run(now - windowMs, legacy.id);
+    db.prepare('UPDATE players SET last_token_at=? WHERE id=?').run(now - windowMs - 1, expired.id);
+    expect(recordFreshRunPresence(db, disabled.id, now, now)).toBe(true);
+    db.prepare('UPDATE players SET disabled=1 WHERE id=?').run(disabled.id);
+
+    const boundary = buildTvState(db, now);
+    expect(boundary.activeRaiders).toBe(2);
+    expect(boundary.players.find((player) => player.id === presence.id)).toMatchObject({
+      modifier: 1,
+      connected: false,
+    });
+    expect(boundary.players.find((player) => player.id === legacy.id)?.connected).toBe(true);
+
+    expect(buildTvState(db, now + 1).activeRaiders).toBe(0);
+  });
+
+  it('computes Momentum once per Raider and public presence once for active status', () => {
     const now = 100_000;
     const active = createPlayer(db, { name: 'Active', class_key: 'wizard', gender: 'M' }, now);
-    createPlayer(db, { name: 'Idle', class_key: 'thief', gender: 'F' }, now);
+    const presence = createPlayer(db, { name: 'Presence', class_key: 'thief', gender: 'F' }, now);
     ingestTokenUsage(db, tokens(active.auth_token, 1_000), now, { cacheReadWeight: 0 });
+    expect(recordFreshRunPresence(db, presence.id, now, now)).toBe(true);
     let activityQueries = 0;
+    let presenceQueries = 0;
     const countedDb = new Proxy(db, {
       get(target, property, receiver) {
         if (property !== 'prepare') return Reflect.get(target, property, receiver);
         return (sql: string) => {
           if (sql.includes('SELECT ts, effective_delta FROM token_events')) activityQueries += 1;
+          if (sql.includes('SELECT DISTINCT player_id')) presenceQueries += 1;
           return target.prepare(sql);
         };
       },
@@ -96,8 +125,10 @@ describe('buildTvState', () => {
     const state = buildTvState(countedDb, now);
 
     expect(activityQueries).toBe(2);
-    expect(state.activeRaiders).toBe(1);
+    expect(presenceQueries).toBe(1);
+    expect(state.activeRaiders).toBe(2);
     expect(state.players.find((player) => player.id === active.id)?.modifier).toBeGreaterThan(1);
+    expect(state.players.find((player) => player.id === presence.id)?.modifier).toBe(1);
   });
 
   it('keeps current Raid counts through a defeat or rest gap without an active Fight', () => {
@@ -121,15 +152,44 @@ describe('buildTvState', () => {
     });
   });
 
-  it('does not serialize Run provider, model, or effort data to the TV', () => {
+  it('does not serialize presence timestamps or Run provider, model, and effort data to the TV', () => {
     const player = createPlayer(db, { name: 'Private', class_key: 'wizard', gender: 'M' }, 1);
     ingestTokenUsage(db, tokens(player.auth_token, 1_000), 100_000, { cacheReadWeight: 0 });
+    expect(recordFreshRunPresence(db, player.id, 99_999, 100_000)).toBe(true);
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'b'.repeat(64), 91_230_000);
+    db.prepare(
+      `INSERT INTO runs
+        (player_id, provider, surface, run_key, state, started_at_ms,
+         last_event_at_ms, last_observed_at_ms, latest_model, latest_effort,
+         policy_version, created_at, updated_at)
+       VALUES (?, 'omp', 'omp', ?, 'open', ?, ?, ?, ?, ?,
+         'raid-power-v2', ?, ?)`,
+    ).run(
+      player.id,
+      'a'.repeat(64),
+      91_230_000,
+      91_234_000,
+      91_234_567,
+      'private-model-marker',
+      'private-effort-marker',
+      91_230_000,
+      91_234_567,
+    );
     new GameEngine(db, { rng: () => 0.5 }).tick(100_000);
 
     const payload = JSON.stringify(buildTvState(db, 100_000));
     expect(payload).not.toContain('provider');
+    expect(payload).not.toContain('"omp"');
     expect(payload).not.toContain('model');
     expect(payload).not.toContain('effort');
+    expect(payload).not.toContain('last_run_activity_at');
+    expect(payload).not.toContain('started_at_ms');
+    expect(payload).not.toContain('91_234_567');
+    expect(payload).not.toContain('a'.repeat(64));
+    expect(payload).not.toContain('private-model-marker');
+    expect(payload).not.toContain('private-effort-marker');
   });
 
   it('leaderboard modifier reflects the accumulate activity score (survives past the old recent-window)', () => {

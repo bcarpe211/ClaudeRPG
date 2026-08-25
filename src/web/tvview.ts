@@ -29,6 +29,7 @@ import { buildDefeatSummary, type DefeatSummary } from '../domain/engine';
 import { monsterByIndex, monsterName } from '../domain/bestiary';
 import { monsterTitle, pluralizeCreature } from '../domain/monstername';
 import { visiblePotionTiersByPlayer } from '../domain/potions';
+import { activeRaiderIds } from '../domain/run-presence';
 
 export function creatureSpriteUrl(index: number): string {
   return `/sprites/creatures_24x24/${creatureSpriteFile(index)}`;
@@ -111,11 +112,10 @@ export function buildTvState(
   const rows = db.prepare(
     'SELECT * FROM players ORDER BY effective_tokens DESC, id ASC',
   ).all() as any[];
+  const activeIds = activeRaiderIds(db, now, cfg.pauseAfterMinutes * 60_000);
   const potionTiersByPlayer = visiblePotionTiersByPlayer(db, now);
-  const activityByPlayer = new Map<number, number>();
   const players: TvHero[] = rows.map((p) => {
     const score = activityScore(db, p.id, now, cfg);
-    activityByPlayer.set(p.id, score);
     const potionEffects = potionTiersByPlayer.get(p.id)
       ?? { goldTier: null, damageTier: null };
     return {
@@ -128,8 +128,7 @@ export function buildTvState(
       potionEffects,
     };
   });
-  const activeRaiders = rows.filter((p) => !p.disabled
-    && (activityByPlayer.get(p.id) ?? 0) > 0).length;
+  const activeRaiders = rows.filter((p) => !p.disabled && activeIds.has(p.id)).length;
 
   // Assign battlefield slots to enabled players (same order) from the layout.
   const layout = currentTvLayout(db);
