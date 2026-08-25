@@ -795,6 +795,14 @@ Power award. Version 0.4.8 delivered a new Run opening immediately and its first
 positive usage event about 14 seconds later, reproducing the mismatch without a
 collector stall.
 
+**Release status (2026-08-25):** the presence correction is approved and
+planned behind a separately authorized, collection-off production gate. Local
+implementation and test evidence do not complete this backlog item; it remains
+open until migration, public wake/count, unchanged Raid Power, duplicate
+non-extension, 15-minute sleep, and verified-off canary evidence exist in
+production. Official re-enrollment and human-readable `raiders status` remain
+separate #33 work and are not part of this server rollout.
+
 - [ ] Add a scoring-independent presence timestamp. Advance it only for a fresh,
       authenticated, newly accepted Run event from an enabled Raider.
 - [ ] Do not let duplicates, device heartbeats, disabled Raiders, future-skewed

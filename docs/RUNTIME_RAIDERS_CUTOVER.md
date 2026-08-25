@@ -601,6 +601,72 @@ updater-hold, and rollback requirement in sections 3–5:
 companion installation, `raiders on`, canary command, or office activation.
 Those actions remain blocked until their own explicit authorization.
 
+### 3.2 Presence-clock release gate: separately authorized and collection-off
+
+This gate is documentation for a later authorized operation; it performs no
+production action by itself. Use it only after the scoring-v2 candidate has
+been independently reviewed and the owner has authorized the exact presence
+candidate SHA, backup target, and deployment window. Deployment authorization
+does not authorize collection or the canary.
+
+Migration `020_raider_presence` creates only the empty
+`raider_presence(player_id, last_run_activity_at)` projection. It contains no
+backfill: applying it must not insert presence from existing Runs, events,
+devices, `token_events`, or `players.last_token_at`, and it must not edit,
+delete, merge, or retarget any account, Raider, enrollment, device, Run, score,
+or other history row. Before canary collection, require both the migration
+marker and an empty table; any row at this boundary is a NO-GO.
+
+The presence-specific rollback is an application-code rollback. First prove
+the canary is off, then return to the recorded prior reviewed application SHA
+under the existing stopped-service, ownership, health, and version gates. Leave
+the additive `020_raider_presence` migration marker and its table in place as
+inert schema. Do not drop the table, reverse the migration, or restore the
+pre-release database merely to remove it during an incident. Database
+corruption or an account/history mismatch remains a separate section 7 rollback
+trigger; an otherwise healthy unused presence table is not.
+
+Perform the release boundary in this order:
+
+1. Prove the public TV state reports `"paused":true` immediately before the
+   backup. Record the public URL, UTC observation time, and content-free result;
+   a database-only pause read is insufficient.
+2. Create and integrity-check the timestamped logical SQLite `.backup` from
+   section 4.2. Retain its recorded path and SHA-256 outside Git.
+3. While the service is stopped, install only the independently reviewed
+   presence candidate SHA and preserve the already reviewed scoring-v2
+   environment.
+4. Start once. Verify database integrity, migration marker
+   `020_raider_presence`, zero pre-canary presence rows, public `/health`, and a
+   public `/tv/stream` version equal to the reviewed candidate's short SHA.
+   Reconfirm `"paused":true`. Any mismatch is a NO-GO; do not enable a canary.
+
+STOP — collection remains off without separate approval
+
+Only a new, explicitly recorded one-canary collection approval permits the
+remaining acceptance steps:
+
+5. Record the canary Raider's Raid Power baseline, then enable exactly one
+   approved canary only long enough to deliver one fresh, newly accepted
+   zero-credit opening event. Do not activate another Mac or the office. If the
+   event does not arrive in the authorized window, turn the canary off and stop;
+   do not retry by broadening collection.
+6. Immediately after that one event—or after any error—run `raiders off` and
+   prove collection is disabled. Keep it off for every remaining observation.
+7. From content-free evidence, verify the event recorded server-receipt
+   presence, the dungeon woke immediately, public `activeRaiders` includes the
+   canary, the new Run award is zero, and the Raider's Raid Power remains at its
+   recorded baseline.
+8. Verify an exact duplicate delivery does not advance the stored presence
+   timestamp or Raid Power. Do not create a second new event to prove this.
+9. Measure from the original accepted receipt. Verify the dungeon remains awake
+   through the configured 15-minute window, then sleeps just after that boundary
+   with the canary absent from `activeRaiders`; the duplicate must not extend
+   the deadline.
+10. Record the migration, health, version, wake, unchanged-Raid-Power,
+    duplicate, sleep, and verified-off evidence. Office activation,
+    re-enrollment, and wider collection remain separately blocked.
+
 ## 4. Coordinated cutover
 
 Use one operator and one shell. Announce the maintenance window. Companions and
