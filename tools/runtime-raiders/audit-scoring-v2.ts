@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import {
   InvalidNestedUsageError,
@@ -156,6 +157,13 @@ interface AuditArguments {
   v2CutoverAt: number;
 }
 
+type OpenAuditDatabase = (
+  path: string,
+  options: { readonly: true; fileMustExist: true },
+) => Database.Database;
+
+const openSqliteDatabase: OpenAuditDatabase = (path, options) => new Database(path, options);
+
 function parseArguments(args: readonly string[]): AuditArguments | null {
   if (args.length !== 4 || args[0] !== '--db' || args[2] !== '--v2-cutover') return null;
   const [dbPath, cutoffText] = [args[1], args[3]];
@@ -168,6 +176,28 @@ function parseArguments(args: readonly string[]): AuditArguments | null {
   return { dbPath, v2CutoverAt };
 }
 
+export function openReadOnlyAuditDatabase(
+  dbPath: string,
+  openDatabase: OpenAuditDatabase = openSqliteDatabase,
+): Database.Database {
+  let validSnapshot = false;
+  try {
+    validSnapshot = isAbsolute(dbPath) && statSync(dbPath).isFile();
+  } catch {
+    validSnapshot = false;
+  }
+  if (!validSnapshot) throw new Error('invalid audit database path');
+
+  const db = openDatabase(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    db.pragma('query_only = ON');
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
 export function main(args: readonly string[] = process.argv.slice(2)): void {
   const parsed = parseArguments(args);
   if (!parsed) {
@@ -178,8 +208,7 @@ export function main(args: readonly string[] = process.argv.slice(2)): void {
 
   let db: Database.Database | undefined;
   try {
-    db = new Database(parsed.dbPath, { readonly: true, fileMustExist: true });
-    db.pragma('query_only = ON');
+    db = openReadOnlyAuditDatabase(parsed.dbPath);
     process.stdout.write(`${JSON.stringify(buildScoringV2Audit(db, parsed.v2CutoverAt))}\n`);
   } catch {
     console.error('audit failed');

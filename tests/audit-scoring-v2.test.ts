@@ -6,7 +6,10 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../src/db/db';
 import { createPlayer } from '../src/domain/players';
-import { buildScoringV2Audit } from '../tools/runtime-raiders/audit-scoring-v2';
+import {
+  buildScoringV2Audit,
+  openReadOnlyAuditDatabase,
+} from '../tools/runtime-raiders/audit-scoring-v2';
 
 const CUTOVER = 1_800_000_000_000;
 const fixtureDirectories: string[] = [];
@@ -130,6 +133,19 @@ afterEach(() => {
 });
 
 describe('scoring v2 audit', () => {
+  it('rejects a missing absolute snapshot before the SQLite open boundary', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'clauderpg-scoring-audit-missing-'));
+    fixtureDirectories.push(directory);
+    const missingPath = join(directory, 'missing.db');
+    let openAttempts = 0;
+
+    expect(() => openReadOnlyAuditDatabase(missingPath, () => {
+      openAttempts++;
+      throw new Error('SQLite must not open a missing snapshot');
+    })).toThrow('invalid audit database path');
+    expect(openAttempts).toBe(0);
+  });
+
   it('reports v2 counterfactuals and marks invalid nested counters', () => {
     const dbPath = createFixture();
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
