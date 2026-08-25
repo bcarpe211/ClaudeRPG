@@ -9,7 +9,7 @@ Reference: the oryx 16-bit fantasy tileset under
 
 ---
 
-## Current priority view (2026-08-23)
+## Current priority view (2026-08-25)
 
 **Importance** is the product/operational urgency. **Impact** and **effort** use
 a 1–5 scale, where 5 is highest. A quick win is useful work estimated at effort
@@ -20,7 +20,8 @@ sections below for history but is not repeated here.
 |---|---|---:|---:|---:|:---:|
 | #31 | Onboard the employee beta and observe first-install, opt-in, and Run behavior | High | 5 | 2 | Yes |
 | #33 | Add official re-enrollment, post-install guidance, and readable companion status | High | 5 | 3 | No |
-| #34 | Observe first-week Momentum, then tune its ramp from real office evidence | High | 4 | 2 | Yes |
+| #34 | Correct nested Codex usage scoring for new Runs, then reassess Momentum | Critical | 5 | 4 | No |
+| #35 | Align dungeon presence with accepted fresh Run activity without awarding points | High | 4 | 3 | No |
 | #22 | Audit Potion Lab evidence against the higher-tier launch threshold | High | 4 | 2 | Yes |
 | #9/#20 | Recheck real fight pacing and economy before changing balance | High | 4 | 2 | Yes |
 | #32 | Add and calibrate the Omp adapter after a credentialed privacy canary | High | 4 | 5 | No |
@@ -44,9 +45,10 @@ sections below for history but is not repeated here.
 | #32 | Reconsider Composer only after a safe record contract exists | Low | 2 | 5 | No |
 | #28/#30/#32 | Optional audit metadata, UI evidence, and internal-name cleanup | Optional | 1–2 | 1–5 | No |
 
-**Recommended quick-win order:** employee-beta observation → the post-install
-guidance/status slice of #33 → first-week Momentum evidence → Potion Lab
-evidence audit → fight/economy snapshot → monster title clamp →
+**Recommended work order:** correct new-Run scoring in #34 → align dungeon
+presence in #35 → verify one bounded collection-off canary boundary → complete
+the post-install guidance/status slice of #33 → observe corrected Momentum →
+Potion Lab evidence audit → fight/economy snapshot → monster title clamp →
 floor-data validation. Do not start higher potion tiers, provider
 expansion, equipment, or pets until their stated evidence/dependency gates pass.
 
@@ -741,22 +743,63 @@ credentials, local paths, or provider-record content.
       sequence only after the fresh install, reinstall, and recovery matrices
       pass.
 
-## 34. First-week Raid Momentum observation and tuning
+## 34. Correct nested Codex usage scoring, then reassess Raid Momentum
 
-The first multi-user activation produced a large but explainable initial wave:
-an active Codex conversation delivered about 3.15 million Raid Power in one
-flush and peaked near 158.54×. The configured 200× combat cap held, scoring did
-not duplicate the Run, and the five-minute hold plus five-minute linear decay
-worked. Raid Power is uncapped; only the combat Momentum multiplier is capped.
+**Production finding (2026-08-25):** Codex reports cache reads as a subset of
+input and reasoning as a subset of output. Runtime Raiders v1 stores those raw
+counters correctly, but its policy sums `input + output + reasoning` while only
+adding zero for the separate cache-read field. Cache reads therefore remain
+inside scored input, and reasoning is counted twice. One 3m55s Run received
+4,110,542 Raid Power even though removing the nested cache-read contribution
+would put the same Run near 100,000 Raid Power. The 200× Momentum cap is therefore
+not evidence that the combat ramp itself is too steep.
 
-- [ ] Observe two to three normal office workdays before changing tuning.
-- [ ] Record content-free aggregates: median, p95, and peak Momentum; number of
-      players reaching the 200× cap; fight duration; damage concentration; and
-      post-activity decay behavior.
-- [ ] Confirm whether already-running Codex conversations normally flush after a
-      newly completed task or sometimes require a Codex restart to emit records.
-- [ ] If the ramp remains too steep, raise `token_modifier_k` from its current
-      20,000 Raid Power per +1×. Preserve the 200× ceiling unless separate
-      evidence supports changing it.
-- [ ] Do not retroactively alter Raid Power, player history, or the scoring
-      policy merely to tune combat pacing.
+**Approved beta-history decision (2026-08-25):** fix scoring only for new Runs.
+Preserve every existing account, Raider, device enrollment, Run, awarded Raid
+Power value, level, gold balance, damage record, reward, and leaderboard result.
+Do not merge, delete, retarget, reset, or recompute any account or historical
+gameplay data as part of this correction. The inflated v1 beta history remains
+visible as beta history. The primary canary's collection was manually turned off;
+no release or diagnostic step may turn it back on without separate approval.
+
+- [ ] Add a forward-only Raid Power policy v2 that scores non-overlapping usage:
+      total input minus cached input, plus total output exactly once. Cache-write
+      and reasoning counters remain visible native-usage detail but are already
+      contained by their parent totals.
+- [ ] Preserve raw provider counters unchanged for audit and display. Reject a
+      new v2 event when cache reads exceed input or reasoning exceeds output.
+- [ ] Add a server cutover that keeps pre-cutover and already-open Runs on v1 and
+      assigns only newly started Runs to v2. Exact duplicates remain idempotent,
+      and one Run may never cross policies.
+- [ ] Render nested usage honestly on the player page: total input with cached
+      and uncached portions, total output with its reasoning portion, and cache
+      writes explicitly labeled as reported usage.
+- [ ] Do not change `token_modifier_k` or `modifier_cap` during the correctness
+      release. After two to three normal office days under v2, record median,
+      p95, peak, cap frequency, fight duration, damage concentration, and decay;
+      tune Momentum only if the corrected evidence still supports it.
+- [ ] Verify the `0.4.8` reconciliation repair with one Codex Desktop Run and one
+      Codex CLI Run that deliver opening, incremental, and terminal events without
+      quitting either client; report provider emission delay separately from
+      collector/upload latency.
+
+## 35. Align dungeon presence with accepted Run activity
+
+**Production finding (2026-08-25):** Runtime Raiders can report an active Run as
+soon as a zero-credit opening event arrives, while dungeon sleep still uses
+`MAX(players.last_token_at)` and therefore waits for the first positive Raid
+Power award. Version 0.4.8 delivered a new Run opening immediately and its first
+positive usage event about 14 seconds later, reproducing the mismatch without a
+collector stall.
+
+- [ ] Add a scoring-independent presence timestamp. Advance it only for a fresh,
+      authenticated, newly accepted Run event from an enabled Raider.
+- [ ] Do not let duplicates, device heartbeats, disabled Raiders, future-skewed
+      timestamps, or stale reconciled backlog extend presence.
+- [ ] Make dungeon sleep and `activeRaiders` consume the same presence definition
+      while positive Raid Power continues to update scoring independently.
+- [ ] Cover zero-credit opening wake, duplicate and heartbeat exclusion, stale
+      backlog exclusion, disabled-Raider exclusion, the 15-minute boundary, and
+      the unchanged positive-credit path.
+- [ ] Ship and verify this server behavior independently from signed companion
+      re-enrollment/status work in #33.
