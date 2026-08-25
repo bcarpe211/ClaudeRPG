@@ -145,6 +145,8 @@ describe('versioned encounter reward awards', () => {
       cacheReadWeight: 0,
     });
     db.prepare('UPDATE players SET disabled=1 WHERE id=?').run(tokenOnly.id);
+    db.prepare('UPDATE players SET last_token_at=? WHERE id=?')
+      .run(100_000, damageOnly.id);
 
     const engine = new GameEngine(db, { rng: () => 0.5 });
     engine.tick(100_000);
@@ -269,6 +271,8 @@ describe('versioned encounter reward awards', () => {
       cacheReadWeight: 0,
     });
     db.prepare('UPDATE players SET disabled=1 WHERE id=?').run(tokenOnly.id);
+    db.prepare('UPDATE players SET last_token_at=? WHERE id=?')
+      .run(100_000, damageOnly.id);
 
     const engine = new GameEngine(db, { rng: () => 0.5 });
     engine.tick(100_000);
