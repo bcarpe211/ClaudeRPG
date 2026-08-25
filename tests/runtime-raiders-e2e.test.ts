@@ -16,6 +16,7 @@ import type { RunEventV1, UsageCountersV1 } from '../src/domain/run-events';
 import { seedSettings } from '../src/domain/settings';
 import { createApp } from '../src/web/app';
 import { buildCompanionInstallCommand } from '../src/web/companion-install';
+import { buildTvState } from '../src/web/tvview';
 
 const NOW = 1_800_000_000_000;
 const CUTOVER = NOW - 60_000;
@@ -142,6 +143,35 @@ function count(table: 'runs' | 'run_events' | 'token_events' | 'potion_work_even
   return (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
 }
 
+function presenceReceipt(): number | null {
+  const row = db.prepare(`
+    SELECT last_run_activity_at
+    FROM raider_presence
+    WHERE player_id = ?
+  `).get(player.id) as { last_run_activity_at: number } | undefined;
+  return row?.last_run_activity_at ?? null;
+}
+
+function scoringAndEconomySnapshot(runKey: string) {
+  const currentPlayer = getPlayerById(db, player.id)!;
+  return {
+    player: {
+      totalTokens: currentPlayer.total_tokens,
+      effectiveTokens: currentPlayer.effective_tokens,
+      lastTokenAt: currentPlayer.last_token_at,
+      gold: currentPlayer.gold,
+      level: currentPlayer.level,
+    },
+    runAward: db.prepare(`
+      SELECT awarded_usage_credit, awarded_completion_credit,
+             awarded_duration_credit, raid_power
+      FROM runs
+      WHERE player_id = ? AND run_key = ?
+    `).get(player.id, runKey),
+    tokenCount: count('token_events'),
+  };
+}
+
 function scoringProgressionSnapshot() {
   return {
     runs: count('runs'),
@@ -202,6 +232,101 @@ describe('Runtime Raiders local integration gate', () => {
     `).get(CUTOVER, 'raid-power-v1') as { invalid: number };
 
     expect(result.invalid).toBe(0);
+  });
+
+  it('wakes and expires dungeon presence from an accepted zero-credit Run without scoring it', async () => {
+    const device = await enrollDevice();
+    const opening = runEvent(device.deviceId, {
+      started_at_ms: NOW,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: ZERO_USAGE,
+    });
+
+    expect(buildTvState(db, NOW)).toMatchObject({ paused: true, activeRaiders: 0 });
+    const accepted = await post(
+      '/api/runs/events',
+      { events: [opening] },
+      device.deviceToken,
+    );
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(presenceReceipt()).toBe(NOW);
+
+    const beforeTick = scoringAndEconomySnapshot(opening.run_key);
+    expect(beforeTick).toEqual({
+      player: {
+        totalTokens: 0,
+        effectiveTokens: 0,
+        lastTokenAt: null,
+        gold: 0,
+        level: 1,
+      },
+      runAward: {
+        awarded_usage_credit: 0,
+        awarded_completion_credit: 0,
+        awarded_duration_credit: 0,
+        raid_power: 0,
+      },
+      tokenCount: 0,
+    });
+
+    const engine = new GameEngine(db, { rng: () => 0.5 });
+    engine.tick(NOW);
+    const awake = buildTvState(db, NOW);
+    expect(awake).toMatchObject({ paused: false, activeRaiders: 1 });
+    expect(awake.players.find((hero) => hero.id === player.id)).toMatchObject({
+      modifier: 1,
+      connected: false,
+    });
+    expect(scoringAndEconomySnapshot(opening.run_key)).toEqual(beforeTick);
+
+    const originalReceipt = presenceReceipt();
+    const duplicateAt = NOW + 15 * 60_000;
+    vi.mocked(Date.now).mockReturnValue(duplicateAt);
+    const duplicate = await post(
+      '/api/runs/events',
+      { events: [opening] },
+      device.deviceToken,
+    );
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body).toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
+    expect(presenceReceipt()).toBe(originalReceipt);
+    expect(buildTvState(db, duplicateAt).activeRaiders).toBe(1);
+
+    const expiredAt = NOW + 15 * 60_000 + 1;
+    engine.tick(expiredAt);
+    expect(buildTvState(db, expiredAt)).toMatchObject({ paused: true, activeRaiders: 0 });
+    expect(scoringAndEconomySnapshot(opening.run_key)).toEqual(beforeTick);
+  });
+
+  it('ingests newly identified stale backlog without creating presence or waking the dungeon', async () => {
+    const device = await enrollDevice();
+    const receivedAt = NOW + 120_001;
+    const stale = runEvent(device.deviceId, {
+      started_at_ms: NOW,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: ZERO_USAGE,
+    });
+    vi.mocked(Date.now).mockReturnValue(receivedAt);
+
+    const accepted = await post(
+      '/api/runs/events',
+      { events: [stale] },
+      device.deviceToken,
+    );
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(presenceReceipt()).toBeNull();
+    expect(scoringAndEconomySnapshot(stale.run_key)).toMatchObject({
+      runAward: { raid_power: 0 },
+      tokenCount: 0,
+    });
+
+    new GameEngine(db, { rng: () => 0.5 }).tick(receivedAt);
+    expect(buildTvState(db, receivedAt)).toMatchObject({ paused: true, activeRaiders: 0 });
+    expect(presenceReceipt()).toBeNull();
   });
 
   it('scores parallel synthetic Codex Runs once, preserves legacy projection, potion work, wake, and recent Run queries', async () => {
