@@ -320,7 +320,9 @@
     );
     setText(
       'hub-run-native-usage',
-      `${number.format(run.nativeUsage.input)} input · ${number.format(run.nativeUsage.output)} output · ${number.format(run.nativeUsage.cacheRead)} cache read · ${number.format(run.nativeUsage.cacheWrite)} cache write · ${number.format(run.nativeUsage.reasoningOutput)} reasoning`,
+      run.nativeUsage.nestedShapeValid
+        ? `${number.format(run.nativeUsage.input)} total input (${number.format(run.nativeUsage.cacheRead)} cached, ${number.format(run.nativeUsage.uncachedInput)} uncached) · ${number.format(run.nativeUsage.output)} total output (${number.format(run.nativeUsage.reasoningOutput)} reasoning) · ${number.format(run.nativeUsage.cacheWrite)} cache writes reported`
+        : `${number.format(run.nativeUsage.input)} total input (${number.format(run.nativeUsage.cacheRead)} cached, cache relationship unavailable) · ${number.format(run.nativeUsage.output)} total output (${number.format(run.nativeUsage.reasoningOutput)} reasoning) · ${number.format(run.nativeUsage.cacheWrite)} cache writes reported`,
     );
     setText('hub-run-awarded', `${number.format(run.raidPower)} Raid Power`);
   }

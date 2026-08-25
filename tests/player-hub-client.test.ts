@@ -198,6 +198,8 @@ type HubState = {
       cacheRead: number;
       cacheWrite: number;
       reasoningOutput: number;
+      uncachedInput: number | null;
+      nestedShapeValid: boolean;
     };
     raidPower: number;
   };
@@ -266,7 +268,10 @@ function interactionHarness(options: {
     latestRun: {
       provider: 'codex', surface: 'codex_desktop', model: 'gpt-live', effort: 'high',
       state: 'open', elapsedMs: 1_000,
-      nativeUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0 },
+      nativeUsage: {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0,
+        uncachedInput: 0, nestedShapeValid: true,
+      },
       raidPower: 0,
     },
     gold: 450_000,
@@ -320,7 +325,8 @@ function interactionHarness(options: {
       state: 'complete',
       elapsedMs: 125_000,
       nativeUsage: {
-        input: 111, output: 222, cacheRead: 333, cacheWrite: 444, reasoningOutput: 555,
+        input: 74_226, output: 486, cacheRead: 71_424, cacheWrite: 0, reasoningOutput: 284,
+        uncachedInput: 2_802, nestedShapeValid: true,
       },
       raidPower: 666,
     },
@@ -881,7 +887,7 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     const h = interactionHarness({ responses: [] });
     h.document.getElementById('hub-raider-power')!.textContent = '0';
     h.document.getElementById('hub-run-native-usage')!.textContent =
-      '0 input · 0 output · 0 cache read · 0 cache write · 0 reasoning';
+      '0 total input (0 cached, 0 uncached) · 0 total output (0 reasoning) · 0 cache writes reported';
     h.document.getElementById('hub-run-awarded')!.textContent = '0 Raid Power';
     h.responses.push({ ok: true, json: async () => h.refreshed });
 
@@ -893,9 +899,38 @@ describe('player hub inventory, effects, and refresh behavior', () => {
     expect(h.document.getElementById('hub-run-state')!.textContent).toBe('Complete');
     expect(h.document.getElementById('hub-run-elapsed')!.textContent).toBe('2m 5s');
     expect(h.document.getElementById('hub-run-native-usage')!.textContent).toBe(
-      '111 input · 222 output · 333 cache read · 444 cache write · 555 reasoning',
+      '74,226 total input (71,424 cached, 2,802 uncached) · 486 total output (284 reasoning) · 0 cache writes reported',
     );
     expect(h.document.getElementById('hub-run-awarded')!.textContent).toBe('666 Raid Power');
+  });
+
+  it('retains malformed historical native counters during polling without showing negative uncached input', async () => {
+    const h = interactionHarness({ responses: [] });
+    h.responses.push({
+      ok: true,
+      json: async () => ({
+        ...h.refreshed,
+        latestRun: {
+          ...h.refreshed.latestRun!,
+          nativeUsage: {
+            input: 11,
+            output: 22,
+            cacheRead: 33,
+            cacheWrite: 44,
+            reasoningOutput: 55,
+            uncachedInput: null,
+            nestedShapeValid: false,
+          },
+        },
+      }),
+    });
+
+    await h.intervals[0].callback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(h.document.getElementById('hub-run-native-usage')!.textContent).toBe(
+      '11 total input (33 cached, cache relationship unavailable) · 22 total output (55 reasoning) · 44 cache writes reported',
+    );
   });
 
   it('clears stale Run details when polling reports no Runs', async () => {

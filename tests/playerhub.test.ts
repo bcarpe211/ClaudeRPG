@@ -72,7 +72,21 @@ function seedRun(playerId: number, input: {
   model: string | null;
   effort: string | null;
   raidPower: number;
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    reasoningOutput: number;
+  };
 }): void {
+  const usage = input.usage ?? {
+    input: 11,
+    output: 22,
+    cacheRead: 33,
+    cacheWrite: 44,
+    reasoningOutput: 55,
+  };
   db.prepare(
     `INSERT INTO runs
       (player_id, provider, surface, run_key, state, started_at_ms,
@@ -81,13 +95,18 @@ function seedRun(playerId: number, input: {
        usage_reasoning_output, latest_model, latest_effort, policy_version,
        raid_power, created_at, updated_at)
      VALUES (?, 'codex', 'codex_desktop', ?, 'open', ?, NULL, ?, ?,
-       11, 22, 33, 44, 55, ?, ?, 'raid-power-v1', ?, ?, ?)`,
+       ?, ?, ?, ?, ?, ?, ?, 'raid-power-v1', ?, ?, ?)`,
   ).run(
     playerId,
     input.runKey,
     input.updatedAt - 5_000,
     input.updatedAt - 1_000,
     input.updatedAt,
+    usage.input,
+    usage.output,
+    usage.cacheRead,
+    usage.cacheWrite,
+    usage.reasoningOutput,
     input.model,
     input.effort,
     input.raidPower,
@@ -139,12 +158,98 @@ describe('player hub state', () => {
         cacheRead: 33,
         cacheWrite: 44,
         reasoningOutput: 55,
+        uncachedInput: null,
+        nestedShapeValid: false,
       },
       raidPower: 321,
     });
     const serialized = JSON.stringify(state);
     expect(serialized).not.toContain('f'.repeat(64));
     expect(serialized).not.toContain('runKey');
+  });
+
+  it('derives native usage containment for valid raw counters without changing them', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Nested Usage', class_key: 'wizard', gender: 'M' },
+      now - 20_000,
+    );
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'd'.repeat(64), now - 20_000);
+    seedRun(player.id, {
+      runKey: 'c'.repeat(64),
+      updatedAt: now - 1_000,
+      model: 'gpt-live',
+      effort: 'high',
+      raidPower: 321,
+      usage: {
+        input: 74_226,
+        output: 486,
+        cacheRead: 71_424,
+        cacheWrite: 0,
+        reasoningOutput: 284,
+      },
+    });
+
+    const state = buildPlayerHubState(
+      db,
+      getPlayerById(db, player.id)!,
+      now,
+      timeZone,
+    );
+
+    expect(state.latestRun?.nativeUsage).toEqual({
+      input: 74_226,
+      output: 486,
+      cacheRead: 71_424,
+      cacheWrite: 0,
+      reasoningOutput: 284,
+      uncachedInput: 2_802,
+      nestedShapeValid: true,
+    });
+  });
+
+  it('withholds uncached input when reasoning output exceeds total output', () => {
+    const player = createPlayer(
+      db,
+      { name: 'Malformed Output', class_key: 'wizard', gender: 'M' },
+      now - 20_000,
+    );
+    db.prepare(
+      'INSERT INTO raider_identities (player_id, dedupe_secret, created_at) VALUES (?, ?, ?)',
+    ).run(player.id, 'f'.repeat(64), now - 20_000);
+    seedRun(player.id, {
+      runKey: 'd'.repeat(64),
+      updatedAt: now - 1_000,
+      model: 'gpt-live',
+      effort: 'high',
+      raidPower: 321,
+      usage: {
+        input: 100,
+        output: 10,
+        cacheRead: 20,
+        cacheWrite: 0,
+        reasoningOutput: 11,
+      },
+    });
+
+    const state = buildPlayerHubState(
+      db,
+      getPlayerById(db, player.id)!,
+      now,
+      timeZone,
+    );
+
+    expect(state.latestRun?.nativeUsage).toEqual({
+      input: 100,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 0,
+      reasoningOutput: 11,
+      uncachedInput: null,
+      nestedShapeValid: false,
+    });
   });
 
   it.each([
@@ -261,6 +366,8 @@ describe('player hub state', () => {
         cacheRead: 33,
         cacheWrite: 44,
         reasoningOutput: 55,
+        uncachedInput: null,
+        nestedShapeValid: false,
       },
       raidPower: 321,
     });

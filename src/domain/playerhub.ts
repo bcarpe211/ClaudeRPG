@@ -82,6 +82,8 @@ export interface PlayerHubLatestRun {
     cacheRead: number;
     cacheWrite: number;
     reasoningOutput: number;
+    uncachedInput: number | null;
+    nestedShapeValid: boolean;
   };
   raidPower: number;
 }
@@ -315,6 +317,12 @@ export function buildPlayerHubState(
         cacheRead: run.usage.cache_read,
         cacheWrite: run.usage.cache_write,
         reasoningOutput: run.usage.reasoning_output,
+        nestedShapeValid: run.usage.cache_read <= run.usage.input
+          && run.usage.reasoning_output <= run.usage.output,
+        uncachedInput: run.usage.cache_read <= run.usage.input
+          && run.usage.reasoning_output <= run.usage.output
+          ? run.usage.input - run.usage.cache_read
+          : null,
       },
       raidPower: run.raidPower,
     } : null,

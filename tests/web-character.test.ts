@@ -144,7 +144,7 @@ describe('character sheet', () => {
     );
     insert.run(
       player.id, 'codex_desktop', 'b'.repeat(64), observedAt - 5_000,
-      observedAt, observedAt, 11, 22, 33, 44, 55,
+      observedAt, observedAt, 74_226, 486, 71_424, 0, 284,
       null, null, 321, observedAt - 5_000, observedAt,
     );
 
@@ -158,8 +158,9 @@ describe('character sheet', () => {
     expect(response.text).toContain('codex_desktop');
     expect(response.text).toContain('Unknown');
     expect(response.text).toContain('Open');
-    expect(response.text).toContain('11 input');
-    expect(response.text).toContain('22 output');
+    expect(response.text).toContain(
+      '74,226 total input (71,424 cached, 2,802 uncached) · 486 total output (284 reasoning) · 0 cache writes reported',
+    );
     expect(response.text).toContain('321 Raid Power');
     const bootstrapMatch = response.text.match(/window\.__PLAYER_HUB__ = (\{.*?\});<\/script>/s);
     expect(bootstrapMatch).not.toBeNull();
@@ -178,7 +179,7 @@ describe('character sheet', () => {
     expect(bootstrap.initialState.activeRuns).toBe(2);
     expect(bootstrap.initialState.latestRun).toMatchObject({
       surface: 'codex_desktop',
-      nativeUsage: { input: 11, output: 22 },
+      nativeUsage: { input: 74_226, output: 486 },
       raidPower: 321,
     });
     const todayIndex = response.text.indexOf('class="hub-today-panel"');
@@ -255,6 +256,9 @@ describe('character sheet', () => {
     expect(response.status).toBe(200);
     expect(response.text).toContain(`<dt>Model</dt><dd id="hub-run-model">${expectedModel}</dd>`);
     expect(response.text).toContain(`<dt>Effort</dt><dd id="hub-run-effort">${expectedEffort}</dd>`);
+    expect(response.text).toContain(
+      '1 total input (3 cached, cache relationship unavailable) · 2 total output (5 reasoning) · 4 cache writes reported',
+    );
   });
 
   it('renders owned potion quantity as unavailable when current tuning is invalid', async () => {
