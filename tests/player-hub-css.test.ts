@@ -143,6 +143,16 @@ describe('player hub layout CSS', () => {
     expect(css).toMatch(/\.hub-today-panel\{[^}]*grid-area:today;min-width:0;padding:0/);
   });
 
+  it('left-packs every Run Details row instead of stretching values across the panel', () => {
+    expect(css).toMatch(
+      /\.hub-latest-run dl\{[^}]*grid-template-columns:repeat\(6,max-content max-content\)[^}]*justify-content:start/,
+    );
+    expect(css).toMatch(/\.hub-latest-run dt:nth-of-type\(7\)\{grid-column:1\}/);
+    expect(css).toMatch(/\.hub-latest-run dd:nth-of-type\(7\)\{grid-column:2 \/ -1\}/);
+    expect(css).toMatch(/\.hub-latest-run dt:nth-of-type\(8\)\{grid-column:1\}/);
+    expect(css).toMatch(/\.hub-latest-run dd:nth-of-type\(8\)\{grid-column:2 \/ -1\}/);
+  });
+
   it('limits narrow TV floor shadows to the approved top-interior cells', () => {
     const narrowRoom = css.slice(
       css.indexOf('@container (max-width:520px)'),
