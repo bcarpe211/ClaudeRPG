@@ -143,6 +143,8 @@ describe('POST /v1/metrics', () => {
         SCORING_MODE: 'runtime-raiders',
         RUN_SCORING_CUTOVER_AT: '1800000000000',
         RAID_POWER_POLICY_PATH: resolve('config/raid-power-policy-v1.json'),
+        RAID_POWER_POLICY_V2_PATH: resolve('config/raid-power-policy-v2.json'),
+        RAID_POWER_V2_CUTOVER_AT: '1800000000000',
         RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli',
       }),
     });

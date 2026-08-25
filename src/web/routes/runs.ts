@@ -22,7 +22,12 @@ import {
   type RunSurface,
 } from '../../domain/run-events';
 import { ingestRunEvents } from '../../domain/run-ingest';
-import { loadRaidPowerPolicy } from '../../domain/raid-power-policy';
+import {
+  InvalidNestedUsageError,
+  loadRaidPowerPolicy,
+  loadRaidPowerPolicyV2,
+} from '../../domain/raid-power-policy';
+import { createRaidPowerPolicySchedule } from '../../domain/raid-power-policy-schedule';
 import {
   createRunRateLimiter,
   type RunRateLimitScope,
@@ -179,8 +184,13 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     rejectOversizedWireBody,
   ];
   const rateLimiter = createRunRateLimiter();
-  const policy = config.scoringMode === 'runtime-raiders'
-    ? loadRaidPowerPolicy(config.raidPowerPolicyPath)
+  const schedule = config.scoringMode === 'runtime-raiders'
+    ? createRaidPowerPolicySchedule(
+      loadRaidPowerPolicy(config.raidPowerPolicyPath),
+      loadRaidPowerPolicyV2(config.raidPowerPolicyV2Path),
+      config.runCutoverAt,
+      config.raidPowerV2CutoverAt,
+    )
     : null;
   const enabledSurfaces = new Set(config.enabledRunSurfaces);
 
@@ -231,7 +241,7 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     res: Response,
     next: NextFunction,
   ): void => {
-    if (config.scoringMode !== 'runtime-raiders' || policy === null) {
+    if (config.scoringMode !== 'runtime-raiders' || schedule === null) {
       res.status(503).json({ reason: 'scoring_disabled' });
       return;
     }
@@ -314,15 +324,22 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     }
     if (!recordContact(device, res)) return;
 
-    const result = ingestRunEvents(
-      db,
-      device,
-      parsed,
-      policy!,
-      config.runCutoverAt,
-      Date.now(),
-    );
-    res.status(200).json(result);
+    try {
+      const result = ingestRunEvents(
+        db,
+        device,
+        parsed,
+        schedule!,
+        Date.now(),
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof InvalidNestedUsageError) {
+        res.status(422).json({ reason: 'invalid_usage_counters' });
+        return;
+      }
+      throw error;
+    }
     },
   );
 

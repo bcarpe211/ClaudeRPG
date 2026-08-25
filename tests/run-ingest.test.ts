@@ -6,7 +6,12 @@ import { applyActivityCredit } from '../src/domain/ingest';
 import { purchaseConsumable } from '../src/domain/inventory';
 import { activatePotion } from '../src/domain/potions';
 import type { AuthenticatedDevice } from '../src/domain/raider-enrollment';
-import type { RaidPowerPolicy } from '../src/domain/raid-power-policy';
+import type {
+  RaidPowerPolicyV1,
+  RaidPowerPolicyV2,
+} from '../src/domain/raid-power-policy';
+import { InvalidNestedUsageError } from '../src/domain/raid-power-policy';
+import { createRaidPowerPolicySchedule } from '../src/domain/raid-power-policy-schedule';
 import type { RunEventV1, UsageCountersV1 } from '../src/domain/run-events';
 import { ingestRunEvents } from '../src/domain/run-ingest';
 import { createPlayer, getPlayerById, updatePlayer } from '../src/domain/players';
@@ -14,6 +19,7 @@ import { seedSettings } from '../src/domain/settings';
 
 const NOW = 1_800_000_000_000;
 const CUTOVER = NOW - 60_000;
+const V2_CUTOVER = NOW;
 const ZERO_USAGE: UsageCountersV1 = {
   input: 0,
   output: 0,
@@ -21,7 +27,7 @@ const ZERO_USAGE: UsageCountersV1 = {
   cache_write: 0,
   reasoning_output: 0,
 };
-const POLICY: RaidPowerPolicy = {
+const POLICY: RaidPowerPolicyV1 = {
   policy_version: 1,
   enabled_providers: ['codex'],
   usage_weights: {
@@ -35,6 +41,20 @@ const POLICY: RaidPowerPolicy = {
   completion_credit: 10,
   duration: { scale: 2, cap: 50 },
 };
+const POLICY_V2: RaidPowerPolicyV2 = {
+  policy_version: 2,
+  enabled_providers: ['codex'],
+  usage_model: 'codex-nested-counters',
+  provider_multipliers: { codex: 1 },
+  completion_credit: 10,
+  duration: { scale: 2, cap: 50 },
+};
+const SCHEDULE = createRaidPowerPolicySchedule(
+  POLICY,
+  POLICY_V2,
+  CUTOVER,
+  V2_CUTOVER,
+);
 
 let db: ReturnType<typeof openDb>;
 let player: ReturnType<typeof createPlayer>;
@@ -195,6 +215,141 @@ describe('applyActivityCredit compatibility projection', () => {
 });
 
 describe('ingestRunEvents', () => {
+  it('keeps v1 additive scoring before the v2 boundary and applies nested scoring at it', () => {
+    const usage = {
+      input: 74_226,
+      output: 486,
+      cache_read: 71_424,
+      reasoning_output: 284,
+    };
+    const v1 = event({
+      run_key: '1'.repeat(64),
+      started_at_ms: V2_CUTOVER - 1,
+      event_time_ms: V2_CUTOVER + 1_000,
+      observed_at_ms: V2_CUTOVER + 1_000,
+      usage,
+    });
+    const v2 = event({
+      run_key: '2'.repeat(64),
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: V2_CUTOVER + 1_000,
+      observed_at_ms: V2_CUTOVER + 1_000,
+      usage,
+    });
+
+    expect(ingestRunEvents(db, device, [v1, v2], SCHEDULE, NOW))
+      .toEqual({ accepted: 2, duplicate: 0, ignored: 0 });
+    expect(db.prepare(`
+      SELECT run_key, policy_version, awarded_usage_credit, usage_input,
+             usage_cache_read, usage_output, usage_reasoning_output
+      FROM runs WHERE player_id = ? ORDER BY run_key
+    `).all(player.id)).toEqual([
+      {
+        run_key: v1.run_key,
+        policy_version: 'raid-power-v1',
+        awarded_usage_credit: 74_996,
+        usage_input: 74_226,
+        usage_cache_read: 71_424,
+        usage_output: 486,
+        usage_reasoning_output: 284,
+      },
+      {
+        run_key: v2.run_key,
+        policy_version: 'raid-power-v2',
+        awarded_usage_credit: 3_288,
+        usage_input: 74_226,
+        usage_cache_read: 71_424,
+        usage_output: 486,
+        usage_reasoning_output: 284,
+      },
+    ]);
+  });
+
+  it('keeps a pre-v2 Run on v1 for late events and awards exact retries nothing', () => {
+    const first = event({
+      started_at_ms: V2_CUTOVER - 1,
+      event_time_ms: V2_CUTOVER - 1,
+      observed_at_ms: V2_CUTOVER - 1,
+      usage: { input: 100, output: 20, cache_read: 90, reasoning_output: 10 },
+    });
+    const late = event({
+      sequence: 2,
+      started_at_ms: first.started_at_ms,
+      event_time_ms: V2_CUTOVER + 60_000,
+      observed_at_ms: V2_CUTOVER + 60_000,
+      usage: { input: 200, output: 30, cache_read: 199, reasoning_output: 15 },
+    });
+
+    expect(ingestRunEvents(db, device, [first], SCHEDULE, NOW))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(ingestRunEvents(db, device, [late], SCHEDULE, NOW + 1))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(ingestRunEvents(db, device, [late], SCHEDULE, NOW + 2))
+      .toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
+    expect(runRow()).toMatchObject({
+      policy_version: 'raid-power-v1',
+      awarded_usage_credit: 245,
+      raid_power: 245,
+    });
+    expect(tokenRows().map((row) => row.effective_delta)).toEqual([130, 115]);
+  });
+
+  it('rolls back a forged Run identity whose claimed start crosses the v2 cutoff', () => {
+    const v1 = event({
+      sequence: 1,
+      started_at_ms: V2_CUTOVER - 1,
+      event_time_ms: V2_CUTOVER - 1,
+      observed_at_ms: V2_CUTOVER - 1,
+      usage: { input: 100 },
+    });
+    const forgedV2 = event({
+      sequence: 2,
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: V2_CUTOVER + 1,
+      observed_at_ms: V2_CUTOVER + 1,
+      usage: { input: 200 },
+    });
+
+    expect(() => ingestRunEvents(db, device, [v1, forgedV2], SCHEDULE, NOW))
+      .toThrow('Run policy raid-power-v1 cannot be rescored with raid-power-v2');
+    expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get()).toEqual({ count: 0 });
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+  });
+
+  it('rolls back the whole batch when one v2 event has invalid nested usage', () => {
+    const valid = event({
+      run_key: '3'.repeat(64),
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: V2_CUTOVER + 1,
+      observed_at_ms: V2_CUTOVER + 1,
+      usage: { input: 100, output: 20, cache_read: 80, reasoning_output: 10 },
+    });
+    const malformed = event({
+      run_key: '4'.repeat(64),
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: V2_CUTOVER + 2,
+      observed_at_ms: V2_CUTOVER + 2,
+      usage: { input: 100, cache_read: 101 },
+    });
+
+    expect(() => ingestRunEvents(db, device, [valid, malformed], SCHEDULE, NOW))
+      .toThrow(InvalidNestedUsageError);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM token_events').get()).toEqual({ count: 0 });
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: 0,
+      total_tokens: 0,
+      last_token_at: null,
+    });
+  });
+
   it('awards only positive cumulative usage differences through compatibility activity', () => {
     activateGoldPotion(NOW - 1_000);
     const first = event({ usage: { input: 100, cache_read: 9_000 } });
@@ -205,7 +360,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 130, output: 20, cache_read: 10_000, cache_write: 5 },
     });
 
-    expect(ingestRunEvents(db, device, [first, second], POLICY, CUTOVER, NOW))
+    expect(ingestRunEvents(db, device, [first, second], SCHEDULE, NOW))
       .toEqual({ accepted: 2, duplicate: 0, ignored: 0 });
 
     expect(runRow()).toMatchObject({
@@ -248,11 +403,11 @@ describe('ingestRunEvents', () => {
       usage: { input: 50 },
     });
 
-    expect(ingestRunEvents(db, device, [higher], POLICY, CUTOVER, NOW))
+    expect(ingestRunEvents(db, device, [higher], SCHEDULE, NOW))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
-    expect(ingestRunEvents(db, device, [higher], POLICY, CUTOVER, NOW + 1))
+    expect(ingestRunEvents(db, device, [higher], SCHEDULE, NOW + 1))
       .toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
-    expect(ingestRunEvents(db, device, [lower], POLICY, CUTOVER, NOW + 2))
+    expect(ingestRunEvents(db, device, [lower], SCHEDULE, NOW + 2))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
 
     expect(eventRows().map(({ sequence, awarded_delta }) => ({ sequence, awarded_delta })))
@@ -268,7 +423,7 @@ describe('ingestRunEvents', () => {
       event({ sequence: 3, usage: { input: 250, output: 5 } }),
     ];
 
-    expect(ingestRunEvents(db, device, events, POLICY, CUTOVER, NOW))
+    expect(ingestRunEvents(db, device, events, SCHEDULE, NOW))
       .toEqual({ accepted: 3, duplicate: 0, ignored: 0 });
     expect(runRow()).toMatchObject({
       usage_input: 250,
@@ -286,7 +441,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 25 },
     });
 
-    ingestRunEvents(db, device, [open], POLICY, CUTOVER, NOW);
+    ingestRunEvents(db, device, [open], SCHEDULE, NOW);
 
     expect(runRow()).toMatchObject({
       state: 'open',
@@ -323,10 +478,10 @@ describe('ingestRunEvents', () => {
       usage: { input: 100 },
     });
 
-    ingestRunEvents(db, device, [open], POLICY, CUTOVER, NOW);
-    ingestRunEvents(db, device, [completed], POLICY, CUTOVER, NOW + 1);
-    ingestRunEvents(db, device, [completed], POLICY, CUTOVER, NOW + 2);
-    ingestRunEvents(db, device, [conflicting], POLICY, CUTOVER, NOW + 3);
+    ingestRunEvents(db, device, [open], SCHEDULE, NOW);
+    ingestRunEvents(db, device, [completed], SCHEDULE, NOW + 1);
+    ingestRunEvents(db, device, [completed], SCHEDULE, NOW + 2);
+    ingestRunEvents(db, device, [conflicting], SCHEDULE, NOW + 3);
 
     expect(runRow()).toMatchObject({
       state: 'completed',
@@ -351,7 +506,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 0, cache_read: 10_000 },
     });
 
-    ingestRunEvents(db, device, [completed], POLICY, CUTOVER, NOW);
+    ingestRunEvents(db, device, [completed], SCHEDULE, NOW);
 
     expect(runRow()).toMatchObject({
       state: 'completed',
@@ -381,7 +536,7 @@ describe('ingestRunEvents', () => {
         usage: { input: 50 },
       });
 
-      ingestRunEvents(db, device, [terminal, lateCompletion], POLICY, CUTOVER, NOW);
+      ingestRunEvents(db, device, [terminal, lateCompletion], SCHEDULE, NOW);
 
       expect(runRow()).toMatchObject({
         state: terminalState,
@@ -405,7 +560,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 1 },
     });
 
-    ingestRunEvents(db, device, [completed], POLICY, CUTOVER, NOW);
+    ingestRunEvents(db, device, [completed], SCHEDULE, NOW);
 
     expect(runRow()).toMatchObject({
       awarded_usage_credit: 1,
@@ -419,7 +574,7 @@ describe('ingestRunEvents', () => {
     const runA = event({ run_key: 'a'.repeat(64), usage: { input: 20 } });
     const runB = event({ run_key: 'b'.repeat(64), usage: { input: 30 } });
 
-    ingestRunEvents(db, device, [runA, runB], POLICY, CUTOVER, NOW);
+    ingestRunEvents(db, device, [runA, runB], SCHEDULE, NOW);
 
     expect(db.prepare(`
       SELECT run_key, raid_power FROM runs WHERE player_id = ? ORDER BY run_key
@@ -438,7 +593,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 500 },
     });
 
-    expect(ingestRunEvents(db, device, [desktop, cli], POLICY, CUTOVER, NOW))
+    expect(ingestRunEvents(db, device, [desktop, cli], SCHEDULE, NOW))
       .toEqual({ accepted: 1, duplicate: 1, ignored: 0 });
     expect(runRow()).toMatchObject({ surface: 'codex_desktop', raid_power: 20 });
     expect(eventRows()).toHaveLength(1);
@@ -449,7 +604,7 @@ describe('ingestRunEvents', () => {
     const runA = event({ run_key: 'a'.repeat(64), usage: { input: 6 } });
     const runB = event({ run_key: 'b'.repeat(64), usage: { input: 6 } });
 
-    expect(() => ingestRunEvents(db, device, [runA, runB], POLICY, CUTOVER, NOW))
+    expect(() => ingestRunEvents(db, device, [runA, runB], SCHEDULE, NOW))
       .toThrow(RangeError);
 
     expect(getPlayerById(db, player.id)).toMatchObject({
@@ -463,7 +618,7 @@ describe('ingestRunEvents', () => {
   });
 
   it('rolls back before persistence when combined Run credit is not a safe integer', () => {
-    const unsafePolicy: RaidPowerPolicy = {
+    const unsafePolicy: RaidPowerPolicyV1 = {
       ...POLICY,
       completion_credit: Number.MAX_SAFE_INTEGER,
       duration: { scale: 1, cap: 0 },
@@ -474,8 +629,7 @@ describe('ingestRunEvents', () => {
       db,
       device,
       [completed],
-      unsafePolicy,
-      CUTOVER,
+      createRaidPowerPolicySchedule(unsafePolicy, POLICY_V2, CUTOVER, V2_CUTOVER),
       NOW,
     )).toThrow(RangeError);
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
@@ -487,7 +641,7 @@ describe('ingestRunEvents', () => {
     updatePlayer(db, player.id, { disabled: 1 });
     const disabledUsage = event({ sequence: 1, usage: { input: 100 } });
 
-    expect(ingestRunEvents(db, device, [disabledUsage], POLICY, CUTOVER, NOW))
+    expect(ingestRunEvents(db, device, [disabledUsage], SCHEDULE, NOW))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
     expect(runRow()).toMatchObject({
       usage_input: 100,
@@ -503,7 +657,7 @@ describe('ingestRunEvents', () => {
       observed_at_ms: disabledUsage.observed_at_ms + 1,
       usage: { input: 110 },
     });
-    ingestRunEvents(db, device, [enabledUsage], POLICY, CUTOVER, NOW + 1);
+    ingestRunEvents(db, device, [enabledUsage], SCHEDULE, NOW + 1);
 
     expect(runRow()).toMatchObject({ awarded_usage_credit: 110, raid_power: 10 });
     expect(tokenRows().map((row) => row.effective_delta)).toEqual([10]);
@@ -521,7 +675,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 0, cache_read: 10_000 },
     });
 
-    ingestRunEvents(db, device, [disabledCompletion], POLICY, CUTOVER, NOW);
+    ingestRunEvents(db, device, [disabledCompletion], SCHEDULE, NOW);
 
     expect(runRow()).toMatchObject({
       state: 'completed',
@@ -539,7 +693,7 @@ describe('ingestRunEvents', () => {
       observed_at_ms: disabledCompletion.observed_at_ms + 1,
       usage: { input: 10, cache_read: 10_000 },
     });
-    ingestRunEvents(db, device, [laterUsage], POLICY, CUTOVER, NOW + 1);
+    ingestRunEvents(db, device, [laterUsage], SCHEDULE, NOW + 1);
 
     expect(runRow()).toMatchObject({
       awarded_usage_credit: 10,
@@ -562,7 +716,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 500 },
     });
 
-    expect(ingestRunEvents(db, device, [preCutover], POLICY, CUTOVER, NOW))
+    expect(ingestRunEvents(db, device, [preCutover], SCHEDULE, NOW))
       .toEqual({ accepted: 0, duplicate: 0, ignored: 1 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM run_events').get()).toEqual({ count: 0 });

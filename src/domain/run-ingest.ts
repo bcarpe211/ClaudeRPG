@@ -6,6 +6,10 @@ import {
   usageCredit,
   type RaidPowerPolicy,
 } from './raid-power-policy';
+import {
+  policyForRunStart,
+  type RaidPowerPolicySchedule,
+} from './raid-power-policy-schedule';
 import type { RunEventV1, UsageCountersV1 } from './run-events';
 
 export interface RunIngestResult {
@@ -181,13 +185,10 @@ export function ingestRunEvents(
   db: Database.Database,
   device: AuthenticatedDevice,
   events: readonly RunEventV1[],
-  policy: RaidPowerPolicy,
-  cutoverAt: number,
+  schedule: RaidPowerPolicySchedule,
   now: number,
 ): RunIngestResult {
-  safeNonNegativeInteger(cutoverAt, 'cutoverAt');
   safeNonNegativeInteger(now, 'now');
-  const version = policyKey(policy);
 
   const ingest = db.transaction((): RunIngestResult => {
     const result: RunIngestResult = { accepted: 0, duplicate: 0, ignored: 0 };
@@ -196,7 +197,8 @@ export function ingestRunEvents(
     if (!player) throw new RangeError('authenticated Raider does not exist');
 
     for (const event of events) {
-      if (event.device_id !== device.deviceId || event.started_at_ms < cutoverAt) {
+      const policy = policyForRunStart(schedule, event.started_at_ms);
+      if (event.device_id !== device.deviceId || policy === null) {
         result.ignored++;
         continue;
       }
@@ -209,6 +211,7 @@ export function ingestRunEvents(
         continue;
       }
 
+      const version = policyKey(policy);
       let run = findRun(db, device.playerId, event);
       const createdRun = run === undefined;
       if (!run) run = createRun(db, device.playerId, event, version, now);

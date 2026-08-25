@@ -16,6 +16,7 @@ import { createApp } from '../src/web/app';
 const NOW = 1_800_000_000_000;
 const CUTOVER = NOW - 60_000;
 const POLICY_PATH = resolve('config/raid-power-policy-v1.json');
+const POLICY_V2_PATH = resolve('config/raid-power-policy-v2.json');
 const ZERO_USAGE: UsageCountersV1 = {
   input: 0,
   output: 0,
@@ -35,6 +36,8 @@ function runtimeConfig(overrides: NodeJS.ProcessEnv = {}) {
     SCORING_MODE: 'runtime-raiders',
     RUN_SCORING_CUTOVER_AT: String(CUTOVER),
     RAID_POWER_POLICY_PATH: POLICY_PATH,
+    RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+    RAID_POWER_V2_CUTOVER_AT: String(NOW),
     RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli',
     ...overrides,
   });
@@ -492,6 +495,50 @@ describe('Run event authentication and ingestion', () => {
     expect(duplicate.body).toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
     expect(countRows('runs')).toBe(1);
     expect(countRows('run_events')).toBe(1);
+  });
+
+  it.each([
+    ['cache_read above input', { input: 100, cache_read: 101 }],
+    ['reasoning_output above output', { output: 10, reasoning_output: 11 }],
+  ] as const)('rejects v2 %s as invalid_usage_counters without persistence', async (
+    _name,
+    usage,
+  ) => {
+    const device = await enrollDevice();
+    const invalid = runEvent(device.deviceId, {
+      started_at_ms: NOW,
+      event_time_ms: NOW + 1,
+      observed_at_ms: NOW + 1,
+      usage,
+    });
+
+    const response = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .send({ events: [invalid] });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({ reason: 'invalid_usage_counters' });
+    expect(countRows('runs')).toBe(0);
+    expect(countRows('run_events')).toBe(0);
+  });
+
+  it('keeps unexpected ingestion failures on the private 500 path', async () => {
+    const device = await enrollDevice();
+    const overflow = [
+      runEvent(device.deviceId, { usage: { input: Number.MAX_SAFE_INTEGER } }),
+      runEvent(device.deviceId, { usage: { input: 1 } }),
+    ];
+
+    const response = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .send({ events: overflow });
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({ reason: 'internal_error' });
+    expect(countRows('runs')).toBe(0);
+    expect(countRows('run_events')).toBe(0);
   });
 
   it('rate-limits an authenticated device without consuming another device quota', async () => {

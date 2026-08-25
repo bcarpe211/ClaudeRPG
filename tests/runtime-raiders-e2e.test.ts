@@ -20,6 +20,7 @@ import { buildCompanionInstallCommand } from '../src/web/companion-install';
 const NOW = 1_800_000_000_000;
 const CUTOVER = NOW - 60_000;
 const POLICY_PATH = resolve('config/raid-power-policy-v1.json');
+const POLICY_V2_PATH = resolve('config/raid-power-policy-v2.json');
 const ZERO_USAGE: UsageCountersV1 = {
   input: 0,
   output: 0,
@@ -40,6 +41,8 @@ function runtimeConfig() {
     SCORING_MODE: 'runtime-raiders',
     RUN_SCORING_CUTOVER_AT: String(CUTOVER),
     RAID_POWER_POLICY_PATH: POLICY_PATH,
+    RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+    RAID_POWER_V2_CUTOVER_AT: String(NOW),
     RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli',
   });
 }
