@@ -79,8 +79,15 @@ required_value RAID_POWER_POLICY_PATH
   || fail 'RAID_POWER_POLICY_PATH is not the reviewed repository policy'
 [[ -f "$ENV_VALUE" && ! -L "$ENV_VALUE" ]] || fail 'Raid Power policy is missing or unsafe'
 
+required_value RAID_POWER_POLICY_V2_PATH
+[[ "$ENV_VALUE" = "$REPO_DIR/config/raid-power-policy-v2.json" ]] \
+  || fail 'RAID_POWER_POLICY_V2_PATH is not the reviewed repository policy'
+[[ -f "$ENV_VALUE" && ! -L "$ENV_VALUE" ]] || fail 'Raid Power v2 policy is missing or unsafe'
+
 required_value RUN_SCORING_CUTOVER_AT
 RUN_SCORING_CUTOVER_AT=$ENV_VALUE
+required_value RAID_POWER_V2_CUTOVER_AT
+RAID_POWER_V2_CUTOVER_AT=$ENV_VALUE
 required_value RUN_ENABLED_SURFACES
 RUN_ENABLED_SURFACES=$ENV_VALUE
 
@@ -89,6 +96,12 @@ if [[ "$SCORING_MODE" = runtime-raiders ]]; then
     || fail 'RUN_SCORING_CUTOVER_AT must be one 13-digit millisecond epoch'
   [[ "$RUN_SCORING_CUTOVER_AT" != 1800000000000 ]] \
     || fail 'placeholder RUN_SCORING_CUTOVER_AT is forbidden in runtime-raiders mode'
+  [[ "$RAID_POWER_V2_CUTOVER_AT" =~ ^[0-9]{13}$ ]] \
+    || fail 'RAID_POWER_V2_CUTOVER_AT must be one 13-digit millisecond epoch'
+  [[ "$RAID_POWER_V2_CUTOVER_AT" != 1800000000000 ]] \
+    || fail 'placeholder RAID_POWER_V2_CUTOVER_AT is forbidden in runtime-raiders mode'
+  [[ "$RAID_POWER_V2_CUTOVER_AT" < "$RUN_SCORING_CUTOVER_AT" ]] \
+    && fail 'RAID_POWER_V2_CUTOVER_AT must not be earlier than RUN_SCORING_CUTOVER_AT'
   [[ "$RUN_ENABLED_SURFACES" = codex_desktop,codex_cli ]] \
     || fail 'RUN_ENABLED_SURFACES must be exactly codex_desktop,codex_cli'
 fi

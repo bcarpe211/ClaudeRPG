@@ -76,6 +76,8 @@ environment contents in this document or a commit.
 | Prior/release short SSE versions | `________________ / ________________` |
 | One 13-digit millisecond epoch (`CUTOVER_AT`) and UTC rendering | `________________ / ________________` |
 | Persisted policy key / JSON document version | `raid-power-v1` / `1` |
+| One 13-digit millisecond v2 epoch (`RAID_POWER_V2_CUTOVER_AT`) and UTC rendering | `________________ / ________________` |
+| v2 policy key / JSON document version | `raid-power-v2` / `2` |
 | Production DB path | `/home/rluser/ClaudeRPG/data/claude-rpg.db` |
 | Verified pre-cutover `.backup` path (`DB_BACKUP`) | `________________` |
 | SHA-256 of the verified pre-cutover backup (`DB_BACKUP_SHA256`) | `________________` |
@@ -281,11 +283,13 @@ PUBLIC_URL=https://raiders.redlattice.com
 SCORING_MODE=runtime-raiders
 RUN_SCORING_CUTOVER_AT=<the one recorded CUTOVER_AT>
 RAID_POWER_POLICY_PATH=/home/rluser/ClaudeRPG/config/raid-power-policy-v1.json
+RAID_POWER_POLICY_V2_PATH=/home/rluser/ClaudeRPG/config/raid-power-policy-v2.json
+RAID_POWER_V2_CUTOVER_AT=<the separately recorded v2 cutoff>
 RUN_ENABLED_SURFACES=codex_desktop,codex_cli
 ```
 
 It must not contain `OTEL_ENDPOINT_HOST`. Do not install the checked-in
-`1800000000000` placeholder. Record only the candidate file's SHA-256 and
+`1800000000000` placeholders. Record only the candidate file's SHA-256 and
 metadata, never its contents:
 
 ```sh
@@ -538,6 +542,65 @@ operation requires a separate recorded authorization, a verified
 `HEAD=PRIOR_SHA`, and a pinned updater design; the current moving-`main` updater
 is not safe to re-enable.
 
+### 3.1 Scoring v2 release gate: separately authorized and collection-off
+
+This gate applies only after an explicit authorization records the reviewed
+`RELEASE_SHA`, exact backup target, UTC window, and a v2 cutoff. It is a server
+configuration release gate, not a collection or canary authorization. Do not
+choose a cutoff from this document: the release owner chooses one future,
+13-digit millisecond epoch, records its UTC rendering as
+`RAID_POWER_V2_CUTOVER_AT`, and confirms it is not earlier than
+`RUN_SCORING_CUTOVER_AT`.
+
+Perform the following order exactly, retaining every established ownership,
+updater-hold, and rollback requirement in sections 3–5:
+
+1. Choose and record the one v2 cutoff in the restricted operator record.
+   Never use the checked-in `1800000000000` placeholder.
+2. Run the read-only scoring comparison against an explicitly authorized,
+   timestamped copy of the database—not the live database—and retain its JSON
+   receipt with the release evidence:
+
+   ```sh
+   npm run audit:scoring-v2 -- --db "$AUTHORIZED_SNAPSHOT" \
+     --v2-cutover "$RAID_POWER_V2_CUTOVER_AT"
+   ```
+
+3. Run the complete automated server suite and typecheck from the reviewed
+   release checkout. Any failure is a NO-GO.
+4. Prove the public TV state still reports `"paused":true` before the backup;
+   record the URL, observation time, and response evidence without recording
+   player or Run content. A local database read alone is insufficient for this
+   gate.
+5. Create and verify the timestamped logical SQLite backup using the existing
+   section 4.2 procedure. A copied SQLite main file is not a substitute.
+6. Install the reviewed source at the authorized `RELEASE_SHA` while the service
+   is stopped, using section 4.4's checkout and ownership checks.
+7. Change only these two environment assignments in the root-owned candidate
+   environment; preserve all existing reviewed assignments and do not print or
+   source the file:
+
+   ```text
+   RAID_POWER_POLICY_V2_PATH=/home/rluser/ClaudeRPG/config/raid-power-policy-v2.json
+   RAID_POWER_V2_CUTOVER_AT=<the recorded v2 cutoff>
+   ```
+
+8. Validate that candidate without sourcing it:
+
+   ```sh
+   sudo "$REPO/scripts/pi/validate-runtime-raiders-env.sh" \
+     --env-file "$CANDIDATE_ENV" --repo-dir "$REPO"
+   ```
+
+9. Install the validated candidate, restart once under section 4.5's fail-closed
+   boundary, and do not retry a failed start.
+10. Verify the public `/health` response and prove the deployed revision equals
+    the recorded `RELEASE_SHA`; retain both results with the release evidence.
+
+**STOP.** A successful v2 server release does not authorize any collection,
+companion installation, `raiders on`, canary command, or office activation.
+Those actions remain blocked until their own explicit authorization.
+
 ## 4. Coordinated cutover
 
 Use one operator and one shell. Announce the maintenance window. Companions and
@@ -777,9 +840,10 @@ test "$service_state" = inactive
 ```
 
 The installed SHA-256 must equal the reviewed candidate SHA-256. Confirm exactly
-one cutover timestamp, `SCORING_MODE=runtime-raiders`, exact
-`codex_desktop,codex_cli`, policy path and JSON document version `1`, existing DB/sprite paths,
-strong secrets, and no `OTEL_ENDPOINT_HOST`. Do not print the environment.
+one original and one v2 cutover timestamp, `SCORING_MODE=runtime-raiders`, exact
+`codex_desktop,codex_cli`, both exact policy paths and JSON document versions
+`1` and `2`, existing DB/sprite paths, strong secrets, and no
+`OTEL_ENDPOINT_HOST`. Do not print the environment.
 
 ### 4.5 Start once and wait for migration/health
 
@@ -868,10 +932,12 @@ from the fail-closed `503 scoring_disabled` response. The executable config,
 metrics, and e2e tests are the evidence that scoring modes are mutually
 exclusive and realistic old OTLP input is acknowledged without writing.
 
-After controlled canaries, every new `runs.policy_version` must be the persisted
-policy key `raid-power-v1` (not the JSON document's numeric `policy_version: 1`), all Run
-starts must be at or after `CUTOVER_AT`, and `players.total_tokens` must remain
-at its retained baseline. Do not rewrite existing lifetime state.
+After controlled canaries, every new `runs.policy_version` must match its Run
+start: the persisted key is `raid-power-v1` before
+`RAID_POWER_V2_CUTOVER_AT` and `raid-power-v2` from that cutoff onward (not the
+JSON document's numeric versions `1` and `2`). All Run starts must be at or
+after `CUTOVER_AT`, and `players.total_tokens` must remain at its retained
+baseline. Do not rewrite existing lifetime state.
 
 ### 5.2 Routes, TLS, mDNS, kiosk, Leaderboard, and release version
 
@@ -1205,9 +1271,10 @@ test "$(systemctl is-active "$SERVICE")" = active
 trap - ERR HUP INT TERM
 ```
 
-Record the final SSE release SHA, persisted policy key `raid-power-v1`, JSON
-policy document version `1`, exact `CUTOVER_AT`, test
-results, UI/kiosk/network results, canary counts, user acceptance, and UTC time.
+Record the final SSE release SHA, persisted policy keys `raid-power-v1` and
+`raid-power-v2`, JSON policy document versions `1` and `2`, exact `CUTOVER_AT`
+and `RAID_POWER_V2_CUTOVER_AT`, test results, UI/kiosk/network results, canary
+counts, user acceptance, and UTC time.
 The temporary old FQDN remains compatible. Retiring it or renaming the repo,
 database, env, service, or updater identifiers is a separate migration.
 

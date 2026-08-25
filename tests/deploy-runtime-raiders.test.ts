@@ -1,4 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -25,6 +34,32 @@ function resolveCaddyFileServerPath(uri: string): string {
 function assignments(key: string): string[] {
   return [...env.matchAll(new RegExp(`^${key}=(.*)$`, 'gm'))]
     .map(([, value]) => value);
+}
+
+function writeAcceptedRuntimeEnv(root: string) {
+  const repoDir = join(root, 'repo');
+  const configDir = join(repoDir, 'config');
+  const envFile = join(root, 'claude-rpg.env');
+  mkdirSync(configDir, { recursive: true });
+  copyFileSync(resolve('config/raid-power-policy-v1.json'), join(configDir, 'raid-power-policy-v1.json'));
+  copyFileSync(resolve('config/raid-power-policy-v2.json'), join(configDir, 'raid-power-policy-v2.json'));
+
+  const contents = env
+    .replaceAll('__REPO__', repoDir)
+    .replace('ADMIN_PASSWORD=change-me-please', 'ADMIN_PASSWORD=long-private-admin-password')
+    .replace('SESSION_SECRET=change-me-too', `SESSION_SECRET=${'s'.repeat(32)}`)
+    .replace('SCORING_MODE=disabled', 'SCORING_MODE=runtime-raiders')
+    .replace('RUN_SCORING_CUTOVER_AT=1800000000000', 'RUN_SCORING_CUTOVER_AT=1800000001000')
+    .replace('RAID_POWER_V2_CUTOVER_AT=1800000000000', 'RAID_POWER_V2_CUTOVER_AT=1800000002000');
+  writeFileSync(envFile, contents, { mode: 0o600 });
+
+  return { envFile, repoDir, contents };
+}
+
+function validateRuntimeEnv(envFile: string, repoDir: string) {
+  return spawnSync('bash', [validatorPath, '--env-file', envFile, '--repo-dir', repoDir], {
+    encoding: 'utf8',
+  });
 }
 
 describe('Runtime Raiders internal deployment configuration', () => {
@@ -110,6 +145,7 @@ describe('Runtime Raiders internal deployment configuration', () => {
     expect(env).toContain('PUBLIC_URL=https://raiders.redlattice.com');
     expect(env).toContain('SCORING_MODE=disabled');
     expect(env).toMatch(/^RAID_POWER_POLICY_PATH=__REPO__\/config\/raid-power-policy-v1\.json$/m);
+    expect(env).toMatch(/^RAID_POWER_POLICY_V2_PATH=__REPO__\/config\/raid-power-policy-v2\.json$/m);
     expect(env).not.toContain('OTEL_ENDPOINT_HOST=');
   });
 
@@ -122,28 +158,73 @@ describe('Runtime Raiders internal deployment configuration', () => {
     expect(setup.slice(validation, restart)).toMatch(/exit 1/);
   });
 
-  it('rejects a placeholder runtime cutover and accepts an explicitly safe one', () => {
+  it('accepts a runtime environment with a reviewed v2 policy and later v2 cutoff', () => {
     const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-env-validation-'));
     try {
-      const envFile = join(root, 'claude-rpg.env');
-      const base = env
-        .replaceAll('__REPO__', resolve('.'))
-        .replace('ADMIN_PASSWORD=change-me-please', 'ADMIN_PASSWORD=long-private-admin-password')
-        .replace('SESSION_SECRET=change-me-too', `SESSION_SECRET=${'s'.repeat(32)}`)
-        .replace('SCORING_MODE=disabled', 'SCORING_MODE=runtime-raiders');
-      writeFileSync(envFile, base, { mode: 0o600 });
+      const { envFile, repoDir } = writeAcceptedRuntimeEnv(root);
 
-      const rejected = spawnSync('bash', [validatorPath, '--env-file', envFile, '--repo-dir', resolve('.')], {
-        encoding: 'utf8',
-      });
-      expect(rejected.status).not.toBe(0);
-      expect(rejected.stderr).toMatch(/placeholder.*RUN_SCORING_CUTOVER_AT/i);
-
-      writeFileSync(envFile, base.replace('1800000000000', '1800000000001'), { mode: 0o600 });
-      const accepted = spawnSync('bash', [validatorPath, '--env-file', envFile, '--repo-dir', resolve('.')], {
-        encoding: 'utf8',
-      });
+      const accepted = validateRuntimeEnv(envFile, repoDir);
       expect(accepted.status, accepted.stderr).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['placeholder Run cutoff', (contents: string) => contents.replace(
+      'RUN_SCORING_CUTOVER_AT=1800000001000',
+      'RUN_SCORING_CUTOVER_AT=1800000000000',
+    )],
+    ['missing v2 policy path', (contents: string) => contents.replace(/^RAID_POWER_POLICY_V2_PATH=.*\n/m, '')],
+    ['duplicate v2 policy path', (contents: string) => `${contents}RAID_POWER_POLICY_V2_PATH=duplicate\n`],
+    ['missing v2 cutoff', (contents: string) => contents.replace(/^RAID_POWER_V2_CUTOVER_AT=.*\n/m, '')],
+    ['duplicate v2 cutoff', (contents: string) => `${contents}RAID_POWER_V2_CUTOVER_AT=1800000003000\n`],
+    ['wrong v2 policy path', (contents: string) => contents.replace(
+      /RAID_POWER_POLICY_V2_PATH=.*$/m,
+      'RAID_POWER_POLICY_V2_PATH=/wrong/raid-power-policy-v2.json',
+    )],
+    ['placeholder v2 cutoff', (contents: string) => contents.replace(
+      'RAID_POWER_V2_CUTOVER_AT=1800000002000',
+      'RAID_POWER_V2_CUTOVER_AT=1800000000000',
+    )],
+    ['non-13-digit v2 cutoff', (contents: string) => contents.replace(
+      'RAID_POWER_V2_CUTOVER_AT=1800000002000',
+      'RAID_POWER_V2_CUTOVER_AT=180000000200',
+    )],
+    ['v2 cutoff before the Run cutoff', (contents: string) => contents.replace(
+      'RAID_POWER_V2_CUTOVER_AT=1800000002000',
+      'RAID_POWER_V2_CUTOVER_AT=1800000000999',
+    )],
+  ])('rejects a runtime environment with %s', (_caseName, mutate) => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-env-validation-'));
+    try {
+      const { envFile, repoDir, contents } = writeAcceptedRuntimeEnv(root);
+      writeFileSync(envFile, mutate(contents), { mode: 0o600 });
+
+      const rejected = validateRuntimeEnv(envFile, repoDir);
+      expect(rejected.status, rejected.stderr).not.toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing v2 policy', (_root: string, repoDir: string) => {
+      unlinkSync(join(repoDir, 'config/raid-power-policy-v2.json'));
+    }],
+    ['symlinked v2 policy', (_root: string, repoDir: string) => {
+      const policyPath = join(repoDir, 'config/raid-power-policy-v2.json');
+      unlinkSync(policyPath);
+      symlinkSync(resolve('config/raid-power-policy-v2.json'), policyPath);
+    }],
+  ])('rejects a runtime environment with a %s file', (_caseName, mutatePolicy) => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-raiders-env-validation-'));
+    try {
+      const { envFile, repoDir } = writeAcceptedRuntimeEnv(root);
+      mutatePolicy(root, repoDir);
+
+      const rejected = validateRuntimeEnv(envFile, repoDir);
+      expect(rejected.status, rejected.stderr).not.toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -151,6 +232,13 @@ describe('Runtime Raiders internal deployment configuration', () => {
 
   it('has exactly one 13-digit millisecond cutover timestamp', () => {
     const cutoverAssignments = assignments('RUN_SCORING_CUTOVER_AT');
+
+    expect(cutoverAssignments).toHaveLength(1);
+    expect(cutoverAssignments[0]).toMatch(/^\d{13}$/);
+  });
+
+  it('has exactly one 13-digit millisecond v2 cutover timestamp', () => {
+    const cutoverAssignments = assignments('RAID_POWER_V2_CUTOVER_AT');
 
     expect(cutoverAssignments).toHaveLength(1);
     expect(cutoverAssignments[0]).toMatch(/^\d{13}$/);

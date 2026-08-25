@@ -762,6 +762,9 @@ gameplay data as part of this correction. The inflated v1 beta history remains
 visible as beta history. The primary canary's collection was manually turned off;
 no release or diagnostic step may turn it back on without separate approval.
 
+**Release status (2026-08-25):** scoring v2 is planned and approved for a
+separately authorized, collection-off release gate; it is **not deployed**.
+
 - [ ] Add a forward-only Raid Power policy v2 that scores non-overlapping usage:
       total input minus cached input, plus total output exactly once. Cache-write
       and reasoning counters remain visible native-usage detail but are already
