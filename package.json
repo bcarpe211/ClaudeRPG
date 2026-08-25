@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "audit:scoring-v2": "tsx tools/runtime-raiders/audit-scoring-v2.ts",
     "check:player-copy": "node tools/runtime-raiders/check-player-copy.mjs",
     "canary:upgrade-test": "/bin/sh -n companion/packaging/install.sh && /bin/zsh -n companion/packaging/install.sh && vitest run tests/companion-installer.test.ts"
   },
