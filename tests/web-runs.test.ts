@@ -559,8 +559,8 @@ describe('Run event authentication and ingestion', () => {
     const device = await enrollDevice();
     const invalid = runEvent(device.deviceId, {
       started_at_ms: NOW,
-      event_time_ms: NOW + 1,
-      observed_at_ms: NOW + 1,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
       usage,
     });
 
