@@ -1000,4 +1000,18 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '020_raider_presence',
+    sql: `
+      CREATE TABLE raider_presence (
+        player_id INTEGER PRIMARY KEY
+          REFERENCES players(id) ON DELETE CASCADE,
+        last_run_activity_at INTEGER NOT NULL
+          CHECK (
+            typeof(last_run_activity_at) = 'integer'
+            AND last_run_activity_at BETWEEN 0 AND 9007199254740991
+          )
+      );
+    `,
+  },
 ];
