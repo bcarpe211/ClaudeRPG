@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { loadConfig } from '../src/config';
 
 const POLICY_PATH = resolve('config/raid-power-policy-v1.json');
+const POLICY_V2_PATH = resolve('config/raid-power-policy-v2.json');
 
 describe('loadConfig', () => {
   it('applies defaults when env is empty', () => {
@@ -15,6 +16,8 @@ describe('loadConfig', () => {
     expect(c.scoringMode).toBe('legacy-otlp');
     expect(c.runCutoverAt).toBe(0);
     expect(c.raidPowerPolicyPath).toBe('config/raid-power-policy-v1.json');
+    expect(c.raidPowerPolicyV2Path).toBe('config/raid-power-policy-v2.json');
+    expect(c.raidPowerV2CutoverAt).toBe(0);
     expect(c.enabledRunSurfaces).toEqual([]);
     expect(typeof c.sessionSecret).toBe('string');
     expect(c.sessionSecret.length).toBeGreaterThan(10);
@@ -51,12 +54,16 @@ describe('loadConfig scoring mode', () => {
       SCORING_MODE: 'runtime-raiders',
       RUN_SCORING_CUTOVER_AT: '1800000000000',
       RAID_POWER_POLICY_PATH: POLICY_PATH,
+      RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+      RAID_POWER_V2_CUTOVER_AT: '1800000001000',
       RUN_ENABLED_SURFACES: 'codex_desktop,codex_cli',
     });
 
     expect(c.scoringMode).toBe('runtime-raiders');
     expect(c.runCutoverAt).toBe(1_800_000_000_000);
     expect(c.raidPowerPolicyPath).toBe(POLICY_PATH);
+    expect(c.raidPowerPolicyV2Path).toBe(POLICY_V2_PATH);
+    expect(c.raidPowerV2CutoverAt).toBe(1_800_000_001_000);
     expect(c.enabledRunSurfaces).toEqual(['codex_desktop', 'codex_cli']);
   });
 
@@ -64,6 +71,8 @@ describe('loadConfig scoring mode', () => {
     const runtime = {
       SCORING_MODE: 'runtime-raiders',
       RAID_POWER_POLICY_PATH: POLICY_PATH,
+      RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+      RAID_POWER_V2_CUTOVER_AT: '1800000001000',
       RUN_ENABLED_SURFACES: 'codex_desktop',
     };
 
@@ -81,6 +90,8 @@ describe('loadConfig scoring mode', () => {
       SCORING_MODE: 'runtime-raiders',
       RUN_SCORING_CUTOVER_AT: '1800000000000',
       RAID_POWER_POLICY_PATH: resolve('config/does-not-exist.json'),
+      RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+      RAID_POWER_V2_CUTOVER_AT: '1800000001000',
       RUN_ENABLED_SURFACES: 'codex_desktop',
     })).toThrow();
   });
@@ -90,6 +101,8 @@ describe('loadConfig scoring mode', () => {
       SCORING_MODE: 'runtime-raiders',
       RUN_SCORING_CUTOVER_AT: '1800000000000',
       RAID_POWER_POLICY_PATH: POLICY_PATH,
+      RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+      RAID_POWER_V2_CUTOVER_AT: '1800000001000',
     };
 
     for (const value of [undefined, '', '   ', 'codex_cli,,codex_desktop',
@@ -106,6 +119,8 @@ describe('loadConfig scoring mode', () => {
       SCORING_MODE: 'runtime-raiders',
       RUN_SCORING_CUTOVER_AT: '1800000000000',
       RAID_POWER_POLICY_PATH: POLICY_PATH,
+      RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+      RAID_POWER_V2_CUTOVER_AT: '1800000001000',
     };
 
     for (const surface of ['claude_code', 'omp']) {
@@ -114,6 +129,61 @@ describe('loadConfig scoring mode', () => {
         RUN_ENABLED_SURFACES: surface,
       }), surface).toThrow(/provider|policy/i);
     }
+  });
+
+  it('requires explicit loadable v2 policy configuration in runtime mode', () => {
+    const runtime = {
+      SCORING_MODE: 'runtime-raiders',
+      RUN_SCORING_CUTOVER_AT: '1800000000000',
+      RAID_POWER_POLICY_PATH: POLICY_PATH,
+      RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+      RAID_POWER_V2_CUTOVER_AT: '1800000001000',
+      RUN_ENABLED_SURFACES: 'codex_desktop',
+    };
+
+    expect(() => loadConfig({
+      ...runtime,
+      RAID_POWER_POLICY_V2_PATH: undefined,
+    })).toThrow(/RAID_POWER_POLICY_V2_PATH/);
+    expect(() => loadConfig({
+      ...runtime,
+      RAID_POWER_V2_CUTOVER_AT: undefined,
+    })).toThrow(/RAID_POWER_V2_CUTOVER_AT/);
+    expect(() => loadConfig({
+      ...runtime,
+      RAID_POWER_POLICY_V2_PATH: resolve('config/does-not-exist-v2.json'),
+    })).toThrow();
+    expect(() => loadConfig({
+      ...runtime,
+      RAID_POWER_POLICY_V2_PATH: POLICY_PATH,
+    })).toThrow();
+  });
+
+  it('requires a safe v2 cutoff that is not before the Run cutoff', () => {
+    const runtime = {
+      SCORING_MODE: 'runtime-raiders',
+      RUN_SCORING_CUTOVER_AT: '1800000000000',
+      RAID_POWER_POLICY_PATH: POLICY_PATH,
+      RAID_POWER_POLICY_V2_PATH: POLICY_V2_PATH,
+      RAID_POWER_V2_CUTOVER_AT: '1800000001000',
+      RUN_ENABLED_SURFACES: 'codex_desktop',
+    };
+
+    for (const value of ['', '-1', '1.5', 'epoch', '9007199254740992']) {
+      expect(() => loadConfig({
+        ...runtime,
+        RAID_POWER_V2_CUTOVER_AT: value,
+      }), value).toThrow(/RAID_POWER_V2_CUTOVER_AT/);
+    }
+    expect(() => loadConfig({
+      ...runtime,
+      RAID_POWER_V2_CUTOVER_AT: '1799999999999',
+    })).toThrow(/v2CutoverAt.*runCutoverAt/i);
+  });
+
+  it('keeps legacy and disabled startup independent of v2 policy settings', () => {
+    expect(() => loadConfig({ SCORING_MODE: 'legacy-otlp' })).not.toThrow();
+    expect(() => loadConfig({ SCORING_MODE: 'disabled' })).not.toThrow();
   });
 });
 

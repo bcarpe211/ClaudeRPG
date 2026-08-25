@@ -3,11 +3,16 @@ import {
   providerForSurface,
   type RunSurface,
 } from './domain/run-events';
-import { loadRaidPowerPolicy } from './domain/raid-power-policy';
+import {
+  loadRaidPowerPolicy,
+  loadRaidPowerPolicyV2,
+} from './domain/raid-power-policy';
+import { createRaidPowerPolicySchedule } from './domain/raid-power-policy-schedule';
 
 export type ScoringMode = 'legacy-otlp' | 'runtime-raiders' | 'disabled';
 
 const DEFAULT_RAID_POWER_POLICY_PATH = 'config/raid-power-policy-v1.json';
+const DEFAULT_RAID_POWER_POLICY_V2_PATH = 'config/raid-power-policy-v2.json';
 const RUN_SURFACES = new Set<RunSurface>([
   'codex_desktop',
   'codex_cli',
@@ -33,6 +38,8 @@ export interface Config {
   scoringMode: ScoringMode;
   runCutoverAt: number;
   raidPowerPolicyPath: string;
+  raidPowerPolicyV2Path: string;
+  raidPowerV2CutoverAt: number;
   enabledRunSurfaces: RunSurface[];
 }
 
@@ -56,6 +63,22 @@ function runCutoverAt(env: NodeJS.ProcessEnv, required: boolean): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error('RUN_SCORING_CUTOVER_AT must be a non-negative safe integer epoch');
+  }
+  return parsed;
+}
+
+function raidPowerV2CutoverAt(env: NodeJS.ProcessEnv, required: boolean): number {
+  const value = env.RAID_POWER_V2_CUTOVER_AT;
+  if (value === undefined) {
+    if (required) throw new Error('RAID_POWER_V2_CUTOVER_AT is required');
+    return 0;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new Error('RAID_POWER_V2_CUTOVER_AT must be a non-negative safe integer epoch');
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error('RAID_POWER_V2_CUTOVER_AT must be a non-negative safe integer epoch');
   }
   return parsed;
 }
@@ -122,18 +145,27 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const cutoverAt = runCutoverAt(env, mode === 'runtime-raiders');
   const raidPowerPolicyPath = env.RAID_POWER_POLICY_PATH
     ?? DEFAULT_RAID_POWER_POLICY_PATH;
+  const raidPowerPolicyV2Path = env.RAID_POWER_POLICY_V2_PATH
+    ?? DEFAULT_RAID_POWER_POLICY_V2_PATH;
+  const v2CutoverAt = raidPowerV2CutoverAt(env, mode === 'runtime-raiders');
   const surfaces = enabledRunSurfaces(env);
 
   if (mode === 'runtime-raiders') {
     if (surfaces.length === 0) {
       throw new Error('RUN_ENABLED_SURFACES is required in runtime-raiders mode');
     }
-    const policy = loadRaidPowerPolicy(raidPowerPolicyPath);
+    if (env.RAID_POWER_POLICY_V2_PATH === undefined) {
+      throw new Error('RAID_POWER_POLICY_V2_PATH is required');
+    }
+    const v1 = loadRaidPowerPolicy(raidPowerPolicyPath);
+    const v2 = loadRaidPowerPolicyV2(raidPowerPolicyV2Path);
+    createRaidPowerPolicySchedule(v1, v2, cutoverAt, v2CutoverAt);
     for (const surface of surfaces) {
       const provider = providerForSurface(surface);
-      if (!(policy.enabled_providers as readonly string[]).includes(provider)) {
+      if (!(v1.enabled_providers as readonly string[]).includes(provider)
+        || !(v2.enabled_providers as readonly string[]).includes(provider)) {
         throw new Error(
-          `RUN_ENABLED_SURFACES provider ${provider} is not enabled by the Raid Power policy`,
+          `RUN_ENABLED_SURFACES provider ${provider} is not enabled by both Raid Power policies`,
         );
       }
     }
@@ -161,6 +193,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     scoringMode: mode,
     runCutoverAt: cutoverAt,
     raidPowerPolicyPath,
+    raidPowerPolicyV2Path,
+    raidPowerV2CutoverAt: v2CutoverAt,
     enabledRunSurfaces: surfaces,
   };
 }
