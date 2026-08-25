@@ -86,6 +86,13 @@ function countRows(table: 'runs' | 'run_events'): number {
   return (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
 }
 
+function presenceReceipt(playerId = player.id): number | null {
+  const row = db.prepare(`
+    SELECT last_run_activity_at FROM raider_presence WHERE player_id = ?
+  `).get(playerId) as { last_run_activity_at: number } | undefined;
+  return row?.last_run_activity_at ?? null;
+}
+
 async function postChunkedGzip(
   path: string,
   compressedBody: Buffer,
@@ -464,7 +471,8 @@ describe('Run event authentication and ingestion', () => {
   });
 
   it('returns the same private 401 for missing, malformed, and invalid Bearer credentials', async () => {
-    const event = runEvent(randomUUID());
+    const device = await enrollDevice();
+    const event = runEvent(device.deviceId);
     const credentials = [undefined, 'Basic private', 'Bearer', 'Bearer malformed', `Bearer ${'A'.repeat(43)}`];
     for (const authorization of credentials) {
       const call = request(app).post('/api/runs/events').send({ events: [event] });
@@ -474,11 +482,17 @@ describe('Run event authentication and ingestion', () => {
       expect(response.body).toEqual({ reason: 'unauthorized' });
       expect(response.text).not.toContain(authorization ?? 'private');
     }
+    expect(presenceReceipt()).toBeNull();
   });
 
-  it('accepts a valid device once and reports an exact retry as duplicate', async () => {
+  it('records an exact server receipt for a fresh zero-usage event and keeps its retry duplicate', async () => {
     const device = await enrollDevice();
-    const event = runEvent(device.deviceId);
+    const event = runEvent(device.deviceId, {
+      started_at_ms: NOW,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: ZERO_USAGE,
+    });
 
     const accepted = await request(app)
       .post('/api/runs/events')
@@ -486,6 +500,7 @@ describe('Run event authentication and ingestion', () => {
       .send({ events: [event] });
     expect(accepted.status).toBe(200);
     expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(presenceReceipt()).toBe(NOW);
 
     const duplicate = await request(app)
       .post('/api/runs/events')
@@ -495,6 +510,43 @@ describe('Run event authentication and ingestion', () => {
     expect(duplicate.body).toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
     expect(countRows('runs')).toBe(1);
     expect(countRows('run_events')).toBe(1);
+  });
+
+  it('does not record presence for malformed event JSON', async () => {
+    const device = await enrollDevice();
+    const response = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .set('Content-Type', 'application/json')
+      .send('{"events":');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ reason: 'invalid_request' });
+    expect(presenceReceipt()).toBeNull();
+  });
+
+  it('accepts a stale valid event without recording presence', async () => {
+    app = createApp({
+      db,
+      config: runtimeConfig({ RUN_SCORING_CUTOVER_AT: String(NOW - 200_000) }),
+    });
+    const device = await enrollDevice();
+    const staleAt = NOW - 120_001;
+    const event = runEvent(device.deviceId, {
+      started_at_ms: staleAt - 1,
+      event_time_ms: staleAt,
+      observed_at_ms: staleAt,
+      usage: ZERO_USAGE,
+    });
+
+    const response = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .send({ events: [event] });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(presenceReceipt()).toBeNull();
   });
 
   it.each([
@@ -521,6 +573,7 @@ describe('Run event authentication and ingestion', () => {
     expect(response.body).toEqual({ reason: 'invalid_usage_counters' });
     expect(countRows('runs')).toBe(0);
     expect(countRows('run_events')).toBe(0);
+    expect(presenceReceipt()).toBeNull();
   });
 
   it('keeps unexpected ingestion failures on the private 500 path', async () => {
@@ -606,6 +659,7 @@ describe('Run event authentication and ingestion', () => {
     expect(db.prepare(`
       SELECT companion_version, last_seen_at FROM raider_devices WHERE device_id = ?
     `).get(device.deviceId)).toEqual({ companion_version: '0.2.0', last_seen_at: NOW });
+    expect(presenceReceipt()).toBeNull();
 
     const invalid = await request(app)
       .post('/api/runs/heartbeat')
@@ -680,6 +734,7 @@ describe('mutually exclusive scoring and atomic surface allowlist', () => {
     expect(response.body).toEqual({ reason: 'surface_disabled' });
     expect(countRows('runs')).toBe(0);
     expect(countRows('run_events')).toBe(0);
+    expect(presenceReceipt()).toBeNull();
   });
 
   it('rejects a mixed enabled/disabled batch without ingesting its enabled event', async () => {
