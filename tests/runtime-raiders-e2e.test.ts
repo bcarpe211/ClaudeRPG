@@ -504,6 +504,9 @@ describe('Runtime Raiders local integration gate', () => {
     );
     const oldDevice = await enrollDevice(player);
     const targetDevice = await enrollDevice(targetPlayer);
+    const targetDedupeSecret = (db.prepare(`
+      SELECT dedupe_secret FROM raider_identities WHERE player_id = ?
+    `).get(targetPlayer.id) as { dedupe_secret: string }).dedupe_secret;
     const oldHistory = runEvent(oldDevice.deviceId, {
       run_key: hexKey(40_001),
       state: 'completed',
@@ -632,19 +635,23 @@ describe('Runtime Raiders local integration gate', () => {
       oldDevice.deviceToken,
     );
     expect(replaced.status).toBe(201);
-    expect(replaced.body).toEqual({
+    const expectedTargetConfiguration = {
       device_id: replacementDeviceId,
-      dedupe_secret: expect.stringMatching(/^[0-9a-f]{64}$/),
+      dedupe_secret: targetDedupeSecret,
       server_url: 'http://127.0.0.1:1',
       cutover_at: CUTOVER,
       enabled_surfaces: ['codex_desktop', 'codex_cli'],
-    });
+    };
+    expect(replaced.body).toEqual(expectedTargetConfiguration);
+    expect(db.prepare(`
+      SELECT player_id FROM raider_devices WHERE device_id = ?
+    `).get(replacementDeviceId)).toEqual({ player_id: targetPlayer.id });
 
     const recovered = await request(app)
       .get('/api/raiders/enrollment-config')
       .set('authorization', `Bearer ${replacementDeviceToken}`);
     expect(recovered.status).toBe(200);
-    expect(recovered.body).toEqual(replaced.body);
+    expect(recovered.body).toEqual(expectedTargetConfiguration);
 
     const rejectedQueuedWork = await post(
       '/api/runs/events',
