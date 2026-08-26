@@ -35,15 +35,33 @@ private enum CLIError: Error, CustomStringConvertible {
     case usage
     case invalidRuntimeConfiguration
     case updateCheckUnavailable
+    case invalidStatusResponse
+    case invalidControlResponse
 
     var description: String {
         switch self {
         case .usage: "usage: raiders on|off|status|doctor|uninstall|update"
         case .invalidRuntimeConfiguration: "Runtime Raiders enrollment configuration is invalid"
         case .updateCheckUnavailable: "Unable to check for a Runtime Raiders update."
+        case .invalidStatusResponse: "Runtime Raiders status response was invalid."
+        case .invalidControlResponse: "Runtime Raiders control response was invalid."
         }
     }
 }
+
+private let helpText = """
+Usage: raiders <command>
+
+Commands:
+  on                       Turn collection on
+  off                      Turn collection off
+  status                   Show collection and agent status
+  status --json            Show machine-readable status
+  doctor                   Run content-free health checks
+  update                   Check for a companion update
+  uninstall                Stop the agent and preserve installed state
+  help                     Show this help
+"""
 
 private final class CancellableDispatchTimer: @unchecked Sendable {
     private let workItem: DispatchWorkItem
@@ -397,14 +415,30 @@ private func runUpdateCheck(
 private func run() throws {
     let environment = ProcessInfo.processInfo.environment
     let arguments = Array(CommandLine.arguments.dropFirst())
+    let style = outputStyle(
+        isTTY: Darwin.isatty(STDOUT_FILENO) == 1,
+        environment: environment
+    )
     if let verificationPaths = try verificationPaths(environment: environment) {
         switch arguments {
         case ["status"]:
-            print(try localStatus(
+            try printLocalStatus(
                 paths: verificationPaths,
+                format: .pretty,
+                style: style,
                 readCachedUpdateState: false,
                 daemonRunning: true
-            ).description)
+            )
+        case ["status", "--json"]:
+            try printLocalStatus(
+                paths: verificationPaths,
+                format: .json,
+                style: style,
+                readCachedUpdateState: false,
+                daemonRunning: true
+            )
+        case ["help"], ["--help"]:
+            print(helpText)
         case ["update"]:
             try runUpdateCheck(
                 paths: verificationPaths,
@@ -453,8 +487,14 @@ private func run() throws {
     case .updateCheck:
         try runUpdateCheck(paths: paths, environment: environment)
         return
+    case .help:
+        print(helpText)
+        return
+    case let .status(format):
+        try runStatusCommand(paths: paths, format: format, style: style)
+        return
     case let .control(command):
-        try runUserControlCommand(command, paths: paths)
+        try runUserControlCommand(command, paths: paths, style: style)
     }
 }
 
@@ -537,28 +577,105 @@ private func isExactOwnerOnlyPhysicalDirectory(_ directory: URL) -> Bool {
         openedMetadata.st_ino == pathMetadata.st_ino
 }
 
-private func runUserControlCommand(_ command: ControlCommand, paths: AgentPaths) throws {
+private func runStatusCommand(
+    paths: AgentPaths,
+    format: StatusOutputFormat,
+    style: OutputStyle
+) throws {
+    do {
+        let request = ControlRequest(command: .status)
+        let response = try ControlSocketClient.send(
+            request: request,
+            to: paths.controlSocket
+        )
+        guard response.ok,
+              let data = response.message.data(using: .utf8),
+              let status = try? JSONDecoder().decode(AgentStatus.self, from: data) else {
+            throw CLIError.invalidStatusResponse
+        }
+        print(renderStatus(status, format: format, style: style))
+    } catch {
+        guard daemonIsUnavailable(error) else { throw error }
+        try printLocalStatus(paths: paths, format: format, style: style)
+    }
+}
+
+private func runUserControlCommand(
+    _ command: ControlCommand,
+    paths: AgentPaths,
+    style: OutputStyle
+) throws {
     do {
         let request = ControlRequest.invocation(
             command: command,
             environment: ProcessInfo.processInfo.environment
         )
-        let response = try ControlSocketClient.send(
-            request: request,
-            to: paths.controlSocket
-        )
-        print(response.message)
-        if !response.ok { Foundation.exit(EXIT_FAILURE) }
+        let response = try ControlSocketClient.send(request: request, to: paths.controlSocket)
+        if !response.ok {
+            print(response.message)
+            Foundation.exit(EXIT_FAILURE)
+        }
+        switch command {
+        case .on:
+            let state: CollectorActivationState
+            switch response.message {
+            case "preparing": state = .preparing
+            case "ready": state = .ready
+            default: throw CLIError.invalidControlResponse
+            }
+            print(CollectionCommandRenderer.render(enabled: true, activationState: state, style: style))
+        case .off:
+            guard response.message == "disabled" else { throw CLIError.invalidControlResponse }
+            print(CollectionCommandRenderer.render(
+                enabled: false,
+                activationState: .disabled,
+                style: style
+            ))
+        case .doctor, .uninstall:
+            print(response.message)
+        case .daemon, .status:
+            throw CLIError.invalidControlResponse
+        }
     } catch {
         guard daemonIsUnavailable(error) else { throw error }
         switch command {
-        case .status:
-            print(try localStatus(paths: paths).description)
         case .doctor:
             print(localDoctor(paths: paths).description)
-        default:
+        case .on, .off, .daemon, .status, .uninstall:
             throw error
         }
+    }
+}
+
+private func printLocalStatus(
+    paths: AgentPaths,
+    format: StatusOutputFormat,
+    style: OutputStyle,
+    readCachedUpdateState: Bool = true,
+    daemonRunning: Bool = false
+) throws {
+    let status = try localStatus(
+        paths: paths,
+        readCachedUpdateState: readCachedUpdateState,
+        daemonRunning: daemonRunning
+    )
+    print(renderStatus(status, format: format, style: style))
+}
+
+private func renderStatus(
+    _ status: AgentStatus,
+    format: StatusOutputFormat,
+    style: OutputStyle
+) -> String {
+    switch format {
+    case .json:
+        return status.description
+    case .pretty:
+        return StatusRenderer.render(
+            status,
+            nowMS: Int64(Date().timeIntervalSince1970 * 1_000),
+            style: style
+        )
     }
 }
 

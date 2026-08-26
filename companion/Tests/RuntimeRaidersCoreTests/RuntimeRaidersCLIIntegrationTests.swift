@@ -7,14 +7,24 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
     func testActualVersionOnlyAppRunsStatusUpdateAndRuntimeInputVersionLoad() throws {
         try withActualVersionOnlyApp { fixture in
             let before = try treeFingerprint(fixture.paths.supportDirectory)
-            let status = try runCLI(fixture, arguments: ["status"])
-            XCTAssertEqual(status.exitStatus, 0, status.stderr)
-            let statusObject = (try? JSONSerialization.jsonObject(
-                with: Data(status.stdout.utf8)
-            )) as? [String: Any]
-            XCTAssertEqual(statusObject?["installedCompanionVersion"] as? String, "1.2.3")
-            XCTAssertEqual(statusObject?["daemonRunning"] as? Bool, true)
-            XCTAssertNil(statusObject?["installedReleaseSequence"])
+            let pretty = try runCLI(fixture, arguments: ["status"])
+            XCTAssertEqual(pretty.exitStatus, 0, pretty.stderr)
+            XCTAssertTrue(pretty.stdout.hasPrefix("Runtime Raiders\nCollection: OFF\n"))
+            XCTAssertFalse(pretty.stdout.contains("\u{001B}["))
+
+            let json = try runCLI(fixture, arguments: ["status", "--json"])
+            XCTAssertEqual(json.exitStatus, 0, json.stderr)
+            XCTAssertEqual(
+                JSONSerialization.isValidJSONObject(
+                    try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.stdout.utf8)))
+                ),
+                true
+            )
+            XCTAssertTrue(json.stdout.contains(#""installedCompanionVersion":"1.2.3""#))
+
+            let help = try runCLI(fixture, arguments: ["help"])
+            XCTAssertEqual(help.exitStatus, 0, help.stderr)
+            XCTAssertEqual(help.stdout, "Usage: raiders <command>\n\nCommands:\n  on                       Turn collection on\n  off                      Turn collection off\n  status                   Show collection and agent status\n  status --json            Show machine-readable status\n  doctor                   Run content-free health checks\n  update                   Check for a companion update\n  uninstall                Stop the agent and preserve installed state\n  help                     Show this help\n")
 
             let update = try runCLI(fixture, arguments: ["update"])
             XCTAssertEqual(update.exitStatus, 0, update.stderr)
@@ -89,9 +99,198 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
 
             let status = try runCLI(fixture, arguments: ["status"])
             XCTAssertEqual(status.exitStatus, 0, status.stderr)
-            XCTAssertTrue(status.stdout.contains(#""installedCompanionVersion":"1.2.3""#))
+            XCTAssertTrue(status.stdout.hasPrefix("Runtime Raiders\nCollection: OFF\n"))
             XCTAssertEqual(recorder.commands, [])
             XCTAssertEqual(try treeFingerprint(fixture.paths.supportDirectory), before)
+        }
+    }
+
+    func testControlCommandsRenderOnlyApprovedDaemonStates() throws {
+        try withActualVersionOnlyApp { fixture in
+            let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
+            try server.start { command in
+                switch command {
+                case .on:
+                    return ControlResponse(ok: true, message: "preparing")
+                case .off:
+                    return ControlResponse(ok: true, message: "disabled")
+                default:
+                    return ControlResponse(ok: false, message: "unexpected command")
+                }
+            }
+            defer { server.stop() }
+
+            let on = try runCLI(
+                fixture,
+                arguments: ["on"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+            XCTAssertEqual(on.exitStatus, 0, on.stderr)
+            XCTAssertEqual(
+                on.stdout,
+                "Runtime Raiders collection is ON\nStatus: Preparing safely in the background.\n"
+            )
+            XCTAssertFalse(on.stdout.contains("\u{001B}["))
+
+            let off = try runCLI(
+                fixture,
+                arguments: ["off"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+            XCTAssertEqual(off.exitStatus, 0, off.stderr)
+            XCTAssertEqual(off.stdout, "Runtime Raiders collection is OFF\n")
+        }
+    }
+
+    func testControlStatusRejectsMalformedDaemonSuccessResponse() throws {
+        try withActualVersionOnlyApp { fixture in
+            let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
+            try server.start { command in
+                XCTAssertEqual(command, .status)
+                return ControlResponse(ok: true, message: "not a status document")
+            }
+            defer { server.stop() }
+
+            let result = try runCLI(
+                fixture,
+                arguments: ["status", "--json"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+
+            XCTAssertNotEqual(result.exitStatus, 0)
+            XCTAssertTrue(
+                result.stderr.contains("Runtime Raiders status response was invalid."),
+                result.stderr
+            )
+        }
+    }
+
+    func testControlStatusDecodesDaemonJSONAndPreservesMachineReadableWireOutput() throws {
+        try withActualVersionOnlyApp { fixture in
+            let status = AgentStatus(
+                enabled: true,
+                activationState: .ready,
+                daemonRunning: true,
+                persistedState: .enabled,
+                serverEnabledSurfaces: [.codexDesktop],
+                compiledAdapters: [.codexDesktop: .available],
+                queuedEventCount: 3,
+                lastSuccessfulUploadMS: nil,
+                activeRunCount: 1,
+                installedCompanionVersion: "1.2.3",
+                availableCompanionVersion: nil,
+                updateCommand: nil
+            )
+            let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
+            try server.start { command in
+                XCTAssertEqual(command, .status)
+                return ControlResponse(ok: true, message: status.description)
+            }
+            defer { server.stop() }
+
+            let pretty = try runCLI(
+                fixture,
+                arguments: ["status"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+            XCTAssertEqual(pretty.exitStatus, 0, pretty.stderr)
+            XCTAssertTrue(pretty.stdout.hasPrefix("Runtime Raiders\nCollection: ON\n"))
+            XCTAssertFalse(pretty.stdout.contains("\u{001B}["))
+
+            let json = try runCLI(
+                fixture,
+                arguments: ["status", "--json"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+            XCTAssertEqual(json.exitStatus, 0, json.stderr)
+            XCTAssertEqual(json.stdout, status.description + "\n")
+            XCTAssertTrue(json.stdout.contains(#""lastSuccessfulUploadMS":null"#))
+        }
+    }
+
+    func testDaemonUnavailableStatusUsesTheSelectedLocalOutputFormat() throws {
+        try withActualVersionOnlyApp { fixture in
+            let pretty = try runCLI(
+                fixture,
+                arguments: ["status"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+            XCTAssertEqual(pretty.exitStatus, 0, pretty.stderr)
+            XCTAssertTrue(pretty.stdout.hasPrefix("Runtime Raiders\nCollection: OFF\n"))
+            XCTAssertFalse(pretty.stdout.contains("\u{001B}["))
+
+            let json = try runCLI(
+                fixture,
+                arguments: ["status", "--json"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+            XCTAssertEqual(json.exitStatus, 0, json.stderr)
+            XCTAssertEqual(
+                JSONSerialization.isValidJSONObject(
+                    try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.stdout.utf8)))
+                ),
+                true
+            )
+            XCTAssertTrue(json.stdout.contains(#""lastSuccessfulUploadMS":null"#))
+        }
+    }
+
+    func testControlOnRendersReadyDaemonState() throws {
+        try withActualVersionOnlyApp { fixture in
+            let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
+            try server.start { command in
+                XCTAssertEqual(command, .on)
+                return ControlResponse(ok: true, message: "ready")
+            }
+            defer { server.stop() }
+
+            let result = try runCLI(
+                fixture,
+                arguments: ["on"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+
+            XCTAssertEqual(result.exitStatus, 0, result.stderr)
+            XCTAssertEqual(result.stdout, "Runtime Raiders collection is ON\nStatus: Ready.\n")
+        }
+    }
+
+    func testControlCommandsRejectUnexpectedSuccessfulDaemonMessages() throws {
+        try withActualVersionOnlyApp { fixture in
+            let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
+            try server.start { command in
+                switch command {
+                case .on:
+                    return ControlResponse(ok: true, message: "enabled")
+                case .off:
+                    return ControlResponse(ok: true, message: "off")
+                default:
+                    return ControlResponse(ok: false, message: "unexpected command")
+                }
+            }
+            defer { server.stop() }
+
+            for arguments in [["on"], ["off"]] {
+                let result = try runCLI(
+                    fixture,
+                    arguments: arguments,
+                    includeVerificationGate: false,
+                    includeSupportOverride: false
+                )
+                XCTAssertNotEqual(result.exitStatus, 0, "accepted \(arguments)")
+                XCTAssertTrue(
+                    result.stderr.contains("Runtime Raiders control response was invalid."),
+                    result.stderr
+                )
+            }
         }
     }
 

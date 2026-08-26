@@ -36,7 +36,7 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
-    func testFlatCommandRoutingUsesOnlyStableDaemonControlAndUpdateCheckRoutes() {
+    func testFlatCommandRoutingUsesEmployeeStatusHelpAndStableDaemonControlRoutes() {
         let paths = AgentPaths(
             applicationSupportDirectory: URL(fileURLWithPath: "/private/tmp/rr-flat-routing")
         )
@@ -49,8 +49,50 @@ final class ControlProtocolTests: XCTestCase {
                 executableURL: otherExecutable,
                 paths: paths
             ),
-            .control(.status)
+            .status(.pretty)
         )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["status"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .status(.pretty)
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["status", "--json"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .status(.json)
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["help"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .help
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["--help"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .help
+        )
+        XCTAssertNil(CompanionCommandRouter.route(
+            arguments: ["status", "--pretty"],
+            executableURL: otherExecutable,
+            paths: paths
+        ))
+        XCTAssertNil(CompanionCommandRouter.route(
+            arguments: ["status", "--json", "extra"],
+            executableURL: otherExecutable,
+            paths: paths
+        ))
         XCTAssertEqual(
             CompanionCommandRouter.route(
                 arguments: ["daemon"],
@@ -97,7 +139,6 @@ final class ControlProtocolTests: XCTestCase {
         for command in [
             ControlCommand.on,
             .off,
-            .status,
             .doctor,
             .uninstall,
         ] {
@@ -147,6 +188,13 @@ final class ControlProtocolTests: XCTestCase {
                 "accepted retired route \(arguments)"
             )
         }
+    }
+
+    func testOutputStyleUsesANSIOnlyForInteractiveOutputWithoutNoColor() {
+        XCTAssertEqual(outputStyle(isTTY: true, environment: [:]), .ansi)
+        XCTAssertEqual(outputStyle(isTTY: false, environment: [:]), .plain)
+        XCTAssertEqual(outputStyle(isTTY: true, environment: ["NO_COLOR": ""]), .plain)
+        XCTAssertEqual(outputStyle(isTTY: false, environment: ["NO_COLOR": "1"]), .plain)
     }
 
     func testNormalDaemonStartupStartsControlBeforeOptionalActivationAndVersionCheck() throws {

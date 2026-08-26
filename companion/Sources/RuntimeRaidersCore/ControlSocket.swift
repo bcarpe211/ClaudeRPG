@@ -13,11 +13,22 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
     case uninstall
 }
 
+public enum StatusOutputFormat: Equatable, Sendable {
+    case pretty
+    case json
+}
+
 public enum CompanionCommandRoute: Equatable, Sendable {
     case daemon
     case managedAgent(ManagedAgentAction)
     case control(ControlCommand)
+    case status(StatusOutputFormat)
     case updateCheck
+    case help
+}
+
+public func outputStyle(isTTY: Bool, environment: [String: String]) -> OutputStyle {
+    isTTY && environment["NO_COLOR"] == nil ? .ansi : .plain
 }
 
 public enum CompanionCommandRouter {
@@ -28,8 +39,14 @@ public enum CompanionCommandRouter {
     ) -> CompanionCommandRoute? {
         switch arguments {
         case []:
-            return .control(.status)
-        case ["on"], ["off"], ["status"], ["doctor"], ["uninstall"]:
+            return .status(.pretty)
+        case ["status"]:
+            return .status(.pretty)
+        case ["status", "--json"]:
+            return .status(.json)
+        case ["help"], ["--help"]:
+            return .help
+        case ["on"], ["off"], ["doctor"], ["uninstall"]:
             guard let argument = arguments.first,
                   let command = ControlCommand(rawValue: argument) else { return nil }
             return .control(command)
