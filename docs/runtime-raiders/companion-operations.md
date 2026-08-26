@@ -159,6 +159,11 @@ ZIP checksum and signed app before enrollment/replacement; it preserves the
 owner-only enrollment, cursors, and outbox across an upgrade or automatic
 rollback.
 
+## Status output contract
+
+Humans use `raiders status`. Scripts and release gates use `raiders status --json`.
+Never parse the human-readable status output.
+
 ## Already-installed player: manual update only
 
 Sequence 2 is installed locally, digest-verified, and persistently off; it is not

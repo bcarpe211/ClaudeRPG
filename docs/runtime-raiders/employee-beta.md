@@ -4,7 +4,7 @@ curl -fsSL https://raiders.redlattice.com/install.sh | sh
 Turn collection on:
 raiders on
 
-Check it:
+Check it (human-readable):
 raiders status
 
 Check for an update:
@@ -23,9 +23,11 @@ with valid existing enrollment does not require another code.
 
 # Runtime Raiders employee beta
 
-The installer starts a new employee with collection off. A reinstall keeps that
-employee's enrollment, queued metrics, cursors, and previous on/off choice.
-Publishing a release never turns collection on for anyone.
+The installer starts a new employee with collection off. `raiders status` is
+the human-readable way to check whether collection is on and what to do next.
+A reinstall keeps that employee's enrollment, queued metrics, cursors, and
+previous on/off choice. Publishing a release never turns collection on for
+anyone.
 
 ## Run the one-shot live acceptance gate
 

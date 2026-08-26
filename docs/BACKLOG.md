@@ -720,18 +720,18 @@ credentials, local paths, or provider-record content.
       state, and outbox; it must not touch Codex sessions or unrelated user data.
       Distinguish “stop and preserve state” from “remove local companion state”
       in both command names and output.
-- [ ] **Make `raiders status` human-readable by default.** Render collection
+- [x] **Make `raiders status` human-readable by default.** Render collection
       state (`Off`, `Preparing`, or `Ready`), daemon/background-agent health,
       supported surfaces, active Runs, queued events, installed/available
       version, last successful upload when present, and one bounded next action.
       Keep it content-free: no Raider Key, device token, native Run ID, local
       path, cursor, prompt, response, or provider-record content.
-- [ ] **Preserve automation compatibility with `raiders status --json`.** Keep
+- [x] **Preserve automation compatibility with `raiders status --json`.** Keep
       the existing structured fields stable and sorted, and exercise both the
       live-daemon and daemon-unavailable local-status paths. The pretty output
       must be deterministic enough for snapshot tests but must not be parsed by
       automation.
-- [ ] **Give a successful install a plain-language handoff.** Say that Runtime
+- [x] **Give a successful install a plain-language handoff.** Say that Runtime
       Raiders is installed, collection starts off, `raiders status` checks the
       setup, and `raiders on` opts into the game. Keep secondary commands behind
       `raiders help` instead of printing an operator runbook after installation.
