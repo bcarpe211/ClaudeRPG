@@ -339,26 +339,26 @@ final class RecoveryJournalTests: XCTestCase {
     func testLifecycleLockIsPrivateNonblockingAndReleasedOnClose() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        var first: LifecycleLock? = try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)
+        var first: LifecycleLock? = try fixture.acquireLifecycleLock()
 
         XCTAssertNotNil(first)
         XCTAssertEqual(try permissions(fixture.paths.lifecycleLock), 0o600)
-        XCTAssertThrowsError(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)) { error in
+        XCTAssertThrowsError(try fixture.acquireLifecycleLock()) { error in
             XCTAssertEqual(error as? LifecycleStorageError, .busy)
         }
 
         first = nil
-        XCTAssertNotNil(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock))
+        XCTAssertNotNil(try fixture.acquireLifecycleLock())
     }
 
     func testHeldLifecycleLockSurvivesSupportTreeRemovalAndReplacement() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let first = try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)
+        let first = try fixture.acquireLifecycleLock()
         XCTAssertNotNil(first)
 
         try FileManager.default.removeItem(at: fixture.paths.agent.supportDirectory)
-        XCTAssertThrowsError(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)) { error in
+        XCTAssertThrowsError(try fixture.acquireLifecycleLock()) { error in
             XCTAssertEqual(error as? LifecycleStorageError, .busy)
         }
 
@@ -371,8 +371,63 @@ final class RecoveryJournalTests: XCTestCase {
             [.posixPermissions: 0o700],
             ofItemAtPath: fixture.paths.agent.stateDirectory.path
         )
-        XCTAssertThrowsError(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)) { error in
+        XCTAssertThrowsError(try fixture.acquireLifecycleLock()) { error in
             XCTAssertEqual(error as? LifecycleStorageError, .busy)
+        }
+    }
+
+    func testHeldLifecycleLockSurvivesMarkerUnlinkAndRecreationUntilRelease() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var first: LifecycleLock? = try fixture.acquireLifecycleLock()
+        XCTAssertNotNil(first)
+
+        try FileManager.default.removeItem(at: fixture.paths.lifecycleLock)
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: fixture.paths.lifecycleLock.path,
+            contents: Data(),
+            attributes: [.posixPermissions: 0o600]
+        ))
+        XCTAssertThrowsError(try fixture.acquireLifecycleLock()) { error in
+            XCTAssertEqual(error as? LifecycleStorageError, .busy)
+        }
+
+        first = nil
+        XCTAssertNotNil(try fixture.acquireLifecycleLock())
+    }
+
+    func testHeldLifecycleLockSurvivesMarkerRenameReplacement() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let first = try fixture.acquireLifecycleLock()
+        let replacement = fixture.paths.lifecycleLock
+            .deletingLastPathComponent()
+            .appendingPathComponent("replacement.lock")
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: replacement.path,
+            contents: Data(),
+            attributes: [.posixPermissions: 0o600]
+        ))
+        XCTAssertEqual(Darwin.rename(replacement.path, fixture.paths.lifecycleLock.path), 0)
+
+        XCTAssertThrowsError(try fixture.acquireLifecycleLock()) { error in
+            XCTAssertEqual(error as? LifecycleStorageError, .busy)
+        }
+        XCTAssertNotNil(first)
+    }
+
+    func testLifecycleLockRejectsUnsafeParentAndHomeMetadataBeforeAcquisition() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+
+        XCTAssertThrowsError(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)) { error in
+            XCTAssertEqual(error as? LifecycleStorageError, .invalidState)
+        }
+
+        XCTAssertEqual(Darwin.chmod(fixture.root.path, 0o722), 0)
+        defer { _ = Darwin.chmod(fixture.root.path, 0o700) }
+        XCTAssertThrowsError(try fixture.acquireLifecycleLock()) { error in
+            XCTAssertEqual(error as? LifecycleStorageError, .invalidState)
         }
     }
 
@@ -443,5 +498,17 @@ private final class Fixture {
 
     func remove() {
         try? FileManager.default.removeItem(at: root)
+    }
+
+    func acquireLifecycleLock() throws -> LifecycleLock {
+        try LifecycleLock.acquire(
+            at: paths.lifecycleLock,
+            anchorParentMetadataTransform: { metadata in
+                var supported = metadata
+                supported.st_uid = 0
+                supported.st_mode = (supported.st_mode & mode_t(S_IFMT)) | 0o755
+                return supported
+            }
+        )
     }
 }

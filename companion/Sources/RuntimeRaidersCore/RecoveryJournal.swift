@@ -455,54 +455,180 @@ private struct StrictTopLevelJSONKeys {
 }
 
 public final class LifecycleLock: @unchecked Sendable {
-    private let stateDirectory: VerifiedStateDirectory
-    private let descriptor: Int32
+    typealias AnchorParentMetadataTransform = (stat) -> stat
 
-    private init(stateDirectory: VerifiedStateDirectory, descriptor: Int32) {
+    private let stateDirectory: VerifiedStateDirectory
+    private let anchorDescriptor: Int32
+    private let markerDescriptor: Int32
+
+    private init(
+        stateDirectory: VerifiedStateDirectory,
+        anchorDescriptor: Int32,
+        markerDescriptor: Int32
+    ) {
         self.stateDirectory = stateDirectory
-        self.descriptor = descriptor
+        self.anchorDescriptor = anchorDescriptor
+        self.markerDescriptor = markerDescriptor
     }
 
     deinit {
-        _ = runtimeRaidersFlock(descriptor, LOCK_UN)
-        Darwin.close(descriptor)
+        _ = runtimeRaidersFlock(markerDescriptor, LOCK_UN)
+        Darwin.close(markerDescriptor)
+        _ = runtimeRaidersFlock(anchorDescriptor, LOCK_UN)
+        Darwin.close(anchorDescriptor)
         _ = stateDirectory
     }
 
     public static func acquire(at url: URL) throws -> LifecycleLock {
+        try acquire(at: url, anchorParentMetadataTransform: { $0 })
+    }
+
+    static func acquire(
+        at url: URL,
+        anchorParentMetadataTransform: @escaping AnchorParentMetadataTransform
+    ) throws -> LifecycleLock {
         guard url.isFileURL,
               url.path.hasPrefix("/"),
               url.standardized.path == url.path,
               !url.lastPathComponent.isEmpty else {
             throw LifecycleStorageError.invalidPath
         }
+        let anchorDescriptor = try openAndLockHomeAnchor(
+            for: url,
+            parentMetadataTransform: anchorParentMetadataTransform
+        )
+        var retainsAnchor = false
+        defer {
+            if !retainsAnchor {
+                _ = runtimeRaidersFlock(anchorDescriptor, LOCK_UN)
+                Darwin.close(anchorDescriptor)
+            }
+        }
         let stateDirectory = try VerifiedStateDirectory(url: url.deletingLastPathComponent())
         try stateDirectory.verifyPathIdentity()
-        let descriptor = Darwin.openat(
+        let markerDescriptor = Darwin.openat(
             stateDirectory.descriptor,
             url.lastPathComponent,
             O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
             mode_t(S_IRUSR | S_IWUSR)
         )
-        guard descriptor >= 0 else { throw LifecycleStorageError.invalidState }
+        guard markerDescriptor >= 0 else { throw LifecycleStorageError.invalidState }
         var metadata = stat()
-        guard Darwin.fstat(descriptor, &metadata) == 0,
+        guard Darwin.fstat(markerDescriptor, &metadata) == 0,
               VerifiedStateDirectory.validPrivateFile(
                 metadata,
                 maximumBytes: 0,
                 allowsEmpty: true
               ) else {
-            Darwin.close(descriptor)
+            Darwin.close(markerDescriptor)
             throw LifecycleStorageError.invalidState
         }
-        guard runtimeRaidersFlock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+        guard runtimeRaidersFlock(markerDescriptor, LOCK_EX | LOCK_NB) == 0 else {
             let lockError = errno
-            Darwin.close(descriptor)
+            Darwin.close(markerDescriptor)
             if lockError == EWOULDBLOCK || lockError == EAGAIN {
                 throw LifecycleStorageError.busy
             }
             throw LifecycleStorageError.invalidState
         }
-        return LifecycleLock(stateDirectory: stateDirectory, descriptor: descriptor)
+        retainsAnchor = true
+        return LifecycleLock(
+            stateDirectory: stateDirectory,
+            anchorDescriptor: anchorDescriptor,
+            markerDescriptor: markerDescriptor
+        )
+    }
+
+    private static func openAndLockHomeAnchor(
+        for marker: URL,
+        parentMetadataTransform: AnchorParentMetadataTransform
+    ) throws -> Int32 {
+        let applicationSupport = marker.deletingLastPathComponent()
+        let library = applicationSupport.deletingLastPathComponent()
+        let home = library.deletingLastPathComponent()
+        guard applicationSupport.lastPathComponent == "Application Support",
+              library.lastPathComponent == "Library",
+              !home.lastPathComponent.isEmpty,
+              home.path != "/" else {
+            throw LifecycleStorageError.invalidPath
+        }
+
+        let parent = home.deletingLastPathComponent()
+        let parentDescriptor = Darwin.open(
+            parent.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard parentDescriptor >= 0 else { throw LifecycleStorageError.invalidState }
+        defer { Darwin.close(parentDescriptor) }
+
+        var parentMetadata = stat()
+        guard Darwin.fstat(parentDescriptor, &parentMetadata) == 0 else {
+            throw LifecycleStorageError.invalidState
+        }
+        parentMetadata = parentMetadataTransform(parentMetadata)
+        guard parentMetadata.st_mode & S_IFMT == S_IFDIR,
+              parentMetadata.st_uid == 0,
+              parentMetadata.st_mode & mode_t(S_IWGRP | S_IWOTH) == 0 else {
+            throw LifecycleStorageError.invalidState
+        }
+
+        let homeDescriptor = Darwin.openat(
+            parentDescriptor,
+            home.lastPathComponent,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard homeDescriptor >= 0 else { throw LifecycleStorageError.invalidState }
+        var retainsHome = false
+        defer {
+            if !retainsHome { Darwin.close(homeDescriptor) }
+        }
+
+        var homeMetadata = stat()
+        guard Darwin.fstat(homeDescriptor, &homeMetadata) == 0,
+              homeMetadata.st_mode & S_IFMT == S_IFDIR,
+              homeMetadata.st_uid == Darwin.geteuid(),
+              homeMetadata.st_mode & mode_t(S_IWGRP | S_IWOTH) == 0,
+              homeMatchesPath(
+                parentDescriptor: parentDescriptor,
+                name: home.lastPathComponent,
+                metadata: homeMetadata
+              ) else {
+            throw LifecycleStorageError.invalidState
+        }
+
+        guard runtimeRaidersFlock(homeDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let lockError = errno
+            if lockError == EWOULDBLOCK || lockError == EAGAIN {
+                throw LifecycleStorageError.busy
+            }
+            throw LifecycleStorageError.invalidState
+        }
+        guard homeMatchesPath(
+            parentDescriptor: parentDescriptor,
+            name: home.lastPathComponent,
+            metadata: homeMetadata
+        ) else {
+            _ = runtimeRaidersFlock(homeDescriptor, LOCK_UN)
+            throw LifecycleStorageError.invalidState
+        }
+        retainsHome = true
+        return homeDescriptor
+    }
+
+    private static func homeMatchesPath(
+        parentDescriptor: Int32,
+        name: String,
+        metadata: stat
+    ) -> Bool {
+        var pathMetadata = stat()
+        return Darwin.fstatat(
+            parentDescriptor,
+            name,
+            &pathMetadata,
+            AT_SYMLINK_NOFOLLOW
+        ) == 0
+            && pathMetadata.st_mode & S_IFMT == S_IFDIR
+            && pathMetadata.st_dev == metadata.st_dev
+            && pathMetadata.st_ino == metadata.st_ino
     }
 }
