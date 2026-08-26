@@ -303,7 +303,7 @@ wait_for_installation_status() {
   readiness_started="$(/bin/date +%s)" || return 1
   readiness_deadline=$((readiness_started + 30))
   while :; do
-    if "$readiness_command" status > "$readiness_output" &&
+    if "$readiness_command" status --json > "$readiness_output" &&
        installation_status_is_ready "$readiness_output" \
          "$readiness_expected_version" "$readiness_expected_daemon"; then
       return 0
@@ -564,7 +564,7 @@ trap 'exit 143' TERM
 
 if [ "$existing_form" != fresh ]; then
   existing_status_file="$WORK/existing-status.json"
-  if ! "$SHIM" status > "$existing_status_file" ||
+  if ! "$SHIM" status --json > "$existing_status_file" ||
      ! collection_is_conclusively_disabled "$existing_status_file"; then
     echo 'Runtime Raiders requires collection to be conclusively disabled before reinstall.' >&2
     exit 1
@@ -838,4 +838,8 @@ fi
 transaction_committed=1
 trap - EXIT HUP INT TERM
 /bin/rm -rf "$WORK"
-echo "Runtime Raiders installed. Run 'raiders status' to check it."
+printf '%s\n' \
+  'Runtime Raiders is installed.' \
+  'Collection is OFF.' \
+  'Run `raiders status` to check the setup.' \
+  'Run `raiders on` when you want to join the game.'

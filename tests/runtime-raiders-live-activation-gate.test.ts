@@ -85,6 +85,10 @@ case "${'$'}{1:-}" in
     status_count=${'$'}((status_count + 1))
     printf '%s' "${'$'}status_count" > '${state}/status-count'
     if [ "${'$'}{GATE_SCENARIO:-}" = status-fail ] && [ "${'$'}status_count" -eq 1 ]; then exit 1; fi
+    if [ "${'$'}{2:-}" != --json ]; then
+      printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'
+      exit 0
+    fi
     current="${'$'}(/bin/cat '${state}/activation' 2>/dev/null || printf disabled)"
     if [ "${'$'}{GATE_SCENARIO:-}" = initial-enabled ] && [ "${'$'}status_count" -eq 1 ]; then current=ready; fi
     if [ "${'$'}current" = preparing ] && [ "${'$'}{GATE_SCENARIO:-}" = ready-disabled ]; then
@@ -261,6 +265,7 @@ describe('Runtime Raiders one-shot live activation gate', () => {
     ]) expect(gateReport).toContain(field);
     const commands = readFileSync(value.log, 'utf8');
     expect(commands).toMatch(/raiders:on[\s\S]*raiders:off/);
+    expect(commands).toContain('raiders:status --json');
     expect(commands).toContain('rluser@raiders.redlattice.com');
     expect(commands).toContain('ProxyCommand=\/usr\/bin\/nc -b en0 %h %p');
     expect(commands).not.toMatch(/10\.1\.6\./);

@@ -436,6 +436,10 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     'esac',
     ...(identity === 'candidate' ? [`[ "${statusFailure}" != 1 ] || exit 78`] : []),
     '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
+    'if [ "${1:-}" = status ] && [ "${2:-}" != --json ]; then',
+    "  printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
+    '  exit 0',
+    'fi',
     ...(identity === 'candidate' ? [
       'status_calls=0',
       'if [ -e "$RR_STATUS_CALLS" ]; then status_calls=$(/bin/cat "$RR_STATUS_CALLS"); fi',
@@ -752,6 +756,10 @@ function writeExistingInstall(value: Fixture, enabled: boolean): void {
   writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.4.2', legacyLabel));
   executable(join(value.app, 'Contents/MacOS/runtime-raiders-agent'), [
     'printf "agent:legacy:%s\\n" "$*" >> "$RR_EVENT_LOG"',
+    'if [ "${1:-}" = status ] && [ "${2:-}" != --json ]; then',
+    "  printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
+    '  exit 0',
+    'fi',
     'if [ -e "$RR_SERVICE_STOPPED" ]; then',
     '  [ "${RR_FAIL_RESTORED_STATUS:-0}" != 1 ] || exit 78',
     '  if [ -e "$RR_LEGACY_JOB" ]; then',
@@ -1704,6 +1712,14 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
     expect(existsSync(value.running)).toBe(true);
     expect(existsSync(join(value.state, 'collector-state.json'))).toBe(false);
+    expect(log).toContain('agent:candidate:status --json');
+    expect(result.stdout).toBe([
+      'Runtime Raiders is installed.',
+      'Collection is OFF.',
+      'Run `raiders status` to check the setup.',
+      'Run `raiders on` when you want to join the game.',
+      '',
+    ].join('\n'));
   });
 
   it.each([
@@ -2602,7 +2618,7 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(installed.status, installed.stderr + installed.stdout).toBe(0);
     const invoked = spawnSync(value.command, ['status'], { env: value.environment, encoding: 'utf8' });
     expect(invoked.status, invoked.stderr).toBe(0);
-    expect(invoked.stdout).toBe(`${agentStatus({ persistedState: 'missing' })}\n`);
+    expect(invoked.stdout).toBe('Runtime Raiders\nCollection: OFF\nStatus: Off\n');
     expect(readFileSync(value.shim, 'utf8')).not.toContain('launcher');
   });
 
