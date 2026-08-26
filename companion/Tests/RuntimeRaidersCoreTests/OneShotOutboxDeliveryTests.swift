@@ -6,10 +6,15 @@ import XCTest
 final class OneShotOutboxDeliveryTests: XCTestCase {
     func testDrainSendsOneHundredOneHundredFiveWithOldBearerAndAcknowledgesAfterEachResponse() throws {
         try withTemporaryDirectory { directory in
-            let outbox = try Outbox(directory: directory)
+            let synchronizations = DeliverySynchronizationCounter()
+            let outbox = try Outbox(
+                directory: directory,
+                directorySynchronizationObserver: synchronizations.record
+            )
             for sequence in 0..<205 {
                 try outbox.enqueue(makeEvent(sequence: Int64(sequence)))
             }
+            let synchronizationsBeforeDrain = synchronizations.count
             var requests: [URLRequest] = []
             var countsObservedInsideTransport: [Int] = []
             let expectedResponseCounts = [100, 100, 5]
@@ -34,6 +39,7 @@ final class OneShotOutboxDeliveryTests: XCTestCase {
             XCTAssertEqual(try delivery.drain(), 205)
 
             XCTAssertEqual(countsObservedInsideTransport, [205, 105, 5])
+            XCTAssertEqual(synchronizations.count, synchronizationsBeforeDrain + 3)
             XCTAssertEqual(try outbox.queuedCount(), 0)
             XCTAssertEqual(try requests.map(batchSize), [100, 100, 5])
             XCTAssertTrue(requests.allSatisfy {
@@ -81,14 +87,44 @@ final class OneShotOutboxDeliveryTests: XCTestCase {
         }
     }
 
-    func testMalformedOwnedRecordFailsBeforeFirstRequestAndLeavesQueueUntouched() throws {
+    func testMalformedRecordArrivingAfterAcceptedBatchStopsBeforeNextRequest() throws {
         try withTemporaryDirectory { directory in
             let outbox = try Outbox(directory: directory)
+            for sequence in 0..<101 {
+                try outbox.enqueue(makeEvent(sequence: Int64(sequence)))
+            }
+            var calls = 0
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                calls += 1
+                let malformed = directory.appendingPathComponent(
+                    String(repeating: "f", count: 64) + ".json"
+                )
+                try Data("malformed".utf8).write(to: malformed)
+                XCTAssertEqual(Darwin.chmod(malformed.path, 0o600), 0)
+                return self.accepted(count: 100)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+
+            XCTAssertEqual(calls, 1)
+            XCTAssertEqual(try outbox.queuedCount(), 1)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 2)
+        }
+    }
+
+    func testMalformedOwnedRecordFailsBeforeFirstRequestAndLeavesQueueUntouched() throws {
+        try withTemporaryDirectory { directory in
+            let synchronizations = DeliverySynchronizationCounter()
+            let outbox = try Outbox(
+                directory: directory,
+                directorySynchronizationObserver: synchronizations.record
+            )
             try outbox.enqueue(makeEvent(sequence: 1))
             let malformed = directory.appendingPathComponent(String(repeating: "f", count: 64) + ".json")
             try Data("malformed".utf8).write(to: malformed)
             XCTAssertEqual(Darwin.chmod(malformed.path, 0o600), 0)
             var calls = 0
+            let synchronizationsBeforeDrain = synchronizations.count
             let delivery = try OneShotOutboxDelivery(
                 outbox: outbox,
                 configuration: .init(
@@ -105,7 +141,35 @@ final class OneShotOutboxDeliveryTests: XCTestCase {
             XCTAssertThrowsError(try delivery.drain())
 
             XCTAssertEqual(calls, 0)
+            XCTAssertEqual(synchronizations.count, synchronizationsBeforeDrain)
             XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 2)
+        }
+    }
+
+    func testOwnedOversizedRecordFailsBeforeFirstRequest() throws {
+        try assertInvalidOwnedEntryFailsBeforeRequest { directory in
+            let oversized = directory.appendingPathComponent(String(repeating: "c", count: 64) + ".json")
+            try Data(repeating: 0x78, count: 64 * 1_024 + 1).write(to: oversized)
+            XCTAssertEqual(Darwin.chmod(oversized.path, 0o600), 0)
+        }
+    }
+
+    func testOwnedDirectoryFailsBeforeFirstRequest() throws {
+        try assertInvalidOwnedEntryFailsBeforeRequest { directory in
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent(
+                    String(repeating: "c", count: 64) + ".json",
+                    isDirectory: true
+                ),
+                withIntermediateDirectories: false
+            )
+        }
+    }
+
+    func testOwnedFIFOTransferFailsBeforeFirstRequest() throws {
+        try assertInvalidOwnedEntryFailsBeforeRequest { directory in
+            let fifo = directory.appendingPathComponent(String(repeating: "c", count: 64) + ".json")
+            XCTAssertEqual(Darwin.mkfifo(fifo.path, 0o600), 0)
         }
     }
 
@@ -137,10 +201,231 @@ final class OneShotOutboxDeliveryTests: XCTestCase {
         }
     }
 
+    func testAcceptedResponseDoesNotAcknowledgeSameNameReplacement() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1))
+            let record = try XCTUnwrap(outbox.records(limit: 1).first)
+            var calls = 0
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                calls += 1
+                try FileManager.default.removeItem(at: record.url)
+                try record.encodedEvent.write(to: record.url)
+                XCTAssertEqual(Darwin.chmod(record.url.path, 0o600), 0)
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+
+            XCTAssertEqual(calls, 1)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: record.url.path))
+            if FileManager.default.fileExists(atPath: record.url.path) {
+                XCTAssertEqual(try Data(contentsOf: record.url), record.encodedEvent)
+            }
+        }
+    }
+
+    func testAcceptedResponseDoesNotTreatUnlinkedUploadedRecordAsAcknowledged() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1))
+            let record = try XCTUnwrap(outbox.records(limit: 1).first)
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                try FileManager.default.removeItem(at: record.url)
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+        }
+    }
+
+    func testAcceptedResponseDoesNotAcknowledgeSymlinkReplacement() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1))
+            let record = try XCTUnwrap(outbox.records(limit: 1).first)
+            let target = directory.appendingPathComponent("unowned-target")
+            let targetData = Data("unowned".utf8)
+            try targetData.write(to: target)
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                try FileManager.default.removeItem(at: record.url)
+                try FileManager.default.createSymbolicLink(at: record.url, withDestinationURL: target)
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+
+            XCTAssertEqual(try Data(contentsOf: target), targetData)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: record.url.path))
+        }
+    }
+
+    func testAcceptedResponseDoesNotAcknowledgeChangedRecordMetadata() throws {
+        try withTemporaryDirectory { directory in
+            let synchronizations = DeliverySynchronizationCounter()
+            let outbox = try Outbox(
+                directory: directory,
+                directorySynchronizationObserver: synchronizations.record
+            )
+            try outbox.enqueue(makeEvent(sequence: 1))
+            let record = try XCTUnwrap(outbox.records(limit: 1).first)
+            let synchronizationsBeforeDrain = synchronizations.count
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                XCTAssertEqual(Darwin.chmod(record.url.path, 0o640), 0)
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+
+            XCTAssertEqual(synchronizations.count, synchronizationsBeforeDrain)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: record.url.path))
+        }
+    }
+
+    func testAcceptedResponseDoesNotAcknowledgeRecordHardLinkedDuringTransport() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1))
+            let record = try XCTUnwrap(outbox.records(limit: 1).first)
+            let hardLink = directory.appendingPathComponent("unowned-hard-link")
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                try FileManager.default.linkItem(at: record.url, to: hardLink)
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+
+            XCTAssertTrue(FileManager.default.fileExists(atPath: record.url.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: hardLink.path))
+        }
+    }
+
+    func testAcceptedResponseDoesNotAcknowledgeChangedCanonicalContent() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1))
+            let record = try XCTUnwrap(outbox.records(limit: 1).first)
+            var replacement = record.event
+            replacement.usage.input += 1
+            let replacementData = try PrivacyEncoder().encode(replacement)
+            let originalInode = try inode(of: record.url)
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                try self.overwrite(record.url, with: replacementData)
+                XCTAssertEqual(try self.inode(of: record.url), originalInode)
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+
+            XCTAssertTrue(FileManager.default.fileExists(atPath: record.url.path))
+            if FileManager.default.fileExists(atPath: record.url.path) {
+                XCTAssertEqual(try Data(contentsOf: record.url), replacementData)
+            }
+        }
+    }
+
+    func testAcceptedResponseDoesNotAcknowledgeAfterOutboxDirectoryPathSwap() throws {
+        try withTemporaryDirectory { root in
+            let directory = root.appendingPathComponent("outbox", isDirectory: true)
+            let moved = root.appendingPathComponent("moved-outbox", isDirectory: true)
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1))
+            let record = try XCTUnwrap(outbox.records(limit: 1).first)
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                try FileManager.default.moveItem(at: directory, to: moved)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+                XCTAssertEqual(Darwin.chmod(directory.path, 0o700), 0)
+                try Data("replacement".utf8).write(
+                    to: directory.appendingPathComponent("replacement.txt")
+                )
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+
+            XCTAssertTrue(FileManager.default.fileExists(
+                atPath: moved.appendingPathComponent(record.url.lastPathComponent).path
+            ))
+            XCTAssertEqual(
+                try Data(contentsOf: directory.appendingPathComponent("replacement.txt")),
+                Data("replacement".utf8)
+            )
+        }
+    }
+
     private func batchSize(_ request: URLRequest) throws -> Int {
         let body = try XCTUnwrap(request.httpBody)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         return try XCTUnwrap(object["events"] as? [Any]).count
+    }
+
+    private func makeDelivery(
+        outbox: Outbox,
+        transport: @escaping Uploader.Transport
+    ) throws -> OneShotOutboxDelivery {
+        try OneShotOutboxDelivery(
+            outbox: outbox,
+            configuration: .init(
+                origin: URL(string: "http://localhost:8765")!,
+                deviceToken: "old-device-token",
+                allowsTestOrigin: true
+            ),
+            transport: transport
+        )
+    }
+
+    private func assertInvalidOwnedEntryFailsBeforeRequest(
+        preparing: (URL) throws -> Void
+    ) throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try preparing(directory)
+            var calls = 0
+            let delivery = try makeDelivery(outbox: outbox) { _ in
+                calls += 1
+                return self.accepted(count: 1)
+            }
+
+            XCTAssertThrowsError(try delivery.drain())
+            XCTAssertEqual(calls, 0)
+        }
+    }
+
+    private func accepted(count: Int) -> UploadHTTPResponse {
+        .init(
+            statusCode: 200,
+            body: Data("{\"accepted\":\(count),\"duplicate\":0,\"ignored\":0}".utf8)
+        )
+    }
+
+    private func inode(of url: URL) throws -> ino_t {
+        var metadata = stat()
+        guard Darwin.lstat(url.path, &metadata) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return metadata.st_ino
+    }
+
+    private func overwrite(_ url: URL, with data: Data) throws {
+        let descriptor = Darwin.open(url.path, O_WRONLY | O_TRUNC | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(descriptor) }
+        try data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.write(
+                    descriptor,
+                    base.advanced(by: offset),
+                    bytes.count - offset
+                )
+                if count > 0 { offset += count }
+                else if count < 0, errno == EINTR { continue }
+                else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            }
+        }
     }
 
     private func makeEvent(sequence: Int64) -> RunEventV1 {
@@ -180,4 +465,12 @@ final class OneShotOutboxDeliveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         try body(root)
     }
+}
+
+private final class DeliverySynchronizationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    var count: Int { lock.withLock { stored } }
+    func record() { lock.withLock { stored += 1 } }
 }

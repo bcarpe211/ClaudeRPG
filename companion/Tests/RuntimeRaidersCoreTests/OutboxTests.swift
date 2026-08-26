@@ -217,6 +217,23 @@ final class OutboxTests: XCTestCase {
         }
     }
 
+    func testSuccessfulDiscardSynchronizesDirectoryExactlyOnceAfterDeletion() throws {
+        try withTemporaryDirectory { directory in
+            let synchronizations = SynchronizationCounter()
+            let outbox = try Outbox(
+                directory: directory,
+                directorySynchronizationObserver: synchronizations.record
+            )
+            try outbox.enqueue(makeEvent(sequence: 1, observedAtMS: 1_700_000_001_001))
+            try outbox.enqueue(makeEvent(sequence: 2, observedAtMS: 1_700_000_001_002))
+            let beforeDiscard = synchronizations.count
+
+            XCTAssertEqual(try outbox.discardAllValidated(), 2)
+
+            XCTAssertEqual(synchronizations.count, beforeDiscard + 1)
+        }
+    }
+
     func testDiscardAllValidatedRejectsMalformedOwnedRecordBeforeDeletingCanonicalRecords() throws {
         try assertDiscardBlocked { directory, _ in
             let malformed = directory.appendingPathComponent(String(repeating: "f", count: 64) + ".json")
@@ -236,6 +253,34 @@ final class OutboxTests: XCTestCase {
         }
     }
 
+    func testDiscardAllValidatedRejectsOwnedOversizedRecordBeforeDeleting() throws {
+        try assertDiscardBlocked { directory, _ in
+            let oversized = directory.appendingPathComponent(String(repeating: "c", count: 64) + ".json")
+            try Data(repeating: 0x78, count: 64 * 1_024 + 1).write(to: oversized)
+            XCTAssertEqual(Darwin.chmod(oversized.path, 0o600), 0)
+        }
+    }
+
+    func testDiscardAllValidatedRejectsOwnedDirectoryBeforeDeleting() throws {
+        try assertDiscardBlocked { directory, _ in
+            let ownedDirectory = directory.appendingPathComponent(
+                String(repeating: "c", count: 64) + ".json",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: ownedDirectory,
+                withIntermediateDirectories: false
+            )
+        }
+    }
+
+    func testDiscardAllValidatedRejectsOwnedFIFOBeforeDeleting() throws {
+        try assertDiscardBlocked { directory, _ in
+            let fifo = directory.appendingPathComponent(String(repeating: "c", count: 64) + ".json")
+            XCTAssertEqual(Darwin.mkfifo(fifo.path, 0o600), 0)
+        }
+    }
+
     func testDiscardAllValidatedRejectsHardLinkedRecordBeforeDeletingCanonicalRecords() throws {
         try assertDiscardBlocked { directory, canonicalURL in
             let outside = directory.appendingPathComponent("hard-link-unowned")
@@ -246,6 +291,29 @@ final class OutboxTests: XCTestCase {
     func testDiscardAllValidatedRejectsWrongModeBeforeDeletingCanonicalRecords() throws {
         try assertDiscardBlocked { _, canonicalURL in
             XCTAssertEqual(Darwin.chmod(canonicalURL.path, 0o640), 0)
+        }
+    }
+
+    func testDiscardAllValidatedRejectsSetIDAndStickyRecordModesBeforeDeleting() throws {
+        for mode: mode_t in [0o4600, 0o2600, 0o1600] {
+            try assertDiscardBlocked { _, canonicalURL in
+                XCTAssertEqual(Darwin.chmod(canonicalURL.path, mode), 0)
+            }
+        }
+    }
+
+    func testDiscardAllValidatedRejectsSetIDAndStickyDirectoryModesBeforeDeleting() throws {
+        for mode: mode_t in [0o4700, 0o2700, 0o1700] {
+            try withTemporaryDirectory { directory in
+                let outbox = try Outbox(directory: directory)
+                try outbox.enqueue(makeEvent(sequence: 1, observedAtMS: 1_700_000_001_001))
+                let record = try XCTUnwrap(outbox.records(limit: 1).first?.url)
+                XCTAssertEqual(Darwin.chmod(directory.path, mode), 0)
+
+                XCTAssertThrowsError(try outbox.discardAllValidated())
+
+                XCTAssertTrue(FileManager.default.fileExists(atPath: record.path))
+            }
         }
     }
 
@@ -327,15 +395,21 @@ final class OutboxTests: XCTestCase {
         by corrupting: (URL, URL) throws -> Void
     ) throws {
         try withTemporaryDirectory { directory in
-            let outbox = try Outbox(directory: directory)
+            let synchronizations = SynchronizationCounter()
+            let outbox = try Outbox(
+                directory: directory,
+                directorySynchronizationObserver: synchronizations.record
+            )
             try outbox.enqueue(makeEvent(sequence: 1, observedAtMS: 1_700_000_001_001))
             try outbox.enqueue(makeEvent(sequence: 2, observedAtMS: 1_700_000_001_002))
             let canonicalURLs = try outbox.records(limit: 100).map(\.url)
             try corrupting(directory, try XCTUnwrap(canonicalURLs.first))
             let namesBeforeDiscard = try directoryNames(directory).sorted()
+            let synchronizationsBeforeDiscard = synchronizations.count
 
             XCTAssertThrowsError(try outbox.discardAllValidated())
             XCTAssertEqual(try directoryNames(directory).sorted(), namesBeforeDiscard)
+            XCTAssertEqual(synchronizations.count, synchronizationsBeforeDiscard)
         }
     }
 
@@ -352,4 +426,12 @@ final class OutboxTests: XCTestCase {
             ? URL(fileURLWithPath: "/private" + temporary.path, isDirectory: true)
             : temporary
     }
+}
+
+private final class SynchronizationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    var count: Int { lock.withLock { stored } }
+    func record() { lock.withLock { stored += 1 } }
 }

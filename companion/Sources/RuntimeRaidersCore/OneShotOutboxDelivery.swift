@@ -29,7 +29,8 @@ public struct OneShotOutboxDelivery {
     public func drain() throws -> Int {
         var delivered = 0
         while true {
-            let records = try outbox.validatedRecordsForDelivery(limit: 100)
+            let batch = try outbox.validatedDeliveryBatch(limit: 100)
+            let records = batch.records
             guard !records.isEmpty else { return delivered }
             let request = try UploadBatchWire.request(
                 records: records,
@@ -44,7 +45,7 @@ public struct OneShotOutboxDelivery {
             guard UploadBatchWire.accepts(response, expectedCount: records.count) else {
                 throw OneShotOutboxDeliveryError.deliveryFailed
             }
-            try outbox.acknowledge(records)
+            try outbox.acknowledge(batch)
             let (next, overflow) = delivered.addingReportingOverflow(records.count)
             guard !overflow else { throw OneShotOutboxDeliveryError.deliveryFailed }
             delivered = next
