@@ -60,8 +60,12 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
             summarize: { _ in },
             confirmReEnrollment: { true },
             resolveQueue: { _ in .cancel },
-            requestCode: { String(repeating: "c", count: 43) },
-            delayMilliseconds: { _ in }
+            requestCode: {
+                service.requestedCodes += 1
+                return String(repeating: "c", count: 43)
+            },
+            delayMilliseconds: { _ in },
+            acquireLock: { TestLock() }
         )
 
         XCTAssertNil(try operations.loadJournal())
@@ -72,6 +76,39 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         XCTAssertFalse(service.registered)
         try operations.registerAgent()
         XCTAssertTrue(service.registered)
+
+        let queued = RunEventV1(
+            schemaVersion: 1,
+            companionVersion: "test",
+            deviceID: old.deviceID,
+            provider: .codex,
+            surface: .codexCLI,
+            runKey: String(repeating: "a", count: 64),
+            sequence: 1,
+            eventTimeMS: 1,
+            observedAtMS: 1,
+            startedAtMS: 1,
+            state: .open,
+            usage: .init(input: 1, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0),
+            model: nil,
+            effort: nil,
+            idempotencyKey: String(repeating: "b", count: 64)
+        )
+        _ = try outbox.enqueue(queued)
+        XCTAssertEqual(try outbox.queuedCount(), 1)
+        let originalRecords = try outbox.records(limit: 10)
+        XCTAssertTrue(
+            try operations.verifyEnrollmentAndOff(old, false),
+            "cancellation verification must permit an unchanged nonempty queue"
+        )
+
+        XCTAssertEqual(try ReEnrollmentCoordinator(operations: operations).run(), .cancelled)
+        XCTAssertEqual(try EnrollmentConfiguration.loadExisting(from: paths.enrollment), old)
+        XCTAssertEqual(try outbox.queuedCount(), 1)
+        XCTAssertEqual(try outbox.records(limit: 10), originalRecords)
+        XCTAssertTrue(service.registered)
+        XCTAssertEqual(service.requestedCodes, 0)
+        XCTAssertNil(try operations.loadJournal())
 
         let material = try operations.generateMaterial()
         let journal = RecoveryJournal(
@@ -87,6 +124,99 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(try operations.loadJournal(), journal)
         try operations.removeJournal()
         XCTAssertNil(try operations.loadJournal())
+    }
+
+    func testLiveOperationsResumeAgentRegisteredAndProveFinalEnabledState() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent(
+            "rr-task4-live-resume-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let paths = try CompanionLifecyclePaths(homeDirectory: root)
+        try FileManager.default.createDirectory(
+            at: paths.agent.stateDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let replacementDeviceID = UUID(
+            uuidString: "33333333-3333-4333-8333-333333333333"
+        )!
+        let replacementToken = String(repeating: "n", count: 43)
+        let secret = Data(repeating: 0x44, count: 32)
+        let expected = try EnrollmentConfiguration(
+            deviceID: replacementDeviceID.uuidString.lowercased(),
+            deviceToken: replacementToken,
+            dedupeSecret: secret,
+            serverURL: URL(string: "https://raiders.redlattice.com")!,
+            cutoverAtMS: 42,
+            enabledSurfaces: [.codexCLI, .codexDesktop]
+        )
+        try expected.persist(to: paths.enrollment)
+        let collectorState = paths.agent.stateDirectory.appendingPathComponent(
+            "collector-state.json"
+        )
+        try Data(#"{"enabled":false,"files":{},"version":1}"#.utf8).write(
+            to: collectorState
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: collectorState.path
+        )
+        let journal = RecoveryJournal(
+            version: 1,
+            operationID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
+            replacementDeviceID: replacementDeviceID,
+            replacementDeviceToken: replacementToken,
+            companionVersion: "test",
+            queueDisposition: .empty,
+            phase: .agentRegistered
+        )
+        let journalStore = try RecoveryJournalStore(paths: paths)
+        try journalStore.write(journal)
+        let outbox = try Outbox(directory: paths.agent.outboxDirectory)
+        let service = ServiceState()
+        let managed = ManagedAgentServiceController(operations: ManagedAgentServiceOperations(
+            register: { service.registered = true },
+            unregister: { service.registered = false },
+            status: { service.registered ? .enabled : .notRegistered }
+        ))
+        let secretHex = secret.map { String(format: "%02x", $0) }.joined()
+        let responseBody = try JSONSerialization.data(withJSONObject: [
+            "device_id": replacementDeviceID.uuidString.lowercased(),
+            "dedupe_secret": secretHex,
+            "server_url": "https://raiders.redlattice.com",
+            "cutover_at": 42,
+            "enabled_surfaces": ["codex_cli", "codex_desktop"],
+        ])
+        let client = try EnrollmentClient(
+            origin: URL(string: "https://raiders.redlattice.com")!,
+            transport: { _ in UploadHTTPResponse(statusCode: 200, body: responseBody) }
+        )
+        let operations = try ReEnrollmentOperations.live(
+            paths: paths,
+            companionVersion: "test",
+            managedAgent: managed,
+            outbox: outbox,
+            enrollmentClient: client,
+            uploadTransport: { _ in throw TestError.recovery },
+            summarize: { _ in },
+            confirmReEnrollment: { true },
+            resolveQueue: { _ in .cancel },
+            requestCode: { String(repeating: "c", count: 43) },
+            delayMilliseconds: { _ in },
+            acquireLock: { TestLock() }
+        )
+
+        XCTAssertEqual(try ReEnrollmentCoordinator(operations: operations).run(), .completed)
+        XCTAssertNil(try journalStore.load())
+        XCTAssertEqual(try EnrollmentConfiguration.loadExisting(from: paths.enrollment), expected)
+        XCTAssertTrue(service.registered)
+        XCTAssertTrue(try operations.verifyEnrollmentAndOff(expected, true))
     }
 
     func testEmptyQueueCompletesInExactOrderAndRemainsOff() throws {
@@ -162,6 +292,30 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(try harness.run(), .invalidEnrollment)
         XCTAssertEqual(harness.current, original)
         XCTAssertEqual(harness.journalWrites.map(\.phase), [.replacementPrepared])
+        XCTAssertNil(harness.journal)
+        XCTAssertTrue(harness.agentRegistered)
+        XCTAssertTrue(harness.collectionOff)
+    }
+
+    func testPreparedResumeUnregistersBeforeRecoveryAfterCrashDuringInvalidCleanup() throws {
+        let harness = Harness(queueCount: 0)
+        harness.replacementResult = .invalidEnrollment
+        harness.crashBoundary = .registerAgent
+
+        XCTAssertThrowsError(try harness.run())
+        XCTAssertEqual(harness.journal?.phase, .replacementPrepared)
+        XCTAssertTrue(harness.agentRegistered)
+
+        let resumeActionStart = harness.actions.count
+        XCTAssertEqual(try harness.run(), .invalidEnrollment)
+        XCTAssertEqual(
+            Array(harness.actions[resumeActionStart...]),
+            [
+                "lock", "unregister", "read-old-config",
+                "recover-new", "recover-new", "recover-new", "recover-new",
+                "register", "verify-new-config-and-off", "delete-journal",
+            ]
+        )
         XCTAssertNil(harness.journal)
         XCTAssertTrue(harness.agentRegistered)
         XCTAssertTrue(harness.collectionOff)
@@ -257,21 +411,24 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
     func testResumeFromEveryDurablePhasePerformsOnlyRemainingMutations() throws {
         let phases: [(ReEnrollmentPhase, [String])] = [
             (.serverCommitted, [
-                "lock", "recover-new", "persist-new-config",
+                "lock", "unregister", "recover-new", "persist-new-config",
                 "journal(configurationInstalled)", "reset-collector",
                 "journal(collectorReset)", "register", "journal(agentRegistered)",
                 "verify-new-config-and-off", "delete-journal",
             ]),
             (.configurationInstalled, [
-                "lock", "read-old-config", "reset-collector", "journal(collectorReset)", "register",
+                "lock", "unregister", "recover-new", "read-old-config", "reset-collector",
+                "journal(collectorReset)", "register",
                 "journal(agentRegistered)", "verify-new-config-and-off", "delete-journal",
             ]),
             (.collectorReset, [
-                "lock", "read-old-config", "register", "journal(agentRegistered)",
+                "lock", "unregister", "recover-new", "read-old-config", "register",
+                "journal(agentRegistered)",
                 "verify-new-config-and-off", "delete-journal",
             ]),
             (.agentRegistered, [
-                "lock", "read-old-config", "verify-new-config-and-off", "delete-journal",
+                "lock", "unregister", "recover-new", "read-old-config", "register",
+                "verify-new-config-and-off", "delete-journal",
             ]),
         ]
 
@@ -294,10 +451,189 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         }
     }
 
-    func testCrashAfterEachPreCleanupBoundaryResumesWithoutRestoringOldEnrollment() throws {
+    func testAgentRegisteredResumeRequiresFinalEnabledProof() throws {
+        for status in [
+            ManagedAgentStatus.notRegistered,
+            .notFound,
+            .requiresApproval,
+        ] {
+            let harness = Harness(queueCount: 0)
+            harness.current = harness.newConfiguration
+            harness.journal = harness.journal(phase: .agentRegistered)
+            harness.serverActiveTokens = [harness.newToken]
+            harness.agentRegistered = false
+            harness.registeredStatusAfterRegister = status
+
+            XCTAssertEqual(try harness.run(), .recoveryRequired, "status \(status)")
+            XCTAssertEqual(harness.journal?.phase, .agentRegistered, "status \(status)")
+            XCTAssertFalse(harness.agentRegistered, "status \(status)")
+            XCTAssertTrue(harness.collectionOff, "status \(status)")
+        }
+    }
+
+    func testFailedFinalProofReturnsToUnregisteredRecoveryState() throws {
+        let harness = Harness(queueCount: 0)
+        harness.current = harness.newConfiguration
+        harness.journal = harness.journal(phase: .agentRegistered)
+        harness.serverActiveTokens = [harness.newToken]
+        harness.agentRegistered = false
+        harness.verificationSucceeds = false
+
+        XCTAssertEqual(try harness.run(), .recoveryRequired)
+        XCTAssertEqual(harness.journal?.phase, .agentRegistered)
+        XCTAssertFalse(harness.agentRegistered)
+        XCTAssertTrue(harness.collectionOff)
+    }
+
+    func testInstalledResumeRequiresFullAuthoritativeConfigurationCoherence() throws {
+        let mismatches: [(String, (Harness) -> EnrollmentConfiguration)] = [
+            ("device ID", { harness in
+                try! EnrollmentConfiguration(
+                    deviceID: "44444444-4444-4444-8444-444444444444",
+                    deviceToken: harness.newToken,
+                    dedupeSecret: harness.recovered.dedupeSecret,
+                    serverURL: harness.recovered.serverURL,
+                    cutoverAtMS: harness.recovered.cutoverAtMS,
+                    enabledSurfaces: harness.recovered.enabledSurfaces
+                )
+            }),
+            ("token", { harness in
+                try! EnrollmentConfiguration(
+                    deviceID: harness.recovered.deviceID,
+                    deviceToken: String(repeating: "x", count: 43),
+                    dedupeSecret: harness.recovered.dedupeSecret,
+                    serverURL: harness.recovered.serverURL,
+                    cutoverAtMS: harness.recovered.cutoverAtMS,
+                    enabledSurfaces: harness.recovered.enabledSurfaces
+                )
+            }),
+            ("secret", { harness in
+                try! EnrollmentConfiguration(
+                    deviceID: harness.recovered.deviceID,
+                    deviceToken: harness.newToken,
+                    dedupeSecret: Data(repeating: 0x55, count: 32),
+                    serverURL: harness.recovered.serverURL,
+                    cutoverAtMS: harness.recovered.cutoverAtMS,
+                    enabledSurfaces: harness.recovered.enabledSurfaces
+                )
+            }),
+            ("cutover", { harness in
+                try! EnrollmentConfiguration(
+                    deviceID: harness.recovered.deviceID,
+                    deviceToken: harness.newToken,
+                    dedupeSecret: harness.recovered.dedupeSecret,
+                    serverURL: harness.recovered.serverURL,
+                    cutoverAtMS: 9,
+                    enabledSurfaces: harness.recovered.enabledSurfaces
+                )
+            }),
+            ("surfaces", { harness in
+                try! EnrollmentConfiguration(
+                    deviceID: harness.recovered.deviceID,
+                    deviceToken: harness.newToken,
+                    dedupeSecret: harness.recovered.dedupeSecret,
+                    serverURL: harness.recovered.serverURL,
+                    cutoverAtMS: harness.recovered.cutoverAtMS,
+                    enabledSurfaces: [.codexCLI]
+                )
+            }),
+        ]
+
+        for phase in [
+            ReEnrollmentPhase.configurationInstalled,
+            .collectorReset,
+            .agentRegistered,
+        ] {
+            for (label, mismatch) in mismatches {
+                let harness = Harness(queueCount: 0)
+                harness.current = mismatch(harness)
+                harness.journal = harness.journal(phase: phase)
+                harness.serverActiveTokens = [harness.newToken]
+                harness.agentRegistered = true
+
+                XCTAssertEqual(
+                    try harness.run(),
+                    .recoveryRequired,
+                    "phase \(phase), mismatch \(label)"
+                )
+                XCTAssertEqual(harness.journal?.phase, phase)
+                XCTAssertFalse(harness.agentRegistered)
+                XCTAssertTrue(harness.collectionOff)
+            }
+        }
+
+        let originHarness = Harness(queueCount: 0)
+        originHarness.current = originHarness.newConfiguration
+        originHarness.journal = originHarness.journal(phase: .configurationInstalled)
+        originHarness.serverActiveTokens = [originHarness.newToken]
+        originHarness.recoveredOverride = RecoveredEnrollment(
+            deviceID: originHarness.recovered.deviceID,
+            dedupeSecret: originHarness.recovered.dedupeSecret,
+            serverURL: URL(string: "https://unexpected.invalid")!,
+            cutoverAtMS: originHarness.recovered.cutoverAtMS,
+            enabledSurfaces: originHarness.recovered.enabledSurfaces
+        )
+
+        XCTAssertEqual(try originHarness.run(), .recoveryRequired)
+        XCTAssertEqual(originHarness.journal?.phase, .configurationInstalled)
+        XCTAssertFalse(originHarness.agentRegistered)
+    }
+
+    func testCrashBeforeJournalCreationStartsFreshAndCompletesOnFirstResume() throws {
         let boundaries: [ReEnrollmentActionBoundary] = [
             .lock, .readEnrollment, .proveCollectionOff, .unregisterAgent, .countQueue,
-            .summarize, .confirmReEnrollment, .resolveQueue, .createJournal, .requestCode,
+            .summarize, .confirmReEnrollment, .resolveQueue,
+        ]
+        for boundary in boundaries {
+            let harness = Harness(queueCount: 0)
+            harness.crashBoundary = boundary
+
+            XCTAssertThrowsError(try harness.run(), "boundary \(boundary)")
+            XCTAssertNil(harness.journal, "boundary \(boundary)")
+
+            let resumeActionStart = harness.actions.count
+            XCTAssertEqual(try harness.run(), .completed, "boundary \(boundary)")
+            XCTAssertEqual(
+                Array(harness.actions[resumeActionStart...]),
+                Self.happyPathActions,
+                "boundary \(boundary)"
+            )
+            XCTAssertEqual(harness.current, harness.newConfiguration, "boundary \(boundary)")
+            XCTAssertTrue(harness.collectionOff, "boundary \(boundary)")
+            XCTAssertNil(harness.journal, "boundary \(boundary)")
+        }
+    }
+
+    func testCrashWithPreparedJournalHasExplicitFirstResumeOutcome() throws {
+        for boundary in [
+            ReEnrollmentActionBoundary.createJournal,
+            .requestCode,
+        ] {
+            let harness = Harness(queueCount: 0)
+            harness.crashBoundary = boundary
+
+            XCTAssertThrowsError(try harness.run(), "boundary \(boundary)")
+            XCTAssertEqual(harness.journal?.phase, .replacementPrepared)
+
+            let resumeActionStart = harness.actions.count
+            XCTAssertEqual(try harness.run(), .invalidEnrollment, "boundary \(boundary)")
+            XCTAssertEqual(
+                Array(harness.actions[resumeActionStart...]),
+                [
+                    "lock", "unregister", "read-old-config",
+                    "recover-new", "recover-new", "recover-new", "recover-new",
+                    "register", "verify-new-config-and-off", "delete-journal",
+                ],
+                "boundary \(boundary)"
+            )
+            XCTAssertEqual(harness.current, harness.old, "boundary \(boundary)")
+            XCTAssertTrue(harness.collectionOff, "boundary \(boundary)")
+            XCTAssertNil(harness.journal, "boundary \(boundary)")
+        }
+    }
+
+    func testCrashAfterReplacementMutationCompletesOnFirstResume() throws {
+        let boundaries: [ReEnrollmentActionBoundary] = [
             .replace, .serverCommitted, .persistNewConfiguration, .configurationInstalled,
             .resetCollector, .collectorReset, .registerAgent, .agentRegistered,
             .verifyNewConfigurationAndOff,
@@ -307,17 +643,59 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
             harness.crashBoundary = boundary
 
             XCTAssertThrowsError(try harness.run(), "boundary \(boundary)")
-            harness.crashBoundary = nil
+            XCTAssertNotNil(harness.journal, "boundary \(boundary)")
 
-            var outcome: ReEnrollmentOutcome = .recoveryRequired
-            for _ in 0..<3 {
-                outcome = try harness.run()
-                if outcome == .completed { break }
-            }
-            XCTAssertEqual(outcome, .completed, "boundary \(boundary)")
+            let resumeActionStart = harness.actions.count
+            XCTAssertEqual(try harness.run(), .completed, "boundary \(boundary)")
+            XCTAssertEqual(
+                Array(harness.actions[resumeActionStart...]),
+                expectedResumeActions(after: boundary),
+                "boundary \(boundary)"
+            )
             XCTAssertEqual(harness.current, harness.newConfiguration, "boundary \(boundary)")
             XCTAssertTrue(harness.collectionOff, "boundary \(boundary)")
             XCTAssertNil(harness.journal, "boundary \(boundary)")
+        }
+
+        func expectedResumeActions(
+            after boundary: ReEnrollmentActionBoundary
+        ) -> [String] {
+            switch boundary {
+            case .replace:
+                return [
+                    "lock", "unregister", "read-old-config", "recover-new",
+                    "journal(serverCommitted)", "persist-new-config",
+                    "journal(configurationInstalled)", "reset-collector",
+                    "journal(collectorReset)", "register", "journal(agentRegistered)",
+                    "verify-new-config-and-off", "delete-journal",
+                ]
+            case .serverCommitted, .persistNewConfiguration:
+                return [
+                    "lock", "unregister", "recover-new", "persist-new-config",
+                    "journal(configurationInstalled)", "reset-collector",
+                    "journal(collectorReset)", "register", "journal(agentRegistered)",
+                    "verify-new-config-and-off", "delete-journal",
+                ]
+            case .configurationInstalled, .resetCollector:
+                return [
+                    "lock", "unregister", "recover-new", "read-old-config",
+                    "reset-collector", "journal(collectorReset)", "register",
+                    "journal(agentRegistered)", "verify-new-config-and-off", "delete-journal",
+                ]
+            case .collectorReset, .registerAgent:
+                return [
+                    "lock", "unregister", "recover-new", "read-old-config", "register",
+                    "journal(agentRegistered)", "verify-new-config-and-off", "delete-journal",
+                ]
+            case .agentRegistered, .verifyNewConfigurationAndOff:
+                return [
+                    "lock", "unregister", "recover-new", "read-old-config", "register",
+                    "verify-new-config-and-off", "delete-journal",
+                ]
+            default:
+                XCTFail("unexpected post-replacement boundary")
+                return []
+            }
         }
     }
 
@@ -339,7 +717,17 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
             XCTAssertFalse(harness.agentRegistered)
             XCTAssertTrue(harness.collectionOff)
 
+            let resumeActionStart = harness.actions.count
             XCTAssertEqual(try harness.run(), .invalidEnrollment)
+            XCTAssertEqual(
+                Array(harness.actions[resumeActionStart...]),
+                [
+                    "lock", "unregister", "read-old-config",
+                    "recover-new", "recover-new", "recover-new", "recover-new",
+                    "register", "verify-new-config-and-off", "delete-journal",
+                ],
+                "boundary \(boundary)"
+            )
             XCTAssertNil(harness.journal)
             XCTAssertTrue(harness.agentRegistered)
         }
@@ -385,6 +773,31 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         }
     }
 
+    func testSecretBearingThrownErrorsAreSanitizedAtCoordinatorBoundary() throws {
+        let replacementHarness = Harness(queueCount: 0)
+        replacementHarness.replaceError = SensitiveOperationError(harness: replacementHarness)
+        XCTAssertEqual(try replacementHarness.run(), .recoveryRequired)
+
+        let recoveryHarness = Harness(queueCount: 0)
+        recoveryHarness.agentRegistered = false
+        recoveryHarness.journal = recoveryHarness.preparedJournal
+        recoveryHarness.recoveryError = SensitiveOperationError(harness: recoveryHarness)
+        XCTAssertEqual(try recoveryHarness.run(), .recoveryRequired)
+
+        let registrationHarness = Harness(queueCount: 3, queueDisposition: .cancel)
+        registrationHarness.registerError = SensitiveOperationError(harness: registrationHarness)
+        XCTAssertThrowsError(try registrationHarness.run()) { error in
+            let diagnostics = String(describing: error) + String(reflecting: error)
+            XCTAssertFalse(diagnostics.contains(registrationHarness.old.deviceToken))
+            XCTAssertFalse(diagnostics.contains(registrationHarness.newToken))
+            XCTAssertFalse(diagnostics.contains(registrationHarness.code))
+            XCTAssertFalse(diagnostics.contains(registrationHarness.preparedJournal.operationID.uuidString))
+            XCTAssertFalse(diagnostics.contains(registrationHarness.preparedJournal.replacementDeviceID.uuidString))
+            XCTAssertFalse(diagnostics.contains(SensitiveOperationError.responseSentinel))
+            XCTAssertFalse(diagnostics.contains(SensitiveOperationError.querySentinel))
+        }
+    }
+
     private static let happyPathActions = [
         "lock", "read-old-config", "prove-off", "unregister", "count-queue",
         "summarize", "confirm-re-enroll", "resolve-queue",
@@ -398,10 +811,33 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
 
 private enum TestError: Error { case recovery, crash }
 
+private struct SensitiveOperationError: Error, CustomStringConvertible, CustomDebugStringConvertible {
+    static let responseSentinel = "sensitive-response-body"
+    static let querySentinel = "?device_token=sensitive-query-token"
+
+    let material: String
+
+    init(harness: Harness) {
+        material = [
+            harness.old.deviceToken,
+            harness.newToken,
+            harness.code,
+            harness.preparedJournal.operationID.uuidString,
+            harness.preparedJournal.replacementDeviceID.uuidString,
+            Self.responseSentinel,
+            Self.querySentinel,
+        ].joined(separator: ":")
+    }
+
+    var description: String { material }
+    var debugDescription: String { material }
+}
+
 private final class TestLock: ReEnrollmentLock, @unchecked Sendable {}
 
 private final class ServiceState: @unchecked Sendable {
     var registered = true
+    var requestedCodes = 0
 }
 
 private final class Harness: @unchecked Sendable {
@@ -435,8 +871,12 @@ private final class Harness: @unchecked Sendable {
     var newRecovery: [RecoveredEnrollment?] = []
     var oldRecovery: RecoveredEnrollment?
     var recoveryError: Error?
+    var recoveredOverride: RecoveredEnrollment?
     var replacementResult: ReplacementHTTPResult
     var replaceError: Error?
+    var registerError: Error?
+    var registeredStatusAfterRegister = ManagedAgentStatus.enabled
+    var verificationSucceeds = true
     var replaceCalls = 0
     var promptedCodes = 0
     var serverActiveTokens: Set<String>
@@ -534,6 +974,7 @@ private final class Harness: @unchecked Sendable {
                 self.actions.append("unregister")
                 self.agentRegistered = false
             },
+            verifyAgentUnregistered: { !self.agentRegistered },
             countQueue: {
                 self.actions.append("count-queue")
                 return self.queueCount
@@ -590,6 +1031,9 @@ private final class Harness: @unchecked Sendable {
                 if let recoveryError = self.recoveryError { throw recoveryError }
                 if token == self.newToken {
                     if !self.newRecovery.isEmpty { return self.newRecovery.removeFirst() }
+                    if let recoveredOverride = self.recoveredOverride {
+                        return recoveredOverride
+                    }
                     return self.serverActiveTokens.contains(token) ? self.recovered : nil
                 }
                 return self.oldRecovery ??
@@ -607,12 +1051,17 @@ private final class Harness: @unchecked Sendable {
             },
             registerAgent: {
                 self.actions.append("register")
-                self.agentRegistered = true
+                if let registerError = self.registerError { throw registerError }
+                self.agentRegistered = self.registeredStatusAfterRegister == .enabled
             },
-            verifyEnrollmentAndOff: { expected in
+            verifyEnrollmentAndOff: { expected, requireEmptyQueue in
                 XCTAssertNotNil(self.activeLock, "lifecycle lock released before verification")
                 self.actions.append("verify-new-config-and-off")
-                return self.current == expected && self.collectionOff
+                return self.current == expected
+                    && self.collectionOff
+                    && self.agentRegistered
+                    && self.verificationSucceeds
+                    && (!requireEmptyQueue || self.queueCount == 0)
             },
             delayMilliseconds: { value in self.delays.append(value) },
             removeJournal: {

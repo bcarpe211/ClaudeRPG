@@ -14,6 +14,14 @@ public enum ReEnrollmentOutcome: Equatable, Sendable {
     case recoveryRequired
 }
 
+public enum ReEnrollmentCoordinatorError: Error, Equatable, Sendable,
+    CustomStringConvertible, CustomDebugStringConvertible {
+    case operationFailed
+
+    public var description: String { "re-enrollment operation failed" }
+    public var debugDescription: String { description }
+}
+
 public protocol ReEnrollmentLock: AnyObject, Sendable {}
 
 extension LifecycleLock: ReEnrollmentLock {}
@@ -51,6 +59,7 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
     public let readEnrollment: () throws -> EnrollmentConfiguration
     public let proveCollectionOff: () throws -> Bool
     public let unregisterAgent: () throws -> Void
+    public let verifyAgentUnregistered: () throws -> Bool
     public let countQueue: () throws -> Int
     public let summarize: (Int) throws -> Void
     public let confirmReEnrollment: () throws -> Bool
@@ -70,7 +79,7 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
     public let persistEnrollment: (EnrollmentConfiguration) throws -> Void
     public let resetCollector: ([RunSurface]) throws -> Void
     public let registerAgent: () throws -> Void
-    public let verifyEnrollmentAndOff: (EnrollmentConfiguration) throws -> Bool
+    public let verifyEnrollmentAndOff: (EnrollmentConfiguration, Bool) throws -> Bool
     public let delayMilliseconds: (Int) throws -> Void
     public let removeJournal: () throws -> Void
     public let interruptionPoint: (ReEnrollmentActionBoundary) throws -> Void
@@ -82,6 +91,7 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
         readEnrollment: @escaping () throws -> EnrollmentConfiguration,
         proveCollectionOff: @escaping () throws -> Bool,
         unregisterAgent: @escaping () throws -> Void,
+        verifyAgentUnregistered: @escaping () throws -> Bool,
         countQueue: @escaping () throws -> Int,
         summarize: @escaping (Int) throws -> Void,
         confirmReEnrollment: @escaping () throws -> Bool,
@@ -101,7 +111,7 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
         persistEnrollment: @escaping (EnrollmentConfiguration) throws -> Void,
         resetCollector: @escaping ([RunSurface]) throws -> Void,
         registerAgent: @escaping () throws -> Void,
-        verifyEnrollmentAndOff: @escaping (EnrollmentConfiguration) throws -> Bool,
+        verifyEnrollmentAndOff: @escaping (EnrollmentConfiguration, Bool) throws -> Bool,
         delayMilliseconds: @escaping (Int) throws -> Void,
         removeJournal: @escaping () throws -> Void,
         interruptionPoint: @escaping (ReEnrollmentActionBoundary) throws -> Void = { _ in }
@@ -112,6 +122,7 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
         self.readEnrollment = readEnrollment
         self.proveCollectionOff = proveCollectionOff
         self.unregisterAgent = unregisterAgent
+        self.verifyAgentUnregistered = verifyAgentUnregistered
         self.countQueue = countQueue
         self.summarize = summarize
         self.confirmReEnrollment = confirmReEnrollment
@@ -144,12 +155,13 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
         confirmReEnrollment: @escaping () throws -> Bool,
         resolveQueue: @escaping (Int) throws -> QueueDisposition,
         requestCode: @escaping () throws -> String,
-        delayMilliseconds: @escaping (Int) throws -> Void
+        delayMilliseconds: @escaping (Int) throws -> Void,
+        acquireLock: (() throws -> any ReEnrollmentLock)? = nil
     ) throws -> ReEnrollmentOperations {
         let journalStore = try RecoveryJournalStore(paths: paths)
         return ReEnrollmentOperations(
             companionVersion: companionVersion,
-            acquireLock: { try LifecycleLock.acquire(at: paths.lifecycleLock) },
+            acquireLock: acquireLock ?? { try LifecycleLock.acquire(at: paths.lifecycleLock) },
             loadJournal: { try journalStore.load() },
             readEnrollment: { try EnrollmentConfiguration.loadExisting(from: paths.enrollment) },
             proveCollectionOff: {
@@ -161,6 +173,14 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
             },
             unregisterAgent: {
                 _ = try managedAgent.perform(.unregister)
+            },
+            verifyAgentUnregistered: {
+                switch try managedAgent.perform(.status) {
+                case .notRegistered, .notFound:
+                    return true
+                case .enabled, .requiresApproval:
+                    return false
+                }
             },
             countQueue: { try outbox.queuedCount() },
             summarize: summarize,
@@ -205,14 +225,17 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
             registerAgent: {
                 _ = try managedAgent.perform(.register)
             },
-            verifyEnrollmentAndOff: { expected in
+            verifyEnrollmentAndOff: { expected, requireEmptyQueue in
                 guard try EnrollmentConfiguration.loadExisting(from: paths.enrollment) == expected,
                       try AgentController.persistedCollectorState(
                         paths: paths.agent,
                         surfaces: expected.enabledSurfaces
                       ) == .disabled,
-                      try outbox.queuedCount() == 0 else {
+                      try managedAgent.perform(.status) == .enabled else {
                     return false
+                }
+                if requireEmptyQueue {
+                    return try outbox.queuedCount() == 0
                 }
                 return true
             },
@@ -232,9 +255,19 @@ public struct ReEnrollmentCoordinator: Sendable {
     }
 
     public func run() throws -> ReEnrollmentOutcome {
+        do {
+            return try runLocked()
+        } catch is ReEnrollmentCoordinatorError {
+            throw ReEnrollmentCoordinatorError.operationFailed
+        } catch {
+            throw ReEnrollmentCoordinatorError.operationFailed
+        }
+    }
+
+    private func runLocked() throws -> ReEnrollmentOutcome {
         let lock = try operations.acquireLock()
-        try operations.interruptionPoint(.lock)
         defer { _ = lock }
+        try operations.interruptionPoint(.lock)
 
         if let journal = try operations.loadJournal() {
             return try resume(journal)
@@ -252,6 +285,9 @@ public struct ReEnrollmentCoordinator: Sendable {
 
         try operations.unregisterAgent()
         try operations.interruptionPoint(.unregisterAgent)
+        guard try operations.verifyAgentUnregistered() else {
+            throw ReEnrollmentCoordinatorError.operationFailed
+        }
 
         let queueCount = try operations.countQueue()
         try operations.interruptionPoint(.countQueue)
@@ -263,7 +299,7 @@ public struct ReEnrollmentCoordinator: Sendable {
         let confirmed = try operations.confirmReEnrollment()
         try operations.interruptionPoint(.confirmReEnrollment)
         guard confirmed else {
-            return try cancel(using: oldConfiguration)
+            return try cancel(using: oldConfiguration, originalQueueCount: queueCount)
         }
 
         let disposition = try operations.resolveQueue(queueCount)
@@ -276,7 +312,7 @@ public struct ReEnrollmentCoordinator: Sendable {
             try operations.discardQueue()
         case (_, .cancel):
             try operations.interruptionPoint(.resolveQueue)
-            return try cancel(using: oldConfiguration)
+            return try cancel(using: oldConfiguration, originalQueueCount: queueCount)
         }
         try operations.interruptionPoint(.resolveQueue)
 
@@ -333,34 +369,47 @@ public struct ReEnrollmentCoordinator: Sendable {
     }
 
     private func resume(_ journal: RecoveryJournal) throws -> ReEnrollmentOutcome {
+        try operations.unregisterAgent()
+        try operations.interruptionPoint(.unregisterAgent)
+        guard try operations.verifyAgentUnregistered() else {
+            throw ReEnrollmentCoordinatorError.operationFailed
+        }
+
         switch journal.phase {
         case .replacementPrepared:
             let oldConfiguration = try operations.readEnrollment()
             try operations.interruptionPoint(.readEnrollment)
             return try recoverAmbiguous(journal, oldConfiguration: oldConfiguration)
-        case .serverCommitted:
-            let recoveredResult: RecoveredEnrollment?
-            do {
-                recoveredResult = try operations.recover(journal.replacementDeviceToken)
-            } catch {
+        case .serverCommitted, .configurationInstalled, .collectorReset, .agentRegistered:
+            guard let configuration = try recoverAuthoritativeConfiguration(journal) else {
                 return .recoveryRequired
             }
-            try operations.interruptionPoint(.recoverNew)
-            guard let recovered = recoveredResult else { return .recoveryRequired }
-            guard let configuration = configuration(from: recovered, journal: journal) else {
-                return .recoveryRequired
+
+            if journal.phase != .serverCommitted {
+                let installed = try operations.readEnrollment()
+                try operations.interruptionPoint(.readEnrollment)
+                guard installed == configuration else { return .recoveryRequired }
+            }
+            if journal.phase == .agentRegistered {
+                try operations.registerAgent()
+                try operations.interruptionPoint(.registerAgent)
             }
             return try complete(journal, configuration: configuration)
-        case .configurationInstalled, .collectorReset, .agentRegistered:
-            let installed = try operations.readEnrollment()
-            try operations.interruptionPoint(.readEnrollment)
-            guard installed.deviceToken == journal.replacementDeviceToken,
-                  installed.deviceID.lowercased()
-                    == journal.replacementDeviceID.uuidString.lowercased() else {
-                return .recoveryRequired
-            }
-            return try complete(journal, configuration: installed)
         }
+    }
+
+    private func recoverAuthoritativeConfiguration(
+        _ journal: RecoveryJournal
+    ) throws -> EnrollmentConfiguration? {
+        let recovered: RecoveredEnrollment?
+        do {
+            recovered = try operations.recover(journal.replacementDeviceToken)
+        } catch {
+            return nil
+        }
+        try operations.interruptionPoint(.recoverNew)
+        guard let recovered else { return nil }
+        return configuration(from: recovered, journal: journal)
     }
 
     private func recoverAmbiguous(
@@ -407,19 +456,23 @@ public struct ReEnrollmentCoordinator: Sendable {
         guard journal.phase == .replacementPrepared else { return .recoveryRequired }
         try operations.registerAgent()
         try operations.interruptionPoint(.registerAgent)
-        guard try operations.verifyEnrollmentAndOff(oldConfiguration) else {
-            return .recoveryRequired
+        guard try operations.verifyEnrollmentAndOff(oldConfiguration, false) else {
+            return try recoverAfterRegistration()
         }
         try operations.removeJournal()
         try operations.interruptionPoint(.deleteJournal)
         return .invalidEnrollment
     }
 
-    private func cancel(using oldConfiguration: EnrollmentConfiguration) throws -> ReEnrollmentOutcome {
+    private func cancel(
+        using oldConfiguration: EnrollmentConfiguration,
+        originalQueueCount: Int
+    ) throws -> ReEnrollmentOutcome {
         try operations.registerAgent()
         try operations.interruptionPoint(.registerAgent)
-        guard try operations.verifyEnrollmentAndOff(oldConfiguration) else {
-            return .recoveryRequired
+        guard try operations.verifyEnrollmentAndOff(oldConfiguration, false),
+              try operations.countQueue() == originalQueueCount else {
+            return try recoverAfterRegistration()
         }
         return .cancelled
     }
@@ -448,14 +501,25 @@ public struct ReEnrollmentCoordinator: Sendable {
             try operations.interruptionPoint(.registerAgent)
             journal = try advance(journal, to: .agentRegistered, boundary: .agentRegistered)
         }
-        guard journal.phase == .agentRegistered,
-              try operations.verifyEnrollmentAndOff(configuration) else {
+        guard journal.phase == .agentRegistered else {
             return .recoveryRequired
+        }
+        guard try operations.verifyEnrollmentAndOff(configuration, true) else {
+            return try recoverAfterRegistration()
         }
         try operations.interruptionPoint(.verifyNewConfigurationAndOff)
         try operations.removeJournal()
         try operations.interruptionPoint(.deleteJournal)
         return .completed
+    }
+
+    private func recoverAfterRegistration() throws -> ReEnrollmentOutcome {
+        try operations.unregisterAgent()
+        try operations.interruptionPoint(.unregisterAgent)
+        guard try operations.verifyAgentUnregistered() else {
+            throw ReEnrollmentCoordinatorError.operationFailed
+        }
+        return .recoveryRequired
     }
 
     private func advance(
