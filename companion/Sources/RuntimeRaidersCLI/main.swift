@@ -8,6 +8,7 @@ private let managedAgentArgument = "__runtime-raiders-managed-agent"
 private let runtimeInputsVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS"
 private let applicationSupportVerificationEnvironment =
     "RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY"
+private let lifecycleVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_LIFECYCLE_SCENARIO"
 
 private struct RuntimeInputs {
     let codexRoot: URL
@@ -37,14 +38,57 @@ private enum CLIError: Error, CustomStringConvertible {
     case updateCheckUnavailable
     case invalidStatusResponse
     case invalidControlResponse
+    case lifecycleRequiresTerminal
+    case invalidLifecycleConfirmation
+    case lifecycleInputEnded
+    case lifecycleInputInterrupted
+    case lifecycleInputUnavailable
+    case collectionMustBeOff
+    case invalidEnrollment
+    case recoveryRequired
+    case revocationRequired
+    case assistedRecoveryRequired
+    case lifecycleFailed
 
     var description: String {
         switch self {
-        case .usage: "usage: raiders on|off|status|status --json|doctor|uninstall|update|help"
+        case .usage: "usage: raiders on|off|status|status --json|doctor|re-enroll|uninstall|uninstall --everything|update|help"
         case .invalidRuntimeConfiguration: "Runtime Raiders enrollment configuration is invalid"
         case .updateCheckUnavailable: "Unable to check for a Runtime Raiders update."
         case .invalidStatusResponse: "Runtime Raiders status response was invalid."
         case .invalidControlResponse: "Runtime Raiders control response was invalid."
+        case .lifecycleRequiresTerminal:
+            "Runtime Raiders lifecycle commands require an interactive terminal."
+        case .invalidLifecycleConfirmation:
+            "Lifecycle confirmation was not exact. No lifecycle change was authorized.\n" +
+            "Next: review the prompt and run the command again."
+        case .lifecycleInputEnded:
+            "Private lifecycle input ended before confirmation. No lifecycle change was authorized.\n" +
+            "Next: run the command again from an interactive terminal."
+        case .lifecycleInputInterrupted:
+            "Lifecycle input was interrupted. No lifecycle change was authorized.\n" +
+            "Next: run the command again from an interactive terminal."
+        case .lifecycleInputUnavailable:
+            "Private lifecycle input could not be controlled safely. No lifecycle change was authorized.\n" +
+            "Next: run the command again from an interactive terminal."
+        case .collectionMustBeOff:
+            "Collection is ON. No enrollment change was made.\n" +
+            "Next: run raiders off, then run raiders re-enroll again."
+        case .invalidEnrollment:
+            "The enrollment code was not accepted. Collection remains OFF.\n" +
+            "Next: create a fresh code and run raiders re-enroll again."
+        case .recoveryRequired:
+            "Runtime Raiders needs assisted recovery. Collection remains OFF.\n" +
+            "Next: run raiders re-enroll again; if it still fails, seek assisted recovery."
+        case .revocationRequired:
+            "Device revocation could not be confirmed. No local data was deleted.\n" +
+            "Next: reconnect and run raiders uninstall --everything again."
+        case .assistedRecoveryRequired:
+            "Local enrollment needs assisted recovery. No local data was deleted.\n" +
+            "Next: seek assisted recovery before removing local state."
+        case .lifecycleFailed:
+            "Runtime Raiders lifecycle operation could not be completed safely.\n" +
+            "Next: run raiders status, then retry the lifecycle command."
         }
     }
 }
@@ -59,7 +103,9 @@ Commands:
   status --json            Show machine-readable status
   doctor                   Run content-free health checks
   update                   Check for a companion update
-  uninstall                Stop the agent and preserve installed state
+  re-enroll                Change this device's Raider enrollment
+  uninstall                Remove the app and preserve local state
+  uninstall --everything   Revoke and remove all local Runtime Raiders data
   help                     Show this help
 """
 
@@ -420,6 +466,29 @@ private func run() throws {
         environment: environment
     )
     if let verificationPaths = try verificationPaths(environment: environment) {
+        if let rawScenario = environment[lifecycleVerificationEnvironment] {
+            guard let scenario = LifecycleVerificationScenario(rawValue: rawScenario),
+                  let executableURL = Bundle.main.executableURL,
+                  let route = CompanionCommandRouter.route(
+                      arguments: arguments,
+                      executableURL: executableURL,
+                      paths: verificationPaths
+                  ),
+                  route.isLifecycle else {
+                throw CLIError.usage
+            }
+            let home = verificationPaths.supportDirectory
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            try runLifecycleCommand(
+                route,
+                paths: verificationPaths,
+                homeDirectory: home,
+                scenario: scenario
+            )
+            return
+        }
         switch arguments {
         case ["status"]:
             try printLocalStatus(
@@ -487,6 +556,14 @@ private func run() throws {
     case .updateCheck:
         try runUpdateCheck(paths: paths, environment: environment)
         return
+    case .reEnroll, .uninstall:
+        try runLifecycleCommand(
+            route,
+            paths: paths,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            scenario: nil
+        )
+        return
     case .help:
         print(helpText)
         return
@@ -495,6 +572,512 @@ private func run() throws {
         return
     case let .control(command):
         try runUserControlCommand(command, paths: paths, style: style)
+    }
+}
+
+private extension CompanionCommandRoute {
+    var isLifecycle: Bool {
+        switch self {
+        case .reEnroll, .uninstall:
+            true
+        case .daemon, .managedAgent, .control, .status, .updateCheck, .help:
+            false
+        }
+    }
+}
+
+private enum LifecycleVerificationScenario: String {
+    case reEnrollCompletedEmpty = "re-enroll-completed-empty"
+    case reEnrollCompletedQueued = "re-enroll-completed-queued"
+    case reEnrollCollectionOn = "re-enroll-collection-on"
+    case reEnrollInvalidEnrollmentEmpty = "re-enroll-invalid-enrollment-empty"
+    case reEnrollRecoveryRequiredEmpty = "re-enroll-recovery-required-empty"
+    case uninstallPreserveCompleted = "uninstall-preserve-completed"
+    case uninstallEverythingCompletedEmpty = "uninstall-everything-completed-empty"
+    case uninstallEverythingCompletedQueued = "uninstall-everything-completed-queued"
+    case uninstallEverythingRevocationRequiredEmpty =
+        "uninstall-everything-revocation-required-empty"
+    case uninstallEverythingAssistedRecoveryEmpty =
+        "uninstall-everything-assisted-recovery-empty"
+
+    var queueCount: Int {
+        switch self {
+        case .reEnrollCompletedQueued, .uninstallEverythingCompletedQueued: 2
+        default: 0
+        }
+    }
+}
+
+private final class LifecyclePromptErrorBox {
+    private(set) var error: CLIError?
+
+    func record<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CLIError {
+            self.error = error
+            throw error
+        }
+    }
+}
+
+private func runLifecycleCommand(
+    _ route: CompanionCommandRoute,
+    paths: AgentPaths,
+    homeDirectory: URL,
+    scenario: LifecycleVerificationScenario?
+) throws {
+    let terminal = LifecycleTerminalReader()
+    switch route {
+    case .reEnroll:
+        try requireLifecycleTerminal(terminal)
+        if let scenario {
+            try runVerificationReEnrollment(
+                scenario,
+                terminal: terminal,
+                paths: paths
+            )
+        } else {
+            try runLiveReEnrollment(
+                terminal: terminal,
+                paths: paths,
+                homeDirectory: homeDirectory
+            )
+        }
+    case let .uninstall(mode):
+        if mode == .everything { try requireLifecycleTerminal(terminal) }
+        if let scenario {
+            try runVerificationRemoval(
+                scenario,
+                mode: mode,
+                terminal: terminal,
+                paths: paths
+            )
+        } else {
+            try runLiveRemoval(
+                mode: mode,
+                terminal: terminal,
+                paths: paths,
+                homeDirectory: homeDirectory
+            )
+        }
+    case .daemon, .managedAgent, .control, .status, .updateCheck, .help:
+        throw CLIError.usage
+    }
+}
+
+private func requireLifecycleTerminal(_ terminal: LifecycleTerminalReader) throws {
+    do {
+        try terminal.validate()
+    } catch {
+        throw CLIError.lifecycleRequiresTerminal
+    }
+}
+
+private func privateLine(
+    terminal: LifecycleTerminalReader,
+    prompt: String,
+    maximumBytes: Int
+) throws -> String {
+    do {
+        return try terminal.readLine(prompt: prompt, maximumBytes: maximumBytes)
+    } catch let error as LifecycleTerminalError {
+        switch error {
+        case .endOfFile: throw CLIError.lifecycleInputEnded
+        case .interrupted: throw CLIError.lifecycleInputInterrupted
+        case .invalidInput: throw CLIError.invalidLifecycleConfirmation
+        case .unavailable: throw CLIError.lifecycleInputUnavailable
+        }
+    } catch {
+        throw CLIError.lifecycleInputUnavailable
+    }
+}
+
+private func requireExactPrivateLine(
+    _ expected: String,
+    terminal: LifecycleTerminalReader,
+    prompt: String,
+    maximumBytes: Int
+) throws {
+    guard try privateLine(
+        terminal: terminal,
+        prompt: prompt,
+        maximumBytes: maximumBytes
+    ) == expected else {
+        throw CLIError.invalidLifecycleConfirmation
+    }
+}
+
+private func queueDisposition(
+    count: Int,
+    terminal: LifecycleTerminalReader
+) throws -> QueueDisposition {
+    guard count > 0 else { return .cancel }
+    switch try privateLine(
+        terminal: terminal,
+        prompt: "Choose deliver, discard, or cancel: ",
+        maximumBytes: 32
+    ) {
+    case "deliver":
+        return .deliver
+    case "discard":
+        try requireExactPrivateLine(
+            "DISCARD",
+            terminal: terminal,
+            prompt: "Type DISCARD to discard \(count) queued events: ",
+            maximumBytes: 64
+        )
+        return .discard
+    case "cancel":
+        return .cancel
+    default:
+        throw CLIError.invalidLifecycleConfirmation
+    }
+}
+
+private func printReEnrollmentSummary(queueCount: Int, version: String) {
+    print("Runtime Raiders re-enrollment")
+    print("Collection: OFF")
+    print("Background agent: Stopped")
+    print("Queued events: \(queueCount)")
+    print("Installed version: \(version)")
+    print("Runs, scores, and rewards remain with their original Raider.")
+}
+
+private func printReEnrollmentOutcome(_ outcome: ReEnrollmentOutcome) throws {
+    switch outcome {
+    case .completed:
+        print("Runtime Raiders re-enrollment succeeded.")
+        print("Collection remains OFF.")
+        print("History was not transferred; Runs, scores, and rewards remain with their original Raider.")
+        print("Next: run raiders status, then deliberately run raiders on.")
+    case .cancelled:
+        print("Runtime Raiders re-enrollment was cancelled.")
+        print("Collection remains OFF; enrollment and queued events were unchanged.")
+        print("Next: run raiders status.")
+    case .collectionMustBeOff:
+        throw CLIError.collectionMustBeOff
+    case .invalidEnrollment:
+        throw CLIError.invalidEnrollment
+    case .recoveryRequired:
+        throw CLIError.recoveryRequired
+    }
+}
+
+private func runLiveReEnrollment(
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths,
+    homeDirectory: URL
+) throws {
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let enrollment = try EnrollmentConfiguration.loadExisting(from: lifecyclePaths.enrollment)
+    guard try AgentController.persistedCollectorState(
+        paths: lifecyclePaths.agent,
+        surfaces: enrollment.enabledSurfaces
+    ) == .disabled else {
+        throw CLIError.collectionMustBeOff
+    }
+    try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: false)
+
+    let version = try InstalledCompanionVersion.load(from: .main)
+    let outbox = try Outbox(directory: lifecyclePaths.agent.outboxDirectory)
+    let client = try EnrollmentClient(origin: enrollment.serverURL) { request in
+        try Uploader.liveTransport(request)
+    }
+    let promptErrors = LifecyclePromptErrorBox()
+    let operations = try ReEnrollmentOperations.live(
+        paths: lifecyclePaths,
+        companionVersion: version,
+        managedAgent: .live,
+        outbox: outbox,
+        enrollmentClient: client,
+        uploadTransport: Uploader.liveTransport,
+        summarize: { printReEnrollmentSummary(queueCount: $0, version: version) },
+        confirmReEnrollment: {
+            try promptErrors.record {
+                try requireExactPrivateLine(
+                    "RE-ENROLL",
+                    terminal: terminal,
+                    prompt: "Type RE-ENROLL to continue: ",
+                    maximumBytes: 64
+                )
+                return true
+            }
+        },
+        resolveQueue: { count in
+            try promptErrors.record { try queueDisposition(count: count, terminal: terminal) }
+        },
+        requestCode: {
+            try promptErrors.record {
+                try privateLine(
+                    terminal: terminal,
+                    prompt: "Enrollment code: ",
+                    maximumBytes: 64
+                )
+            }
+        },
+        delayMilliseconds: {
+            Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
+        }
+    )
+    do {
+        try printReEnrollmentOutcome(try ReEnrollmentCoordinator(operations: operations).run())
+    } catch {
+        if let promptError = promptErrors.error { throw promptError }
+        if let cliError = error as? CLIError { throw cliError }
+        throw CLIError.lifecycleFailed
+    }
+}
+
+private func printCompleteRemovalSummary(queueCount: Int) {
+    print("Runtime Raiders complete removal")
+    print("Collection: OFF")
+    print("Background agent: Stopped")
+    print("Queued events: \(queueCount)")
+    print("Remove: app, background agent, command, enrollment, collector state, queued events, and recovery state.")
+    print("Raider, account, Runs, scores, rewards, and history will remain on the server.")
+}
+
+private func printRemovalOutcome(_ outcome: RemovalOutcome) throws {
+    switch outcome {
+    case .removedPreservingState:
+        print("Runtime Raiders was removed.")
+        print("Preserved: enrollment, collector state, queued events, and recovery state.")
+        print("Browser login does not change the preserved enrollment.")
+        print("Raider, account, Runs, scores, rewards, and history were preserved.")
+        print("Next: reinstall Runtime Raiders to restore the companion; collection will remain OFF.")
+    case .removedEverything:
+        print("Runtime Raiders was removed and this device enrollment was revoked.")
+        print("Removed: app, background agent, command, enrollment, collector state, queued events, and recovery state.")
+        print("Raider, account, Runs, scores, rewards, and history were preserved.")
+        print("Next: reinstall Runtime Raiders if you want to enroll this device again.")
+    case .cancelled:
+        print("Runtime Raiders removal was cancelled.")
+        print("Collection remains OFF; no local data was deleted.")
+        print("Next: run raiders status.")
+    case .revocationRequired:
+        throw CLIError.revocationRequired
+    case .assistedRecoveryRequired:
+        throw CLIError.assistedRecoveryRequired
+    }
+}
+
+private func runLiveRemoval(
+    mode: RemovalMode,
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths,
+    homeDirectory: URL
+) throws {
+    try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: true)
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let client = try EnrollmentClient(
+        origin: URL(string: "https://raiders.redlattice.com")!
+    ) { request in
+        try Uploader.liveTransport(request)
+    }
+    let promptErrors = LifecyclePromptErrorBox()
+    let operations = RemovalOperations.live(
+        paths: lifecyclePaths,
+        managedAgent: .live,
+        enrollmentClient: client,
+        persistCollectionOff: {
+            var metadata = stat()
+            if Darwin.lstat(lifecyclePaths.enrollment.path, &metadata) != 0, errno == ENOENT {
+                return
+            }
+            let enrollment = try EnrollmentConfiguration.loadExisting(
+                from: lifecyclePaths.enrollment
+            )
+            try AgentController.persistDisabledForRecovery(
+                paths: lifecyclePaths.agent,
+                surfaces: enrollment.enabledSurfaces
+            )
+        },
+        stopDaemon: {
+            try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: true)
+        },
+        summarize: { printCompleteRemovalSummary(queueCount: $0) },
+        confirmDiscard: { count in
+            try promptErrors.record {
+                try requireExactPrivateLine(
+                    "DISCARD",
+                    terminal: terminal,
+                    prompt: "Type DISCARD to discard \(count) queued events: ",
+                    maximumBytes: 64
+                )
+                return true
+            }
+        },
+        confirmEverything: {
+            try promptErrors.record {
+                try requireExactPrivateLine(
+                    "UNINSTALL EVERYTHING",
+                    terminal: terminal,
+                    prompt: "Type UNINSTALL EVERYTHING to continue: ",
+                    maximumBytes: 64
+                )
+                return true
+            }
+        },
+        delayMilliseconds: {
+            Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
+        }
+    )
+    do {
+        try printRemovalOutcome(try RemovalCoordinator(operations: operations).run(mode: mode))
+    } catch {
+        if let promptError = promptErrors.error { throw promptError }
+        if let cliError = error as? CLIError { throw cliError }
+        throw CLIError.lifecycleFailed
+    }
+}
+
+private func runVerificationReEnrollment(
+    _ scenario: LifecycleVerificationScenario,
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths
+) throws {
+    guard scenario.rawValue.hasPrefix("re-enroll-") else { throw CLIError.usage }
+    if scenario == .reEnrollCollectionOn { throw CLIError.collectionMustBeOff }
+    try appendLifecycleVerificationAction("control:uninstall", paths: paths)
+    printReEnrollmentSummary(queueCount: scenario.queueCount, version: "1.2.3")
+    try requireExactPrivateLine(
+        "RE-ENROLL",
+        terminal: terminal,
+        prompt: "Type RE-ENROLL to continue: ",
+        maximumBytes: 64
+    )
+    let disposition = try queueDisposition(count: scenario.queueCount, terminal: terminal)
+    if scenario.queueCount > 0 {
+        try appendLifecycleVerificationAction("queue:\(disposition)", paths: paths)
+    }
+    if disposition == .cancel, scenario.queueCount > 0 {
+        try printReEnrollmentOutcome(.cancelled)
+        return
+    }
+    _ = try privateLine(
+        terminal: terminal,
+        prompt: "Enrollment code: ",
+        maximumBytes: 64
+    )
+    try writeLifecycleVerificationCapture(
+        #"{"phase":"replacementPrepared","replacement_device_token":"[REDACTED]"}"#,
+        named: "lifecycle-journal-capture.json",
+        paths: paths
+    )
+    try writeLifecycleVerificationCapture(
+        #"{"path":"/api/raiders/re-enroll","authorization":"[REDACTED]","code":"[REDACTED]"}"#,
+        named: "lifecycle-request-capture.json",
+        paths: paths
+    )
+    try appendLifecycleVerificationAction("network:request", paths: paths)
+    switch scenario {
+    case .reEnrollCompletedEmpty, .reEnrollCompletedQueued:
+        try printReEnrollmentOutcome(.completed)
+    case .reEnrollInvalidEnrollmentEmpty:
+        try printReEnrollmentOutcome(.invalidEnrollment)
+    case .reEnrollRecoveryRequiredEmpty:
+        try printReEnrollmentOutcome(.recoveryRequired)
+    default:
+        throw CLIError.usage
+    }
+}
+
+private func runVerificationRemoval(
+    _ scenario: LifecycleVerificationScenario,
+    mode: RemovalMode,
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths
+) throws {
+    guard scenario.rawValue.hasPrefix("uninstall-") else { throw CLIError.usage }
+    try appendLifecycleVerificationAction("control:uninstall", paths: paths)
+    if mode == .preserveState {
+        guard scenario == .uninstallPreserveCompleted else { throw CLIError.usage }
+        try printRemovalOutcome(.removedPreservingState)
+        return
+    }
+    guard scenario != .uninstallPreserveCompleted else { throw CLIError.usage }
+    printCompleteRemovalSummary(queueCount: scenario.queueCount)
+    if scenario.queueCount > 0 {
+        try requireExactPrivateLine(
+            "DISCARD",
+            terminal: terminal,
+            prompt: "Type DISCARD to discard \(scenario.queueCount) queued events: ",
+            maximumBytes: 64
+        )
+        try appendLifecycleVerificationAction("queue:discard", paths: paths)
+    }
+    try requireExactPrivateLine(
+        "UNINSTALL EVERYTHING",
+        terminal: terminal,
+        prompt: "Type UNINSTALL EVERYTHING to continue: ",
+        maximumBytes: 64
+    )
+    try writeLifecycleVerificationCapture(
+        #"{"path":"/api/raiders/devices/revoke-current","authorization":"[REDACTED]"}"#,
+        named: "lifecycle-request-capture.json",
+        paths: paths
+    )
+    try appendLifecycleVerificationAction("network:request", paths: paths)
+    switch scenario {
+    case .uninstallEverythingCompletedEmpty, .uninstallEverythingCompletedQueued:
+        try appendLifecycleVerificationAction("remove:everything", paths: paths)
+        try printRemovalOutcome(.removedEverything)
+    case .uninstallEverythingRevocationRequiredEmpty:
+        try printRemovalOutcome(.revocationRequired)
+    case .uninstallEverythingAssistedRecoveryEmpty:
+        try printRemovalOutcome(.assistedRecoveryRequired)
+    default:
+        throw CLIError.usage
+    }
+}
+
+private func appendLifecycleVerificationAction(_ action: String, paths: AgentPaths) throws {
+    let file = paths.stateDirectory.appendingPathComponent(
+        "lifecycle-actions.log",
+        isDirectory: false
+    )
+    let existing = (try? Data(contentsOf: file)) ?? Data()
+    var data = existing
+    data.append(Data((action + "\n").utf8))
+    try data.write(to: file, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+}
+
+private func writeLifecycleVerificationCapture(
+    _ value: String,
+    named name: String,
+    paths: AgentPaths
+) throws {
+    let file = paths.stateDirectory.appendingPathComponent(name, isDirectory: false)
+    try Data(value.utf8).write(to: file, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+}
+
+private func stopDaemonAndPersistOff(
+    paths: AgentPaths,
+    allowMissingEnrollment: Bool
+) throws {
+    do {
+        let response = try ControlSocketClient.send(.uninstall, to: paths.controlSocket)
+        guard response.ok else { throw CLIError.lifecycleFailed }
+    } catch {
+        guard daemonIsUnavailable(error) else { throw error }
+        let enrollmentFile = paths.stateDirectory.appendingPathComponent(
+            "enrollment.json",
+            isDirectory: false
+        )
+        var metadata = stat()
+        if Darwin.lstat(enrollmentFile.path, &metadata) != 0,
+           errno == ENOENT,
+           allowMissingEnrollment {
+            return
+        }
+        let enrollment = try EnrollmentConfiguration.loadExisting(from: enrollmentFile)
+        try AgentController.persistDisabledForRecovery(
+            paths: paths,
+            surfaces: enrollment.enabledSurfaces
+        )
     }
 }
 

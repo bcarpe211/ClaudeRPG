@@ -187,7 +187,6 @@ final class ControlProtocolTests: XCTestCase {
             ControlCommand.on,
             .off,
             .doctor,
-            .uninstall,
         ] {
             XCTAssertEqual(
                 CompanionCommandRouter.route(
@@ -206,6 +205,46 @@ final class ControlProtocolTests: XCTestCase {
             ),
             .updateCheck
         )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["re-enroll"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .reEnroll
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["uninstall"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .uninstall(.preserveState)
+        )
+        XCTAssertEqual(
+            CompanionCommandRouter.route(
+                arguments: ["uninstall", "--everything"],
+                executableURL: otherExecutable,
+                paths: paths
+            ),
+            .uninstall(.everything)
+        )
+        for arguments in [
+            ["re-enroll", "synthetic-code"],
+            ["re-enroll", "--code", "synthetic-code"],
+            ["uninstall", "--all"],
+            ["uninstall", "everything"],
+            ["uninstall", "--everything", "extra"],
+        ] {
+            XCTAssertNil(
+                CompanionCommandRouter.route(
+                    arguments: arguments,
+                    executableURL: otherExecutable,
+                    paths: paths
+                ),
+                "accepted lifecycle alias or argv input \(arguments)"
+            )
+        }
 
         let retiredPrepare = ["prepare", "update"].joined(separator: "_")
         let retiredResume = ["resume", "update"].joined(separator: "_")
@@ -242,6 +281,108 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(outputStyle(isTTY: false, environment: [:]), .plain)
         XCTAssertEqual(outputStyle(isTTY: true, environment: ["NO_COLOR": ""]), .plain)
         XCTAssertEqual(outputStyle(isTTY: false, environment: ["NO_COLOR": "1"]), .plain)
+    }
+
+    func testLifecycleTerminalReaderUsesPrivateTTYAndRestoresEchoAfterBoundedRead() throws {
+        try withPseudoTerminal { master, path in
+            let secret = "synthetic-redacted-code"
+            let result = TerminalReadResult()
+            DispatchQueue.global().async {
+                result.start()
+                result.finish(Result {
+                    try LifecycleTerminalReader(path: path).readLine(
+                        prompt: "Enrollment code: ",
+                        maximumBytes: 64
+                    )
+                })
+            }
+            XCTAssertTrue(result.started.wait(timeout: .now() + 1) == .success)
+            var terminalOutput = ""
+            for _ in 0..<100 {
+                terminalOutput += readAvailable(master)
+                if terminalOutput.contains("Enrollment code: ") { break }
+                Darwin.usleep(10_000)
+            }
+            XCTAssertTrue(terminalOutput.contains("Enrollment code: "))
+            try writeAll(Data((secret + "\n").utf8), to: master)
+
+            XCTAssertEqual(try result.value(), secret)
+            XCTAssertTrue(terminalEchoEnabled(at: path))
+            XCTAssertFalse((terminalOutput + readAvailable(master)).contains(secret))
+        }
+    }
+
+    func testLifecycleTerminalReaderEnforcesCodeChoiceAndConfirmationByteBounds() throws {
+        for (maximumBytes, acceptedCount) in [(64, 64), (32, 32), (64, 64)] {
+            try withPseudoTerminal { master, path in
+                let result = startTerminalRead(path: path, maximumBytes: maximumBytes)
+                try waitForPrompt("Private input: ", from: master)
+                try writeAll(Data((String(repeating: "a", count: acceptedCount) + "\n").utf8), to: master)
+                XCTAssertEqual(try result.value().utf8.count, acceptedCount)
+                XCTAssertTrue(terminalEchoEnabled(at: path))
+            }
+        }
+
+        for maximumBytes in [64, 32] {
+            try withPseudoTerminal { master, path in
+                let result = startTerminalRead(path: path, maximumBytes: maximumBytes)
+                try waitForPrompt("Private input: ", from: master)
+                try writeAll(
+                    Data((String(repeating: "b", count: maximumBytes + 1) + "\n").utf8),
+                    to: master
+                )
+                XCTAssertThrowsError(try result.value())
+                XCTAssertTrue(terminalEchoEnabled(at: path))
+            }
+        }
+    }
+
+    func testLifecycleTerminalReaderRejectsEmptyInvalidUTF8AndNonCharacterDevice() throws {
+        for input in [Data([0x0A]), Data([0xFF, 0x0A])] {
+            try withPseudoTerminal { master, path in
+                let result = startTerminalRead(path: path, maximumBytes: 64)
+                try waitForPrompt("Private input: ", from: master)
+                try writeAll(input, to: master)
+                XCTAssertThrowsError(try result.value())
+                XCTAssertTrue(terminalEchoEnabled(at: path))
+            }
+        }
+        XCTAssertThrowsError(
+            try LifecycleTerminalReader(path: "/dev/null").readLine(
+                prompt: "Code: ",
+                maximumBytes: 64
+            )
+        )
+    }
+
+    func testLifecycleTerminalReaderRestoresEchoAfterTerminalWriteFailure() throws {
+        try withPseudoTerminal { _, path in
+            let reader = LifecycleTerminalReader(
+                testPath: path,
+                writeBytes: { _, _, _ in
+                    errno = EIO
+                    return -1
+                }
+            )
+
+            XCTAssertThrowsError(try reader.readLine(prompt: "Private input: ", maximumBytes: 64))
+            XCTAssertTrue(terminalEchoEnabled(at: path))
+        }
+    }
+
+    func testLifecycleTerminalReaderFailsClosedWhenTerminalAttributesCannotBeControlled() throws {
+        try withPseudoTerminal { _, path in
+            let reader = LifecycleTerminalReader(
+                testPath: path,
+                setAttributes: { _, _, _ in
+                    errno = ENOTTY
+                    return -1
+                }
+            )
+
+            XCTAssertThrowsError(try reader.readLine(prompt: "Private input: ", maximumBytes: 64))
+            XCTAssertTrue(terminalEchoEnabled(at: path))
+        }
     }
 
     func testNormalDaemonStartupStartsControlBeforeOptionalActivationAndVersionCheck() throws {
@@ -788,6 +929,106 @@ final class ControlProtocolTests: XCTestCase {
             decoding: try Data(contentsOf: app.appendingPathComponent("marker")),
             as: UTF8.self
         )
+    }
+}
+
+@_silgen_name("openpty")
+private func openPseudoTerminal(
+    _ master: UnsafeMutablePointer<Int32>,
+    _ slave: UnsafeMutablePointer<Int32>,
+    _ name: UnsafeMutablePointer<CChar>?,
+    _ termp: UnsafeMutableRawPointer?,
+    _ winp: UnsafeMutableRawPointer?
+) -> Int32
+
+private func withPseudoTerminal(
+    _ body: (Int32, String) throws -> Void
+) throws {
+    var master: Int32 = -1
+    var slave: Int32 = -1
+    var name = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    guard openPseudoTerminal(&master, &slave, &name, nil, nil) == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    defer {
+        Darwin.close(master)
+        if slave >= 0 { Darwin.close(slave) }
+    }
+    var state = termios()
+    guard Darwin.tcgetattr(slave, &state) == 0 else { throw POSIXError(.EIO) }
+    state.c_lflag &= ~tcflag_t(ICANON)
+    guard Darwin.tcsetattr(slave, TCSANOW, &state) == 0 else { throw POSIXError(.EIO) }
+    Darwin.close(slave)
+    slave = -1
+    try body(
+        master,
+        String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    )
+}
+
+private func terminalEchoEnabled(at path: String) -> Bool {
+    let descriptor = Darwin.open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW)
+    guard descriptor >= 0 else { return false }
+    defer { Darwin.close(descriptor) }
+    var state = termios()
+    return Darwin.tcgetattr(descriptor, &state) == 0 && state.c_lflag & tcflag_t(ECHO) != 0
+}
+
+private func readAvailable(_ descriptor: Int32) -> String {
+    _ = Darwin.fcntl(descriptor, F_SETFL, O_NONBLOCK)
+    var bytes = [UInt8](repeating: 0, count: 512)
+    let count = bytes.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
+    guard count > 0 else { return "" }
+    return String(decoding: bytes.prefix(Int(count)), as: UTF8.self)
+}
+
+private func startTerminalRead(path: String, maximumBytes: Int) -> TerminalReadResult {
+    let result = TerminalReadResult()
+    DispatchQueue.global().async {
+        result.start()
+        result.finish(Result {
+            try LifecycleTerminalReader(path: path).readLine(
+                prompt: "Private input: ",
+                maximumBytes: maximumBytes
+            )
+        })
+    }
+    return result
+}
+
+private func waitForPrompt(_ prompt: String, from descriptor: Int32) throws {
+    var output = ""
+    for _ in 0..<100 {
+        output += readAvailable(descriptor)
+        if output.contains(prompt) { return }
+        Darwin.usleep(10_000)
+    }
+    throw POSIXError(.ETIMEDOUT)
+}
+
+private func writeAll(_ data: Data, to descriptor: Int32) throws {
+    let count = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
+    guard count == data.count else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+}
+
+private final class TerminalReadResult: @unchecked Sendable {
+    let started = DispatchSemaphore(value: 0)
+    private let completed = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var stored: Result<String, Error>?
+
+    func start() {
+        started.signal()
+    }
+
+    func finish(_ result: Result<String, Error>) {
+        lock.withLock { stored = result }
+        completed.signal()
+    }
+
+    func value() throws -> String {
+        guard completed.wait(timeout: .now() + 1) == .success else { throw POSIXError(.ETIMEDOUT) }
+        return try lock.withLock { try stored!.get() }
     }
 }
 

@@ -24,7 +24,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
 
             let help = try runCLI(fixture, arguments: ["help"])
             XCTAssertEqual(help.exitStatus, 0, help.stderr)
-            XCTAssertEqual(help.stdout, "Usage: raiders <command>\n\nCommands:\n  on                       Turn collection on\n  off                      Turn collection off\n  status                   Show collection and agent status\n  status --json            Show machine-readable status\n  doctor                   Run content-free health checks\n  update                   Check for a companion update\n  uninstall                Stop the agent and preserve installed state\n  help                     Show this help\n")
+            XCTAssertEqual(help.stdout, "Usage: raiders <command>\n\nCommands:\n  on                       Turn collection on\n  off                      Turn collection off\n  status                   Show collection and agent status\n  status --json            Show machine-readable status\n  doctor                   Run content-free health checks\n  update                   Check for a companion update\n  re-enroll                Change this device's Raider enrollment\n  uninstall                Remove the app and preserve local state\n  uninstall --everything   Revoke and remove all local Runtime Raiders data\n  help                     Show this help\n")
 
             let update = try runCLI(fixture, arguments: ["update"])
             XCTAssertEqual(update.exitStatus, 0, update.stderr)
@@ -356,8 +356,366 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             XCTAssertEqual(result.stdout, "")
             XCTAssertEqual(
                 result.stderr,
-                "usage: raiders on|off|status|status --json|doctor|uninstall|update|help\n"
+                "usage: raiders on|off|status|status --json|doctor|re-enroll|uninstall|uninstall --everything|update|help\n"
             )
+        }
+    }
+
+    func testNonTTYLifecycleRequestsFailBeforeDaemonStateServiceQueueOrNetworkOperations() throws {
+        try withActualVersionOnlyApp { fixture in
+            let recorder = RequestRecorder()
+            let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
+            try server.startRequests { request in
+                recorder.record(request.command)
+                return ControlResponse(ok: true, message: "unexpected lifecycle request")
+            }
+            defer { server.stop() }
+            let before = try treeFingerprint(fixture.paths.supportDirectory)
+
+            for (arguments, scenario) in [
+                (["re-enroll"], "re-enroll-completed-empty"),
+                (["uninstall", "--everything"], "uninstall-everything-completed-queued"),
+            ] {
+                try removeLifecycleCaptures(fixture)
+                let result = try runCLI(
+                    fixture,
+                    arguments: arguments,
+                    lifecycleScenario: scenario
+                )
+
+                XCTAssertNotEqual(result.exitStatus, 0, "accepted \(arguments)")
+                XCTAssertEqual(result.stdout, "")
+                XCTAssertEqual(
+                    result.stderr,
+                    "Runtime Raiders lifecycle commands require an interactive terminal.\n"
+                )
+                XCTAssertEqual(
+                    try treeFingerprint(fixture.paths.supportDirectory),
+                    before,
+                    "mutated state for \(arguments)"
+                )
+                XCTAssertEqual(recorder.commands, [])
+                XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleActions(fixture).path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleJournal(fixture).path))
+            }
+        }
+    }
+
+    func testOrdinaryUninstallRemainsNoninteractiveAndReportsPreservedState() throws {
+        try withActualVersionOnlyApp { fixture in
+            let result = try runCLI(
+                fixture,
+                arguments: ["uninstall"],
+                lifecycleScenario: "uninstall-preserve-completed"
+            )
+
+            XCTAssertEqual(result.exitStatus, 0, result.contentFreeDiagnostics)
+            XCTAssertEqual(
+                result.stdout,
+                "Runtime Raiders was removed.\n" +
+                "Preserved: enrollment, collector state, queued events, and recovery state.\n" +
+                "Browser login does not change the preserved enrollment.\n" +
+                "Raider, account, Runs, scores, rewards, and history were preserved.\n" +
+                "Next: reinstall Runtime Raiders to restore the companion; collection will remain OFF.\n"
+            )
+            XCTAssertEqual(result.stderr, "")
+            try assertLifecycleOutputIsContentFree(result.stdout + result.stderr, fixture: fixture)
+            XCTAssertEqual(try lifecycleActionLines(fixture).first, "control:uninstall")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
+        }
+    }
+
+    func testReEnrollmentPTYSuccessKeepsCodePrivateAndRedactsCapturedArtifacts() throws {
+        try withActualVersionOnlyApp { fixture in
+            let code = "private-\(UUID().uuidString)"
+            let process = try startPTYCLI(
+                fixture,
+                arguments: ["re-enroll"],
+                lifecycleScenario: "re-enroll-completed-empty"
+            )
+            try process.waitForPrompt("Type RE-ENROLL to continue: ")
+            XCTAssertFalse(process.arguments.contains(code))
+            try process.sendLine("RE-ENROLL")
+            try process.waitForPrompt("Enrollment code: ")
+            XCTAssertFalse(process.terminalTranscript.contains(code))
+            try process.sendLine(code)
+
+            let result = try process.wait()
+            XCTAssertEqual(result.exitStatus, 0, result.contentFreeDiagnostics)
+            XCTAssertEqual(
+                result.stdout,
+                reEnrollmentSummary(queueCount: 0) +
+                "Runtime Raiders re-enrollment succeeded.\n" +
+                "Collection remains OFF.\n" +
+                "History was not transferred; Runs, scores, and rewards remain with their original Raider.\n" +
+                "Next: run raiders status, then deliberately run raiders on.\n"
+            )
+            XCTAssertEqual(result.stderr, "")
+            XCTAssertFalse(process.terminalTranscript.contains(code))
+            XCTAssertFalse(result.stdout.contains(code))
+            XCTAssertFalse(result.stderr.contains(code))
+            XCTAssertFalse(result.contentFreeDiagnostics.contains(code))
+            for capture in [lifecycleJournal(fixture), lifecycleRequest(fixture)] {
+                let contents = String(decoding: try Data(contentsOf: capture), as: UTF8.self)
+                XCTAssertFalse(contents.contains(code))
+                XCTAssertTrue(contents.contains("[REDACTED]"))
+            }
+            try assertLifecycleOutputIsContentFree(
+                result.stdout + result.stderr + process.terminalTranscript,
+                fixture: fixture,
+                additionalSecrets: [code]
+            )
+        }
+    }
+
+    func testReEnrollmentPTYAcceptsOnlyDeliverDiscardOrCancelAndRequiresExactDiscard() throws {
+        for disposition in ["deliver", "discard", "cancel"] {
+            try withActualVersionOnlyApp { fixture in
+                let code = "private-\(UUID().uuidString)"
+                let process = try startPTYCLI(
+                    fixture,
+                    arguments: ["re-enroll"],
+                    lifecycleScenario: "re-enroll-completed-queued"
+                )
+                try process.waitForPrompt("Type RE-ENROLL to continue: ")
+                try process.sendLine("RE-ENROLL")
+                try process.waitForPrompt("Choose deliver, discard, or cancel: ")
+                try process.sendLine(disposition)
+                if disposition == "discard" {
+                    try process.waitForPrompt("Type DISCARD to discard 2 queued events: ")
+                    try process.sendLine("DISCARD")
+                }
+                if disposition != "cancel" {
+                    try process.waitForPrompt("Enrollment code: ")
+                    try process.sendLine(code)
+                }
+
+                let result = try process.wait()
+                XCTAssertEqual(result.exitStatus, 0, result.contentFreeDiagnostics)
+                if disposition == "cancel" {
+                    XCTAssertEqual(
+                        result.stdout,
+                        reEnrollmentSummary(queueCount: 2) +
+                        "Runtime Raiders re-enrollment was cancelled.\n" +
+                        "Collection remains OFF; enrollment and queued events were unchanged.\n" +
+                        "Next: run raiders status.\n"
+                    )
+                    XCTAssertFalse(process.terminalTranscript.contains("Enrollment code: "))
+                } else {
+                    XCTAssertTrue(result.stdout.hasSuffix(
+                        "Runtime Raiders re-enrollment succeeded.\n" +
+                        "Collection remains OFF.\n" +
+                        "History was not transferred; Runs, scores, and rewards remain with their original Raider.\n" +
+                        "Next: run raiders status, then deliberately run raiders on.\n"
+                    ))
+                }
+                XCTAssertTrue(try lifecycleActionLines(fixture).contains("queue:\(disposition)"))
+                try assertLifecycleOutputIsContentFree(
+                    result.stdout + result.stderr + process.terminalTranscript,
+                    fixture: fixture,
+                    additionalSecrets: [code]
+                )
+            }
+        }
+    }
+
+    func testLifecyclePTYMisspellingsFailClosedWithoutRequestOrDestructiveAction() throws {
+        let cases: [(scenario: String, arguments: [String], steps: [(String, String)])] = [
+            ("re-enroll-completed-empty", ["re-enroll"], [("Type RE-ENROLL to continue: ", "RE_ENROLL")]),
+            ("re-enroll-completed-queued", ["re-enroll"], [
+                ("Type RE-ENROLL to continue: ", "RE-ENROLL"),
+                ("Choose deliver, discard, or cancel: ", "Deliver"),
+            ]),
+            ("re-enroll-completed-queued", ["re-enroll"], [
+                ("Type RE-ENROLL to continue: ", "RE-ENROLL"),
+                ("Choose deliver, discard, or cancel: ", "discard"),
+                ("Type DISCARD to discard 2 queued events: ", "discard"),
+            ]),
+            ("uninstall-everything-completed-empty", ["uninstall", "--everything"], [
+                ("Type UNINSTALL EVERYTHING to continue: ", "UNINSTALL ALL"),
+            ]),
+            ("uninstall-everything-completed-queued", ["uninstall", "--everything"], [
+                ("Type DISCARD to discard 2 queued events: ", "discard"),
+            ]),
+        ]
+
+        for item in cases {
+            try withActualVersionOnlyApp { fixture in
+                let process = try startPTYCLI(
+                    fixture,
+                    arguments: item.arguments,
+                    lifecycleScenario: item.scenario
+                )
+                for (prompt, input) in item.steps {
+                    try process.waitForPrompt(prompt)
+                    try process.sendLine(input)
+                }
+                let result = try process.wait()
+                XCTAssertNotEqual(result.exitStatus, 0)
+                XCTAssertEqual(
+                    result.stderr,
+                    "Lifecycle confirmation was not exact. No lifecycle change was authorized.\n" +
+                    "Next: review the prompt and run the command again.\n"
+                )
+                XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
+                XCTAssertFalse(try lifecycleActionLines(fixture).contains("remove:everything"))
+                try assertLifecycleOutputIsContentFree(
+                    result.stdout + result.stderr + process.terminalTranscript,
+                    fixture: fixture
+                )
+            }
+        }
+    }
+
+    func testCompleteRemovalPTYRequiresBothExactConfirmationsAndReportsRemovedCategories() throws {
+        try withActualVersionOnlyApp { fixture in
+            let process = try startPTYCLI(
+                fixture,
+                arguments: ["uninstall", "--everything"],
+                lifecycleScenario: "uninstall-everything-completed-queued"
+            )
+            try process.waitForPrompt("Type DISCARD to discard 2 queued events: ")
+            try process.sendLine("DISCARD")
+            try process.waitForPrompt("Type UNINSTALL EVERYTHING to continue: ")
+            try process.sendLine("UNINSTALL EVERYTHING")
+
+            let result = try process.wait()
+            XCTAssertEqual(result.exitStatus, 0, result.contentFreeDiagnostics)
+            XCTAssertEqual(
+                result.stdout,
+                completeRemovalSummary(queueCount: 2) +
+                "Runtime Raiders was removed and this device enrollment was revoked.\n" +
+                "Removed: app, background agent, command, enrollment, collector state, queued events, and recovery state.\n" +
+                "Raider, account, Runs, scores, rewards, and history were preserved.\n" +
+                "Next: reinstall Runtime Raiders if you want to enroll this device again.\n"
+            )
+            XCTAssertEqual(result.stderr, "")
+            XCTAssertTrue(try lifecycleActionLines(fixture).contains("queue:discard"))
+            XCTAssertTrue(try lifecycleActionLines(fixture).contains("remove:everything"))
+            try assertLifecycleOutputIsContentFree(
+                result.stdout + result.stderr + process.terminalTranscript,
+                fixture: fixture
+            )
+        }
+    }
+
+    func testCompleteRemovalPTYOmitsDiscardForEmptyQueue() throws {
+        try withActualVersionOnlyApp { fixture in
+            let process = try startPTYCLI(
+                fixture,
+                arguments: ["uninstall", "--everything"],
+                lifecycleScenario: "uninstall-everything-completed-empty"
+            )
+            try process.waitForPrompt("Type UNINSTALL EVERYTHING to continue: ")
+            XCTAssertFalse(process.terminalTranscript.contains("Type DISCARD"))
+            try process.sendLine("UNINSTALL EVERYTHING")
+
+            let result = try process.wait()
+            XCTAssertEqual(result.exitStatus, 0, result.contentFreeDiagnostics)
+            XCTAssertFalse(process.terminalTranscript.contains("Type DISCARD"))
+            XCTAssertFalse(try lifecycleActionLines(fixture).contains("queue:discard"))
+        }
+    }
+
+    func testLifecyclePTYEOFFailsClosedAndRestoresEcho() throws {
+        try withActualVersionOnlyApp { fixture in
+            let process = try startPTYCLI(
+                fixture,
+                arguments: ["re-enroll"],
+                lifecycleScenario: "re-enroll-completed-empty"
+            )
+            try process.waitForPrompt("Type RE-ENROLL to continue: ")
+            XCTAssertFalse(process.echoEnabled)
+            try process.sendEOF()
+
+            let result = try process.wait()
+            XCTAssertNotEqual(result.exitStatus, 0)
+            XCTAssertTrue(process.echoEnabled)
+            XCTAssertEqual(
+                result.stderr,
+                "Private lifecycle input ended before confirmation. No lifecycle change was authorized.\n" +
+                "Next: run the command again from an interactive terminal.\n"
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
+            XCTAssertFalse(try lifecycleActionLines(fixture).contains("network:request"))
+        }
+    }
+
+    func testLifecyclePTYSignalFailsClosedAndRestoresEcho() throws {
+        try withActualVersionOnlyApp { fixture in
+            let process = try startPTYCLI(
+                fixture,
+                arguments: ["re-enroll"],
+                lifecycleScenario: "re-enroll-completed-empty"
+            )
+            try process.waitForPrompt("Type RE-ENROLL to continue: ")
+            XCTAssertFalse(process.echoEnabled)
+            try process.sendSignal(SIGINT)
+
+            let result = try process.wait()
+            XCTAssertNotEqual(result.exitStatus, 0)
+            XCTAssertTrue(process.echoEnabled)
+            XCTAssertEqual(
+                result.stderr,
+                "Lifecycle input was interrupted. No lifecycle change was authorized.\n" +
+                "Next: run the command again from an interactive terminal.\n"
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
+            XCTAssertFalse(try lifecycleActionLines(fixture).contains("network:request"))
+        }
+    }
+
+    func testLifecycleFailuresRemainContentFreeAndNameSafeNextActions() throws {
+        let cases: [(scenario: String, arguments: [String], inputs: [(String, String)], expected: String)] = [
+            (
+                "re-enroll-collection-on", ["re-enroll"], [],
+                "Collection is ON. No enrollment change was made.\nNext: run raiders off, then run raiders re-enroll again.\n"
+            ),
+            (
+                "re-enroll-invalid-enrollment-empty", ["re-enroll"],
+                [("Type RE-ENROLL to continue: ", "RE-ENROLL"), ("Enrollment code: ", "private-code")],
+                "The enrollment code was not accepted. Collection remains OFF.\nNext: create a fresh code and run raiders re-enroll again.\n"
+            ),
+            (
+                "re-enroll-recovery-required-empty", ["re-enroll"],
+                [("Type RE-ENROLL to continue: ", "RE-ENROLL"), ("Enrollment code: ", "private-code")],
+                "Runtime Raiders needs assisted recovery. Collection remains OFF.\nNext: run raiders re-enroll again; if it still fails, seek assisted recovery.\n"
+            ),
+            (
+                "uninstall-everything-revocation-required-empty", ["uninstall", "--everything"],
+                [("Type UNINSTALL EVERYTHING to continue: ", "UNINSTALL EVERYTHING")],
+                "Device revocation could not be confirmed. No local data was deleted.\nNext: reconnect and run raiders uninstall --everything again.\n"
+            ),
+            (
+                "uninstall-everything-assisted-recovery-empty", ["uninstall", "--everything"],
+                [("Type UNINSTALL EVERYTHING to continue: ", "UNINSTALL EVERYTHING")],
+                "Local enrollment needs assisted recovery. No local data was deleted.\nNext: seek assisted recovery before removing local state.\n"
+            ),
+        ]
+
+        for item in cases {
+            try withActualVersionOnlyApp { fixture in
+                let process = try startPTYCLI(
+                    fixture,
+                    arguments: item.arguments,
+                    lifecycleScenario: item.scenario
+                )
+                for (prompt, input) in item.inputs {
+                    try process.waitForPrompt(prompt)
+                    try process.sendLine(input)
+                }
+                let result = try process.wait()
+                XCTAssertNotEqual(result.exitStatus, 0)
+                XCTAssertEqual(result.stderr, item.expected)
+                try assertLifecycleOutputIsContentFree(
+                    result.stdout + result.stderr + process.terminalTranscript,
+                    fixture: fixture,
+                    additionalSecrets: item.inputs.compactMap { prompt, input in
+                        prompt == "Enrollment code: " ? input : nil
+                    }
+                )
+            }
         }
     }
 
@@ -549,12 +907,185 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         let exitStatus: Int32
         let stdout: String
         let stderr: String
+
+        var contentFreeDiagnostics: String {
+            "exit=\(exitStatus) stdout-bytes=\(stdout.utf8.count) stderr-bytes=\(stderr.utf8.count)"
+        }
     }
 
     private enum FixtureError: Error {
         case builtExecutableMissing
         case cannotCreateVerificationRoot
         case processTimedOut
+    }
+
+    private final class PTYCLIProcess {
+        let arguments: [String]
+        private(set) var terminalTranscript = ""
+        private let processID: pid_t
+        private let master: Int32
+        private let stdoutRead: Int32
+        private let stderrRead: Int32
+        private var waited = false
+
+        init(
+            executable: URL,
+            arguments: [String],
+            environment: [String: String]
+        ) throws {
+            self.arguments = arguments
+            var stdoutPipe = [Int32](repeating: -1, count: 2)
+            var stderrPipe = [Int32](repeating: -1, count: 2)
+            guard Darwin.pipe(&stdoutPipe) == 0, Darwin.pipe(&stderrPipe) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            var masterDescriptor: Int32 = -1
+            var argv = ([executable.path] + arguments).map { strdup($0) }
+            argv.append(nil)
+            var envp = environment.sorted { $0.key < $1.key }.map { strdup("\($0.key)=\($0.value)") }
+            envp.append(nil)
+            defer {
+                for pointer in argv.dropLast() { free(pointer) }
+                for pointer in envp.dropLast() { free(pointer) }
+            }
+
+            let child = forkPseudoTerminal(&masterDescriptor, nil, nil, nil)
+            guard child >= 0 else {
+                let saved = errno
+                for descriptor in stdoutPipe + stderrPipe where descriptor >= 0 {
+                    Darwin.close(descriptor)
+                }
+                throw POSIXError(POSIXErrorCode(rawValue: saved) ?? .EIO)
+            }
+            if child == 0 {
+                Darwin.close(stdoutPipe[0])
+                Darwin.close(stderrPipe[0])
+                guard Darwin.dup2(stdoutPipe[1], STDOUT_FILENO) >= 0,
+                      Darwin.dup2(stderrPipe[1], STDERR_FILENO) >= 0 else {
+                    Darwin._exit(126)
+                }
+                Darwin.close(stdoutPipe[1])
+                Darwin.close(stderrPipe[1])
+                executable.path.withCString { executablePath in
+                    argv.withUnsafeMutableBufferPointer { argumentBuffer in
+                        envp.withUnsafeMutableBufferPointer { environmentBuffer in
+                            _ = Darwin.execve(
+                                executablePath,
+                                argumentBuffer.baseAddress,
+                                environmentBuffer.baseAddress
+                            )
+                        }
+                    }
+                }
+                Darwin._exit(127)
+            }
+
+            processID = child
+            master = masterDescriptor
+            stdoutRead = stdoutPipe[0]
+            stderrRead = stderrPipe[0]
+            Darwin.close(stdoutPipe[1])
+            Darwin.close(stderrPipe[1])
+            _ = Darwin.fcntl(master, F_SETFL, Darwin.fcntl(master, F_GETFL) | O_NONBLOCK)
+        }
+
+        deinit {
+            if !waited {
+                Darwin.kill(processID, SIGKILL)
+                var status: Int32 = 0
+                _ = Darwin.waitpid(processID, &status, 0)
+            }
+            Darwin.close(master)
+            Darwin.close(stdoutRead)
+            Darwin.close(stderrRead)
+        }
+
+        var echoEnabled: Bool {
+            var state = termios()
+            return Darwin.tcgetattr(master, &state) == 0 && state.c_lflag & tcflag_t(ECHO) != 0
+        }
+
+        func waitForPrompt(_ prompt: String) throws {
+            for _ in 0..<300 {
+                drainTerminal()
+                if terminalTranscript.contains(prompt) { return }
+                var status: Int32 = 0
+                if Darwin.waitpid(processID, &status, WNOHANG) == processID {
+                    waited = true
+                    throw POSIXError(.ECHILD)
+                }
+                Darwin.usleep(10_000)
+            }
+            throw POSIXError(.ETIMEDOUT)
+        }
+
+        func sendLine(_ line: String) throws {
+            try writeAll(Data((line + "\n").utf8), to: master)
+        }
+
+        func sendEOF() throws {
+            try writeAll(Data([0x04]), to: master)
+        }
+
+        func sendSignal(_ value: Int32) throws {
+            guard Darwin.kill(processID, value) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        }
+
+        func wait(timeoutIterations: Int = 500) throws -> ProcessResult {
+            var status: Int32 = 0
+            for _ in 0..<timeoutIterations {
+                let result = Darwin.waitpid(processID, &status, WNOHANG)
+                if result == processID {
+                    waited = true
+                    drainTerminal()
+                    return ProcessResult(
+                        exitStatus: decodedExitStatus(status),
+                        stdout: readToEnd(stdoutRead),
+                        stderr: readToEnd(stderrRead)
+                    )
+                }
+                guard result == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                drainTerminal()
+                Darwin.usleep(10_000)
+            }
+            Darwin.kill(processID, SIGKILL)
+            _ = Darwin.waitpid(processID, &status, 0)
+            waited = true
+            throw FixtureError.processTimedOut
+        }
+
+        private func drainTerminal() {
+            var bytes = [UInt8](repeating: 0, count: 1_024)
+            while true {
+                let count = bytes.withUnsafeMutableBytes {
+                    Darwin.read(master, $0.baseAddress, $0.count)
+                }
+                guard count > 0 else { return }
+                terminalTranscript += String(decoding: bytes.prefix(Int(count)), as: UTF8.self)
+            }
+        }
+
+        private func readToEnd(_ descriptor: Int32) -> String {
+            var result = Data()
+            var bytes = [UInt8](repeating: 0, count: 1_024)
+            while true {
+                let count = bytes.withUnsafeMutableBytes {
+                    Darwin.read(descriptor, $0.baseAddress, $0.count)
+                }
+                guard count > 0 else { break }
+                result.append(contentsOf: bytes.prefix(Int(count)))
+            }
+            return String(decoding: result, as: UTF8.self)
+        }
+
+        private func decodedExitStatus(_ status: Int32) -> Int32 {
+            let signal = status & 0x7f
+            return signal == 0 ? (status >> 8) & 0xff : 128 + signal
+        }
     }
 
     private final class RequestRecorder: @unchecked Sendable {
@@ -722,25 +1253,33 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         ))
     }
 
-    private func runCLI(
+    private func startPTYCLI(
         _ fixture: Fixture,
         arguments: [String],
+        lifecycleScenario: String
+    ) throws -> PTYCLIProcess {
+        try PTYCLIProcess(
+            executable: fixture.executable,
+            arguments: arguments,
+            environment: cliEnvironment(fixture, lifecycleScenario: lifecycleScenario)
+        )
+    }
+
+    private func cliEnvironment(
+        _ fixture: Fixture,
+        lifecycleScenario: String? = nil,
         includeVerificationGate: Bool = true,
         includeSupportOverride: Bool = true,
         supportOverridePath: String? = nil,
-        versionResponsePath: String? = nil,
-        completionTimeout: DispatchTimeInterval = .seconds(5)
-    ) throws -> ProcessResult {
-        let process = Process()
-        process.executableURL = fixture.executable
-        process.arguments = arguments
+        versionResponsePath: String? = nil
+    ) -> [String: String] {
         var environment: [String: String] = [
             "PATH": "/usr/bin:/bin",
             "HOME": fixture.home.path,
             "CFFIXED_USER_HOME": fixture.home.path,
+            "RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE":
+                versionResponsePath ?? fixture.versionResponse.path,
         ]
-        environment["RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE"] =
-            versionResponsePath ?? fixture.versionResponse.path
         if includeSupportOverride {
             environment["RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY"] =
                 supportOverridePath ?? fixture.applicationSupport.path
@@ -748,7 +1287,117 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         if includeVerificationGate {
             environment["RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS"] = "1"
         }
-        process.environment = environment
+        if let lifecycleScenario {
+            environment["RUNTIME_RAIDERS_VERIFY_LIFECYCLE_SCENARIO"] = lifecycleScenario
+        }
+        return environment
+    }
+
+    private func lifecycleActions(_ fixture: Fixture) -> URL {
+        fixture.paths.stateDirectory.appendingPathComponent(
+            "lifecycle-actions.log",
+            isDirectory: false
+        )
+    }
+
+    private func lifecycleRequest(_ fixture: Fixture) -> URL {
+        fixture.paths.stateDirectory.appendingPathComponent(
+            "lifecycle-request-capture.json",
+            isDirectory: false
+        )
+    }
+
+    private func lifecycleJournal(_ fixture: Fixture) -> URL {
+        fixture.paths.stateDirectory.appendingPathComponent(
+            "lifecycle-journal-capture.json",
+            isDirectory: false
+        )
+    }
+
+    private func lifecycleActionLines(_ fixture: Fixture) throws -> [String] {
+        guard FileManager.default.fileExists(atPath: lifecycleActions(fixture).path) else {
+            return []
+        }
+        return String(
+            decoding: try Data(contentsOf: lifecycleActions(fixture)),
+            as: UTF8.self
+        ).split(separator: "\n").map(String.init)
+    }
+
+    private func removeLifecycleCaptures(_ fixture: Fixture) throws {
+        for file in [lifecycleActions(fixture), lifecycleRequest(fixture), lifecycleJournal(fixture)] {
+            if FileManager.default.fileExists(atPath: file.path) {
+                try FileManager.default.removeItem(at: file)
+            }
+        }
+    }
+
+    private func reEnrollmentSummary(queueCount: Int) -> String {
+        "Runtime Raiders re-enrollment\n" +
+        "Collection: OFF\n" +
+        "Background agent: Stopped\n" +
+        "Queued events: \(queueCount)\n" +
+        "Installed version: 1.2.3\n" +
+        "Runs, scores, and rewards remain with their original Raider.\n"
+    }
+
+    private func completeRemovalSummary(queueCount: Int) -> String {
+        "Runtime Raiders complete removal\n" +
+        "Collection: OFF\n" +
+        "Background agent: Stopped\n" +
+        "Queued events: \(queueCount)\n" +
+        "Remove: app, background agent, command, enrollment, collector state, queued events, and recovery state.\n" +
+        "Raider, account, Runs, scores, rewards, and history will remain on the server.\n"
+    }
+
+    private func assertLifecycleOutputIsContentFree(
+        _ text: String,
+        fixture: Fixture,
+        additionalSecrets: [String] = [],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let forbidden = [
+            fixture.root.path,
+            "00000000-0000-4000-8000-000000000001",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "player-private-id",
+            "cursor-private-value",
+            "provider-private-content",
+            "native-run-private-id",
+        ] + additionalSecrets
+        for (index, value) in forbidden.enumerated() where !value.isEmpty {
+            XCTAssertFalse(
+                text.contains(value),
+                "content-free output contained forbidden value index \(index)",
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func runCLI(
+        _ fixture: Fixture,
+        arguments: [String],
+        includeVerificationGate: Bool = true,
+        includeSupportOverride: Bool = true,
+        supportOverridePath: String? = nil,
+        versionResponsePath: String? = nil,
+        lifecycleScenario: String? = nil,
+        completionTimeout: DispatchTimeInterval = .seconds(5)
+    ) throws -> ProcessResult {
+        let process = Process()
+        process.executableURL = fixture.executable
+        process.arguments = arguments
+        process.environment = cliEnvironment(
+            fixture,
+            lifecycleScenario: lifecycleScenario,
+            includeVerificationGate: includeVerificationGate,
+            includeSupportOverride: includeSupportOverride,
+            supportOverridePath: supportOverridePath,
+            versionResponsePath: versionResponsePath
+        )
         let output = Pipe()
         let error = Pipe()
         process.standardOutput = output
@@ -881,5 +1530,30 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             [.posixPermissions: 0o600],
             ofItemAtPath: url.path
         )
+    }
+}
+
+@_silgen_name("forkpty")
+private func forkPseudoTerminal(
+    _ master: UnsafeMutablePointer<Int32>,
+    _ name: UnsafeMutablePointer<CChar>?,
+    _ termp: UnsafeMutableRawPointer?,
+    _ winp: UnsafeMutableRawPointer?
+) -> pid_t
+
+private func writeAll(_ data: Data, to descriptor: Int32) throws {
+    var offset = 0
+    while offset < data.count {
+        let count = data.withUnsafeBytes { bytes in
+            Darwin.write(
+                descriptor,
+                bytes.baseAddress?.advanced(by: offset),
+                data.count - offset
+            )
+        }
+        guard count > 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        offset += count
     }
 }

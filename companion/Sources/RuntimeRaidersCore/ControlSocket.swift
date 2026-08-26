@@ -24,6 +24,8 @@ public enum CompanionCommandRoute: Equatable, Sendable {
     case control(ControlCommand)
     case status(StatusOutputFormat)
     case updateCheck
+    case reEnroll
+    case uninstall(RemovalMode)
     case help
 }
 
@@ -46,10 +48,16 @@ public enum CompanionCommandRouter {
             return .status(.json)
         case ["help"], ["--help"]:
             return .help
-        case ["on"], ["off"], ["doctor"], ["uninstall"]:
+        case ["on"], ["off"], ["doctor"]:
             guard let argument = arguments.first,
                   let command = ControlCommand(rawValue: argument) else { return nil }
             return .control(command)
+        case ["re-enroll"]:
+            return .reEnroll
+        case ["uninstall"]:
+            return .uninstall(.preserveState)
+        case ["uninstall", "--everything"]:
+            return .uninstall(.everything)
         case ["update"]:
             return .updateCheck
         case ["daemon"]:
@@ -69,6 +77,209 @@ public enum CompanionCommandRouter {
         first.isFileURL &&
             second.isFileURL &&
             first.standardizedFileURL.path == second.standardizedFileURL.path
+    }
+}
+
+public enum LifecycleTerminalError: Error, Equatable, Sendable {
+    case unavailable
+    case invalidInput
+    case endOfFile
+    case interrupted
+}
+
+typealias TerminalSetAttributes = (
+    Int32,
+    Int32,
+    UnsafePointer<termios>
+) -> Int32
+typealias TerminalWriteBytes = (
+    Int32,
+    UnsafeRawPointer?,
+    Int
+) -> Int
+
+private let lifecycleTerminalSignalLock = NSLock()
+private nonisolated(unsafe) var lifecycleTerminalSignalWriteDescriptor: Int32 = -1
+
+private func lifecycleTerminalSignalHandler(_ signal: Int32) {
+    let descriptor = lifecycleTerminalSignalWriteDescriptor
+    guard descriptor >= 0 else { return }
+    var byte = UInt8(truncatingIfNeeded: signal)
+    _ = Darwin.write(descriptor, &byte, 1)
+}
+
+public struct LifecycleTerminalReader: @unchecked Sendable {
+    private let path: String
+    private let setAttributes: TerminalSetAttributes
+    private let writeBytes: TerminalWriteBytes
+
+    public init(path: String = "/dev/tty") {
+        self.path = path
+        setAttributes = { Darwin.tcsetattr($0, $1, $2) }
+        writeBytes = { Darwin.write($0, $1, $2) }
+    }
+
+    init(
+        testPath path: String,
+        setAttributes: @escaping TerminalSetAttributes = { Darwin.tcsetattr($0, $1, $2) },
+        writeBytes: @escaping TerminalWriteBytes = { Darwin.write($0, $1, $2) }
+    ) {
+        self.path = path
+        self.setAttributes = setAttributes
+        self.writeBytes = writeBytes
+    }
+
+    public func validate() throws {
+        let descriptor = try openValidatedTerminal()
+        defer { Darwin.close(descriptor) }
+        var attributes = termios()
+        guard Darwin.tcgetattr(descriptor, &attributes) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+    }
+
+    public func readLine(prompt: String, maximumBytes: Int) throws -> String {
+        guard (1...64).contains(maximumBytes) else {
+            throw LifecycleTerminalError.invalidInput
+        }
+        let descriptor = try openValidatedTerminal()
+        defer { Darwin.close(descriptor) }
+
+        var original = termios()
+        guard Darwin.tcgetattr(descriptor, &original) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+        var privateInput = original
+        privateInput.c_lflag &= ~tcflag_t(ECHO)
+        guard setAttributes(descriptor, TCSANOW, &privateInput) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+        defer { _ = setAttributes(descriptor, TCSANOW, &original) }
+
+        let signalTrap = try LifecycleTerminalSignalTrap()
+        defer { signalTrap.restore() }
+        let originalFlags = Darwin.fcntl(descriptor, F_GETFL)
+        guard originalFlags >= 0,
+              Darwin.fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+        defer { _ = Darwin.fcntl(descriptor, F_SETFL, originalFlags) }
+        try write(prompt, to: descriptor)
+
+        var bytes = [UInt8]()
+        while true {
+            if signalTrap.consumeSignal() { throw LifecycleTerminalError.interrupted }
+            var byte: UInt8 = 0
+            let count = withUnsafeMutablePointer(to: &byte) {
+                Darwin.read(descriptor, $0, 1)
+            }
+            if count == 0 { throw LifecycleTerminalError.endOfFile }
+            if count < 0 {
+                if errno == EINTR { continue }
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    Darwin.usleep(10_000)
+                    continue
+                }
+                throw LifecycleTerminalError.unavailable
+            }
+            if byte == 0x0A || byte == 0x0D {
+                try write("\n", to: descriptor)
+                break
+            }
+            guard bytes.count < maximumBytes else {
+                throw LifecycleTerminalError.invalidInput
+            }
+            bytes.append(byte)
+        }
+        guard !bytes.isEmpty, let line = String(bytes: bytes, encoding: .utf8) else {
+            throw LifecycleTerminalError.invalidInput
+        }
+        return line
+    }
+
+    private func openValidatedTerminal() throws -> Int32 {
+        let descriptor = Darwin.open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw LifecycleTerminalError.unavailable }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFCHR,
+              metadata.st_uid == 0 || metadata.st_uid == Darwin.geteuid() else {
+            Darwin.close(descriptor)
+            throw LifecycleTerminalError.unavailable
+        }
+        return descriptor
+    }
+
+    private func write(_ value: String, to descriptor: Int32) throws {
+        let data = Data(value.utf8)
+        var offset = 0
+        while offset < data.count {
+            let count = data.withUnsafeBytes { bytes in
+                writeBytes(
+                    descriptor,
+                    bytes.baseAddress?.advanced(by: offset),
+                    data.count - offset
+                )
+            }
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { throw LifecycleTerminalError.unavailable }
+            offset += count
+        }
+    }
+}
+
+private final class LifecycleTerminalSignalTrap {
+    private static let signals = [SIGINT, SIGTERM, SIGHUP, SIGQUIT]
+    private var descriptors = [Int32](repeating: -1, count: 2)
+    private var previousHandlers: [(Int32, sig_t?)] = []
+    private var restored = false
+
+    init() throws {
+        lifecycleTerminalSignalLock.lock()
+        guard lifecycleTerminalSignalWriteDescriptor < 0 else {
+            lifecycleTerminalSignalLock.unlock()
+            throw LifecycleTerminalError.unavailable
+        }
+        guard descriptors.withUnsafeMutableBufferPointer({ Darwin.pipe($0.baseAddress!) }) == 0 else {
+            lifecycleTerminalSignalLock.unlock()
+            throw LifecycleTerminalError.unavailable
+        }
+        _ = Darwin.fcntl(descriptors[0], F_SETFD, FD_CLOEXEC)
+        _ = Darwin.fcntl(descriptors[1], F_SETFD, FD_CLOEXEC)
+        _ = Darwin.fcntl(
+            descriptors[0],
+            F_SETFL,
+            Darwin.fcntl(descriptors[0], F_GETFL) | O_NONBLOCK
+        )
+        _ = Darwin.fcntl(
+            descriptors[1],
+            F_SETFL,
+            Darwin.fcntl(descriptors[1], F_GETFL) | O_NONBLOCK
+        )
+        lifecycleTerminalSignalWriteDescriptor = descriptors[1]
+        for signalValue in Self.signals {
+            let previous = Darwin.signal(signalValue, lifecycleTerminalSignalHandler)
+            previousHandlers.append((signalValue, previous))
+        }
+    }
+
+    deinit { restore() }
+
+    func consumeSignal() -> Bool {
+        var signalByte: UInt8 = 0
+        return Darwin.read(descriptors[0], &signalByte, 1) == 1
+    }
+
+    func restore() {
+        guard !restored else { return }
+        restored = true
+        for (signalValue, previous) in previousHandlers.reversed() {
+            _ = Darwin.signal(signalValue, previous)
+        }
+        lifecycleTerminalSignalWriteDescriptor = -1
+        if descriptors[0] >= 0 { Darwin.close(descriptors[0]) }
+        if descriptors[1] >= 0 { Darwin.close(descriptors[1]) }
+        lifecycleTerminalSignalLock.unlock()
     }
 }
 
