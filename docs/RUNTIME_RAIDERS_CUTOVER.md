@@ -620,13 +620,11 @@ backfill: applying it must not insert presence from existing Runs, events,
 devices, `token_events`, or `players.last_token_at`, and it must not edit,
 delete, merge, or retarget any account, Raider, enrollment, device, Run, score,
 or other history row. On a first migration, require both the migration marker
-and an empty table before canary collection; any row is then a NO-GO. On a
-retry, retained presence rows are expected and must not be deleted merely to
-satisfy the first-migration gate. Keep collection off and prove, at candidate
-start and again before canary authorization, that every retained server receipt
-is strictly older than the configured `pause_after_minutes` activity window.
-If any retained receipt is still active at either observation, wait with
-collection off until it expires; do not truncate, rewrite, or backdate it.
+and an empty table after startup and before canary collection; any row is then
+a NO-GO. On a retry, retained presence rows are expected and must not be deleted
+merely to satisfy the first-migration gate. Follow the stopped-service pre-start
+expiry proof and the post-start recheck below; do not truncate, rewrite, or
+backdate retained rows.
 
 For this combined scoring-v2 plus presence release path, the bounded one-event
 canary below supersedes legacy section 6. Do not run section 6's two-surface,
@@ -669,35 +667,48 @@ Perform the release boundary in this order:
 3. While the service is stopped, install only the independently reviewed
    presence candidate SHA and preserve the already reviewed scoring-v2
    environment.
-4. Start once. Verify database integrity, migration marker
-   `020_raider_presence`, the applicable first-migration zero-row or retry
-   retained-row-expiry gate above, public `/health`, and a public `/tv/stream`
-   version equal to the reviewed candidate's short SHA. Reconfirm
-   `"paused":true`. Any mismatch is a NO-GO; do not enable a canary.
+4. While the service remains stopped and before any candidate start, determine
+   from read-only schema evidence whether this is the first migration or a
+   retry. On a retry, use `PRAGMA query_only=ON` evidence from `settings` and
+   `raider_presence`, plus the recorded current 13-digit epoch, to prove every
+   retained `last_run_activity_at` satisfies
+   `current_time - last_run_activity_at > pause_after_minutes * 60000`. If any
+   receipt remains active, keep the service and candidate stopped and collection
+   off, wait for it to expire, then take fresh read-only config, presence, and
+   current-time evidence and recheck. Do not delete retained rows to pass this
+   gate. On a first deployment, retain the post-start zero-row requirement.
+5. Start once. Verify database integrity, migration marker
+   `020_raider_presence`, public `/health`, and a public `/tv/stream` version
+   equal to the reviewed candidate's short SHA. For a first deployment, prove
+   the table still has zero rows. For a retry, take fresh read-only config,
+   presence, and current-time evidence and prove every retained receipt is still
+   strictly outside the configured activity window. Reconfirm public
+   `"paused":true`. Any mismatch is a NO-GO; keep collection off and do not
+   request or enable a canary.
 
 STOP — collection remains off without separate approval
 
 Only a new, explicitly recorded one-canary collection approval permits the
 remaining acceptance steps:
 
-5. Record the canary Raider's Raid Power baseline, then enable exactly one
+6. Record the canary Raider's Raid Power baseline, then enable exactly one
    approved canary only long enough to deliver one fresh, newly accepted
    zero-credit opening event. Do not activate another Mac or the office. If the
    event does not arrive in the authorized window, turn the canary off and stop;
    do not retry by broadening collection.
-6. Immediately after that one event—or after any error—run `raiders off` and
+7. Immediately after that one event—or after any error—run `raiders off` and
    prove collection is disabled. Keep it off for every remaining observation.
-7. From content-free evidence, verify the event recorded server-receipt
+8. From content-free evidence, verify the event recorded server-receipt
    presence, the dungeon woke immediately, public `activeRaiders` includes the
    canary, the new Run award is zero, and the Raider's Raid Power remains at its
    recorded baseline.
-8. Verify an exact duplicate delivery does not advance the stored presence
+9. Verify an exact duplicate delivery does not advance the stored presence
    timestamp or Raid Power. Do not create a second new event to prove this.
-9. Measure from the original accepted receipt. Verify the dungeon remains awake
-   through the configured 15-minute window, then sleeps just after that boundary
-   with the canary absent from `activeRaiders`; the duplicate must not extend
-   the deadline.
-10. Record the migration, health, version, wake, unchanged-Raid-Power,
+10. Measure from the original accepted receipt. Verify the dungeon remains
+    awake through the configured 15-minute window, then sleeps just after that
+    boundary with the canary absent from `activeRaiders`; the duplicate must not
+    extend the deadline.
+11. Record the migration, health, version, wake, unchanged-Raid-Power,
     duplicate, sleep, and verified-off evidence. Office activation,
     re-enrollment, and wider collection remain separately blocked.
 
