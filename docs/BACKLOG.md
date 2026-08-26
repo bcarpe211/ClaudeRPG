@@ -708,6 +708,13 @@ credentials, local paths, or provider-record content.
       must finish by prompting for a new short-lived enrollment code from the
       Raider selected in **Raider settings → Companion Setup**. Browser login
       alone must never silently retarget an installed device.
+  - [x] Server: atomically consume the target enrollment, revoke the old
+        device, insert the client-generated replacement, and make exact replay
+        deterministic without changing account or game history.
+  - [x] Server: provide active-device configuration recovery for an ambiguous
+        response or interrupted local commit.
+  - [ ] Local: implement and verify the owner-only coordinator, recovery
+        journal, private prompt, safe state reset, and managed-agent lifecycle.
 - [ ] **Make pending-event disposition explicit.** Before replacing enrollment,
       show the queued-event count and require either a deliberate, documented
       delivery-to-current-Raider choice or a deliberate discard choice. Never
@@ -715,11 +722,21 @@ credentials, local paths, or provider-record content.
       re-enrollment must revoke the prior device credential before the new one
       can collect, and historical scores/Runs remain attached to their original
       Raider.
+  - [x] Server: reject the old credential after replacement and preserve every
+        Run, event, score, reward, inventory row, player total, and Run owner
+        across replacement, recovery, and revocation.
+  - [ ] Local: implement and verify bounded delivery, explicit discard, cancel,
+        partial-failure recovery, and the rule that queued work is never sent in
+        a replacement request.
 - [ ] **Provide a true, equally bounded removal option.** It must unregister the
       managed agent and remove only the companion's app, launcher, owner-only
       state, and outbox; it must not touch Codex sessions or unrelated user data.
       Distinguish “stop and preserve state” from “remove local companion state”
       in both command names and output.
+  - [x] Server: provide idempotent current-device revocation that immediately
+        blocks configuration recovery, events, and heartbeat.
+  - [ ] Local: implement and verify recoverable uninstall and confirmed
+        `--everything` allowlisted removal.
 - [x] **Make `raiders status` human-readable by default.** Render collection
       state (`Off`, `Preparing`, or `Ready`), daemon/background-agent health,
       supported surfaces, active Runs, queued events, installed/available

@@ -89,8 +89,10 @@ function post(path: string, body: object, token?: string) {
   return token === undefined ? outgoing : outgoing.set('authorization', `Bearer ${token}`);
 }
 
-async function enrollDevice(): Promise<{ deviceId: string; deviceToken: string }> {
-  const issued = await post('/api/raiders/enrollments', { raider_key: player.auth_token });
+async function enrollDevice(
+  raider: { auth_token: string } = player,
+): Promise<{ deviceId: string; deviceToken: string }> {
+  const issued = await post('/api/raiders/enrollments', { raider_key: raider.auth_token });
   expect(issued.status).toBe(201);
   const issuedBody = issued.body as { install_command: string; enrollment_code: string };
   const code = issuedBody.enrollment_code;
@@ -110,6 +112,38 @@ async function enrollDevice(): Promise<{ deviceId: string; deviceToken: string }
   const enrollment = enrolled.body as { device_token: string; enabled_surfaces: string[] };
   expect(enrollment.enabled_surfaces).toEqual(['codex_desktop', 'codex_cli']);
   return { deviceId, deviceToken: enrollment.device_token };
+}
+
+function accountAndGameTablesSnapshot(): { tables: string[]; bytes: string } {
+  const lifecycleTables = new Set([
+    'raider_enrollments',
+    'raider_devices',
+    'raider_device_replacements',
+  ]);
+  const tables = (db.prepare(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table'
+      AND name NOT LIKE 'sqlite_%'
+      AND name <> '_migrations'
+    ORDER BY name
+  `).all() as { name: string }[])
+    .map((row) => row.name)
+    .filter((table) => !lifecycleTables.has(table));
+
+  const snapshots = tables.map((table) => {
+    const primaryKey = (db.prepare(`PRAGMA table_info("${table}")`).all() as {
+      name: string;
+      pk: number;
+    }[])
+      .filter((column) => column.pk > 0)
+      .sort((left, right) => left.pk - right.pk)
+      .map((column) => `"${column.name}"`);
+    const orderBy = primaryKey.length > 0 ? primaryKey.join(', ') : 'rowid';
+    return [table, db.prepare(`SELECT * FROM "${table}" ORDER BY ${orderBy}`).all()];
+  });
+
+  return { tables, bytes: JSON.stringify(snapshots) };
 }
 
 function armGoldPotion(): void {
@@ -460,5 +494,186 @@ describe('Runtime Raiders local integration gate', () => {
       expect(rejected.body).toEqual({ reason: 'surface_disabled' });
       expect(scoringProgressionSnapshot()).toEqual(before);
     }
+  });
+
+  it('preserves every account and game row across cross-Raider replacement, recovery, and revocation', async () => {
+    const targetPlayer = createPlayer(
+      db,
+      { name: 'Target Raider', class_key: 'wizard', gender: 'F' },
+      NOW + 1,
+    );
+    const oldDevice = await enrollDevice(player);
+    const targetDevice = await enrollDevice(targetPlayer);
+    const oldHistory = runEvent(oldDevice.deviceId, {
+      run_key: hexKey(40_001),
+      state: 'completed',
+      usage: { input: 111, output: 11 },
+    });
+    const targetHistory = runEvent(targetDevice.deviceId, {
+      surface: 'codex_cli',
+      run_key: hexKey(40_002),
+      state: 'completed',
+      usage: { input: 222, output: 22 },
+    });
+
+    for (const [device, event] of [
+      [oldDevice, oldHistory],
+      [targetDevice, targetHistory],
+    ] as const) {
+      const accepted = await post(
+        '/api/runs/events',
+        { events: [event] },
+        device.deviceToken,
+      );
+      expect(accepted.status).toBe(200);
+      expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    }
+
+    applyGoldMutation(db, {
+      playerId: player.id,
+      amount: 400_000,
+      reason: 'encounter_reward',
+      sourceTable: 'runtime_raiders_e2e',
+      sourceId: `reward-${player.id}`,
+      now: NOW + 2,
+    });
+    applyGoldMutation(db, {
+      playerId: targetPlayer.id,
+      amount: 500_000,
+      reason: 'encounter_reward',
+      sourceTable: 'runtime_raiders_e2e',
+      sourceId: `reward-${targetPlayer.id}`,
+      now: NOW + 3,
+    });
+    expect(purchaseConsumable(db, {
+      playerId: player.id,
+      skuId: 'potion_gold_t1',
+      quantity: 1,
+      expectedUnitPrice: 100_000,
+      requestId: `runtime-raiders-history-${player.id}`,
+      now: NOW + 4,
+      timeZone: 'America/New_York',
+    })).toMatchObject({ ok: true, inventory: 1 });
+    expect(purchaseConsumable(db, {
+      playerId: targetPlayer.id,
+      skuId: 'potion_damage_t1',
+      quantity: 2,
+      expectedUnitPrice: 150_000,
+      requestId: `runtime-raiders-history-${targetPlayer.id}`,
+      now: NOW + 5,
+      timeZone: 'America/New_York',
+    })).toMatchObject({ ok: true, inventory: 2 });
+
+    const distinctHistories = db.prepare(`
+      SELECT players.id, players.effective_tokens, players.gold,
+             runs.raid_power, player_inventory.sku, player_inventory.quantity
+      FROM players
+      JOIN runs ON runs.player_id = players.id
+      JOIN player_inventory ON player_inventory.player_id = players.id
+      WHERE players.id IN (?, ?)
+      ORDER BY players.id
+    `).all(player.id, targetPlayer.id);
+    expect(distinctHistories).toEqual([
+      {
+        id: player.id,
+        effective_tokens: 1011,
+        gold: 300_000,
+        raid_power: 1011,
+        sku: 'potion_gold_t1',
+        quantity: 1,
+      },
+      {
+        id: targetPlayer.id,
+        effective_tokens: 1133,
+        gold: 200_000,
+        raid_power: 1133,
+        sku: 'potion_damage_t1',
+        quantity: 2,
+      },
+    ]);
+
+    const issued = await post('/api/raiders/enrollments', {
+      raider_key: targetPlayer.auth_token,
+    });
+    expect(issued.status).toBe(201);
+    const targetCode = (issued.body as { enrollment_code: string }).enrollment_code;
+    const oldQueuedWork = runEvent(oldDevice.deviceId, {
+      run_key: hexKey(40_003),
+      usage: { input: 333 },
+    });
+    const replacementDeviceId = randomUUID();
+    const replacementDeviceToken = `${randomUUID().replaceAll('-', '')}${'R'.repeat(11)}`;
+    const replacementRequest = {
+      code: targetCode,
+      operation_id: randomUUID(),
+      replacement_device_id: replacementDeviceId,
+      replacement_device_token: replacementDeviceToken,
+      companion_version: '0.4.9',
+    };
+    const replacementRequestBytes = JSON.stringify(replacementRequest);
+    expect(Object.keys(replacementRequest).sort()).toEqual([
+      'code',
+      'companion_version',
+      'operation_id',
+      'replacement_device_id',
+      'replacement_device_token',
+    ]);
+    expect(replacementRequestBytes).not.toContain(oldQueuedWork.run_key);
+    expect(replacementRequestBytes).not.toContain(oldQueuedWork.idempotency_key);
+
+    const before = accountAndGameTablesSnapshot();
+    const runOwnersBefore = db.prepare(`
+      SELECT id, player_id FROM runs ORDER BY id
+    `).all();
+
+    const replaced = await post(
+      '/api/raiders/re-enroll',
+      replacementRequest,
+      oldDevice.deviceToken,
+    );
+    expect(replaced.status).toBe(201);
+    expect(replaced.body).toEqual({
+      device_id: replacementDeviceId,
+      dedupe_secret: expect.stringMatching(/^[0-9a-f]{64}$/),
+      server_url: 'http://127.0.0.1:1',
+      cutover_at: CUTOVER,
+      enabled_surfaces: ['codex_desktop', 'codex_cli'],
+    });
+
+    const recovered = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('authorization', `Bearer ${replacementDeviceToken}`);
+    expect(recovered.status).toBe(200);
+    expect(recovered.body).toEqual(replaced.body);
+
+    const rejectedQueuedWork = await post(
+      '/api/runs/events',
+      { events: [oldQueuedWork] },
+      oldDevice.deviceToken,
+    );
+    expect(rejectedQueuedWork.status).toBe(401);
+    expect(rejectedQueuedWork.body).toEqual({ reason: 'unauthorized' });
+
+    const revoked = await post(
+      '/api/raiders/devices/revoke-current',
+      {},
+      replacementDeviceToken,
+    );
+    expect(revoked.status).toBe(200);
+    expect(revoked.body).toEqual({ revoked: true });
+    const unavailable = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('authorization', `Bearer ${replacementDeviceToken}`);
+    expect(unavailable.status).toBe(401);
+    expect(unavailable.body).toEqual({ reason: 'unauthorized' });
+
+    const after = accountAndGameTablesSnapshot();
+    expect(after.tables).toEqual(before.tables);
+    expect(after.bytes).toBe(before.bytes);
+    expect(db.prepare('SELECT id, player_id FROM runs ORDER BY id').all())
+      .toEqual(runOwnersBefore);
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM run_events WHERE event_key = ?
+    `).get(oldQueuedWork.idempotency_key)).toEqual({ count: 0 });
   });
 });
