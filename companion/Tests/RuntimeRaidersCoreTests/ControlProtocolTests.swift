@@ -4,6 +4,46 @@ import XCTest
 @testable import RuntimeRaidersCore
 
 final class ControlProtocolTests: XCTestCase {
+    func testCompanionLifecyclePathsExposeOnlyTheExactOwnedInventory() throws {
+        let paths = try CompanionLifecyclePaths(
+            homeDirectory: URL(fileURLWithPath: "/Users/test", isDirectory: true)
+        )
+
+        XCTAssertEqual(
+            paths.agent.supportDirectory.path,
+            "/Users/test/Library/Application Support/Runtime Raiders"
+        )
+        XCTAssertEqual(
+            paths.supportShim.path,
+            "/Users/test/Library/Application Support/Runtime Raiders/raiders"
+        )
+        XCTAssertEqual(paths.commandShim.path, "/Users/test/.local/bin/raiders")
+        XCTAssertEqual(
+            paths.legacyPlist.path,
+            "/Users/test/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist"
+        )
+        XCTAssertEqual(
+            paths.enrollment.path,
+            "/Users/test/Library/Application Support/Runtime Raiders/state/enrollment.json"
+        )
+        XCTAssertEqual(paths.recoveryJournal.lastPathComponent, "re-enrollment.json")
+        XCTAssertEqual(paths.lifecycleLock.lastPathComponent, "lifecycle.lock")
+    }
+
+    func testCompanionLifecyclePathsRejectNonFileRelativeAndNonstandardHomes() {
+        XCTAssertThrowsError(
+            try CompanionLifecyclePaths(homeDirectory: URL(string: "https://example.test/home")!)
+        )
+        XCTAssertThrowsError(
+            try CompanionLifecyclePaths(homeDirectory: URL(string: "relative-home")!)
+        )
+        XCTAssertThrowsError(
+            try CompanionLifecyclePaths(
+                homeDirectory: URL(fileURLWithPath: "/Users/test/../other", isDirectory: true)
+            )
+        )
+    }
+
     func testAgentPathsExposeOneStableApplicationWithoutChangingStatePaths() {
         let root = URL(fileURLWithPath: "/Users/test/Library/Application Support")
         let paths = AgentPaths(applicationSupportDirectory: root)

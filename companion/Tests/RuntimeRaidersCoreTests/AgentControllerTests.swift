@@ -1975,6 +1975,232 @@ final class AgentControllerTests: XCTestCase {
         XCTAssertThrowsError(try EnrollmentConfiguration.load(from: file, allowsTestOrigin: true))
     }
 
+    func testEnrollmentConfigurationPersistsExactPrivateVersionOneWire() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-enrollment-persist-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lifecycle = try CompanionLifecyclePaths(homeDirectory: root)
+        try FileManager.default.createDirectory(
+            at: lifecycle.agent.stateDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: lifecycle.agent.stateDirectory.path
+        )
+        let configuration = try makeEnrollmentConfiguration(
+            surfaces: [.codexCLI, .codexDesktop]
+        )
+
+        try configuration.persist(to: lifecycle.enrollment)
+
+        XCTAssertEqual(
+            try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment),
+            configuration
+        )
+        XCTAssertEqual(try permissions(lifecycle.enrollment), 0o600)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: lifecycle.enrollment))
+                as? [String: Any]
+        )
+        XCTAssertEqual(Set(object.keys), [
+            "version", "device_id", "device_token", "dedupe_secret",
+            "server_url", "cutover_at", "enabled_surfaces",
+        ])
+        XCTAssertEqual(
+            object["dedupe_secret"] as? String,
+            String(repeating: "ab", count: 32)
+        )
+        XCTAssertEqual(
+            object["enabled_surfaces"] as? [String],
+            ["codex_cli", "codex_desktop"]
+        )
+    }
+
+    func testEnrollmentPersistenceRejectsSymlinkAndRetainedDirectorySwap() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-enrollment-swap-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lifecycle = try CompanionLifecyclePaths(homeDirectory: root)
+        try FileManager.default.createDirectory(
+            at: lifecycle.agent.stateDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: lifecycle.agent.stateDirectory.path
+        )
+        let configuration = try makeEnrollmentConfiguration()
+        let outside = root.appendingPathComponent("outside-enrollment")
+        let original = Data("DO_NOT_EXPORT_EXISTING_ENROLLMENT".utf8)
+        try original.write(to: outside)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: outside.path)
+        try FileManager.default.createSymbolicLink(
+            at: lifecycle.enrollment,
+            withDestinationURL: outside
+        )
+
+        XCTAssertThrowsError(try configuration.persist(to: lifecycle.enrollment))
+        XCTAssertEqual(try Data(contentsOf: outside), original)
+
+        try FileManager.default.removeItem(at: lifecycle.enrollment)
+        let retained = try VerifiedStateDirectory(url: lifecycle.agent.stateDirectory)
+        let pinned = root.appendingPathComponent("state-pinned", isDirectory: true)
+        try FileManager.default.moveItem(at: lifecycle.agent.stateDirectory, to: pinned)
+        try FileManager.default.createDirectory(
+            at: lifecycle.agent.stateDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+
+        XCTAssertThrowsError(
+            try configuration.persist(to: lifecycle.enrollment, stateDirectory: retained)
+        )
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: pinned.appendingPathComponent("enrollment.json").path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycle.enrollment.path))
+    }
+
+    func testResetForReEnrollmentCreatesDisabledEmptyStateAndPreservesOwnedRecoveryData() throws {
+        try withHarness { harness in
+            let provider = try harness.makeFile("reset-active.jsonl", contents: Data())
+            try harness.controller.install(existingFiles: [provider])
+            try append(runPrefix(nativeID: "reset-active-run"), to: provider)
+            try harness.controller.processChangedFiles([provider])
+            XCTAssertEqual(harness.controller.activeRunCount, 1)
+
+            let enrollmentFile = harness.paths.stateDirectory.appendingPathComponent(
+                "enrollment.json"
+            )
+            let enrollment = try makeEnrollmentConfiguration()
+            try enrollment.persist(to: enrollmentFile)
+            try harness.outbox.enqueue(makeEvent(run: 42, observedAtMS: now))
+            let outboxBefore = try harness.outbox.records(limit: 100)
+                .reduce(into: [String: Data]()) {
+                    $0[$1.url.lastPathComponent] = $1.encodedEvent
+                }
+            let enrollmentBefore = try Data(contentsOf: enrollmentFile)
+            let updateBefore = Data(#"{"version":1,"available":"0.4.9"}"#.utf8)
+            try updateBefore.write(to: harness.paths.updateState)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: harness.paths.updateState.path
+            )
+
+            try AgentController.resetForReEnrollment(
+                paths: harness.paths,
+                surfaces: [.codexCLI]
+            )
+
+            XCTAssertEqual(
+                try AgentController.persistedCollectorState(
+                    paths: harness.paths,
+                    surfaces: [.codexCLI]
+                ),
+                .disabled
+            )
+            XCTAssertEqual(
+                try AgentController.persistedAdapterFacts(
+                    paths: harness.paths,
+                    surfaces: [.codexCLI]
+                ),
+                PersistedAdapterFacts(activeRunCount: 0, compatibilityReasons: [])
+            )
+            let stateObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: harness.paths.stateDirectory
+                        .appendingPathComponent("collector-state.json"))
+                ) as? [String: Any]
+            )
+            XCTAssertEqual(stateObject["version"] as? Int, 1)
+            XCTAssertEqual(stateObject["enabled"] as? Bool, false)
+            XCTAssertEqual((stateObject["files"] as? [String: Any])?.count, 0)
+            XCTAssertNil(stateObject["deferredSeedPaths"])
+            XCTAssertEqual(try Data(contentsOf: enrollmentFile), enrollmentBefore)
+            XCTAssertEqual(try Data(contentsOf: harness.paths.updateState), updateBefore)
+            XCTAssertEqual(
+                try harness.outbox.records(limit: 100)
+                    .reduce(into: [String: Data]()) {
+                        $0[$1.url.lastPathComponent] = $1.encodedEvent
+                    },
+                outboxBefore
+            )
+        }
+    }
+
+    func testResetForReEnrollmentRejectsSymlinkAndRetainedDirectorySwapBeforeMutation() throws {
+        try withHarness { harness in
+            let stateFile = harness.paths.stateDirectory
+                .appendingPathComponent("collector-state.json")
+            let outside = harness.root.appendingPathComponent("outside-collector-state")
+            let original = try Data(contentsOf: stateFile)
+            try original.write(to: outside)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: outside.path
+            )
+            try FileManager.default.removeItem(at: stateFile)
+            try FileManager.default.createSymbolicLink(at: stateFile, withDestinationURL: outside)
+
+            XCTAssertThrowsError(
+                try AgentController.resetForReEnrollment(
+                    paths: harness.paths,
+                    surfaces: [.codexCLI]
+                )
+            )
+            XCTAssertEqual(try Data(contentsOf: outside), original)
+
+            try FileManager.default.removeItem(at: stateFile)
+            try original.write(to: stateFile)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: stateFile.path
+            )
+            let retained = try VerifiedStateDirectory(url: harness.paths.stateDirectory)
+            let pinned = harness.paths.supportDirectory.appendingPathComponent(
+                "state-pinned-reset",
+                isDirectory: true
+            )
+            try FileManager.default.moveItem(at: harness.paths.stateDirectory, to: pinned)
+            try FileManager.default.createDirectory(
+                at: harness.paths.stateDirectory,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+
+            XCTAssertThrowsError(
+                try AgentController.resetForReEnrollment(
+                    stateDirectory: retained,
+                    surfaces: [.codexCLI]
+                )
+            )
+            XCTAssertEqual(
+                try Data(contentsOf: pinned.appendingPathComponent("collector-state.json")),
+                original
+            )
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: harness.paths.stateDirectory
+                    .appendingPathComponent("collector-state.json").path
+            ))
+        }
+    }
+
+    private func makeEnrollmentConfiguration(
+        surfaces: [RunSurface] = [.codexCLI]
+    ) throws -> EnrollmentConfiguration {
+        try EnrollmentConfiguration(
+            deviceID: "00000000-0000-4000-8000-000000000001",
+            deviceToken: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            dedupeSecret: Data(repeating: 0xab, count: 32),
+            serverURL: URL(string: "https://raiders.redlattice.com")!,
+            cutoverAtMS: 1_700_000_000_000,
+            enabledSurfaces: surfaces
+        )
+    }
+
     private func permissions(_ url: URL) throws -> Int {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         return try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue & 0o777

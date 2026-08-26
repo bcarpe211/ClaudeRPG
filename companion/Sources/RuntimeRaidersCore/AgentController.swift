@@ -204,6 +204,93 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
     public let cutoverAtMS: Int64
     public let enabledSurfaces: [RunSurface]
 
+    public init(
+        deviceID: String,
+        deviceToken: String,
+        dedupeSecret: Data,
+        serverURL: URL,
+        cutoverAtMS: Int64,
+        enabledSurfaces: [RunSurface]
+    ) throws {
+        guard UUID(uuidString: deviceID) != nil,
+              deviceToken.range(
+                of: #"^[A-Za-z0-9_-]{43}$"#,
+                options: .regularExpression
+              ) != nil,
+              dedupeSecret.count == 32,
+              serverURL.absoluteString == "https://raiders.redlattice.com",
+              (0...9_007_199_254_740_991).contains(cutoverAtMS),
+              !enabledSurfaces.isEmpty,
+              Set(enabledSurfaces).count == enabledSurfaces.count,
+              enabledSurfaces.allSatisfy({ $0 == .codexDesktop || $0 == .codexCLI }) else {
+            throw EnrollmentConfigurationError.invalidConfiguration
+        }
+        self.init(
+            validatedDeviceID: deviceID,
+            deviceToken: deviceToken,
+            dedupeSecret: dedupeSecret,
+            serverURL: serverURL,
+            cutoverAtMS: cutoverAtMS,
+            enabledSurfaces: enabledSurfaces,
+            sortEnabledSurfaces: true
+        )
+    }
+
+    private init(
+        validatedDeviceID deviceID: String,
+        deviceToken: String,
+        dedupeSecret: Data,
+        serverURL: URL,
+        cutoverAtMS: Int64,
+        enabledSurfaces: [RunSurface],
+        sortEnabledSurfaces: Bool
+    ) {
+        self.deviceID = deviceID
+        self.deviceToken = deviceToken
+        self.dedupeSecret = dedupeSecret
+        self.serverURL = serverURL
+        self.cutoverAtMS = cutoverAtMS
+        self.enabledSurfaces = sortEnabledSurfaces
+            ? enabledSurfaces.sorted { $0.rawValue < $1.rawValue }
+            : enabledSurfaces
+    }
+
+    public func persist(to file: URL) throws {
+        let stateDirectory = try VerifiedStateDirectory(url: file.deletingLastPathComponent())
+        try persist(to: file, stateDirectory: stateDirectory)
+    }
+
+    func persist(to file: URL, stateDirectory: VerifiedStateDirectory) throws {
+        guard file.isFileURL,
+              file.path.hasPrefix("/"),
+              file.standardized.path == file.path,
+              file.lastPathComponent == "enrollment.json",
+              file.deletingLastPathComponent().path == stateDirectory.url.path,
+              serverURL.absoluteString == "https://raiders.redlattice.com" else {
+            throw EnrollmentConfigurationError.invalidConfiguration
+        }
+        let wire = EnrollmentWire(
+            version: 1,
+            deviceID: deviceID,
+            deviceToken: deviceToken,
+            dedupeSecret: dedupeSecret.map { String(format: "%02x", $0) }.joined(),
+            serverURL: serverURL.absoluteString,
+            cutoverAtMS: cutoverAtMS,
+            enabledSurfaces: enabledSurfaces.sorted { $0.rawValue < $1.rawValue }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        do {
+            try stateDirectory.writePrivateFile(
+                encoder.encode(wire),
+                name: file.lastPathComponent,
+                maximumExistingBytes: 65_536
+            )
+        } catch {
+            throw EnrollmentConfigurationError.invalidFile
+        }
+    }
+
     public static func load(from file: URL) throws -> EnrollmentConfiguration {
         try load(from: file, allowsTestOrigin: false)
     }
@@ -292,16 +379,17 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
             throw EnrollmentConfigurationError.invalidConfiguration
         }
         return EnrollmentConfiguration(
-            deviceID: wire.deviceID,
+            validatedDeviceID: wire.deviceID,
             deviceToken: wire.deviceToken,
             dedupeSecret: secret,
             serverURL: serverURL,
             cutoverAtMS: wire.cutoverAtMS,
-            enabledSurfaces: wire.enabledSurfaces
+            enabledSurfaces: wire.enabledSurfaces,
+            sortEnabledSurfaces: false
         )
     }
 
-    private struct EnrollmentWire: Decodable {
+    private struct EnrollmentWire: Codable {
         let version: Int
         let deviceID: String
         let deviceToken: String
@@ -539,6 +627,47 @@ public final class AgentController: @unchecked Sendable {
             directoryDescriptor: descriptor,
             name: "collector-state.json"
         )
+    }
+
+    public static func resetForReEnrollment(
+        paths: AgentPaths,
+        surfaces: [RunSurface]
+    ) throws {
+        let stateDirectory: VerifiedStateDirectory
+        do {
+            stateDirectory = try VerifiedStateDirectory(url: paths.stateDirectory)
+        } catch {
+            throw AgentControllerError.invalidState
+        }
+        try resetForReEnrollment(stateDirectory: stateDirectory, surfaces: surfaces)
+    }
+
+    static func resetForReEnrollment(
+        stateDirectory: VerifiedStateDirectory,
+        surfaces: [RunSurface]
+    ) throws {
+        do {
+            guard let data = try stateDirectory.readPrivateFile(
+                name: "collector-state.json",
+                maximumBytes: 4 * 1_024 * 1_024
+            ),
+            let current = try? JSONDecoder().decode(PersistedState.self, from: data),
+            valid(current, surfaces: surfaces) else {
+                throw AgentControllerError.invalidState
+            }
+            let reset = PersistedState(version: 1, enabled: false, files: [:])
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            try stateDirectory.writePrivateFile(
+                encoder.encode(reset),
+                name: "collector-state.json",
+                maximumExistingBytes: 4 * 1_024 * 1_024
+            )
+        } catch let error as AgentControllerError {
+            throw error
+        } catch {
+            throw AgentControllerError.invalidState
+        }
     }
 
     public static func persistedCollectorState(
