@@ -84,7 +84,7 @@ LEGACY_PLIST="$HOME/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.pl
   exit 1
 }
 
-STATUS="$($COMMAND status)" || {
+STATUS="$($COMMAND status --json)" || {
   echo 'Runtime Raiders local canary status failed.' >&2
   exit 1
 }

@@ -153,11 +153,13 @@ sh "$CANARY_INSTALLER" --code-file "$CANARY_CODE_FILE"
 ```
 
 Require `daemonRunning=true`, `enabled=false`, and `persistedState=disabled`
-in `raiders status` and `raiders doctor`. Collection remains persistently off
-until the later bounded `raiders on` authorization. The installer validates the
-ZIP checksum and signed app before enrollment/replacement; it preserves the
-owner-only enrollment, cursors, and outbox across an upgrade or automatic
-rollback.
+from `raiders status --json`. Separately, require `raiders doctor` to establish
+a readable Codex root, healthy server, valid signing, matching enrolled and
+compiled adapters, no compatibility review, and zero provider lag. Collection
+remains persistently off until the later bounded `raiders on` authorization. The
+installer validates the ZIP checksum and signed app before enrollment/replacement;
+it preserves the owner-only enrollment, cursors, and outbox across an upgrade or
+automatic rollback.
 
 ## Status output contract
 
