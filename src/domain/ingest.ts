@@ -59,6 +59,10 @@ export interface IngestResult {
   ignoredUnknownTokens: number;
 }
 
+export interface ActivityCreditOptions {
+  updateLastTokenAt?: boolean;
+}
+
 interface PerToken {
   input: number;
   output: number;
@@ -98,7 +102,9 @@ function addIncrement(
  * Project one positive activity credit through the legacy player/token-event
  * compatibility path. Callers may wrap this in a larger transaction; nested
  * better-sqlite3 transactions use a savepoint and preserve all-or-nothing
- * behavior through potion attribution.
+ * behavior through potion attribution. Legacy OTLP callers advance
+ * `last_token_at` by default; callers with an independent freshness clock may
+ * explicitly suppress only that timestamp update.
  */
 export function applyActivityCredit(
   db: Database.Database,
@@ -106,6 +112,7 @@ export function applyActivityCredit(
   effectiveDelta: number,
   totalDelta: number,
   now: number,
+  options: ActivityCreditOptions = {},
 ): number {
   if (!Number.isSafeInteger(playerId) || playerId <= 0) {
     throw new RangeError('playerId must be a positive safe integer');
@@ -122,6 +129,7 @@ export function applyActivityCredit(
   if (effectiveDelta <= 0 && totalDelta <= 0) {
     throw new RangeError('activity credit must contain a positive delta');
   }
+  const updateLastTokenAt = options.updateLastTokenAt ?? true;
 
   const apply = db.transaction((): number => {
     const player = db.prepare(`
@@ -140,9 +148,15 @@ export function applyActivityCredit(
       `UPDATE players
        SET total_tokens = total_tokens + ?,
            effective_tokens = effective_tokens + ?,
-           last_token_at = ?
+           last_token_at = CASE WHEN ? = 1 THEN ? ELSE last_token_at END
        WHERE id = ?`,
-    ).run(totalDelta, effectiveDelta, now, playerId);
+    ).run(
+      totalDelta,
+      effectiveDelta,
+      updateLastTokenAt ? 1 : 0,
+      now,
+      playerId,
+    );
     if (updated.changes !== 1) throw new Error('activity player update was not applied');
 
     const tokenEvent = db.prepare(

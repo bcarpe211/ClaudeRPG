@@ -576,6 +576,55 @@ describe('Run event authentication and ingestion', () => {
     expect(presenceReceipt()).toBeNull();
   });
 
+  it('rejects a newly claimed malformed v2 lower sequence without extending presence', async () => {
+    const device = await enrollDevice();
+    const higher = runEvent(device.deviceId, {
+      sequence: 2,
+      started_at_ms: NOW,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: { input: 200 },
+    });
+    const accepted = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .send({ events: [higher] });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(presenceReceipt()).toBe(NOW);
+
+    vi.mocked(Date.now).mockReturnValue(NOW + 1);
+    const malformedLower = runEvent(device.deviceId, {
+      run_key: higher.run_key,
+      sequence: 1,
+      started_at_ms: higher.started_at_ms,
+      event_time_ms: NOW,
+      observed_at_ms: NOW + 1,
+      usage: { input: 10, cache_read: 11 },
+    });
+    const rejected = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .send({ events: [malformedLower] });
+
+    expect(rejected.status).toBe(422);
+    expect(rejected.body).toEqual({ reason: 'invalid_usage_counters' });
+    expect(countRows('runs')).toBe(1);
+    expect(countRows('run_events')).toBe(1);
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM run_events WHERE event_key = ?
+    `).get(malformedLower.idempotency_key)).toEqual({ count: 0 });
+    expect(db.prepare(`
+      SELECT usage_input, awarded_usage_credit, raid_power
+      FROM runs WHERE run_key = ?
+    `).get(higher.run_key)).toEqual({
+      usage_input: 200,
+      awarded_usage_credit: 200,
+      raid_power: 200,
+    });
+    expect(presenceReceipt()).toBe(NOW);
+  });
+
   it('keeps unexpected ingestion failures on the private 500 path', async () => {
     const device = await enrollDevice();
     const overflow = [

@@ -521,8 +521,9 @@ change, service change, or game wake makes the result stale: stop and rerun it.
 Present the completed pre-cutover record of truth, fresh preflight result, test
 evidence, visual approval, signed/notarized artifact validation, exact
 prior/release SHAs, exact backup target, persisted policy key
-`raid-power-v1`, JSON policy document version `1`, exact `CUTOVER_AT`,
-DNS/TLS/mDNS evidence, current
+`raid-power-v1`, JSON policy document version `1`, exact `CUTOVER_AT`, persisted
+policy key `raid-power-v2`, JSON policy document version `2`, exact
+`RAID_POWER_V2_CUTOVER_AT`, DNS/TLS/mDNS evidence, current
 `paused=1`, rollback order, and post-rollback loss semantics to the user.
 
 The user must explicitly authorize this release SHA, timestamp, backup target,
@@ -601,6 +602,10 @@ updater-hold, and rollback requirement in sections 3–5:
 companion installation, `raiders on`, canary command, or office activation.
 Those actions remain blocked until their own explicit authorization.
 
+For the combined scoring-v2 plus presence release path, section 3.2's bounded
+one-event canary supersedes legacy section 6. Do not run section 6's two-surface,
+two-event canary or its v1-only policy query for this release path.
+
 ### 3.2 Presence-clock release gate: separately authorized and collection-off
 
 This gate is documentation for a later authorized operation; it performs no
@@ -614,17 +619,45 @@ Migration `020_raider_presence` creates only the empty
 backfill: applying it must not insert presence from existing Runs, events,
 devices, `token_events`, or `players.last_token_at`, and it must not edit,
 delete, merge, or retarget any account, Raider, enrollment, device, Run, score,
-or other history row. Before canary collection, require both the migration
-marker and an empty table; any row at this boundary is a NO-GO.
+or other history row. On a first migration, require both the migration marker
+and an empty table before canary collection; any row is then a NO-GO. On a
+retry, retained presence rows are expected and must not be deleted merely to
+satisfy the first-migration gate. Keep collection off and prove, at candidate
+start and again before canary authorization, that every retained server receipt
+is strictly older than the configured `pause_after_minutes` activity window.
+If any retained receipt is still active at either observation, wait with
+collection off until it expires; do not truncate, rewrite, or backdate it.
 
-The presence-specific rollback is an application-code rollback. First prove
-the canary is off, then return to the recorded prior reviewed application SHA
-under the existing stopped-service, ownership, health, and version gates. Leave
-the additive `020_raider_presence` migration marker and its table in place as
-inert schema. Do not drop the table, reverse the migration, or restore the
-pre-release database merely to remove it during an incident. Database
-corruption or an account/history mismatch remains a separate section 7 rollback
-trigger; an otherwise healthy unused presence table is not.
+For this combined scoring-v2 plus presence release path, the bounded one-event
+canary below supersedes legacy section 6. Do not run section 6's two-surface,
+two-event canary or its v1-only policy query.
+
+For a presence behavior or canary failure while database integrity and all
+account/history checks remain healthy, use this presence-only application
+rollback. It explicitly supersedes the destructive section 7 procedure:
+
+1. Run `raiders off` for every authorized canary and prove collection is
+   disabled. Keep office collection off.
+2. Reassert the updater hold, stop `claude-rpg.service`, and prove the service is
+   inactive before changing the checkout or environment.
+3. Recheck database integrity and the recorded account/history aggregates. If
+   either check fails, stop this procedure and use section 7; otherwise do not
+   restore or replace the database.
+4. Install the recorded prior reviewed scoring-v2 application SHA and its
+   recorded environment under section 4.4's exact checkout, ownership,
+   dependency, game-unit, and root-owned environment gates.
+5. Keep migration `020_raider_presence`, its table, and every retained presence
+   row in place. Do not drop, clear, reverse, or restore them away.
+6. Start the service once. Verify local and public health, the `/tv/stream`
+   version equals the recorded prior scoring-v2 short SHA, database integrity
+   remains `ok`, and public state reports `"paused":true`.
+7. Prove the updater remains held and all canary and office collection remains
+   off. Any retry requires a new candidate review and authorization, plus the
+   retained-row expiry gate above.
+
+Reserve section 7's destructive database restore for database corruption or a
+verified account/history mismatch. A behavior mismatch, canary mismatch, or an
+otherwise healthy retained presence table is not a destructive-restore trigger.
 
 Perform the release boundary in this order:
 
@@ -637,9 +670,10 @@ Perform the release boundary in this order:
    presence candidate SHA and preserve the already reviewed scoring-v2
    environment.
 4. Start once. Verify database integrity, migration marker
-   `020_raider_presence`, zero pre-canary presence rows, public `/health`, and a
-   public `/tv/stream` version equal to the reviewed candidate's short SHA.
-   Reconfirm `"paused":true`. Any mismatch is a NO-GO; do not enable a canary.
+   `020_raider_presence`, the applicable first-migration zero-row or retry
+   retained-row-expiry gate above, public `/health`, and a public `/tv/stream`
+   version equal to the reviewed candidate's short SHA. Reconfirm
+   `"paused":true`. Any mismatch is a NO-GO; do not enable a canary.
 
 STOP — collection remains off without separate approval
 
@@ -1269,6 +1303,11 @@ piped. No manual-update proof authorizes `raiders on`.
 
 ## 6. Canary activation, office activation, and acceptance
 
+**Legacy release context only.** This section is superseded and inapplicable
+for the scoring-v2 plus presence release path authorized through sections
+3.1/3.2. Operators on that path must use section 3.2's one-event canary and
+must not run the two-surface/two-event sequence or v1-only query below.
+
 The required post-cutover lifecycle is Caddy preparation approval →
 sequence-2 publication → installed-off sequence-2 canary → sequence-3 build,
 review, and signing → sequence-3 publication → notification/status proof →
@@ -1362,9 +1401,17 @@ rejected or future SHA.
 
 ## 7. Rollback
 
+For the scoring-v2 plus presence path, this section is a destructive database
+restore reserved only for database corruption or a verified account/history
+mismatch. When database integrity and account/history checks remain healthy, a
+presence behavior or canary failure must use section 3.2's presence-only
+application rollback instead; that procedure retains migration 020, its table,
+its rows, and all post-release account/history data.
+
 ### 7.1 Immediate triggers
 
-Rollback immediately for any migration or startup failure/restart loop;
+In this section's original legacy release context, rollback immediately for any
+migration or startup failure/restart loop;
 database integrity failure; missing or changed history; reset/drifted Raider
 progression, economy, inventory, cosmetics, or Raid Power baseline; double
 score; accepted pre-cutover Run; content leakage; provider interference or
@@ -1375,8 +1422,10 @@ mismatch; non-idempotent outbox replay; or any unknown acceptance result.
 
 ### 7.2 Exact rollback order
 
-Do not attempt a destructive reverse migration. Use the recorded verified
-backup and prior SHA. First turn collection off on every enabled canary and
+Do not use this destructive order for a healthy scoring-v2/presence behavior or
+canary failure. For an allowed section 7 trigger, do not attempt a destructive
+reverse migration. Use the recorded verified backup and prior SHA. First turn
+collection off on every enabled canary and
 office Mac and verify `raiders status` reports off. Then open a clean root Bash
 shell with `sudo -i`. Set only the two literal paths and expected checksum
 copied to the restricted operator record before cutover; do not restore,

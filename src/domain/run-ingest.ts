@@ -234,9 +234,15 @@ export function ingestRunEvents(
         continue;
       }
 
-      if (!player.disabled) {
-        recordFreshRunPresence(db, device.playerId, event.observed_at_ms, now);
+      if (policy.policy_version === 2) {
+        usageCredit(policy, event.provider, event.usage);
       }
+      const recordedPresence = !player.disabled && recordFreshRunPresence(
+        db,
+        device.playerId,
+        event.observed_at_ms,
+        now,
+      );
 
       const priorSequence = db.prepare(`
         SELECT MAX(sequence) AS sequence
@@ -326,7 +332,9 @@ export function ingestRunEvents(
         UPDATE run_events SET awarded_delta = ? WHERE event_key = ?
       `).run(awardedDelta, event.idempotency_key);
       if (awardedDelta > 0) {
-        applyActivityCredit(db, device.playerId, awardedDelta, 0, now);
+        applyActivityCredit(db, device.playerId, awardedDelta, 0, now, {
+          updateLastTokenAt: recordedPresence,
+        });
       }
       result.accepted++;
     }

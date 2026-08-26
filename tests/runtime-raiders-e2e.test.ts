@@ -300,28 +300,51 @@ describe('Runtime Raiders local integration gate', () => {
     expect(scoringAndEconomySnapshot(opening.run_key)).toEqual(beforeTick);
   });
 
-  it('ingests newly identified stale backlog without creating presence or waking the dungeon', async () => {
+  it.each([
+    {
+      name: 'stale backlog',
+      receivedAt: NOW + 120_001,
+      observedAt: NOW,
+    },
+    {
+      name: 'future observation',
+      receivedAt: NOW,
+      observedAt: NOW + 1,
+    },
+  ])('scores a positive $name without creating activity or waking the dungeon', async ({
+    receivedAt,
+    observedAt,
+  }) => {
     const device = await enrollDevice();
-    const receivedAt = NOW + 120_001;
-    const stale = runEvent(device.deviceId, {
+    const priorActivity = receivedAt - 15 * 60_000 - 1;
+    db.prepare('UPDATE players SET last_token_at = ? WHERE id = ?')
+      .run(priorActivity, player.id);
+    const excluded = runEvent(device.deviceId, {
       started_at_ms: NOW,
       event_time_ms: NOW,
-      observed_at_ms: NOW,
-      usage: ZERO_USAGE,
+      observed_at_ms: observedAt,
+      usage: { input: 100 },
     });
     vi.mocked(Date.now).mockReturnValue(receivedAt);
 
     const accepted = await post(
       '/api/runs/events',
-      { events: [stale] },
+      { events: [excluded] },
       device.deviceToken,
     );
     expect(accepted.status).toBe(200);
     expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
     expect(presenceReceipt()).toBeNull();
-    expect(scoringAndEconomySnapshot(stale.run_key)).toMatchObject({
-      runAward: { raid_power: 0 },
-      tokenCount: 0,
+    expect(scoringAndEconomySnapshot(excluded.run_key)).toMatchObject({
+      player: {
+        effectiveTokens: 100,
+        lastTokenAt: priorActivity,
+      },
+      runAward: {
+        awarded_usage_credit: 100,
+        raid_power: 100,
+      },
+      tokenCount: 1,
     });
 
     new GameEngine(db, { rng: () => 0.5 }).tick(receivedAt);

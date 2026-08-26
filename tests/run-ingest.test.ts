@@ -121,6 +121,15 @@ function tokenRows() {
   }>;
 }
 
+function presenceReceipt(): number | null {
+  const row = db.prepare(`
+    SELECT last_run_activity_at
+    FROM raider_presence
+    WHERE player_id = ?
+  `).get(player.id) as { last_run_activity_at: number } | undefined;
+  return row?.last_run_activity_at ?? null;
+}
+
 function enrollPlayer(): void {
   db.prepare(`
     INSERT INTO raider_identities (player_id, dedupe_secret, created_at)
@@ -280,6 +289,50 @@ describe('ingestRunEvents', () => {
     expect(lastRaiderActivityAt(db, player.id)).toBe(0);
   });
 
+  it.each([
+    {
+      name: 'stale',
+      observedAt: NOW,
+      receivedAt: NOW + 120_001,
+    },
+    {
+      name: 'future-observed',
+      observedAt: NOW + 1,
+      receivedAt: NOW,
+    },
+  ])('scores a positive $name event without advancing legacy activity', ({
+    observedAt,
+    receivedAt,
+  }) => {
+    const priorActivity = receivedAt - 15 * 60_000 - 1;
+    db.prepare('UPDATE players SET last_token_at = ? WHERE id = ?')
+      .run(priorActivity, player.id);
+    const excluded = event({
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: NOW,
+      observed_at_ms: observedAt,
+      usage: { input: 100 },
+    });
+
+    expect(ingestRunEvents(db, device, [excluded], SCHEDULE, receivedAt))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(runRow()).toMatchObject({
+      awarded_usage_credit: 100,
+      raid_power: 100,
+    });
+    expect(getPlayerById(db, player.id)).toMatchObject({
+      effective_tokens: 100,
+      total_tokens: 0,
+      last_token_at: priorActivity,
+    });
+    expect(tokenRows()).toMatchObject([{
+      effective_delta: 100,
+      total_delta: 0,
+      ts: receivedAt,
+    }]);
+    expect(presenceReceipt()).toBeNull();
+  });
+
   it('does not record presence for an authenticated disabled Raider', () => {
     updatePlayer(db, player.id, { disabled: 1 });
     const disabled = event({
@@ -433,7 +486,11 @@ describe('ingestRunEvents', () => {
 
   it('awards only positive cumulative usage differences through compatibility activity', () => {
     activateGoldPotion(NOW - 1_000);
-    const first = event({ usage: { input: 100, cache_read: 9_000 } });
+    const first = event({
+      event_time_ms: NOW - 1,
+      observed_at_ms: NOW - 1,
+      usage: { input: 100, cache_read: 9_000 },
+    });
     const second = event({
       sequence: 2,
       event_time_ms: first.event_time_ms + 1,
@@ -500,6 +557,43 @@ describe('ingestRunEvents', () => {
     expect(runRow()).toMatchObject({ usage_input: 200, raid_power: 200 });
     expect(tokenRows()).toHaveLength(1);
     expect(lastRaiderActivityAt(db, player.id)).toBe(NOW + 2);
+  });
+
+  it('rejects newly claimed malformed v2 lower sequences before presence or persistence', () => {
+    const higher = event({
+      sequence: 2,
+      started_at_ms: V2_CUTOVER,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+      usage: { input: 200 },
+    });
+    const malformedLower = event({
+      sequence: 1,
+      started_at_ms: higher.started_at_ms,
+      event_time_ms: NOW,
+      observed_at_ms: NOW + 1,
+      usage: { input: 10, cache_read: 11 },
+    });
+
+    expect(ingestRunEvents(db, device, [higher], SCHEDULE, NOW))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(presenceReceipt()).toBe(NOW);
+
+    expect(() => ingestRunEvents(db, device, [malformedLower], SCHEDULE, NOW + 1))
+      .toThrow(InvalidNestedUsageError);
+
+    expect(eventRows().map(({ event_key, sequence, awarded_delta }) => ({
+      event_key,
+      sequence,
+      awarded_delta,
+    }))).toEqual([{
+      event_key: higher.idempotency_key,
+      sequence: 2,
+      awarded_delta: 200,
+    }]);
+    expect(runRow()).toMatchObject({ usage_input: 200, raid_power: 200 });
+    expect(tokenRows()).toHaveLength(1);
+    expect(presenceReceipt()).toBe(NOW);
   });
 
   it('never rolls cumulative counters back on a later sequence', () => {
