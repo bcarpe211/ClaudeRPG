@@ -485,6 +485,204 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         XCTAssertTrue(harness.collectionOff)
     }
 
+    func testMutateThenThrowRegistrationCleansUpEveryCoordinatorPath() throws {
+        let invalid = Harness(queueCount: 0)
+        invalid.replacementResult = .invalidEnrollment
+        invalid.registerMutatesBeforeThrow = true
+        invalid.registerError = SensitiveOperationError(harness: invalid)
+
+        XCTAssertEqual(try? invalid.run(), .recoveryRequired)
+        XCTAssertEqual(invalid.journal?.phase, .replacementPrepared)
+        XCTAssertEqual(Array(invalid.actions.suffix(2)), ["register", "unregister"])
+        XCTAssertFalse(invalid.agentRegistered)
+        XCTAssertEqual(invalid.current, invalid.old)
+        XCTAssertEqual(invalid.queueCount, 0)
+        XCTAssertTrue(invalid.collectionOff)
+
+        let cancellation = Harness(queueCount: 3, queueDisposition: .cancel)
+        cancellation.registerMutatesBeforeThrow = true
+        cancellation.registerError = SensitiveOperationError(harness: cancellation)
+
+        XCTAssertEqual(try? cancellation.run(), .recoveryRequired)
+        XCTAssertNil(cancellation.journal)
+        XCTAssertEqual(Array(cancellation.actions.suffix(2)), ["register", "unregister"])
+        XCTAssertFalse(cancellation.agentRegistered)
+        XCTAssertEqual(cancellation.current, cancellation.old)
+        XCTAssertEqual(cancellation.queueCount, 3)
+        XCTAssertTrue(cancellation.collectionOff)
+
+        let completion = Harness(queueCount: 0)
+        completion.registerMutatesBeforeThrow = true
+        completion.registerError = SensitiveOperationError(harness: completion)
+
+        XCTAssertEqual(try? completion.run(), .recoveryRequired)
+        XCTAssertEqual(completion.journal?.phase, .collectorReset)
+        XCTAssertEqual(Array(completion.actions.suffix(2)), ["register", "unregister"])
+        XCTAssertFalse(completion.agentRegistered)
+        XCTAssertEqual(completion.current, completion.newConfiguration)
+        XCTAssertEqual(completion.queueCount, 0)
+        XCTAssertTrue(completion.collectionOff)
+    }
+
+    func testThrowingVerifierCleansUpInvalidAndFinalRegistration() throws {
+        let invalid = Harness(queueCount: 0)
+        invalid.replacementResult = .invalidEnrollment
+        invalid.verificationError = SensitiveOperationError(harness: invalid)
+
+        XCTAssertEqual(try? invalid.run(), .recoveryRequired)
+        XCTAssertEqual(invalid.journal?.phase, .replacementPrepared)
+        XCTAssertEqual(
+            Array(invalid.actions.suffix(3)),
+            ["register", "verify-new-config-and-off", "unregister"]
+        )
+        XCTAssertFalse(invalid.agentRegistered)
+        XCTAssertEqual(invalid.current, invalid.old)
+        XCTAssertTrue(invalid.collectionOff)
+
+        let completion = Harness(queueCount: 0)
+        completion.verificationError = SensitiveOperationError(harness: completion)
+
+        XCTAssertEqual(try? completion.run(), .recoveryRequired)
+        XCTAssertEqual(completion.journal?.phase, .agentRegistered)
+        XCTAssertEqual(
+            Array(completion.actions.suffix(3)),
+            ["journal(agentRegistered)", "verify-new-config-and-off", "unregister"]
+        )
+        XCTAssertFalse(completion.agentRegistered)
+        XCTAssertEqual(completion.current, completion.newConfiguration)
+        XCTAssertTrue(completion.collectionOff)
+    }
+
+    func testThrowingCancellationVerifierAndQueueCountCleanUpWithoutMutation() throws {
+        let throwingVerifier = Harness(queueCount: 3, queueDisposition: .cancel)
+        throwingVerifier.verificationError = SensitiveOperationError(harness: throwingVerifier)
+
+        XCTAssertEqual(try? throwingVerifier.run(), .recoveryRequired)
+        XCTAssertNil(throwingVerifier.journal)
+        XCTAssertEqual(
+            Array(throwingVerifier.actions.suffix(3)),
+            ["register", "verify-new-config-and-off", "unregister"]
+        )
+        XCTAssertFalse(throwingVerifier.agentRegistered)
+        XCTAssertEqual(throwingVerifier.current, throwingVerifier.old)
+        XCTAssertEqual(throwingVerifier.queueCount, 3)
+        XCTAssertTrue(throwingVerifier.collectionOff)
+
+        let throwingCount = Harness(queueCount: 3, queueDisposition: .cancel)
+        throwingCount.queueCountErrorOnCall = 2
+        throwingCount.queueCountError = SensitiveOperationError(harness: throwingCount)
+
+        XCTAssertEqual(try? throwingCount.run(), .recoveryRequired)
+        XCTAssertNil(throwingCount.journal)
+        XCTAssertEqual(
+            Array(throwingCount.actions.suffix(4)),
+            ["register", "verify-new-config-and-off", "count-queue", "unregister"]
+        )
+        XCTAssertFalse(throwingCount.agentRegistered)
+        XCTAssertEqual(throwingCount.current, throwingCount.old)
+        XCTAssertEqual(throwingCount.queueCount, 3)
+        XCTAssertTrue(throwingCount.collectionOff)
+    }
+
+    func testCleanupFailureExposesOnlyContentFreeCoordinatorError() throws {
+        enum CleanupFailure {
+            case unregisterThrows
+            case proofThrows
+            case proofReturnsFalse
+        }
+
+        for mode in [
+            CleanupFailure.unregisterThrows,
+            .proofThrows,
+            .proofReturnsFalse,
+        ] {
+            let harness = Harness(queueCount: 0)
+            harness.verificationError = SensitiveOperationError(harness: harness)
+            switch mode {
+            case .unregisterThrows:
+                harness.unregisterErrorOnCall = 2
+                harness.unregisterError = SensitiveOperationError(
+                    harness: harness,
+                    additionalSentinel: SensitiveOperationError.cleanupSentinel
+                )
+            case .proofThrows:
+                harness.verifyUnregisteredErrorOnCall = 2
+                harness.verifyUnregisteredError = SensitiveOperationError(
+                    harness: harness,
+                    additionalSentinel: SensitiveOperationError.cleanupSentinel
+                )
+            case .proofReturnsFalse:
+                harness.verifyUnregisteredFailureOnCall = 2
+            }
+
+            XCTAssertThrowsError(try harness.run()) { error in
+                let diagnostics = String(describing: error) + String(reflecting: error)
+                XCTAssertEqual(error as? ReEnrollmentCoordinatorError, .operationFailed)
+                XCTAssertFalse(diagnostics.contains(harness.old.deviceToken))
+                XCTAssertFalse(diagnostics.contains(harness.newToken))
+                XCTAssertFalse(diagnostics.contains(harness.code))
+                XCTAssertFalse(diagnostics.contains(harness.preparedJournal.operationID.uuidString))
+                XCTAssertFalse(diagnostics.contains(harness.preparedJournal.replacementDeviceID.uuidString))
+                XCTAssertFalse(diagnostics.contains(SensitiveOperationError.responseSentinel))
+                XCTAssertFalse(diagnostics.contains(SensitiveOperationError.querySentinel))
+                XCTAssertFalse(diagnostics.contains(SensitiveOperationError.cleanupSentinel))
+            }
+            XCTAssertEqual(harness.journal?.phase, .agentRegistered)
+            XCTAssertTrue(harness.collectionOff)
+            XCTAssertEqual(harness.current, harness.newConfiguration)
+            XCTAssertEqual(harness.queueCount, 0)
+            XCTAssertEqual(harness.unregisterCalls, 2)
+            if case .unregisterThrows = mode {
+                XCTAssertTrue(harness.agentRegistered)
+            } else {
+                XCTAssertFalse(harness.agentRegistered)
+            }
+        }
+    }
+
+    func testThrowingPostRegistrationJournalMutationsAlsoCleanUp() throws {
+        let journalWrite = Harness(queueCount: 0)
+        journalWrite.journalWriteErrorPhase = .agentRegistered
+        journalWrite.journalWriteError = SensitiveOperationError(harness: journalWrite)
+
+        XCTAssertEqual(try? journalWrite.run(), .recoveryRequired)
+        XCTAssertEqual(journalWrite.journal?.phase, .collectorReset)
+        XCTAssertEqual(
+            Array(journalWrite.actions.suffix(3)),
+            ["register", "journal(agentRegistered)", "unregister"]
+        )
+        XCTAssertFalse(journalWrite.agentRegistered)
+        XCTAssertEqual(journalWrite.current, journalWrite.newConfiguration)
+        XCTAssertTrue(journalWrite.collectionOff)
+
+        let invalidRemoval = Harness(queueCount: 0)
+        invalidRemoval.replacementResult = .invalidEnrollment
+        invalidRemoval.removeJournalError = SensitiveOperationError(harness: invalidRemoval)
+
+        XCTAssertEqual(try? invalidRemoval.run(), .recoveryRequired)
+        XCTAssertEqual(invalidRemoval.journal?.phase, .replacementPrepared)
+        XCTAssertEqual(
+            Array(invalidRemoval.actions.suffix(3)),
+            ["verify-new-config-and-off", "delete-journal", "unregister"]
+        )
+        XCTAssertFalse(invalidRemoval.agentRegistered)
+        XCTAssertEqual(invalidRemoval.current, invalidRemoval.old)
+        XCTAssertTrue(invalidRemoval.collectionOff)
+
+        let finalRemoval = Harness(queueCount: 0)
+        finalRemoval.removeJournalError = SensitiveOperationError(harness: finalRemoval)
+
+        XCTAssertEqual(try? finalRemoval.run(), .recoveryRequired)
+        XCTAssertEqual(finalRemoval.journal?.phase, .agentRegistered)
+        XCTAssertEqual(
+            Array(finalRemoval.actions.suffix(3)),
+            ["verify-new-config-and-off", "delete-journal", "unregister"]
+        )
+        XCTAssertFalse(finalRemoval.agentRegistered)
+        XCTAssertEqual(finalRemoval.current, finalRemoval.newConfiguration)
+        XCTAssertTrue(finalRemoval.collectionOff)
+    }
+
     func testInstalledResumeRequiresFullAuthoritativeConfigurationCoherence() throws {
         let mismatches: [(String, (Harness) -> EnrollmentConfiguration)] = [
             ("device ID", { harness in
@@ -786,16 +984,17 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
 
         let registrationHarness = Harness(queueCount: 3, queueDisposition: .cancel)
         registrationHarness.registerError = SensitiveOperationError(harness: registrationHarness)
-        XCTAssertThrowsError(try registrationHarness.run()) { error in
-            let diagnostics = String(describing: error) + String(reflecting: error)
-            XCTAssertFalse(diagnostics.contains(registrationHarness.old.deviceToken))
-            XCTAssertFalse(diagnostics.contains(registrationHarness.newToken))
-            XCTAssertFalse(diagnostics.contains(registrationHarness.code))
-            XCTAssertFalse(diagnostics.contains(registrationHarness.preparedJournal.operationID.uuidString))
-            XCTAssertFalse(diagnostics.contains(registrationHarness.preparedJournal.replacementDeviceID.uuidString))
-            XCTAssertFalse(diagnostics.contains(SensitiveOperationError.responseSentinel))
-            XCTAssertFalse(diagnostics.contains(SensitiveOperationError.querySentinel))
-        }
+        let registrationOutcome = try registrationHarness.run()
+        XCTAssertEqual(registrationOutcome, .recoveryRequired)
+        let diagnostics = String(describing: registrationOutcome)
+            + String(reflecting: registrationOutcome)
+        XCTAssertFalse(diagnostics.contains(registrationHarness.old.deviceToken))
+        XCTAssertFalse(diagnostics.contains(registrationHarness.newToken))
+        XCTAssertFalse(diagnostics.contains(registrationHarness.code))
+        XCTAssertFalse(diagnostics.contains(registrationHarness.preparedJournal.operationID.uuidString))
+        XCTAssertFalse(diagnostics.contains(registrationHarness.preparedJournal.replacementDeviceID.uuidString))
+        XCTAssertFalse(diagnostics.contains(SensitiveOperationError.responseSentinel))
+        XCTAssertFalse(diagnostics.contains(SensitiveOperationError.querySentinel))
     }
 
     private static let happyPathActions = [
@@ -814,10 +1013,11 @@ private enum TestError: Error { case recovery, crash }
 private struct SensitiveOperationError: Error, CustomStringConvertible, CustomDebugStringConvertible {
     static let responseSentinel = "sensitive-response-body"
     static let querySentinel = "?device_token=sensitive-query-token"
+    static let cleanupSentinel = "sensitive-cleanup-error"
 
     let material: String
 
-    init(harness: Harness) {
+    init(harness: Harness, additionalSentinel: String? = nil) {
         material = [
             harness.old.deviceToken,
             harness.newToken,
@@ -826,7 +1026,8 @@ private struct SensitiveOperationError: Error, CustomStringConvertible, CustomDe
             harness.preparedJournal.replacementDeviceID.uuidString,
             Self.responseSentinel,
             Self.querySentinel,
-        ].joined(separator: ":")
+            additionalSentinel,
+        ].compactMap { $0 }.joined(separator: ":")
     }
 
     var description: String { material }
@@ -875,8 +1076,23 @@ private final class Harness: @unchecked Sendable {
     var replacementResult: ReplacementHTTPResult
     var replaceError: Error?
     var registerError: Error?
+    var registerMutatesBeforeThrow = false
     var registeredStatusAfterRegister = ManagedAgentStatus.enabled
     var verificationSucceeds = true
+    var verificationError: Error?
+    var queueCountCalls = 0
+    var queueCountErrorOnCall: Int?
+    var queueCountError: Error?
+    var unregisterCalls = 0
+    var unregisterErrorOnCall: Int?
+    var unregisterError: Error?
+    var verifyUnregisteredCalls = 0
+    var verifyUnregisteredErrorOnCall: Int?
+    var verifyUnregisteredError: Error?
+    var verifyUnregisteredFailureOnCall: Int?
+    var journalWriteErrorPhase: ReEnrollmentPhase?
+    var journalWriteError: Error?
+    var removeJournalError: Error?
     var replaceCalls = 0
     var promptedCodes = 0
     var serverActiveTokens: Set<String>
@@ -972,11 +1188,29 @@ private final class Harness: @unchecked Sendable {
             },
             unregisterAgent: {
                 self.actions.append("unregister")
+                self.unregisterCalls += 1
+                if self.unregisterErrorOnCall == self.unregisterCalls,
+                   let unregisterError = self.unregisterError {
+                    throw unregisterError
+                }
                 self.agentRegistered = false
             },
-            verifyAgentUnregistered: { !self.agentRegistered },
+            verifyAgentUnregistered: {
+                self.verifyUnregisteredCalls += 1
+                if self.verifyUnregisteredErrorOnCall == self.verifyUnregisteredCalls,
+                   let verifyUnregisteredError = self.verifyUnregisteredError {
+                    throw verifyUnregisteredError
+                }
+                return !self.agentRegistered
+                    && self.verifyUnregisteredFailureOnCall != self.verifyUnregisteredCalls
+            },
             countQueue: {
                 self.actions.append("count-queue")
+                self.queueCountCalls += 1
+                if self.queueCountErrorOnCall == self.queueCountCalls,
+                   let queueCountError = self.queueCountError {
+                    throw queueCountError
+                }
                 return self.queueCount
             },
             summarize: { _ in self.actions.append("summarize") },
@@ -999,13 +1233,17 @@ private final class Harness: @unchecked Sendable {
             },
             generateMaterial: { self.material },
             writeJournal: { value in
-                self.journal = value
-                self.journalWrites.append(value)
-                if value.phase == .replacementPrepared, self.journalWrites.count == 1 {
+                if value.phase == .replacementPrepared, self.journalWrites.isEmpty {
                     self.actions.append("create-journal(replacementPrepared)")
                 } else {
                     self.actions.append("journal(\(value.phase.rawValue))")
                 }
+                if self.journalWriteErrorPhase == value.phase,
+                   let journalWriteError = self.journalWriteError {
+                    throw journalWriteError
+                }
+                self.journal = value
+                self.journalWrites.append(value)
             },
             requestCode: {
                 self.actions.append("request-code")
@@ -1051,12 +1289,14 @@ private final class Harness: @unchecked Sendable {
             },
             registerAgent: {
                 self.actions.append("register")
+                if self.registerMutatesBeforeThrow { self.agentRegistered = true }
                 if let registerError = self.registerError { throw registerError }
                 self.agentRegistered = self.registeredStatusAfterRegister == .enabled
             },
             verifyEnrollmentAndOff: { expected, requireEmptyQueue in
                 XCTAssertNotNil(self.activeLock, "lifecycle lock released before verification")
                 self.actions.append("verify-new-config-and-off")
+                if let verificationError = self.verificationError { throw verificationError }
                 return self.current == expected
                     && self.collectionOff
                     && self.agentRegistered
@@ -1067,6 +1307,7 @@ private final class Harness: @unchecked Sendable {
             removeJournal: {
                 XCTAssertNotNil(self.activeLock, "lifecycle lock released before journal cleanup")
                 self.actions.append("delete-journal")
+                if let removeJournalError = self.removeJournalError { throw removeJournalError }
                 self.journal = nil
             },
             interruptionPoint: { boundary in

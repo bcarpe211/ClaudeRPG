@@ -391,7 +391,7 @@ public struct ReEnrollmentCoordinator: Sendable {
                 guard installed == configuration else { return .recoveryRequired }
             }
             if journal.phase == .agentRegistered {
-                try operations.registerAgent()
+                guard try registerAgentSafely() else { return .recoveryRequired }
                 try operations.interruptionPoint(.registerAgent)
             }
             return try complete(journal, configuration: configuration)
@@ -454,12 +454,16 @@ public struct ReEnrollmentCoordinator: Sendable {
         oldConfiguration: EnrollmentConfiguration
     ) throws -> ReEnrollmentOutcome {
         guard journal.phase == .replacementPrepared else { return .recoveryRequired }
-        try operations.registerAgent()
+        guard try registerAgentSafely() else { return .recoveryRequired }
         try operations.interruptionPoint(.registerAgent)
-        guard try operations.verifyEnrollmentAndOff(oldConfiguration, false) else {
-            return try recoverAfterRegistration()
+        guard try verifyAfterRegistration({
+            try operations.verifyEnrollmentAndOff(oldConfiguration, false)
+        }) else {
+            return .recoveryRequired
         }
-        try operations.removeJournal()
+        guard try performAfterRegistration({ try operations.removeJournal() }) else {
+            return .recoveryRequired
+        }
         try operations.interruptionPoint(.deleteJournal)
         return .invalidEnrollment
     }
@@ -468,11 +472,15 @@ public struct ReEnrollmentCoordinator: Sendable {
         using oldConfiguration: EnrollmentConfiguration,
         originalQueueCount: Int
     ) throws -> ReEnrollmentOutcome {
-        try operations.registerAgent()
+        guard try registerAgentSafely() else { return .recoveryRequired }
         try operations.interruptionPoint(.registerAgent)
-        guard try operations.verifyEnrollmentAndOff(oldConfiguration, false),
-              try operations.countQueue() == originalQueueCount else {
-            return try recoverAfterRegistration()
+        guard try verifyAfterRegistration({
+            guard try operations.verifyEnrollmentAndOff(oldConfiguration, false) else {
+                return false
+            }
+            return try operations.countQueue() == originalQueueCount
+        }) else {
+            return .recoveryRequired
         }
         return .cancelled
     }
@@ -497,20 +505,65 @@ public struct ReEnrollmentCoordinator: Sendable {
             journal = try advance(journal, to: .collectorReset, boundary: .collectorReset)
         }
         if journal.phase == .collectorReset {
-            try operations.registerAgent()
+            guard try registerAgentSafely() else { return .recoveryRequired }
             try operations.interruptionPoint(.registerAgent)
-            journal = try advance(journal, to: .agentRegistered, boundary: .agentRegistered)
+            var registered = journal
+            registered.phase = .agentRegistered
+            guard try performAfterRegistration({ try operations.writeJournal(registered) }) else {
+                return .recoveryRequired
+            }
+            journal = registered
+            try operations.interruptionPoint(.agentRegistered)
         }
         guard journal.phase == .agentRegistered else {
             return .recoveryRequired
         }
-        guard try operations.verifyEnrollmentAndOff(configuration, true) else {
-            return try recoverAfterRegistration()
+        guard try verifyAfterRegistration({
+            try operations.verifyEnrollmentAndOff(configuration, true)
+        }) else {
+            return .recoveryRequired
         }
         try operations.interruptionPoint(.verifyNewConfigurationAndOff)
-        try operations.removeJournal()
+        guard try performAfterRegistration({ try operations.removeJournal() }) else {
+            return .recoveryRequired
+        }
         try operations.interruptionPoint(.deleteJournal)
         return .completed
+    }
+
+    private func registerAgentSafely() throws -> Bool {
+        do {
+            try operations.registerAgent()
+            return true
+        } catch {
+            _ = try recoverAfterRegistration()
+            return false
+        }
+    }
+
+    private func verifyAfterRegistration(_ verification: () throws -> Bool) throws -> Bool {
+        let verified: Bool
+        do {
+            verified = try verification()
+        } catch {
+            _ = try recoverAfterRegistration()
+            return false
+        }
+        guard verified else {
+            _ = try recoverAfterRegistration()
+            return false
+        }
+        return true
+    }
+
+    private func performAfterRegistration(_ operation: () throws -> Void) throws -> Bool {
+        do {
+            try operation()
+            return true
+        } catch {
+            _ = try recoverAfterRegistration()
+            return false
+        }
     }
 
     private func recoverAfterRegistration() throws -> ReEnrollmentOutcome {
