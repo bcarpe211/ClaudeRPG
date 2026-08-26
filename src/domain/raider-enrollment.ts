@@ -379,6 +379,61 @@ export function authenticateDevice(
   };
 }
 
+/** Return recovery configuration for an active device credential without recording contact. */
+export function getDeviceEnrollmentConfiguration(
+  db: Database.Database,
+  bearerToken: string,
+  now: number,
+): DeviceEnrollmentConfiguration | null {
+  requireTimestamp(now);
+  if (!validCredential(bearerToken)) return null;
+
+  const configuration = db.prepare(`
+    SELECT device.device_id, identity.dedupe_secret
+    FROM raider_devices AS device
+    JOIN raider_identities AS identity ON identity.player_id = device.player_id
+    WHERE device.token_hash = ? AND device.revoked_at IS NULL
+  `).get(sha256(bearerToken)) as {
+    device_id: string;
+    dedupe_secret: string;
+  } | undefined;
+  if (!configuration) return null;
+
+  return {
+    deviceId: configuration.device_id,
+    dedupeSecret: configuration.dedupe_secret,
+  };
+}
+
+/** Revoke a device credential once without recording contact. */
+export function revokeDeviceCredential(
+  db: Database.Database,
+  bearerToken: string,
+  now: number,
+): 'revoked' | 'already_revoked' | null {
+  requireTimestamp(now);
+  if (!validCredential(bearerToken)) return null;
+
+  const tokenHash = sha256(bearerToken);
+  const device = db.prepare(`
+    SELECT revoked_at
+    FROM raider_devices
+    WHERE token_hash = ?
+  `).get(tokenHash) as { revoked_at: number | null } | undefined;
+  if (!device) return null;
+  if (device.revoked_at !== null) return 'already_revoked';
+
+  const revoked = db.prepare(`
+    UPDATE raider_devices
+    SET revoked_at = ?
+    WHERE token_hash = ? AND revoked_at IS NULL
+  `).run(now, tokenHash);
+  if (revoked.changes !== 1) {
+    throw new Error('device credential revocation did not update one row');
+  }
+  return 'revoked';
+}
+
 /** Record contact only after route-level quotas and request validation accept the request. */
 export function recordDeviceContact(
   db: Database.Database,

@@ -6,7 +6,9 @@ import {
   authenticateDevice,
   createEnrollment,
   exchangeEnrollment,
+  getDeviceEnrollmentConfiguration,
   recordDeviceContact,
+  revokeDeviceCredential,
   replaceDeviceEnrollment,
   type ReplacementRequest,
 } from '../src/domain/raider-enrollment';
@@ -351,6 +353,65 @@ describe('raider enrollment', () => {
       expect(authenticateDevice(db, exchanged!.deviceToken, NOW + 4)).toBeNull();
       expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
         .get(deviceId)).toEqual({ last_seen_at: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('returns only active enrollment configuration and revokes credentials monotonically', () => {
+    const db = enrollmentDb();
+    try {
+      const enrollment = createEnrollment(db, 1, NOW);
+      const deviceId = newDeviceId();
+      const exchanged = exchangeEnrollment(db, enrollment.code, deviceId, '0.1.0', NOW + 1);
+      if (!exchanged) throw new Error('device enrollment fixture failed');
+      const identity = db.prepare(`
+        SELECT dedupe_secret
+        FROM raider_identities
+        WHERE player_id = 1
+      `).get() as { dedupe_secret: string };
+
+      expect(getDeviceEnrollmentConfiguration(db, exchanged.deviceToken, NOW + 2)).toEqual({
+        deviceId,
+        dedupeSecret: identity.dedupe_secret,
+      });
+      expect(db.prepare('SELECT last_seen_at FROM raider_devices WHERE device_id = ?')
+        .get(deviceId)).toEqual({ last_seen_at: null });
+
+      expect(revokeDeviceCredential(db, exchanged.deviceToken, NOW + 3)).toBe('revoked');
+      expect(db.prepare(`
+        SELECT revoked_at, last_seen_at
+        FROM raider_devices
+        WHERE device_id = ?
+      `).get(deviceId)).toEqual({ revoked_at: NOW + 3, last_seen_at: null });
+      expect(authenticateDevice(db, exchanged.deviceToken, NOW + 4)).toBeNull();
+      expect(getDeviceEnrollmentConfiguration(db, exchanged.deviceToken, NOW + 4)).toBeNull();
+
+      expect(revokeDeviceCredential(db, exchanged.deviceToken, NOW + 5)).toBe('already_revoked');
+      expect(db.prepare(`
+        SELECT revoked_at, last_seen_at
+        FROM raider_devices
+        WHERE device_id = ?
+      `).get(deviceId)).toEqual({ revoked_at: NOW + 3, last_seen_at: null });
+
+      const beforeMalformed = snapshotTables(db);
+      for (const invalidToken of [
+        [],
+        {},
+        Symbol('token'),
+        null,
+        'malformed',
+        'x'.repeat(44),
+        'Z'.repeat(43),
+      ]) {
+        expect(getDeviceEnrollmentConfiguration(
+          db,
+          invalidToken as unknown as string,
+          NOW + 6,
+        )).toBeNull();
+        expect(revokeDeviceCredential(db, invalidToken as unknown as string, NOW + 7)).toBeNull();
+      }
+      expect(snapshotTables(db)).toBe(beforeMalformed);
     } finally {
       db.close();
     }
