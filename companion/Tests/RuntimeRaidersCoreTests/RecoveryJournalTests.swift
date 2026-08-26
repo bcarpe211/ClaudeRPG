@@ -53,6 +53,67 @@ final class RecoveryJournalTests: XCTestCase {
         XCTAssertNil(try recovered.load())
     }
 
+    func testAtomicJournalInterruptionsRecoverOnlyOldOrNewCompleteValue() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let original = journal(phase: .replacementPrepared)
+        var replacement = original
+        replacement.phase = .serverCommitted
+        let normal = try RecoveryJournalStore(paths: fixture.paths)
+        try normal.write(original)
+        let originalBytes = try Data(contentsOf: fixture.paths.recoveryJournal)
+
+        let beforeRename = try RecoveryJournalStore(
+            paths: fixture.paths,
+            atomicStore: AtomicStore(descriptorCheckpoint: { checkpoint in
+                if checkpoint == .beforeRename { throw SimulatedInterruption() }
+            })
+        )
+        XCTAssertThrowsError(try beforeRename.write(replacement))
+        XCTAssertEqual(try RecoveryJournalStore(paths: fixture.paths).load(), original)
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.recoveryJournal), originalBytes)
+
+        let afterRename = try RecoveryJournalStore(
+            paths: fixture.paths,
+            atomicStore: AtomicStore(descriptorCheckpoint: { checkpoint in
+                if checkpoint == .afterRenameBeforeDirectorySync {
+                    throw SimulatedInterruption()
+                }
+            })
+        )
+        XCTAssertThrowsError(try afterRename.write(replacement))
+        XCTAssertEqual(try RecoveryJournalStore(paths: fixture.paths).load(), replacement)
+        XCTAssertNotEqual(try Data(contentsOf: fixture.paths.recoveryJournal), originalBytes)
+    }
+
+    func testJournalStoreReadPathRejectsInjectedWrongOwnerAndSetgidMetadata() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let normal = try RecoveryJournalStore(paths: fixture.paths)
+        try normal.write(journal(phase: .replacementPrepared))
+
+        let wrongOwner = try RecoveryJournalStore(
+            paths: fixture.paths,
+            metadataTransform: { metadata in
+                var changed = metadata
+                changed.st_uid = Darwin.geteuid() &+ 1
+                return changed
+            }
+        )
+        XCTAssertThrowsError(try wrongOwner.load())
+
+        let setgid = try RecoveryJournalStore(
+            paths: fixture.paths,
+            metadataTransform: { metadata in
+                var changed = metadata
+                changed.st_mode |= mode_t(S_ISGID)
+                return changed
+            }
+        )
+        XCTAssertThrowsError(try setgid.load())
+        XCTAssertEqual(try fullPermissions(fixture.paths.recoveryJournal), 0o600)
+    }
+
     func testJournalRejectsMissingExtraBadVersionAndInvalidTokenWithoutLeakingSecret() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -109,6 +170,81 @@ final class RecoveryJournalTests: XCTestCase {
         XCTAssertFalse(String(reflecting: value).contains(replacementToken))
     }
 
+    func testJournalRejectsNonASCIIControlAndWrongByteLengthTokensOnWriteAndLoad() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = try RecoveryJournalStore(paths: fixture.paths)
+        let invalidTokens = [
+            String(repeating: "A", count: 42),
+            String(repeating: "A", count: 44),
+            String(repeating: "A", count: 42) + "\n",
+            String(repeating: "A", count: 42) + "\r",
+            String(repeating: "A", count: 41) + "é",
+        ]
+
+        for (index, token) in invalidTokens.enumerated() {
+            let invalid = RecoveryJournal(
+                version: 1,
+                operationID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+                replacementDeviceID: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
+                replacementDeviceToken: token,
+                companionVersion: "0.4.8",
+                queueDisposition: .empty,
+                phase: .replacementPrepared
+            )
+            XCTAssertThrowsError(try store.write(invalid), "write case \(index)")
+
+            let object: [String: Any] = [
+                "version": 1,
+                "operation_id": "00000000-0000-4000-8000-000000000001",
+                "replacement_device_id": "00000000-0000-4000-8000-000000000002",
+                "replacement_device_token": token,
+                "companion_version": "0.4.8",
+                "queue_disposition": "empty",
+                "phase": "replacementPrepared",
+            ]
+            try writeRaw(try JSONSerialization.data(withJSONObject: object), to: fixture.paths.recoveryJournal)
+            XCTAssertThrowsError(try store.load(), "load case \(index)")
+        }
+    }
+
+    func testJournalRejectsDuplicateTopLevelSecurityKeysBeforeDecode() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = try RecoveryJournalStore(paths: fixture.paths)
+        let prefix = #"{"operation_id":"00000000-0000-4000-8000-000000000001","replacement_device_id":"00000000-0000-4000-8000-000000000002","companion_version":"0.4.8","queue_disposition":"empty","#
+        let validToken = String(repeating: "A", count: 43)
+        let otherToken = String(repeating: "B", count: 43)
+        let fixtures = [
+            prefix + #""version":1,"version":1,"replacement_device_token":"\#(validToken)","phase":"replacementPrepared"}"#,
+            prefix + #""version":1,"version":2,"replacement_device_token":"\#(validToken)","phase":"replacementPrepared"}"#,
+            prefix + #""version":1,"replacement_device_token":"\#(validToken)","replacement_device_token":"\#(validToken)","phase":"replacementPrepared"}"#,
+            prefix + #""version":1,"replacement_device_token":"\#(validToken)","replacement_device_token":"\#(otherToken)","phase":"replacementPrepared"}"#,
+            prefix + #""version":1,"replacement_device_token":"\#(validToken)","phase":"replacementPrepared","phase":"replacementPrepared"}"#,
+            prefix + #""version":1,"replacement_device_token":"\#(validToken)","phase":"replacementPrepared","phase":"serverCommitted"}"#,
+        ]
+
+        for (index, raw) in fixtures.enumerated() {
+            try writeRaw(Data(raw.utf8), to: fixture.paths.recoveryJournal)
+            XCTAssertThrowsError(try store.load(), "duplicate case \(index)")
+        }
+    }
+
+    func testJournalReadRejectsSetIDAndStickyPermissionBits() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = try RecoveryJournalStore(paths: fixture.paths)
+        let modes: [mode_t] = [0o4600, 0o1600]
+
+        for mode in modes {
+            try? FileManager.default.removeItem(at: fixture.paths.recoveryJournal)
+            try store.write(journal(phase: .replacementPrepared))
+            XCTAssertEqual(Darwin.chmod(fixture.paths.recoveryJournal.path, mode), 0)
+            XCTAssertEqual(try fullPermissions(fixture.paths.recoveryJournal), Int(mode))
+            XCTAssertThrowsError(try store.load(), "mode \(String(mode, radix: 8))")
+        }
+    }
+
     func testJournalRejectsWrongModeTypeLinkCountAndBoundedSize() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -141,12 +277,6 @@ final class RecoveryJournalTests: XCTestCase {
         try writeRaw(Data(repeating: 0x61, count: 16_385), to: fixture.paths.recoveryJournal)
         XCTAssertThrowsError(try store.load())
 
-        var metadata = stat()
-        metadata.st_mode = mode_t(S_IFREG | 0o600)
-        metadata.st_uid = Darwin.geteuid() &+ 1
-        metadata.st_nlink = 1
-        metadata.st_size = 10
-        XCTAssertFalse(VerifiedStateDirectory.validPrivateFile(metadata, maximumBytes: 16_384))
     }
 
     func testJournalRejectsSymlinkFileAndParentWithoutTouchingTarget() throws {
@@ -221,6 +351,31 @@ final class RecoveryJournalTests: XCTestCase {
         XCTAssertNotNil(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock))
     }
 
+    func testHeldLifecycleLockSurvivesSupportTreeRemovalAndReplacement() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let first = try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)
+        XCTAssertNotNil(first)
+
+        try FileManager.default.removeItem(at: fixture.paths.agent.supportDirectory)
+        XCTAssertThrowsError(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)) { error in
+            XCTAssertEqual(error as? LifecycleStorageError, .busy)
+        }
+
+        try FileManager.default.createDirectory(
+            at: fixture.paths.agent.stateDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: fixture.paths.agent.stateDirectory.path
+        )
+        XCTAssertThrowsError(try LifecycleLock.acquire(at: fixture.paths.lifecycleLock)) { error in
+            XCTAssertEqual(error as? LifecycleStorageError, .busy)
+        }
+    }
+
     private func journal(phase: ReEnrollmentPhase) -> RecoveryJournal {
         RecoveryJournal(
             version: 1,
@@ -244,11 +399,19 @@ final class RecoveryJournalTests: XCTestCase {
         return try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue & 0o777
     }
 
+    private func fullPermissions(_ url: URL) throws -> Int {
+        var metadata = stat()
+        guard Darwin.lstat(url.path, &metadata) == 0 else { throw POSIXError(.EIO) }
+        return Int(metadata.st_mode & 0o7777)
+    }
+
     private func inode(_ url: URL) throws -> UInt64 {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         return try XCTUnwrap(attributes[.systemFileNumber] as? NSNumber).uint64Value
     }
 }
+
+private struct SimulatedInterruption: Error {}
 
 private final class Fixture {
     let root: URL
@@ -271,6 +434,10 @@ private final class Fixture {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
             ofItemAtPath: paths.agent.stateDirectory.path
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: paths.agent.supportDirectory.deletingLastPathComponent().path
         )
     }
 

@@ -19,6 +19,10 @@ final class ControlProtocolTests: XCTestCase {
         )
         XCTAssertEqual(paths.commandShim.path, "/Users/test/.local/bin/raiders")
         XCTAssertEqual(
+            paths.managedPlist.path,
+            "/Users/test/Library/Application Support/Runtime Raiders/Runtime Raiders.app/Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist"
+        )
+        XCTAssertEqual(
             paths.legacyPlist.path,
             "/Users/test/Library/LaunchAgents/com.redlattice.runtime-raiders-agent.plist"
         )
@@ -27,7 +31,10 @@ final class ControlProtocolTests: XCTestCase {
             "/Users/test/Library/Application Support/Runtime Raiders/state/enrollment.json"
         )
         XCTAssertEqual(paths.recoveryJournal.lastPathComponent, "re-enrollment.json")
-        XCTAssertEqual(paths.lifecycleLock.lastPathComponent, "lifecycle.lock")
+        XCTAssertEqual(
+            paths.lifecycleLock.path,
+            "/Users/test/Library/Application Support/.runtime-raiders.lifecycle.lock"
+        )
     }
 
     func testCompanionLifecyclePathsRejectNonFileRelativeAndNonstandardHomes() {

@@ -4,6 +4,18 @@ import Foundation
 @_silgen_name("flock")
 private func runtimeRaidersFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 
+func isExactBase64URLCredential(_ value: String) -> Bool {
+    let bytes = Array(value.utf8)
+    guard bytes.count == 43 else { return false }
+    return bytes.allSatisfy { byte in
+        (0x41...0x5a).contains(byte)
+            || (0x61...0x7a).contains(byte)
+            || (0x30...0x39).contains(byte)
+            || byte == 0x5f
+            || byte == 0x2d
+    }
+}
+
 public enum LifecycleStorageError: Error, Equatable {
     case invalidPath
     case invalidState
@@ -71,12 +83,20 @@ public struct RecoveryJournal: Codable, Equatable, Sendable,
 }
 
 final class VerifiedStateDirectory: @unchecked Sendable {
+    typealias MetadataTransform = (stat) -> stat
+
     let url: URL
     let descriptor: Int32
     private let device: dev_t
     private let inode: ino_t
+    private let atomicStore: AtomicStore
+    private let metadataTransform: MetadataTransform
 
-    init(url: URL) throws {
+    init(
+        url: URL,
+        atomicStore: AtomicStore = AtomicStore(),
+        metadataTransform: @escaping MetadataTransform = { $0 }
+    ) throws {
         guard url.isFileURL,
               url.path.hasPrefix("/"),
               url.standardized.path == url.path,
@@ -90,6 +110,8 @@ final class VerifiedStateDirectory: @unchecked Sendable {
         }
         self.url = URL(fileURLWithPath: url.path, isDirectory: true)
         self.descriptor = descriptor
+        self.atomicStore = atomicStore
+        self.metadataTransform = metadataTransform
         device = metadata.st_dev
         inode = metadata.st_ino
     }
@@ -126,7 +148,11 @@ final class VerifiedStateDirectory: @unchecked Sendable {
         }
         defer { Darwin.close(file) }
         var metadata = stat()
-        guard Darwin.fstat(file, &metadata) == 0,
+        guard Darwin.fstat(file, &metadata) == 0 else {
+            throw LifecycleStorageError.invalidState
+        }
+        metadata = metadataTransform(metadata)
+        guard
               Self.validPrivateFile(metadata, maximumBytes: maximumBytes) else {
             throw LifecycleStorageError.invalidState
         }
@@ -163,7 +189,7 @@ final class VerifiedStateDirectory: @unchecked Sendable {
         try verifyPathIdentity()
         try validateExistingFileIfPresent(name: name, maximumBytes: maximumExistingBytes)
         do {
-            try AtomicStore().write(data, directoryDescriptor: descriptor, name: name)
+            try atomicStore.write(data, directoryDescriptor: descriptor, name: name)
         } catch {
             throw LifecycleStorageError.invalidState
         }
@@ -189,6 +215,7 @@ final class VerifiedStateDirectory: @unchecked Sendable {
             if errno == ENOENT { return }
             throw LifecycleStorageError.invalidState
         }
+        metadata = metadataTransform(metadata)
         guard Self.validPrivateFile(metadata, maximumBytes: maximumBytes) else {
             throw LifecycleStorageError.invalidState
         }
@@ -208,7 +235,7 @@ final class VerifiedStateDirectory: @unchecked Sendable {
     ) -> Bool {
         metadata.st_mode & S_IFMT == S_IFREG
             && metadata.st_uid == Darwin.geteuid()
-            && metadata.st_mode & 0o777 == 0o600
+            && metadata.st_mode & 0o7777 == 0o600
             && metadata.st_nlink == 1
             && (allowsEmpty ? metadata.st_size >= 0 : metadata.st_size > 0)
             && metadata.st_size <= maximumBytes
@@ -225,13 +252,35 @@ public struct RecoveryJournalStore: @unchecked Sendable {
         name = paths.recoveryJournal.lastPathComponent
     }
 
+    init(paths: CompanionLifecyclePaths, atomicStore: AtomicStore) throws {
+        stateDirectory = try VerifiedStateDirectory(
+            url: paths.agent.stateDirectory,
+            atomicStore: atomicStore
+        )
+        name = paths.recoveryJournal.lastPathComponent
+    }
+
+    init(
+        paths: CompanionLifecyclePaths,
+        metadataTransform: @escaping VerifiedStateDirectory.MetadataTransform
+    ) throws {
+        stateDirectory = try VerifiedStateDirectory(
+            url: paths.agent.stateDirectory,
+            metadataTransform: metadataTransform
+        )
+        name = paths.recoveryJournal.lastPathComponent
+    }
+
     public func load() throws -> RecoveryJournal? {
         guard let data = try stateDirectory.readPrivateFile(
             name: name,
             maximumBytes: Self.maximumBytes
         ) else { return nil }
+        var keyScanner = StrictTopLevelJSONKeys(data: data)
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == Set(RecoveryJournal.CodingKeys.allCases.map(\.rawValue)),
+              let scannedKeys = try? keyScanner.parse(),
+              scannedKeys == Set(RecoveryJournal.CodingKeys.allCases.map(\.rawValue)),
+              Set(object.keys) == scannedKeys,
               let journal = try? JSONDecoder().decode(RecoveryJournal.self, from: data),
               Self.valid(journal) else {
             throw LifecycleStorageError.invalidState
@@ -263,10 +312,145 @@ public struct RecoveryJournalStore: @unchecked Sendable {
     private static func valid(_ journal: RecoveryJournal) -> Bool {
         journal.version == 1
             && (1...100).contains(journal.companionVersion.utf8.count)
-            && journal.replacementDeviceToken.range(
-                of: #"^[A-Za-z0-9_-]{43}$"#,
-                options: .regularExpression
-            ) != nil
+            && isExactBase64URLCredential(journal.replacementDeviceToken)
+    }
+}
+
+private struct StrictTopLevelJSONKeys {
+    private let bytes: [UInt8]
+    private var index = 0
+
+    init(data: Data) {
+        bytes = Array(data)
+    }
+
+    mutating func parse() throws -> Set<String> {
+        skipWhitespace()
+        guard consume(0x7b) else { throw LifecycleStorageError.invalidState }
+        skipWhitespace()
+        var keys = Set<String>()
+        if consume(0x7d) {
+            skipWhitespace()
+            guard index == bytes.count else { throw LifecycleStorageError.invalidState }
+            return keys
+        }
+        while true {
+            let key = try parseString()
+            guard keys.insert(key).inserted else { throw LifecycleStorageError.invalidState }
+            skipWhitespace()
+            guard consume(0x3a) else { throw LifecycleStorageError.invalidState }
+            skipWhitespace()
+            try skipValue(depth: 0)
+            skipWhitespace()
+            if consume(0x7d) { break }
+            guard consume(0x2c) else { throw LifecycleStorageError.invalidState }
+            skipWhitespace()
+        }
+        skipWhitespace()
+        guard index == bytes.count else { throw LifecycleStorageError.invalidState }
+        return keys
+    }
+
+    private mutating func skipValue(depth: Int) throws {
+        guard depth <= 32, index < bytes.count else {
+            throw LifecycleStorageError.invalidState
+        }
+        switch bytes[index] {
+        case 0x22:
+            _ = try parseString()
+        case 0x7b:
+            index += 1
+            skipWhitespace()
+            if consume(0x7d) { return }
+            while true {
+                _ = try parseString()
+                skipWhitespace()
+                guard consume(0x3a) else { throw LifecycleStorageError.invalidState }
+                skipWhitespace()
+                try skipValue(depth: depth + 1)
+                skipWhitespace()
+                if consume(0x7d) { return }
+                guard consume(0x2c) else { throw LifecycleStorageError.invalidState }
+                skipWhitespace()
+            }
+        case 0x5b:
+            index += 1
+            skipWhitespace()
+            if consume(0x5d) { return }
+            while true {
+                try skipValue(depth: depth + 1)
+                skipWhitespace()
+                if consume(0x5d) { return }
+                guard consume(0x2c) else { throw LifecycleStorageError.invalidState }
+                skipWhitespace()
+            }
+        case 0x74:
+            try consumeLiteral(Array("true".utf8))
+        case 0x66:
+            try consumeLiteral(Array("false".utf8))
+        case 0x6e:
+            try consumeLiteral(Array("null".utf8))
+        case 0x2d, 0x30...0x39:
+            let start = index
+            while index < bytes.count,
+                  bytes[index] == 0x2d
+                    || bytes[index] == 0x2b
+                    || bytes[index] == 0x2e
+                    || bytes[index] == 0x45
+                    || bytes[index] == 0x65
+                    || (0x30...0x39).contains(bytes[index]) {
+                index += 1
+            }
+            guard index > start else { throw LifecycleStorageError.invalidState }
+        default:
+            throw LifecycleStorageError.invalidState
+        }
+    }
+
+    private mutating func parseString() throws -> String {
+        let start = index
+        guard consume(0x22) else { throw LifecycleStorageError.invalidState }
+        while index < bytes.count {
+            let byte = bytes[index]
+            index += 1
+            if byte == 0x22 {
+                let encoded = Data(bytes[start..<index])
+                guard let decoded = try? JSONDecoder().decode(String.self, from: encoded) else {
+                    throw LifecycleStorageError.invalidState
+                }
+                return decoded
+            }
+            guard byte >= 0x20 else { throw LifecycleStorageError.invalidState }
+            if byte == 0x5c {
+                guard index < bytes.count else { throw LifecycleStorageError.invalidState }
+                index += 1
+            }
+        }
+        throw LifecycleStorageError.invalidState
+    }
+
+    private mutating func consumeLiteral(_ literal: [UInt8]) throws {
+        guard index + literal.count <= bytes.count,
+              Array(bytes[index..<(index + literal.count)]) == literal else {
+            throw LifecycleStorageError.invalidState
+        }
+        index += literal.count
+    }
+
+    private mutating func skipWhitespace() {
+        while index < bytes.count,
+              bytes[index] == 0x20
+                || bytes[index] == 0x09
+                || bytes[index] == 0x0a
+                || bytes[index] == 0x0d {
+            index += 1
+        }
+    }
+
+    private mutating func consume(_ byte: UInt8) -> Bool {
+        guard index < bytes.count, bytes[index] == byte else { return false }
+        index += 1
+        return true
     }
 }
 

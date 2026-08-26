@@ -196,7 +196,8 @@ public enum EnrollmentConfigurationError: Error, Equatable {
     case invalidConfiguration
 }
 
-public struct EnrollmentConfiguration: Equatable, Sendable {
+public struct EnrollmentConfiguration: Equatable, Sendable,
+    CustomStringConvertible, CustomDebugStringConvertible {
     public let deviceID: String
     public let deviceToken: String
     public let dedupeSecret: Data
@@ -213,10 +214,7 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
         enabledSurfaces: [RunSurface]
     ) throws {
         guard UUID(uuidString: deviceID) != nil,
-              deviceToken.range(
-                of: #"^[A-Za-z0-9_-]{43}$"#,
-                options: .regularExpression
-              ) != nil,
+              isExactBase64URLCredential(deviceToken),
               dedupeSecret.count == 32,
               serverURL.absoluteString == "https://raiders.redlattice.com",
               (0...9_007_199_254_740_991).contains(cutoverAtMS),
@@ -235,6 +233,12 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
             sortEnabledSurfaces: true
         )
     }
+
+    public var description: String {
+        "EnrollmentConfiguration(surfaces: \(enabledSurfaces.count), credentials: <redacted>)"
+    }
+
+    public var debugDescription: String { description }
 
     private init(
         validatedDeviceID deviceID: String,
@@ -338,7 +342,7 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
         guard Darwin.fstat(descriptor, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG,
               metadata.st_uid == Darwin.geteuid(),
-              metadata.st_mode & 0o777 == 0o600,
+              metadata.st_mode & 0o7777 == 0o600,
               metadata.st_size > 0,
               metadata.st_size <= 65_536 else {
             throw EnrollmentConfigurationError.invalidFile
@@ -362,10 +366,7 @@ public struct EnrollmentConfiguration: Equatable, Sendable {
               let wire = try? JSONDecoder().decode(EnrollmentWire.self, from: data),
               wire.version == 1,
               UUID(uuidString: wire.deviceID) != nil,
-              wire.deviceToken.range(
-                of: #"^[A-Za-z0-9_-]{43}$"#,
-                options: .regularExpression
-              ) != nil,
+              isExactBase64URLCredential(wire.deviceToken),
               let secret = decodeLowerHex(wire.dedupeSecret),
               secret.count == 32,
               let serverURL = URL(string: wire.serverURL),
@@ -1576,7 +1577,7 @@ public final class AgentController: @unchecked Sendable {
         guard Darwin.fstat(descriptor, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG,
               metadata.st_uid == Darwin.geteuid(),
-              metadata.st_mode & 0o777 == 0o600,
+              metadata.st_mode & 0o7777 == 0o600,
               metadata.st_nlink == 1,
               metadata.st_size > 0,
               metadata.st_size <= maximumBytes else {
@@ -1888,7 +1889,7 @@ enum OwnerOnlyDirectory {
         guard Darwin.fstat(descriptor, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFDIR,
               metadata.st_uid == Darwin.geteuid(),
-              metadata.st_mode & 0o777 == 0o700 else {
+              metadata.st_mode & 0o7777 == 0o700 else {
             Darwin.close(descriptor)
             throw AgentControllerError.invalidState
         }

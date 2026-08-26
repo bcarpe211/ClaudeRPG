@@ -1,17 +1,31 @@
 import Darwin
 import Foundation
 
+enum AtomicStoreDescriptorCheckpoint: Equatable {
+    case beforeRename
+    case afterRenameBeforeDirectorySync
+}
+
 public struct AtomicStore {
     typealias Replace = (_ temporary: URL, _ destination: URL) throws -> Void
+    typealias DescriptorCheckpoint = (AtomicStoreDescriptorCheckpoint) throws -> Void
 
     private let replace: Replace
+    private let descriptorCheckpoint: DescriptorCheckpoint
 
     public init() {
         replace = Self.atomicReplace
+        descriptorCheckpoint = { _ in }
     }
 
     init(replace: @escaping Replace) {
         self.replace = replace
+        descriptorCheckpoint = { _ in }
+    }
+
+    init(descriptorCheckpoint: @escaping DescriptorCheckpoint) {
+        replace = Self.atomicReplace
+        self.descriptorCheckpoint = descriptorCheckpoint
     }
 
     public func write(_ data: Data, to destination: URL) throws {
@@ -62,6 +76,7 @@ public struct AtomicStore {
         try Self.synchronizeDescriptor(descriptor)
         try Self.closeDescriptor(descriptor)
         needsClose = false
+        try descriptorCheckpoint(.beforeRename)
         guard Darwin.renameat(
             directoryDescriptor,
             temporary,
@@ -70,6 +85,7 @@ public struct AtomicStore {
         ) == 0 else {
             throw Self.currentPOSIXError()
         }
+        try descriptorCheckpoint(.afterRenameBeforeDirectorySync)
         try Self.synchronizeDescriptor(directoryDescriptor)
     }
 

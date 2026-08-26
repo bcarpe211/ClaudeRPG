@@ -2018,6 +2018,80 @@ final class AgentControllerTests: XCTestCase {
         )
     }
 
+    func testEnrollmentInitializerRejectsNonASCIIControlAndWrongByteLengthTokens() {
+        let invalidTokens = [
+            String(repeating: "A", count: 42),
+            String(repeating: "A", count: 44),
+            String(repeating: "A", count: 42) + "\n",
+            String(repeating: "A", count: 42) + "\r",
+            String(repeating: "A", count: 41) + "é",
+        ]
+
+        for (index, token) in invalidTokens.enumerated() {
+            XCTAssertThrowsError(
+                try EnrollmentConfiguration(
+                    deviceID: "00000000-0000-4000-8000-000000000001",
+                    deviceToken: token,
+                    dedupeSecret: Data(repeating: 0xab, count: 32),
+                    serverURL: URL(string: "https://raiders.redlattice.com")!,
+                    cutoverAtMS: 1_700_000_000_000,
+                    enabledSurfaces: [.codexCLI]
+                ),
+                "token case \(index)"
+            )
+        }
+    }
+
+    func testEnrollmentConfigurationDescriptionsRedactCredentialMaterial() throws {
+        let token = String(repeating: "B", count: 43)
+        let secret = Data(repeating: 0xcd, count: 32)
+        let configuration = try EnrollmentConfiguration(
+            deviceID: "00000000-0000-4000-8000-000000000001",
+            deviceToken: token,
+            dedupeSecret: secret,
+            serverURL: URL(string: "https://raiders.redlattice.com")!,
+            cutoverAtMS: 1_700_000_000_000,
+            enabledSurfaces: [.codexCLI]
+        )
+        let secretHex = String(repeating: "cd", count: 32)
+        let descriptions = [
+            String(describing: configuration),
+            String(reflecting: configuration),
+            String(reflecting: [configuration]),
+        ]
+
+        for description in descriptions {
+            XCTAssertFalse(description.contains(token))
+            XCTAssertFalse(description.contains(secretHex))
+            XCTAssertFalse(description.contains(secret.base64EncodedString()))
+        }
+    }
+
+    func testEnrollmentLoadRejectsSetIDAndStickyPermissionBits() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-enrollment-special-mode-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("enrollment.json")
+        let data = Data(
+            #"{"version":1,"device_id":"00000000-0000-4000-8000-000000000001","device_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","dedupe_secret":"abababababababababababababababababababababababababababababababab","server_url":"https://raiders.redlattice.com","cutover_at":1700000000000,"enabled_surfaces":["codex_cli"]}"#.utf8
+        )
+        let modes: [mode_t] = [0o4600, 0o1600]
+
+        for mode in modes {
+            try data.write(to: file)
+            XCTAssertEqual(Darwin.chmod(file.path, mode), 0)
+            XCTAssertThrowsError(
+                try EnrollmentConfiguration.loadExisting(from: file),
+                "mode \(String(mode, radix: 8))"
+            )
+        }
+    }
+
     func testEnrollmentPersistenceRejectsSymlinkAndRetainedDirectorySwap() throws {
         let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-enrollment-swap-\(UUID().uuidString)", isDirectory: true)

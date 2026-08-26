@@ -34,8 +34,8 @@ public struct CompanionLifecyclePaths: Equatable, Sendable {
         self.agent = agent
         supportShim = agent.supportDirectory.appendingPathComponent("raiders", isDirectory: false)
         commandShim = home.appendingPathComponent(".local/bin/raiders", isDirectory: false)
-        managedPlist = launchAgents.appendingPathComponent(
-            "com.redlattice.runtime-raiders.agent.plist",
+        managedPlist = agent.agentApplication.appendingPathComponent(
+            "Contents/Library/LaunchAgents/com.redlattice.runtime-raiders.agent.plist",
             isDirectory: false
         )
         legacyPlist = launchAgents.appendingPathComponent(
@@ -50,8 +50,8 @@ public struct CompanionLifecyclePaths: Equatable, Sendable {
             "re-enrollment.json",
             isDirectory: false
         )
-        lifecycleLock = agent.stateDirectory.appendingPathComponent(
-            "lifecycle.lock",
+        lifecycleLock = applicationSupport.appendingPathComponent(
+            ".runtime-raiders.lifecycle.lock",
             isDirectory: false
         )
     }
