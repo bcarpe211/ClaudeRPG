@@ -356,7 +356,12 @@ describe('Runtime Raiders local integration gate', () => {
     db.prepare('UPDATE game_state SET paused = 1, last_activity_at = ? WHERE id = 1')
       .run(NOW - 20 * 60_000);
     const device = await enrollDevice();
-    const wakingEvent = runEvent(device.deviceId, { run_key: hexKey(20_000) });
+    const wakingEvent = runEvent(device.deviceId, {
+      run_key: hexKey(20_000),
+      started_at_ms: NOW,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
+    });
     const wake = await post('/api/runs/events', { events: [wakingEvent] }, device.deviceToken);
     expect(wake.status).toBe(200);
     expect(wake.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
@@ -366,11 +371,15 @@ describe('Runtime Raiders local integration gate', () => {
     const desktopOpen = runEvent(device.deviceId, {
       run_key: hexKey(20_001),
       sequence: 1,
+      started_at_ms: NOW,
+      event_time_ms: NOW,
+      observed_at_ms: NOW,
       usage: { input: 120 },
     });
     const desktopCompleted = runEvent(device.deviceId, {
       run_key: desktopOpen.run_key,
       sequence: 2,
+      started_at_ms: desktopOpen.started_at_ms,
       event_time_ms: desktopOpen.event_time_ms + 1_000,
       observed_at_ms: desktopOpen.observed_at_ms + 1_000,
       state: 'completed',
@@ -380,26 +389,26 @@ describe('Runtime Raiders local integration gate', () => {
       surface: 'codex_cli',
       run_key: hexKey(20_002),
       sequence: 1,
-      started_at_ms: CUTOVER + 2_000,
-      event_time_ms: CUTOVER + 2_000 + 6 * 24 * 60 * 60 * 1_000,
-      observed_at_ms: CUTOVER + 2_000 + 6 * 24 * 60 * 60 * 1_000,
+      started_at_ms: NOW + 2_000,
+      event_time_ms: NOW + 2_000 + 6 * 24 * 60 * 60 * 1_000,
+      observed_at_ms: NOW + 2_000 + 6 * 24 * 60 * 60 * 1_000,
       state: 'completed',
-      usage: { input: 300, reasoning_output: 30 },
+      usage: { input: 300, output: 30, reasoning_output: 30 },
     });
     const desktopLong = runEvent(device.deviceId, {
       run_key: hexKey(20_003),
-      started_at_ms: CUTOVER + 3_000,
-      event_time_ms: CUTOVER + 3_000 + 6 * 24 * 60 * 60 * 1_000,
-      observed_at_ms: CUTOVER + 3_000 + 6 * 24 * 60 * 60 * 1_000,
+      started_at_ms: NOW + 3_000,
+      event_time_ms: NOW + 3_000 + 6 * 24 * 60 * 60 * 1_000,
+      observed_at_ms: NOW + 3_000 + 6 * 24 * 60 * 60 * 1_000,
       state: 'completed',
       usage: { input: 250 },
     });
     const cliShort = runEvent(device.deviceId, {
       surface: 'codex_cli',
       run_key: hexKey(20_004),
-      started_at_ms: CUTOVER + 4_000,
-      event_time_ms: CUTOVER + 5_000,
-      observed_at_ms: CUTOVER + 5_000,
+      started_at_ms: NOW + 4_000,
+      event_time_ms: NOW + 5_000,
+      observed_at_ms: NOW + 5_000,
       state: 'completed',
       usage: { input: 150 },
     });

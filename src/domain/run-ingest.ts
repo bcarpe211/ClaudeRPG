@@ -254,7 +254,11 @@ export function ingestRunEvents(
       }
 
       const usage = cumulativeUsage(run, event);
-      const targetUsageCredit = usageCredit(policy, event.provider, usage);
+      const cumulativeUsageCredit = usageCredit(policy, event.provider, usage);
+      const v1UsageExpired = policy.policy_version === 1 && now >= schedule.v2CutoverAt;
+      const targetUsageCredit = v1UsageExpired
+        ? run.awarded_usage_credit
+        : cumulativeUsageCredit;
       if (targetUsageCredit < run.awarded_usage_credit) {
         throw new RangeError('cumulative usage credit cannot roll back');
       }
@@ -265,7 +269,7 @@ export function ingestRunEvents(
       const terminalAt = acceptsTerminal ? event.event_time_ms : run.terminal_at_ms;
 
       let targetCompletionCredit = run.awarded_completion_credit;
-      if (state === 'completed' && (targetUsageCredit > 0 || player.disabled)) {
+      if (state === 'completed' && (cumulativeUsageCredit > 0 || player.disabled)) {
         targetCompletionCredit = Math.max(
           targetCompletionCredit,
           safeNonNegativeInteger(policy.completion_credit, 'completion credit'),
@@ -276,7 +280,7 @@ export function ingestRunEvents(
       let targetDurationCredit = run.awarded_duration_credit;
       if (state === 'completed'
         && terminalAt !== null
-        && (targetUsageCredit > 0 || player.disabled)) {
+        && (cumulativeUsageCredit > 0 || player.disabled)) {
         targetDurationCredit = Math.max(
           targetDurationCredit,
           safeNonNegativeInteger(

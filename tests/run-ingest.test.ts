@@ -56,6 +56,12 @@ const SCHEDULE = createRaidPowerPolicySchedule(
   CUTOVER,
   V2_CUTOVER,
 );
+const PRE_EXPIRATION_SCHEDULE = createRaidPowerPolicySchedule(
+  POLICY,
+  POLICY_V2,
+  CUTOVER,
+  V2_CUTOVER + 8 * 24 * 60 * 60_000,
+);
 
 let db: ReturnType<typeof openDb>;
 let player: ReturnType<typeof createPlayer>;
@@ -369,8 +375,10 @@ describe('ingestRunEvents', () => {
       usage,
     });
 
-    expect(ingestRunEvents(db, device, [v1, v2], SCHEDULE, NOW))
-      .toEqual({ accepted: 2, duplicate: 0, ignored: 0 });
+    expect(ingestRunEvents(db, device, [v1], SCHEDULE, V2_CUTOVER - 1))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
+    expect(ingestRunEvents(db, device, [v2], SCHEDULE, V2_CUTOVER))
+      .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
     expect(db.prepare(`
       SELECT run_key, policy_version, awarded_usage_credit, usage_input,
              usage_cache_read, usage_output, usage_reasoning_output
@@ -397,9 +405,9 @@ describe('ingestRunEvents', () => {
     ]);
   });
 
-  it('keeps a pre-v2 Run on v1 for late events and awards exact retries nothing', () => {
+  it('expires v1 usage at the v2 receipt cutoff while retaining raw counters and presence', () => {
     const first = event({
-      started_at_ms: V2_CUTOVER - 1,
+      started_at_ms: V2_CUTOVER - 60_000,
       event_time_ms: V2_CUTOVER - 1,
       observed_at_ms: V2_CUTOVER - 1,
       usage: { input: 100, output: 20, cache_read: 90, reasoning_output: 10 },
@@ -407,23 +415,62 @@ describe('ingestRunEvents', () => {
     const late = event({
       sequence: 2,
       started_at_ms: first.started_at_ms,
-      event_time_ms: V2_CUTOVER + 60_000,
-      observed_at_ms: V2_CUTOVER + 60_000,
+      event_time_ms: V2_CUTOVER,
+      observed_at_ms: V2_CUTOVER,
       usage: { input: 200, output: 30, cache_read: 199, reasoning_output: 15 },
     });
 
-    expect(ingestRunEvents(db, device, [first], SCHEDULE, NOW))
+    expect(ingestRunEvents(db, device, [first], SCHEDULE, V2_CUTOVER - 1))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
-    expect(ingestRunEvents(db, device, [late], SCHEDULE, NOW + 1))
+    expect(ingestRunEvents(db, device, [late], SCHEDULE, V2_CUTOVER))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
-    expect(ingestRunEvents(db, device, [late], SCHEDULE, NOW + 2))
+    expect(ingestRunEvents(db, device, [late], SCHEDULE, V2_CUTOVER + 1))
       .toEqual({ accepted: 0, duplicate: 1, ignored: 0 });
     expect(runRow()).toMatchObject({
       policy_version: 'raid-power-v1',
-      awarded_usage_credit: 245,
-      raid_power: 245,
+      usage_input: 200,
+      usage_output: 30,
+      usage_cache_read: 199,
+      usage_reasoning_output: 15,
+      awarded_usage_credit: 130,
+      raid_power: 130,
     });
-    expect(tokenRows().map((row) => row.effective_delta)).toEqual([130, 115]);
+    expect(tokenRows().map((row) => row.effective_delta)).toEqual([130]);
+    expect(eventRows().map((row) => row.awarded_delta)).toEqual([130, 0]);
+    expect(lastRaiderActivityAt(db, player.id)).toBe(V2_CUTOVER);
+  });
+
+  it('keeps bounded terminal credits when v1 usage first arrives after expiration', () => {
+    const startedAt = V2_CUTOVER - 60_000;
+    const opening = event({
+      started_at_ms: startedAt,
+      event_time_ms: V2_CUTOVER - 1,
+      observed_at_ms: V2_CUTOVER - 1,
+      usage: ZERO_USAGE,
+    });
+    const completed = event({
+      sequence: 2,
+      started_at_ms: startedAt,
+      event_time_ms: V2_CUTOVER,
+      observed_at_ms: V2_CUTOVER,
+      state: 'completed',
+      usage: { input: 100, cache_read: 90 },
+    });
+
+    ingestRunEvents(db, device, [opening], SCHEDULE, V2_CUTOVER - 1);
+    ingestRunEvents(db, device, [completed], SCHEDULE, V2_CUTOVER);
+
+    expect(runRow()).toMatchObject({
+      state: 'completed',
+      usage_input: 100,
+      usage_cache_read: 90,
+      awarded_usage_credit: 0,
+      awarded_completion_credit: 10,
+      awarded_duration_credit: 2,
+      raid_power: 12,
+    });
+    expect(tokenRows().map((row) => row.effective_delta)).toEqual([12]);
+    expect(eventRows().map((row) => row.awarded_delta)).toEqual([0, 12]);
   });
 
   it('rolls back a forged Run identity whose claimed start crosses the v2 cutoff', () => {
@@ -498,7 +545,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 130, output: 20, cache_read: 10_000, cache_write: 5 },
     });
 
-    expect(ingestRunEvents(db, device, [first, second], SCHEDULE, NOW))
+    expect(ingestRunEvents(db, device, [first, second], PRE_EXPIRATION_SCHEDULE, NOW))
       .toEqual({ accepted: 2, duplicate: 0, ignored: 0 });
 
     expect(runRow()).toMatchObject({
@@ -546,10 +593,10 @@ describe('ingestRunEvents', () => {
       usage: { input: 50 },
     });
 
-    expect(ingestRunEvents(db, device, [higher], SCHEDULE, NOW))
+    expect(ingestRunEvents(db, device, [higher], PRE_EXPIRATION_SCHEDULE, NOW))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
     expect(lastRaiderActivityAt(db, player.id)).toBe(NOW);
-    expect(ingestRunEvents(db, device, [lower], SCHEDULE, NOW + 2))
+    expect(ingestRunEvents(db, device, [lower], PRE_EXPIRATION_SCHEDULE, NOW + 2))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
 
     expect(eventRows().map(({ sequence, awarded_delta }) => ({ sequence, awarded_delta })))
@@ -603,7 +650,7 @@ describe('ingestRunEvents', () => {
       event({ sequence: 3, usage: { input: 250, output: 5 } }),
     ];
 
-    expect(ingestRunEvents(db, device, events, SCHEDULE, NOW))
+    expect(ingestRunEvents(db, device, events, PRE_EXPIRATION_SCHEDULE, NOW))
       .toEqual({ accepted: 3, duplicate: 0, ignored: 0 });
     expect(runRow()).toMatchObject({
       usage_input: 250,
@@ -621,7 +668,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 25 },
     });
 
-    ingestRunEvents(db, device, [open], SCHEDULE, NOW);
+    ingestRunEvents(db, device, [open], PRE_EXPIRATION_SCHEDULE, NOW);
 
     expect(runRow()).toMatchObject({
       state: 'open',
@@ -658,10 +705,10 @@ describe('ingestRunEvents', () => {
       usage: { input: 100 },
     });
 
-    ingestRunEvents(db, device, [open], SCHEDULE, NOW);
-    ingestRunEvents(db, device, [completed], SCHEDULE, NOW + 1);
-    ingestRunEvents(db, device, [completed], SCHEDULE, NOW + 2);
-    ingestRunEvents(db, device, [conflicting], SCHEDULE, NOW + 3);
+    ingestRunEvents(db, device, [open], PRE_EXPIRATION_SCHEDULE, NOW);
+    ingestRunEvents(db, device, [completed], PRE_EXPIRATION_SCHEDULE, NOW + 1);
+    ingestRunEvents(db, device, [completed], PRE_EXPIRATION_SCHEDULE, NOW + 2);
+    ingestRunEvents(db, device, [conflicting], PRE_EXPIRATION_SCHEDULE, NOW + 3);
 
     expect(runRow()).toMatchObject({
       state: 'completed',
@@ -716,7 +763,7 @@ describe('ingestRunEvents', () => {
         usage: { input: 50 },
       });
 
-      ingestRunEvents(db, device, [terminal, lateCompletion], SCHEDULE, NOW);
+      ingestRunEvents(db, device, [terminal, lateCompletion], PRE_EXPIRATION_SCHEDULE, NOW);
 
       expect(runRow()).toMatchObject({
         state: terminalState,
@@ -740,7 +787,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 1 },
     });
 
-    ingestRunEvents(db, device, [completed], SCHEDULE, NOW);
+    ingestRunEvents(db, device, [completed], PRE_EXPIRATION_SCHEDULE, NOW);
 
     expect(runRow()).toMatchObject({
       awarded_usage_credit: 1,
@@ -754,7 +801,7 @@ describe('ingestRunEvents', () => {
     const runA = event({ run_key: 'a'.repeat(64), usage: { input: 20 } });
     const runB = event({ run_key: 'b'.repeat(64), usage: { input: 30 } });
 
-    ingestRunEvents(db, device, [runA, runB], SCHEDULE, NOW);
+    ingestRunEvents(db, device, [runA, runB], PRE_EXPIRATION_SCHEDULE, NOW);
 
     expect(db.prepare(`
       SELECT run_key, raid_power FROM runs WHERE player_id = ? ORDER BY run_key
@@ -773,7 +820,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 500 },
     });
 
-    expect(ingestRunEvents(db, device, [desktop, cli], SCHEDULE, NOW))
+    expect(ingestRunEvents(db, device, [desktop, cli], PRE_EXPIRATION_SCHEDULE, NOW))
       .toEqual({ accepted: 1, duplicate: 1, ignored: 0 });
     expect(runRow()).toMatchObject({ surface: 'codex_desktop', raid_power: 20 });
     expect(eventRows()).toHaveLength(1);
@@ -794,7 +841,13 @@ describe('ingestRunEvents', () => {
       usage: { input: 6 },
     });
 
-    expect(() => ingestRunEvents(db, device, [runA, runB], SCHEDULE, NOW))
+    expect(() => ingestRunEvents(
+      db,
+      device,
+      [runA, runB],
+      PRE_EXPIRATION_SCHEDULE,
+      NOW,
+    ))
       .toThrow(RangeError);
 
     expect(getPlayerById(db, player.id)).toMatchObject({
@@ -825,7 +878,7 @@ describe('ingestRunEvents', () => {
       db,
       device,
       [completed],
-      createRaidPowerPolicySchedule(unsafePolicy, POLICY_V2, CUTOVER, V2_CUTOVER),
+      createRaidPowerPolicySchedule(unsafePolicy, POLICY_V2, CUTOVER, V2_CUTOVER + 1),
       NOW,
     )).toThrow(RangeError);
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({ count: 0 });
@@ -838,7 +891,7 @@ describe('ingestRunEvents', () => {
     updatePlayer(db, player.id, { disabled: 1 });
     const disabledUsage = event({ sequence: 1, usage: { input: 100 } });
 
-    expect(ingestRunEvents(db, device, [disabledUsage], SCHEDULE, NOW))
+    expect(ingestRunEvents(db, device, [disabledUsage], PRE_EXPIRATION_SCHEDULE, NOW))
       .toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
     expect(runRow()).toMatchObject({
       usage_input: 100,
@@ -854,7 +907,7 @@ describe('ingestRunEvents', () => {
       observed_at_ms: disabledUsage.observed_at_ms + 1,
       usage: { input: 110 },
     });
-    ingestRunEvents(db, device, [enabledUsage], SCHEDULE, NOW + 1);
+    ingestRunEvents(db, device, [enabledUsage], PRE_EXPIRATION_SCHEDULE, NOW + 1);
 
     expect(runRow()).toMatchObject({ awarded_usage_credit: 110, raid_power: 10 });
     expect(tokenRows().map((row) => row.effective_delta)).toEqual([10]);
@@ -872,7 +925,7 @@ describe('ingestRunEvents', () => {
       usage: { input: 0, cache_read: 10_000 },
     });
 
-    ingestRunEvents(db, device, [disabledCompletion], SCHEDULE, NOW);
+    ingestRunEvents(db, device, [disabledCompletion], PRE_EXPIRATION_SCHEDULE, NOW);
 
     expect(runRow()).toMatchObject({
       state: 'completed',
@@ -890,7 +943,7 @@ describe('ingestRunEvents', () => {
       observed_at_ms: disabledCompletion.observed_at_ms + 1,
       usage: { input: 10, cache_read: 10_000 },
     });
-    ingestRunEvents(db, device, [laterUsage], SCHEDULE, NOW + 1);
+    ingestRunEvents(db, device, [laterUsage], PRE_EXPIRATION_SCHEDULE, NOW + 1);
 
     expect(runRow()).toMatchObject({
       awarded_usage_credit: 10,

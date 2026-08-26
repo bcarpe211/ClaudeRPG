@@ -628,8 +628,18 @@ describe('Run event authentication and ingestion', () => {
   it('keeps unexpected ingestion failures on the private 500 path', async () => {
     const device = await enrollDevice();
     const overflow = [
-      runEvent(device.deviceId, { usage: { input: Number.MAX_SAFE_INTEGER } }),
-      runEvent(device.deviceId, { usage: { input: 1 } }),
+      runEvent(device.deviceId, {
+        started_at_ms: NOW,
+        event_time_ms: NOW,
+        observed_at_ms: NOW,
+        usage: { input: Number.MAX_SAFE_INTEGER },
+      }),
+      runEvent(device.deviceId, {
+        started_at_ms: NOW,
+        event_time_ms: NOW,
+        observed_at_ms: NOW,
+        usage: { input: 1 },
+      }),
     ];
 
     const response = await request(app)

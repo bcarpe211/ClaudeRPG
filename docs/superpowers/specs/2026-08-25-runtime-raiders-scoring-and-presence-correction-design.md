@@ -68,11 +68,18 @@ For v2, the server rejects an event when `cache_read > input` or
 
 The cutover is based on Run start time:
 
-- Runs started before the v2 cutover remain v1, including late or reconciled
-  events belonging to those Runs.
+- Runs started before the v2 cutover remain assigned to v1.
 - Runs started at or after the cutover use v2.
 - A Run's assigned policy is immutable.
 - Duplicate event identities remain idempotent under either policy.
+
+V1 usage credit expires at the v2 cutoff by authoritative server receipt time.
+At or after that instant, an accepted event for an existing v1 Run still
+updates its raw cumulative counters, lifecycle state, model metadata, and fresh
+presence receipt, but its awarded usage credit cannot increase. A completed v1
+Run may still receive the same bounded completion and duration credits. This is
+forward-only: the expiration does not automatically remove Raid Power awarded
+before deployment or otherwise rewrite existing history.
 
 This allows 0.4.8 collectors to continue sending auditable native counters while
 the server owns provider-specific scoring semantics.
@@ -131,6 +138,9 @@ notarization, publication, and wider employee activation remain separate work.
 
 - A Run with 74,226 input, 71,424 cached input, 486 output, and 284 reasoning
   receives 3,288 usage credit under v2.
+- A v1 Run retains its last pre-cutoff usage award when later accepted events
+  increase its raw counters, while completion and duration remain bounded and
+  available.
 - The same native counters remain available for player-page audit without
   additive wording.
 - Existing v1 database rows and every account-related table remain byte-for-byte
