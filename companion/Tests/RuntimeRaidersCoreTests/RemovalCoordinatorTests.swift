@@ -12,7 +12,7 @@ final class RemovalCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(fixture.actions, [
             "lock", "persist-off", "stop-daemon", "unregister", "verify-unregistered",
-            "remove-executable-artifacts", "verify-preserved-state",
+            "prepare-session", "remove-executable-artifacts", "verify-preserved-state",
         ])
     }
 
@@ -27,8 +27,9 @@ final class RemovalCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(fixture.actions, [
             "lock", "persist-off", "stop-daemon", "unregister", "verify-unregistered",
-            "summarize", "confirm-discard", "confirm-everything",
-            "revoke", "verify-revoked", "discard-queue", "remove-all-artifacts",
+            "prepare-session", "queue-snapshot", "summarize", "confirm-discard",
+            "confirm-everything", "load-enrollment", "revoke", "verify-revoked",
+            "discard-queue", "verify-queue-empty", "remove-all-artifacts",
         ])
     }
 
@@ -130,6 +131,47 @@ final class RemovalCoordinatorTests: XCTestCase {
         XCTAssertFalse(fixture.actions.contains("discard-queue"))
         XCTAssertFalse(fixture.actions.contains("remove-all-artifacts"))
     }
+
+    func testCompleteRemovalAuthorizationIsBoundToThePreparedSessionAndFinalQueueProof() throws {
+        let fixture = CoordinatorFixture()
+        fixture.queueCount = 1
+        fixture.enrollment = try makeEnrollment()
+
+        XCTAssertEqual(
+            try RemovalCoordinator(operations: fixture.operations()).run(mode: .everything),
+            .removedEverything
+        )
+        XCTAssertEqual(fixture.preparedSessions.count, 1)
+        XCTAssertTrue(fixture.receivedBoundAuthorization)
+        XCTAssertLessThan(
+            try XCTUnwrap(fixture.actions.firstIndex(of: "verify-queue-empty")),
+            try XCTUnwrap(fixture.actions.firstIndex(of: "remove-all-artifacts"))
+        )
+        XCTAssertEqual(Set(fixture.sessionIdentities).count, 1)
+    }
+
+    func testZeroQueueStillRequiresFinalExactEmptyProofBeforeDeletion() throws {
+        let fixture = CoordinatorFixture()
+        fixture.queueCount = 0
+        fixture.verifyQueueEmpty = false
+
+        XCTAssertThrowsError(
+            try RemovalCoordinator(operations: fixture.operations()).run(mode: .everything)
+        )
+        XCTAssertTrue(fixture.actions.contains("verify-queue-empty"))
+        XCTAssertFalse(fixture.actions.contains("discard-queue"))
+        XCTAssertFalse(fixture.actions.contains("remove-all-artifacts"))
+    }
+
+    func testCoordinatorCanIdempotentlyCompleteAnAlreadyRemovedSession() throws {
+        let fixture = CoordinatorFixture()
+        let coordinator = RemovalCoordinator(operations: fixture.operations())
+
+        XCTAssertEqual(try coordinator.run(mode: .everything), .removedEverything)
+        XCTAssertEqual(try coordinator.run(mode: .everything), .removedEverything)
+        XCTAssertEqual(fixture.actions.filter { $0 == "remove-all-artifacts" }.count, 2)
+        XCTAssertEqual(fixture.preparedSessions.count, 2)
+    }
 }
 
 private final class CoordinatorFixture {
@@ -142,7 +184,11 @@ private final class CoordinatorFixture {
     var confirmDiscard = true
     var confirmEverything = true
     var verifyUnregistered = true
+    var verifyQueueEmpty = true
     var throwingError: Error?
+    var preparedSessions: [CoordinatorSession] = []
+    var sessionIdentities: [ObjectIdentifier] = []
+    var receivedBoundAuthorization = false
 
     func operations() -> RemovalOperations {
         RemovalOperations(
@@ -155,7 +201,20 @@ private final class CoordinatorFixture {
                 if let error = self.throwingError { throw error }
                 return self.verifyUnregistered
             },
-            countQueue: { self.queueCount },
+            prepareSession: {
+                self.actions.append("prepare-session")
+                let session = CoordinatorSession()
+                self.preparedSessions.append(session)
+                return session
+            },
+            queueSnapshot: { session in
+                self.actions.append("queue-snapshot")
+                self.sessionIdentities.append(ObjectIdentifier(session))
+                return RemovalQueueSnapshot(
+                    sessionIdentifier: ObjectIdentifier(session),
+                    names: (0..<self.queueCount).map { "record-\($0)" }
+                )
+            },
             summarize: { _ in self.actions.append("summarize") },
             confirmDiscard: { _ in
                 self.actions.append("confirm-discard")
@@ -165,7 +224,9 @@ private final class CoordinatorFixture {
                 self.actions.append("confirm-everything")
                 return self.confirmEverything
             },
-            loadEnrollment: {
+            loadEnrollment: { session in
+                self.actions.append("load-enrollment")
+                self.sessionIdentities.append(ObjectIdentifier(session))
                 if let error = self.loadEnrollmentError { throw error }
                 return self.enrollment
             },
@@ -177,19 +238,36 @@ private final class CoordinatorFixture {
                 return try result.get()
             },
             delayMilliseconds: { delay in self.delays.append(delay) },
-            discardQueue: { self.actions.append("discard-queue") },
-            removeExecutableArtifacts: { self.actions.append("remove-executable-artifacts") },
-            verifyPreservedState: {
+            discardQueue: { session, _ in
+                self.sessionIdentities.append(ObjectIdentifier(session))
+                self.actions.append("discard-queue")
+            },
+            verifyQueueEmpty: { session, _ in
+                self.sessionIdentities.append(ObjectIdentifier(session))
+                self.actions.append("verify-queue-empty")
+                return self.verifyQueueEmpty
+            },
+            removeExecutableArtifacts: { session in
+                self.sessionIdentities.append(ObjectIdentifier(session))
+                self.actions.append("remove-executable-artifacts")
+            },
+            verifyPreservedState: { session in
+                self.sessionIdentities.append(ObjectIdentifier(session))
                 self.actions.append("verify-preserved-state")
                 return true
             },
-            removeAllArtifacts: { self.actions.append("remove-all-artifacts") },
+            removeAllArtifacts: { session, authorization in
+                self.sessionIdentities.append(ObjectIdentifier(session))
+                self.receivedBoundAuthorization = authorization.authorizes(session)
+                self.actions.append("remove-all-artifacts")
+            },
             revocationProof: { self.actions.append("verify-revoked") }
         )
     }
 }
 
 private final class CoordinatorLock: RemovalLock, @unchecked Sendable {}
+private final class CoordinatorSession: RemovalSession, @unchecked Sendable {}
 
 private enum CoordinatorError: Error { case transport, corrupt }
 

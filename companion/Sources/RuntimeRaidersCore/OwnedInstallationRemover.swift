@@ -1,5 +1,9 @@
 import Darwin
+import CryptoKit
 import Foundation
+
+@_silgen_name("flock")
+private func removalFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 
 public enum OwnedInstallationRemovalError: Error, Equatable,
     CustomStringConvertible, CustomDebugStringConvertible {
@@ -9,16 +13,10 @@ public enum OwnedInstallationRemovalError: Error, Equatable,
     public var debugDescription: String { description }
 }
 
-/// An unforgeable-across-modules proof that the coordinator reached its
-/// explicit revocation boundary. Only RuntimeRaidersCore can create one.
-public struct CompleteRemovalAuthorization: Sendable {
-    init() {}
-}
-
 public struct OwnedInstallationRemover: @unchecked Sendable {
     typealias MetadataTransform = (_ relativePath: String, _ metadata: stat) -> stat
     typealias ValidationCheckpoint = () throws -> Void
-    typealias RemovalObserver = (_ relativePath: String) -> Void
+    typealias RemovalObserver = (_ relativePath: String) throws -> Void
 
     private static let supportNames: Set<String> = [
         "Runtime Raiders.app", "raiders", "state", "outbox", "agent.sock",
@@ -31,6 +29,16 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
     ]
     private static let privateFileModes: Set<mode_t> = [0o600, 0o644, 0o700, 0o755]
     private static let directoryModes: Set<mode_t> = [0o700, 0o755]
+    private static let enrollmentMaximumBytes: off_t = 65_536
+    private static let journalMaximumBytes: off_t = 16 * 1_024
+    private static let collectorStateMaximumBytes: off_t = 4 * 1_024 * 1_024
+    private static let updateStateMaximumBytes: off_t = 16 * 1_024
+    private static let outboxRecordMaximumBytes: off_t = 64 * 1_024
+    private static let shimMaximumBytes: off_t = 4 * 1_024 * 1_024
+    private static let plistMaximumBytes: off_t = 1 * 1_024 * 1_024
+    // A signed app or retained release payload may be large, but removal never
+    // needs to trust an unbounded object.
+    private static let ownedPayloadMaximumBytes: off_t = 512 * 1_024 * 1_024
 
     private let paths: CompanionLifecyclePaths
     private let metadataTransform: MetadataTransform
@@ -59,37 +67,232 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
     }
 
     public func removeExecutableArtifacts() throws {
+        try prepareSession().removeExecutableArtifacts()
+    }
+
+    func prepareSession() throws -> OwnedInstallationRemovalSession {
         let plan = try validateCompleteInstallation()
         try validationCheckpoint()
         try plan.revalidateAll(metadataTransform: metadataTransform)
+        let socketLock = try acquireSocketLifetimeLock(plan: plan)
+        return OwnedInstallationRemovalSession(
+            socketLockDescriptor: socketLock,
+            queueNames: { try validatedQueueNames(plan: plan) },
+            loadEnrollment: { try loadEnrollment(plan: plan) },
+            discardQueue: { names in try discardQueue(names, plan: plan) },
+            verifyQueueEmpty: { names in try verifyQueueEmpty(names, plan: plan) },
+            removeExecutableArtifacts: { try removeExecutableArtifacts(plan: plan) },
+            verifyPreservedState: { try verifyPreservedState(plan: plan) },
+            removeAllArtifacts: { try removeAllArtifacts(plan: plan) }
+        )
+    }
 
-        if let support = plan.support {
-            for name in Self.executableNames.sorted() {
-                guard let node = support.children[name] else { continue }
-                try remove(node, from: support.descriptor)
+    private func acquireSocketLifetimeLock(plan: InstallationPlan) throws -> Int32? {
+        guard let support = plan.support else { return nil }
+        let lockName = ".agent.sock.runtime-raiders.lock"
+        guard let lock = support.children[lockName] else {
+            let stillExecutable = support.children.keys.contains {
+                Self.executableNames.contains($0) && $0 != lockName
             }
-            try synchronize(support.descriptor)
+            guard !stillExecutable else {
+                throw OwnedInstallationRemovalError.invalidInstallation
+            }
+            return nil
         }
-        try remove(plan.command)
-        try remove(plan.legacyPlist)
+        guard lock.kind == .regular, lock.metadata.st_size == 0 else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        while removalFlock(lock.descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if errno == EINTR { continue }
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        return lock.descriptor
     }
 
-    public func removeAllArtifacts(authorization: CompleteRemovalAuthorization) throws {
-        _ = authorization
-        let plan = try validateCompleteInstallation()
-        try validationCheckpoint()
+    private func removeExecutableArtifacts(plan: InstallationPlan) throws {
         try plan.revalidateAll(metadataTransform: metadataTransform)
-
-        try remove(plan.command)
-        try remove(plan.legacyPlist)
         if let support = plan.support {
-            try remove(support, from: plan.applicationSupport.descriptor)
-            try synchronize(plan.applicationSupport.descriptor)
+            for name in [
+                "Runtime Raiders.app", "releases", "installation", "launcher", "agent.sock",
+            ] {
+                try removeChild(named: name, support: support, plan: plan)
+            }
+            try remove(plan.legacyPlist)
+            try removeChild(named: "raiders", support: support, plan: plan)
+            try remove(plan.command)
+            try removeChild(
+                named: ".agent.sock.runtime-raiders.lock",
+                support: support,
+                plan: plan
+            )
+            try synchronize(support.descriptor)
+        } else {
+            try remove(plan.legacyPlist)
+            try remove(plan.command)
         }
     }
 
-    func prevalidateAllArtifacts() throws {
-        _ = try validateCompleteInstallation()
+    private func removeAllArtifacts(plan: InstallationPlan) throws {
+        try plan.revalidateAll(metadataTransform: metadataTransform)
+        if let support = plan.support {
+            for name in [
+                "state", "outbox", "Runtime Raiders.app", "releases", "installation",
+                "launcher", "agent.sock",
+            ] {
+                try removeChild(named: name, support: support, plan: plan)
+            }
+            try remove(plan.legacyPlist)
+            try removeChild(named: "raiders", support: support, plan: plan)
+            try removeChild(
+                named: ".agent.sock.runtime-raiders.lock",
+                support: support,
+                plan: plan
+            )
+            try remove(
+                support,
+                from: plan.applicationSupport.descriptor,
+                beforeMutation: {
+                    try plan.revalidateSupportAnchor(metadataTransform: metadataTransform)
+                }
+            )
+            try synchronize(plan.applicationSupport.descriptor)
+        } else {
+            try remove(plan.legacyPlist)
+        }
+        try remove(plan.command)
+    }
+
+    private func removeChild(
+        named name: String,
+        support: RetainedNode,
+        plan: InstallationPlan
+    ) throws {
+        guard let child = support.children[name] else { return }
+        try remove(
+            child,
+            from: support.descriptor,
+            beforeMutation: {
+                try plan.revalidateSupportAnchor(metadataTransform: metadataTransform)
+            }
+        )
+        support.children.removeValue(forKey: name)
+    }
+
+    private func validatedQueueNames(plan: InstallationPlan) throws -> [String] {
+        try plan.revalidateAll(metadataTransform: metadataTransform)
+        guard let support = plan.support,
+              let outbox = support.children["outbox"] else { return [] }
+        let names = outbox.children.keys.sorted()
+        for name in names {
+            guard Self.isCanonicalOutboxRecordName(name),
+                  let node = outbox.children[name],
+                  node.kind == .regular else {
+                throw OwnedInstallationRemovalError.invalidInstallation
+            }
+            let data = try readRetainedData(
+                descriptor: node.descriptor,
+                expectedSize: node.metadata.st_size,
+                maximumBytes: Self.outboxRecordMaximumBytes
+            )
+            guard let event = try? JSONDecoder().decode(RunEventV1.self, from: data),
+                  let canonical = try? PrivacyEncoder().encode(event),
+                  canonical == data,
+                  name == Self.canonicalOutboxName(event) else {
+                throw OwnedInstallationRemovalError.invalidInstallation
+            }
+        }
+        return names
+    }
+
+    private func loadEnrollment(plan: InstallationPlan) throws -> EnrollmentConfiguration? {
+        try plan.revalidateAll(metadataTransform: metadataTransform)
+        guard let state = plan.support?.children["state"],
+              let enrollment = state.children["enrollment.json"] else { return nil }
+        let data = try readRetainedData(
+            descriptor: enrollment.descriptor,
+            expectedSize: enrollment.metadata.st_size,
+            maximumBytes: Self.enrollmentMaximumBytes
+        )
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == [
+                  "version", "device_id", "device_token", "dedupe_secret",
+                  "server_url", "cutover_at", "enabled_surfaces",
+              ],
+              let wire = try? JSONDecoder().decode(RemovalEnrollmentWire.self, from: data),
+              wire.version == 1,
+              let secret = decodeRemovalLowerHex(wire.dedupeSecret),
+              let serverURL = URL(string: wire.serverURL) else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        return try EnrollmentConfiguration(
+            deviceID: wire.deviceID,
+            deviceToken: wire.deviceToken,
+            dedupeSecret: secret,
+            serverURL: serverURL,
+            cutoverAtMS: wire.cutoverAtMS,
+            enabledSurfaces: wire.enabledSurfaces
+        )
+    }
+
+    private func discardQueue(_ names: [String], plan: InstallationPlan) throws {
+        try plan.revalidateAll(metadataTransform: metadataTransform)
+        guard let support = plan.support,
+              let outbox = support.children["outbox"],
+              outbox.children.keys.sorted() == names else {
+            if names.isEmpty, plan.support?.children["outbox"] == nil { return }
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        for name in names.sorted() {
+            guard let node = outbox.children[name] else {
+                throw OwnedInstallationRemovalError.invalidInstallation
+            }
+            try remove(
+                node,
+                from: outbox.descriptor,
+                beforeMutation: {
+                    try plan.revalidateOutboxAnchor(metadataTransform: metadataTransform)
+                }
+            )
+            outbox.children.removeValue(forKey: name)
+        }
+        try synchronize(outbox.descriptor)
+    }
+
+    private func verifyQueueEmpty(_ names: [String], plan: InstallationPlan) throws -> Bool {
+        _ = names
+        try plan.revalidateAll(metadataTransform: metadataTransform)
+        guard let outbox = plan.support?.children["outbox"] else { return true }
+        let physicalNames = try directoryNames(outbox.descriptor)
+        return outbox.children.isEmpty && physicalNames.isEmpty
+    }
+
+    private func verifyPreservedState(plan: InstallationPlan) throws -> Bool {
+        try plan.home.revalidate(metadataTransform: metadataTransform)
+        try plan.applicationSupport.revalidate(metadataTransform: metadataTransform)
+        guard let support = plan.support else { return false }
+        try support.revalidateIdentity(
+            parentDescriptor: plan.applicationSupport.descriptor,
+            metadataTransform: metadataTransform
+        )
+        guard let state = support.children["state"],
+              let outbox = support.children["outbox"] else { return false }
+        try state.revalidate(
+            parentDescriptor: support.descriptor,
+            metadataTransform: metadataTransform
+        )
+        try outbox.revalidate(
+            parentDescriptor: support.descriptor,
+            metadataTransform: metadataTransform
+        )
+        return true
+    }
+
+    private static func canonicalOutboxName(_ event: RunEventV1) -> String {
+        event.idempotencyKey + ".json"
+    }
+
+    private static func isCanonicalOutboxRecordName(_ name: String) -> Bool {
+        name.range(of: #"^[0-9a-f]{64}\.json$"#, options: .regularExpression) != nil
     }
 
     private func validateCompleteInstallation() throws -> InstallationPlan {
@@ -260,7 +463,9 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
                     expectedDevice: expectedDevice,
                     allowedModes: [0o700]
                   ),
-                  metadata.st_nlink == 1 else {
+                  metadata.st_nlink == 1,
+                  metadata.st_size >= 0,
+                  metadata.st_size <= Self.shimMaximumBytes else {
                 throw OwnedInstallationRemovalError.invalidInstallation
             }
             return try openRegularNode(
@@ -330,6 +535,9 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
                 throw OwnedInstallationRemovalError.invalidInstallation
             }
         case .privateRegular:
+            guard let maximumBytes = Self.maximumBytes(for: relativePath, role: role) else {
+                throw OwnedInstallationRemovalError.invalidInstallation
+            }
             guard type == mode_t(S_IFREG),
                   validOwnerModeDevice(
                     metadata,
@@ -337,7 +545,8 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
                     allowedModes: [0o600]
                   ),
                   metadata.st_nlink == 1,
-                  metadata.st_size >= 0 else {
+                  metadata.st_size >= 0,
+                  metadata.st_size <= maximumBytes else {
                 throw OwnedInstallationRemovalError.invalidInstallation
             }
             return try openRegularNode(
@@ -366,7 +575,8 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
                     allowedModes: Self.privateFileModes
                   ),
                   metadata.st_nlink == 1,
-                  metadata.st_size >= 0 else {
+                  metadata.st_size >= 0,
+                  metadata.st_size <= Self.ownedPayloadMaximumBytes else {
                 throw OwnedInstallationRemovalError.invalidInstallation
             }
             return try openRegularNode(
@@ -397,7 +607,11 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
                 relativePath: relativePath,
                 metadata: metadata,
                 descriptor: descriptor,
-                kind: .regular
+                kind: .regular,
+                contentDigest: try digestRetainedDescriptor(
+                    descriptor,
+                    expectedSize: metadata.st_size
+                )
             )
         } catch {
             Darwin.close(descriptor)
@@ -453,7 +667,9 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
                 expectedDevice: expectedDevice,
                 allowedModes: allowedModes
               ),
-              metadata.st_nlink == 1 else {
+              metadata.st_nlink == 1,
+              metadata.st_size >= 0,
+              metadata.st_size <= Self.plistMaximumBytes else {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
         let descriptor = Darwin.openat(
@@ -469,7 +685,11 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
                 name: name,
                 relativePath: relativePath,
                 metadata: metadata,
-                descriptor: descriptor
+                descriptor: descriptor,
+                contentDigest: try digestRetainedDescriptor(
+                    descriptor,
+                    expectedSize: metadata.st_size
+                )
             )
         } catch {
             Darwin.close(descriptor)
@@ -503,22 +723,40 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
         }
     }
 
-    private func remove(_ node: RetainedNode, from parentDescriptor: Int32) throws {
+    private func remove(
+        _ node: RetainedNode,
+        from parentDescriptor: Int32,
+        beforeMutation: @escaping () throws -> Void
+    ) throws {
         try node.revalidate(
             parentDescriptor: parentDescriptor,
             metadataTransform: metadataTransform
         )
         if node.kind == .directory {
             for child in node.children.values.sorted(by: { $0.name < $1.name }) {
-                try remove(child, from: node.descriptor)
+                try remove(
+                    child,
+                    from: node.descriptor,
+                    beforeMutation: beforeMutation
+                )
             }
             try synchronize(node.descriptor)
-            removalObserver(node.relativePath)
+            try removalObserver(node.relativePath)
+            try beforeMutation()
+            try node.revalidateIdentity(
+                parentDescriptor: parentDescriptor,
+                metadataTransform: metadataTransform
+            )
             guard Darwin.unlinkat(parentDescriptor, node.name, AT_REMOVEDIR) == 0 else {
                 throw OwnedInstallationRemovalError.invalidInstallation
             }
         } else {
-            removalObserver(node.relativePath)
+            try removalObserver(node.relativePath)
+            try beforeMutation()
+            try node.revalidate(
+                parentDescriptor: parentDescriptor,
+                metadataTransform: metadataTransform
+            )
             guard Darwin.unlinkat(parentDescriptor, node.name, 0) == 0 else {
                 throw OwnedInstallationRemovalError.invalidInstallation
             }
@@ -528,7 +766,9 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
     private func remove(_ link: RetainedLink?) throws {
         guard let link else { return }
         try link.revalidate(metadataTransform: metadataTransform)
-        removalObserver(link.relativePath)
+        try removalObserver(link.relativePath)
+        try link.parent.revalidate(metadataTransform: metadataTransform)
+        try link.revalidate(metadataTransform: metadataTransform)
         guard Darwin.unlinkat(link.parent.descriptor, link.name, 0) == 0 else {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
@@ -538,7 +778,9 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
     private func remove(_ file: RetainedExternalFile?) throws {
         guard let file else { return }
         try file.revalidate(metadataTransform: metadataTransform)
-        removalObserver(file.relativePath)
+        try removalObserver(file.relativePath)
+        try file.parent.revalidate(metadataTransform: metadataTransform)
+        try file.revalidate(metadataTransform: metadataTransform)
         guard Darwin.unlinkat(file.parent.descriptor, file.name, 0) == 0 else {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
@@ -555,7 +797,7 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
     private static func validStateName(_ name: String) -> Bool {
         let fixed: Set<String> = [
             "enrollment.json", "collector-state.json", "update-state.json",
-            "update.lock", "re-enrollment.json",
+            "update-state.lock", "re-enrollment.json",
         ]
         if fixed.contains(name) { return true }
         return name.range(
@@ -573,6 +815,143 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
             options: .regularExpression
         ) != nil
     }
+
+    private static func maximumBytes(for relativePath: String, role: TreeRole) -> off_t? {
+        if relativePath == ".agent.sock.runtime-raiders.lock" { return 0 }
+        if relativePath.hasPrefix("outbox/") { return outboxRecordMaximumBytes }
+        guard role == .privateRegular, relativePath.hasPrefix("state/") else {
+            return nil
+        }
+        let name = String(relativePath.dropFirst("state/".count))
+        if name == "update-state.lock" { return 0 }
+        if name == "enrollment.json" || name.hasPrefix(".enrollment.json.runtime-raiders-tmp-") {
+            return enrollmentMaximumBytes
+        }
+        if name == "collector-state.json" || name.hasPrefix(".collector-state.json.runtime-raiders-tmp-") {
+            return collectorStateMaximumBytes
+        }
+        if name == "update-state.json" || name.hasPrefix(".update-state.json.runtime-raiders-tmp-") {
+            return updateStateMaximumBytes
+        }
+        if name == "re-enrollment.json" || name.hasPrefix(".re-enrollment.json.runtime-raiders-tmp-") {
+            return journalMaximumBytes
+        }
+        return nil
+    }
+}
+
+final class OwnedInstallationRemovalSession: RemovalSession, @unchecked Sendable {
+    private let socketLockDescriptor: Int32?
+    private let queueNamesImpl: () throws -> [String]
+    private let loadEnrollmentImpl: () throws -> EnrollmentConfiguration?
+    private let discardQueueImpl: ([String]) throws -> Void
+    private let verifyQueueEmptyImpl: ([String]) throws -> Bool
+    private let removeExecutableArtifactsImpl: () throws -> Void
+    private let verifyPreservedStateImpl: () throws -> Bool
+    private let removeAllArtifactsImpl: () throws -> Void
+
+    init(
+        socketLockDescriptor: Int32?,
+        queueNames: @escaping () throws -> [String],
+        loadEnrollment: @escaping () throws -> EnrollmentConfiguration?,
+        discardQueue: @escaping ([String]) throws -> Void,
+        verifyQueueEmpty: @escaping ([String]) throws -> Bool,
+        removeExecutableArtifacts: @escaping () throws -> Void,
+        verifyPreservedState: @escaping () throws -> Bool,
+        removeAllArtifacts: @escaping () throws -> Void
+    ) {
+        self.socketLockDescriptor = socketLockDescriptor
+        queueNamesImpl = queueNames
+        loadEnrollmentImpl = loadEnrollment
+        discardQueueImpl = discardQueue
+        verifyQueueEmptyImpl = verifyQueueEmpty
+        removeExecutableArtifactsImpl = removeExecutableArtifacts
+        verifyPreservedStateImpl = verifyPreservedState
+        removeAllArtifactsImpl = removeAllArtifacts
+    }
+
+    deinit {
+        if let socketLockDescriptor {
+            _ = removalFlock(socketLockDescriptor, LOCK_UN)
+        }
+    }
+
+    func validatedQueueSnapshot() throws -> RemovalQueueSnapshot {
+        RemovalQueueSnapshot(
+            sessionIdentifier: ObjectIdentifier(self),
+            names: try queueNamesImpl()
+        )
+    }
+
+    func loadEnrollment() throws -> EnrollmentConfiguration? {
+        try loadEnrollmentImpl()
+    }
+
+    func discardValidatedQueue(_ snapshot: RemovalQueueSnapshot) throws {
+        guard snapshot.belongs(to: self) else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        try discardQueueImpl(snapshot.names)
+    }
+
+    func verifyQueueEmpty(_ snapshot: RemovalQueueSnapshot) throws -> Bool {
+        guard snapshot.belongs(to: self) else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        return try verifyQueueEmptyImpl(snapshot.names)
+    }
+
+    func removeExecutableArtifacts() throws {
+        try removeExecutableArtifactsImpl()
+    }
+
+    func verifyPreservedState() throws -> Bool {
+        try verifyPreservedStateImpl()
+    }
+
+    func removeAllArtifacts(authorization: CompleteRemovalAuthorization) throws {
+        guard authorization.authorizes(self) else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        try removeAllArtifactsImpl()
+    }
+}
+
+private struct RemovalEnrollmentWire: Decodable {
+    let version: Int
+    let deviceID: String
+    let deviceToken: String
+    let dedupeSecret: String
+    let serverURL: String
+    let cutoverAtMS: Int64
+    let enabledSurfaces: [RunSurface]
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case deviceID = "device_id"
+        case deviceToken = "device_token"
+        case dedupeSecret = "dedupe_secret"
+        case serverURL = "server_url"
+        case cutoverAtMS = "cutover_at"
+        case enabledSurfaces = "enabled_surfaces"
+    }
+}
+
+private func decodeRemovalLowerHex(_ value: String) -> Data? {
+    guard value.utf8.count == 64,
+          value.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil else {
+        return nil
+    }
+    var result = Data()
+    result.reserveCapacity(32)
+    var index = value.startIndex
+    for _ in 0..<32 {
+        let end = value.index(index, offsetBy: 2)
+        guard let byte = UInt8(value[index..<end], radix: 16) else { return nil }
+        result.append(byte)
+        index = end
+    }
+    return result
 }
 
 private enum TreeRole: Equatable {
@@ -595,6 +974,7 @@ private final class RetainedNode {
     let metadata: stat
     let descriptor: Int32
     let kind: RetainedNodeKind
+    let contentDigest: Data?
     var children: [String: RetainedNode] = [:]
 
     init(
@@ -602,13 +982,15 @@ private final class RetainedNode {
         relativePath: String,
         metadata: stat,
         descriptor: Int32,
-        kind: RetainedNodeKind
+        kind: RetainedNodeKind,
+        contentDigest: Data? = nil
     ) {
         self.name = name
         self.relativePath = relativePath
         self.metadata = metadata
         self.descriptor = descriptor
         self.kind = kind
+        self.contentDigest = contentDigest
     }
 
     deinit { if descriptor >= 0 { Darwin.close(descriptor) } }
@@ -618,22 +1000,33 @@ private final class RetainedNode {
         metadataTransform: OwnedInstallationRemover.MetadataTransform
     ) throws {
         var pathMetadata = stat()
+        func matches(_ lhs: stat, _ rhs: stat) -> Bool {
+            if kind == .directory { return sameStableDirectoryMetadata(lhs, rhs) }
+            return sameMetadata(lhs, rhs)
+        }
         guard Darwin.fstatat(
             parentDescriptor,
             name,
             &pathMetadata,
             AT_SYMLINK_NOFOLLOW
         ) == 0,
-        sameMetadata(metadata, metadataTransform(relativePath, pathMetadata)) else {
+        matches(metadata, metadataTransform(relativePath, pathMetadata)) else {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
         if descriptor >= 0 {
             var descriptorMetadata = stat()
             guard Darwin.fstat(descriptor, &descriptorMetadata) == 0,
-                  sameMetadata(
+                  matches(
                     metadata,
                     metadataTransform(relativePath, descriptorMetadata)
                   ) else {
+                throw OwnedInstallationRemovalError.invalidInstallation
+            }
+            if let contentDigest,
+               try digestRetainedDescriptor(
+                   descriptor,
+                   expectedSize: metadata.st_size
+               ) != contentDigest {
                 throw OwnedInstallationRemovalError.invalidInstallation
             }
         }
@@ -647,6 +1040,27 @@ private final class RetainedNode {
                     metadataTransform: metadataTransform
                 )
             }
+        }
+    }
+
+    func revalidateIdentity(
+        parentDescriptor: Int32,
+        metadataTransform: OwnedInstallationRemover.MetadataTransform
+    ) throws {
+        var pathMetadata = stat()
+        var descriptorMetadata = stat()
+        guard Darwin.fstatat(parentDescriptor, name, &pathMetadata, AT_SYMLINK_NOFOLLOW) == 0,
+              sameStableDirectoryMetadata(
+                  metadata,
+                  metadataTransform(relativePath, pathMetadata)
+              ),
+              descriptor >= 0,
+              Darwin.fstat(descriptor, &descriptorMetadata) == 0,
+              sameStableDirectoryMetadata(
+                  metadata,
+                  metadataTransform(relativePath, descriptorMetadata)
+              ) else {
+            throw OwnedInstallationRemovalError.invalidInstallation
         }
     }
 }
@@ -747,19 +1161,22 @@ private final class RetainedExternalFile {
     let relativePath: String
     let metadata: stat
     let descriptor: Int32
+    let contentDigest: Data
 
     init(
         parent: RetainedDirectory,
         name: String,
         relativePath: String,
         metadata: stat,
-        descriptor: Int32
+        descriptor: Int32,
+        contentDigest: Data
     ) {
         self.parent = parent
         self.name = name
         self.relativePath = relativePath
         self.metadata = metadata
         self.descriptor = descriptor
+        self.contentDigest = contentDigest
     }
 
     deinit { Darwin.close(descriptor) }
@@ -772,7 +1189,11 @@ private final class RetainedExternalFile {
         guard Darwin.fstatat(parent.descriptor, name, &pathMetadata, AT_SYMLINK_NOFOLLOW) == 0,
               Darwin.fstat(descriptor, &descriptorMetadata) == 0,
               sameMetadata(metadata, metadataTransform(relativePath, pathMetadata)),
-              sameMetadata(metadata, metadataTransform(relativePath, descriptorMetadata)) else {
+              sameMetadata(metadata, metadataTransform(relativePath, descriptorMetadata)),
+              try digestRetainedDescriptor(
+                  descriptor,
+                  expectedSize: metadata.st_size
+              ) == contentDigest else {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
     }
@@ -859,6 +1280,33 @@ private final class InstallationPlan {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
         try legacyPlist?.revalidate(metadataTransform: metadataTransform)
+    }
+
+    func revalidateSupportAnchor(
+        metadataTransform: OwnedInstallationRemover.MetadataTransform
+    ) throws {
+        try home.revalidate(metadataTransform: metadataTransform)
+        try applicationSupport.revalidate(metadataTransform: metadataTransform)
+        if let support {
+            try support.revalidateIdentity(
+                parentDescriptor: applicationSupport.descriptor,
+                metadataTransform: metadataTransform
+            )
+        }
+    }
+
+    func revalidateOutboxAnchor(
+        metadataTransform: OwnedInstallationRemover.MetadataTransform
+    ) throws {
+        try revalidateSupportAnchor(metadataTransform: metadataTransform)
+        guard let support,
+              let outbox = support.children["outbox"] else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        try outbox.revalidateIdentity(
+            parentDescriptor: support.descriptor,
+            metadataTransform: metadataTransform
+        )
     }
 }
 
@@ -947,6 +1395,68 @@ private func sameMetadata(_ lhs: stat, _ rhs: stat) -> Bool {
         && lhs.st_mode == rhs.st_mode
         && lhs.st_nlink == rhs.st_nlink
         && lhs.st_size == rhs.st_size
+        && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
+        && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
+        && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
+        && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+}
+
+private func sameStableDirectoryMetadata(_ lhs: stat, _ rhs: stat) -> Bool {
+    lhs.st_dev == rhs.st_dev
+        && lhs.st_ino == rhs.st_ino
+        && lhs.st_uid == rhs.st_uid
+        && lhs.st_mode == rhs.st_mode
+}
+
+private func digestRetainedDescriptor(_ descriptor: Int32, expectedSize: off_t) throws -> Data {
+    guard expectedSize >= 0 else { throw OwnedInstallationRemovalError.invalidInstallation }
+    var hasher = SHA256()
+    var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+    var offset: off_t = 0
+    while offset < expectedSize {
+        let requested = min(buffer.count, Int(expectedSize - offset))
+        let count = Darwin.pread(descriptor, &buffer, requested, offset)
+        if count > 0 {
+            hasher.update(data: Data(buffer[0..<count]))
+            offset += off_t(count)
+        } else if count < 0, errno == EINTR {
+            continue
+        } else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+    }
+    var extra: UInt8 = 0
+    guard Darwin.pread(descriptor, &extra, 1, offset) == 0 else {
+        throw OwnedInstallationRemovalError.invalidInstallation
+    }
+    return Data(hasher.finalize())
+}
+
+private func readRetainedData(
+    descriptor: Int32,
+    expectedSize: off_t,
+    maximumBytes: off_t
+) throws -> Data {
+    guard expectedSize >= 0, expectedSize <= maximumBytes else {
+        throw OwnedInstallationRemovalError.invalidInstallation
+    }
+    var data = Data(count: Int(expectedSize))
+    var offset = 0
+    try data.withUnsafeMutableBytes { bytes in
+        guard let base = bytes.baseAddress else { return }
+        while offset < bytes.count {
+            let count = Darwin.pread(
+                descriptor,
+                base.advanced(by: offset),
+                bytes.count - offset,
+                off_t(offset)
+            )
+            if count > 0 { offset += count }
+            else if count < 0, errno == EINTR { continue }
+            else { throw OwnedInstallationRemovalError.invalidInstallation }
+        }
+    }
+    return data
 }
 
 private func validComponent(_ value: String) -> Bool {

@@ -135,7 +135,7 @@ final class AtomicStoreTests: XCTestCase {
             )
             XCTAssertEqual(
                 paths.updateLock,
-                support.appendingPathComponent("state/update.lock", isDirectory: false)
+                support.appendingPathComponent("state/update-state.lock", isDirectory: false)
             )
             XCTAssertEqual(
                 paths.agentApplication,

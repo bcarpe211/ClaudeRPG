@@ -26,42 +26,82 @@ public protocol RemovalLock: AnyObject, Sendable {}
 
 extension LifecycleLock: RemovalLock {}
 
-public struct RemovalOperations: @unchecked Sendable {
-    public let acquireLock: () throws -> any RemovalLock
-    public let persistCollectionOff: () throws -> Void
-    public let stopDaemon: () throws -> Void
-    public let unregisterAgent: () throws -> Void
-    public let verifyAgentUnregistered: () throws -> Bool
-    public let countQueue: () throws -> Int
-    public let summarize: (Int) throws -> Void
-    public let confirmDiscard: (Int) throws -> Bool
-    public let confirmEverything: () throws -> Bool
-    public let loadEnrollment: () throws -> EnrollmentConfiguration?
-    public let revoke: (EnrollmentConfiguration) throws -> Bool
-    public let delayMilliseconds: (Int) throws -> Void
-    public let discardQueue: () throws -> Void
-    public let removeExecutableArtifacts: () throws -> Void
-    public let verifyPreservedState: () throws -> Bool
-    public let removeAllArtifacts: () throws -> Void
-    public let revocationProof: () throws -> Void
+protocol RemovalSession: AnyObject, Sendable {}
 
-    public init(
+struct RemovalQueueSnapshot: @unchecked Sendable {
+    let sessionIdentifier: ObjectIdentifier
+    let names: [String]
+    var count: Int { names.count }
+
+    func belongs(to session: any RemovalSession) -> Bool {
+        sessionIdentifier == ObjectIdentifier(session)
+    }
+}
+
+struct CompleteRemovalAuthorization: @unchecked Sendable {
+    private let sessionIdentifier: ObjectIdentifier
+
+    fileprivate init(session: any RemovalSession) {
+        sessionIdentifier = ObjectIdentifier(session)
+    }
+
+    func authorizes(_ session: any RemovalSession) -> Bool {
+        sessionIdentifier == ObjectIdentifier(session)
+    }
+}
+
+public struct RemovalOperations: @unchecked Sendable {
+    let acquireLock: () throws -> any RemovalLock
+    let persistCollectionOff: () throws -> Void
+    let stopDaemon: () throws -> Void
+    let unregisterAgent: () throws -> Void
+    let verifyAgentUnregistered: () throws -> Bool
+    let prepareSession: () throws -> any RemovalSession
+    let queueSnapshot: (any RemovalSession) throws -> RemovalQueueSnapshot
+    let summarize: (Int) throws -> Void
+    let confirmDiscard: (Int) throws -> Bool
+    let confirmEverything: () throws -> Bool
+    let loadEnrollment: (any RemovalSession) throws -> EnrollmentConfiguration?
+    let revoke: (EnrollmentConfiguration) throws -> Bool
+    let delayMilliseconds: (Int) throws -> Void
+    let discardQueue: (any RemovalSession, RemovalQueueSnapshot) throws -> Void
+    let verifyQueueEmpty: (any RemovalSession, RemovalQueueSnapshot) throws -> Bool
+    let removeExecutableArtifacts: (any RemovalSession) throws -> Void
+    let verifyPreservedState: (any RemovalSession) throws -> Bool
+    let removeAllArtifacts: (
+        any RemovalSession,
+        CompleteRemovalAuthorization
+    ) throws -> Void
+    let revocationProof: () throws -> Void
+
+    init(
         acquireLock: @escaping () throws -> any RemovalLock,
         persistCollectionOff: @escaping () throws -> Void,
         stopDaemon: @escaping () throws -> Void,
         unregisterAgent: @escaping () throws -> Void,
         verifyAgentUnregistered: @escaping () throws -> Bool,
-        countQueue: @escaping () throws -> Int,
+        prepareSession: @escaping () throws -> any RemovalSession,
+        queueSnapshot: @escaping (any RemovalSession) throws -> RemovalQueueSnapshot,
         summarize: @escaping (Int) throws -> Void,
         confirmDiscard: @escaping (Int) throws -> Bool,
         confirmEverything: @escaping () throws -> Bool,
-        loadEnrollment: @escaping () throws -> EnrollmentConfiguration?,
+        loadEnrollment: @escaping (any RemovalSession) throws -> EnrollmentConfiguration?,
         revoke: @escaping (EnrollmentConfiguration) throws -> Bool,
         delayMilliseconds: @escaping (Int) throws -> Void,
-        discardQueue: @escaping () throws -> Void,
-        removeExecutableArtifacts: @escaping () throws -> Void,
-        verifyPreservedState: @escaping () throws -> Bool,
-        removeAllArtifacts: @escaping () throws -> Void,
+        discardQueue: @escaping (
+            any RemovalSession,
+            RemovalQueueSnapshot
+        ) throws -> Void,
+        verifyQueueEmpty: @escaping (
+            any RemovalSession,
+            RemovalQueueSnapshot
+        ) throws -> Bool,
+        removeExecutableArtifacts: @escaping (any RemovalSession) throws -> Void,
+        verifyPreservedState: @escaping (any RemovalSession) throws -> Bool,
+        removeAllArtifacts: @escaping (
+            any RemovalSession,
+            CompleteRemovalAuthorization
+        ) throws -> Void,
         revocationProof: @escaping () throws -> Void
     ) {
         self.acquireLock = acquireLock
@@ -69,7 +109,8 @@ public struct RemovalOperations: @unchecked Sendable {
         self.stopDaemon = stopDaemon
         self.unregisterAgent = unregisterAgent
         self.verifyAgentUnregistered = verifyAgentUnregistered
-        self.countQueue = countQueue
+        self.prepareSession = prepareSession
+        self.queueSnapshot = queueSnapshot
         self.summarize = summarize
         self.confirmDiscard = confirmDiscard
         self.confirmEverything = confirmEverything
@@ -77,6 +118,7 @@ public struct RemovalOperations: @unchecked Sendable {
         self.revoke = revoke
         self.delayMilliseconds = delayMilliseconds
         self.discardQueue = discardQueue
+        self.verifyQueueEmpty = verifyQueueEmpty
         self.removeExecutableArtifacts = removeExecutableArtifacts
         self.verifyPreservedState = verifyPreservedState
         self.removeAllArtifacts = removeAllArtifacts
@@ -86,7 +128,6 @@ public struct RemovalOperations: @unchecked Sendable {
     public static func live(
         paths: CompanionLifecyclePaths,
         managedAgent: ManagedAgentServiceController = .live,
-        outbox: Outbox,
         enrollmentClient: EnrollmentClient,
         persistCollectionOff: @escaping () throws -> Void,
         stopDaemon: @escaping () throws -> Void,
@@ -108,38 +149,53 @@ public struct RemovalOperations: @unchecked Sendable {
                 case .enabled, .requiresApproval: false
                 }
             },
-            countQueue: { try outbox.queuedCount() },
+            prepareSession: { try remover.prepareSession() },
+            queueSnapshot: { session in
+                guard let session = session as? OwnedInstallationRemovalSession else {
+                    throw RemovalCoordinatorError.operationFailed
+                }
+                return try session.validatedQueueSnapshot()
+            },
             summarize: summarize,
             confirmDiscard: confirmDiscard,
             confirmEverything: confirmEverything,
-            loadEnrollment: {
-                try remover.prevalidateAllArtifacts()
-                return try loadVerifiedEnrollmentIfPresent(paths: paths)
+            loadEnrollment: { session in
+                guard let session = session as? OwnedInstallationRemovalSession else {
+                    throw RemovalCoordinatorError.operationFailed
+                }
+                return try session.loadEnrollment()
             },
             revoke: { try enrollmentClient.revoke(token: $0.deviceToken) },
             delayMilliseconds: delayMilliseconds,
-            discardQueue: {
-                _ = try outbox.discardAllValidated()
-                guard try outbox.queuedCount() == 0 else {
+            discardQueue: { session, snapshot in
+                guard let session = session as? OwnedInstallationRemovalSession else {
                     throw RemovalCoordinatorError.operationFailed
                 }
+                try session.discardValidatedQueue(snapshot)
             },
-            removeExecutableArtifacts: { try remover.removeExecutableArtifacts() },
-            verifyPreservedState: {
-                guard let state = try OwnerOnlyDirectory.openExisting(
-                    paths.agent.stateDirectory
-                ) else {
-                    return false
+            verifyQueueEmpty: { session, snapshot in
+                guard let session = session as? OwnedInstallationRemovalSession else {
+                    throw RemovalCoordinatorError.operationFailed
                 }
-                defer { Darwin.close(state) }
-                guard let outbox = try OwnerOnlyDirectory.openExisting(
-                    paths.agent.outboxDirectory
-                ) else { return false }
-                Darwin.close(outbox)
-                return true
+                return try session.verifyQueueEmpty(snapshot)
             },
-            removeAllArtifacts: {
-                try remover.removeAllArtifacts(authorization: CompleteRemovalAuthorization())
+            removeExecutableArtifacts: { session in
+                guard let session = session as? OwnedInstallationRemovalSession else {
+                    throw RemovalCoordinatorError.operationFailed
+                }
+                try session.removeExecutableArtifacts()
+            },
+            verifyPreservedState: { session in
+                guard let session = session as? OwnedInstallationRemovalSession else {
+                    throw RemovalCoordinatorError.operationFailed
+                }
+                return try session.verifyPreservedState()
+            },
+            removeAllArtifacts: { session, authorization in
+                guard let session = session as? OwnedInstallationRemovalSession else {
+                    throw RemovalCoordinatorError.operationFailed
+                }
+                try session.removeAllArtifacts(authorization: authorization)
             },
             revocationProof: {}
         )
@@ -173,22 +229,26 @@ public struct RemovalCoordinator: Sendable {
         guard try operations.verifyAgentUnregistered() else {
             throw RemovalCoordinatorError.operationFailed
         }
+        let session = try operations.prepareSession()
 
         switch mode {
         case .preserveState:
-            try operations.removeExecutableArtifacts()
-            guard try operations.verifyPreservedState() else {
+            try operations.removeExecutableArtifacts(session)
+            guard try operations.verifyPreservedState(session) else {
                 throw RemovalCoordinatorError.operationFailed
             }
             return .removedPreservingState
         case .everything:
-            return try removeEverything()
+            return try removeEverything(session: session)
         }
     }
 
-    private func removeEverything() throws -> RemovalOutcome {
-        let queueCount = try operations.countQueue()
-        guard queueCount >= 0 else { throw RemovalCoordinatorError.operationFailed }
+    private func removeEverything(session: any RemovalSession) throws -> RemovalOutcome {
+        let snapshot = try operations.queueSnapshot(session)
+        guard snapshot.belongs(to: session) else {
+            throw RemovalCoordinatorError.operationFailed
+        }
+        let queueCount = snapshot.count
         try operations.summarize(queueCount)
         if queueCount > 0, try !operations.confirmDiscard(queueCount) {
             return .cancelled
@@ -197,7 +257,7 @@ public struct RemovalCoordinator: Sendable {
 
         let enrollment: EnrollmentConfiguration?
         do {
-            enrollment = try operations.loadEnrollment()
+            enrollment = try operations.loadEnrollment(session)
         } catch {
             return .assistedRecoveryRequired
         }
@@ -205,8 +265,12 @@ public struct RemovalCoordinator: Sendable {
         if let enrollment {
             guard try proveRevoked(enrollment) else { return .revocationRequired }
         }
-        if queueCount > 0 { try operations.discardQueue() }
-        try operations.removeAllArtifacts()
+        let authorization = CompleteRemovalAuthorization(session: session)
+        if queueCount > 0 { try operations.discardQueue(session, snapshot) }
+        guard try operations.verifyQueueEmpty(session, snapshot) else {
+            throw RemovalCoordinatorError.operationFailed
+        }
+        try operations.removeAllArtifacts(session, authorization)
         return .removedEverything
     }
 
@@ -233,35 +297,4 @@ public struct RemovalCoordinator: Sendable {
         }
         return false
     }
-}
-
-private func loadVerifiedEnrollmentIfPresent(
-    paths: CompanionLifecyclePaths
-) throws -> EnrollmentConfiguration? {
-    guard let stateDescriptor = try OwnerOnlyDirectory.openExisting(
-        paths.agent.stateDirectory
-    ) else { return nil }
-    defer { Darwin.close(stateDescriptor) }
-    var directoryMetadata = stat()
-    var enrollmentMetadata = stat()
-    guard Darwin.fstat(stateDescriptor, &directoryMetadata) == 0 else {
-        throw EnrollmentConfigurationError.invalidFile
-    }
-    guard Darwin.fstatat(
-        stateDescriptor,
-        paths.enrollment.lastPathComponent,
-        &enrollmentMetadata,
-        AT_SYMLINK_NOFOLLOW
-    ) == 0 else {
-        if errno == ENOENT { return nil }
-        throw EnrollmentConfigurationError.invalidFile
-    }
-    guard enrollmentMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-          enrollmentMetadata.st_uid == Darwin.geteuid(),
-          enrollmentMetadata.st_mode & 0o7777 == 0o600,
-          enrollmentMetadata.st_nlink == 1,
-          enrollmentMetadata.st_dev == directoryMetadata.st_dev else {
-        throw EnrollmentConfigurationError.invalidFile
-    }
-    return try EnrollmentConfiguration.loadExisting(from: paths.enrollment)
 }
