@@ -202,8 +202,8 @@ public struct EnrollmentClient: Sendable {
         } catch {
             return .ambiguous
         }
-        try Self.requireBounded(response.body)
         if (500...599).contains(response.statusCode) { return .ambiguous }
+        try Self.requireBounded(response.body)
         switch response.statusCode {
         case 200, 201:
             let configuration = try decodeConfiguration(response.body)

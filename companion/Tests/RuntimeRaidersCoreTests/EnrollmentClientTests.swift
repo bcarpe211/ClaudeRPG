@@ -135,6 +135,13 @@ final class EnrollmentClientTests: XCTestCase, @unchecked Sendable {
             .conflict
         )
         XCTAssertEqual(try replacing(status: 500, body: #"{"anything":"private"}"#), .ambiguous)
+        for status in [500, 502, 503] {
+            XCTAssertEqual(
+                try replacing(status: status, body: ""),
+                .ambiguous,
+                "empty replacement server error was not ambiguous"
+            )
+        }
         XCTAssertEqual(try replacing(transportError: SecretTransportError()), .ambiguous)
     }
 
@@ -189,8 +196,12 @@ final class EnrollmentClientTests: XCTestCase, @unchecked Sendable {
         assertContentFreeThrow {
             _ = try self.replacing(status: 200, body: oversized)
         }
-        assertContentFreeThrow {
-            _ = try self.replacing(status: 503, body: oversized)
+        for status in [500, 502, 503] {
+            XCTAssertEqual(
+                try replacing(status: status, body: oversized),
+                .ambiguous,
+                "oversized replacement server error was not ambiguous"
+            )
         }
     }
 
