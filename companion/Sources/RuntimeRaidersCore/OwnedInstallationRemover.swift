@@ -16,6 +16,7 @@ public enum OwnedInstallationRemovalError: Error, Equatable,
 public struct OwnedInstallationRemover: @unchecked Sendable {
     typealias MetadataTransform = (_ relativePath: String, _ metadata: stat) -> stat
     typealias ValidationCheckpoint = () throws -> Void
+    typealias EnrollmentReadCheckpoint = () throws -> Void
     typealias RemovalObserver = (_ relativePath: String) throws -> Void
 
     private static let supportNames: Set<String> = [
@@ -43,6 +44,7 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
     private let paths: CompanionLifecyclePaths
     private let metadataTransform: MetadataTransform
     private let validationCheckpoint: ValidationCheckpoint
+    private let enrollmentReadCheckpoint: EnrollmentReadCheckpoint
     private let removalObserver: RemovalObserver
 
     public init(paths: CompanionLifecyclePaths) {
@@ -50,6 +52,7 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
             paths: paths,
             metadataTransform: { _, metadata in metadata },
             validationCheckpoint: {},
+            enrollmentReadCheckpoint: {},
             removalObserver: { _ in }
         )
     }
@@ -58,11 +61,13 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
         paths: CompanionLifecyclePaths,
         metadataTransform: @escaping MetadataTransform = { _, metadata in metadata },
         validationCheckpoint: @escaping ValidationCheckpoint = {},
+        enrollmentReadCheckpoint: @escaping EnrollmentReadCheckpoint = {},
         removalObserver: @escaping RemovalObserver = { _ in }
     ) {
         self.paths = paths
         self.metadataTransform = metadataTransform
         self.validationCheckpoint = validationCheckpoint
+        self.enrollmentReadCheckpoint = enrollmentReadCheckpoint
         self.removalObserver = removalObserver
     }
 
@@ -76,7 +81,7 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
         try plan.revalidateAll(metadataTransform: metadataTransform)
         let socketLock = try acquireSocketLifetimeLock(plan: plan)
         return OwnedInstallationRemovalSession(
-            socketLockDescriptor: socketLock,
+            socketLifetimeLock: socketLock,
             queueNames: { try validatedQueueNames(plan: plan) },
             loadEnrollment: { try loadEnrollment(plan: plan) },
             discardQueue: { names in try discardQueue(names, plan: plan) },
@@ -87,7 +92,7 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
         )
     }
 
-    private func acquireSocketLifetimeLock(plan: InstallationPlan) throws -> Int32? {
+    private func acquireSocketLifetimeLock(plan: InstallationPlan) throws -> SocketLifetimeLock? {
         guard let support = plan.support else { return nil }
         let lockName = ".agent.sock.runtime-raiders.lock"
         guard let lock = support.children[lockName] else {
@@ -102,11 +107,16 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
         guard lock.kind == .regular, lock.metadata.st_size == 0 else {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
-        while removalFlock(lock.descriptor, LOCK_EX | LOCK_NB) != 0 {
-            if errno == EINTR { continue }
+        let descriptor = Darwin.fcntl(lock.descriptor, F_DUPFD_CLOEXEC, 0)
+        guard descriptor >= 0 else {
             throw OwnedInstallationRemovalError.invalidInstallation
         }
-        return lock.descriptor
+        while removalFlock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if errno == EINTR { continue }
+            Darwin.close(descriptor)
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        return SocketLifetimeLock(descriptor: descriptor)
     }
 
     private func removeExecutableArtifacts(plan: InstallationPlan) throws {
@@ -208,11 +218,17 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
         try plan.revalidateAll(metadataTransform: metadataTransform)
         guard let state = plan.support?.children["state"],
               let enrollment = state.children["enrollment.json"] else { return nil }
+        try enrollmentReadCheckpoint()
         let data = try readRetainedData(
             descriptor: enrollment.descriptor,
             expectedSize: enrollment.metadata.st_size,
             maximumBytes: Self.enrollmentMaximumBytes
         )
+        guard let retainedDigest = enrollment.contentDigest,
+              Data(SHA256.hash(data: data)) == retainedDigest else {
+            throw OwnedInstallationRemovalError.invalidInstallation
+        }
+        try plan.revalidateAll(metadataTransform: metadataTransform)
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == [
                   "version", "device_id", "device_token", "dedupe_secret",
@@ -840,8 +856,21 @@ public struct OwnedInstallationRemover: @unchecked Sendable {
     }
 }
 
+private final class SocketLifetimeLock {
+    private let descriptor: Int32
+
+    init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    deinit {
+        _ = removalFlock(descriptor, LOCK_UN)
+        Darwin.close(descriptor)
+    }
+}
+
 final class OwnedInstallationRemovalSession: RemovalSession, @unchecked Sendable {
-    private let socketLockDescriptor: Int32?
+    private let socketLifetimeLock: SocketLifetimeLock?
     private let queueNamesImpl: () throws -> [String]
     private let loadEnrollmentImpl: () throws -> EnrollmentConfiguration?
     private let discardQueueImpl: ([String]) throws -> Void
@@ -850,8 +879,8 @@ final class OwnedInstallationRemovalSession: RemovalSession, @unchecked Sendable
     private let verifyPreservedStateImpl: () throws -> Bool
     private let removeAllArtifactsImpl: () throws -> Void
 
-    init(
-        socketLockDescriptor: Int32?,
+    fileprivate init(
+        socketLifetimeLock: SocketLifetimeLock?,
         queueNames: @escaping () throws -> [String],
         loadEnrollment: @escaping () throws -> EnrollmentConfiguration?,
         discardQueue: @escaping ([String]) throws -> Void,
@@ -860,7 +889,7 @@ final class OwnedInstallationRemovalSession: RemovalSession, @unchecked Sendable
         verifyPreservedState: @escaping () throws -> Bool,
         removeAllArtifacts: @escaping () throws -> Void
     ) {
-        self.socketLockDescriptor = socketLockDescriptor
+        self.socketLifetimeLock = socketLifetimeLock
         queueNamesImpl = queueNames
         loadEnrollmentImpl = loadEnrollment
         discardQueueImpl = discardQueue
@@ -868,12 +897,6 @@ final class OwnedInstallationRemovalSession: RemovalSession, @unchecked Sendable
         removeExecutableArtifactsImpl = removeExecutableArtifacts
         verifyPreservedStateImpl = verifyPreservedState
         removeAllArtifactsImpl = removeAllArtifacts
-    }
-
-    deinit {
-        if let socketLockDescriptor {
-            _ = removalFlock(socketLockDescriptor, LOCK_UN)
-        }
     }
 
     func validatedQueueSnapshot() throws -> RemovalQueueSnapshot {

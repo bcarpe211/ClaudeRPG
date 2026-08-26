@@ -348,6 +348,30 @@ final class OwnedInstallationRemoverTests: XCTestCase {
         }
     }
 
+    func testEnrollmentSameInodeMutationBetweenValidationAndReadReturnsNoRevocationEvidence() throws {
+        let fixture = try RemovalFixture()
+        defer { fixture.remove() }
+        let originalInode = try inode(fixture.paths.enrollment)
+        let replacement = try validEnrollmentData(tokenByte: 0x44)
+        XCTAssertEqual(replacement.count, try Data(contentsOf: fixture.paths.enrollment).count)
+        var checkpointCalls = 0
+        let remover = OwnedInstallationRemover(
+            paths: fixture.paths,
+            enrollmentReadCheckpoint: {
+                checkpointCalls += 1
+                try writePrivateReplacing(replacement, at: fixture.paths.enrollment)
+                XCTAssertEqual(try inode(fixture.paths.enrollment), originalInode)
+            }
+        )
+        let session = try remover.prepareSession()
+        var revocationEvidence: EnrollmentConfiguration?
+
+        XCTAssertThrowsError(revocationEvidence = try session.loadEnrollment())
+        XCTAssertNil(revocationEvidence)
+        XCTAssertEqual(checkpointCalls, 1)
+        XCTAssertTrue(entryExists(fixture.paths.commandShim))
+    }
+
     func testHeldSocketLifetimeLockPreventsSessionPreparationAndDeletion() throws {
         let fixture = try RemovalFixture()
         defer { fixture.remove() }
@@ -360,6 +384,29 @@ final class OwnedInstallationRemoverTests: XCTestCase {
         XCTAssertThrowsError(try OwnedInstallationRemover(paths: fixture.paths).prepareSession())
         XCTAssertTrue(entryExists(fixture.paths.agent.agentApplication))
         XCTAssertTrue(entryExists(fixture.paths.commandShim))
+    }
+
+    func testSocketLifetimeLockRemainsHeldAfterUnlinkUntilSessionDestruction() throws {
+        let fixture = try RemovalFixture()
+        defer { fixture.remove() }
+        var session: OwnedInstallationRemovalSession? = try OwnedInstallationRemover(
+            paths: fixture.paths
+        ).prepareSession()
+        let contender = Darwin.open(
+            fixture.socketLock.path,
+            O_RDWR | O_NOFOLLOW | O_CLOEXEC
+        )
+        XCTAssertGreaterThanOrEqual(contender, 0)
+        defer { Darwin.close(contender) }
+
+        XCTAssertNotEqual(testRemovalFlock(contender, LOCK_EX | LOCK_NB), 0)
+        try XCTUnwrap(session).removeExecutableArtifacts()
+        XCTAssertFalse(entryExists(fixture.socketLock))
+        XCTAssertNotEqual(testRemovalFlock(contender, LOCK_EX | LOCK_NB), 0)
+
+        session = nil
+        XCTAssertEqual(testRemovalFlock(contender, LOCK_EX | LOCK_NB), 0)
+        XCTAssertEqual(testRemovalFlock(contender, LOCK_UN), 0)
     }
 
     func testCurrentStateInventoryAndEveryGrammarClassHasABoundedSize() throws {
