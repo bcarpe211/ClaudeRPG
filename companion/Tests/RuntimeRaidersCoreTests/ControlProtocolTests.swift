@@ -583,8 +583,53 @@ final class ControlProtocolTests: XCTestCase {
             enableCompletionTimeoutSeconds: 3
         )
 
-        XCTAssertEqual(response, ControlResponse(ok: true, message: "enabled"))
+        XCTAssertEqual(response, ControlResponse(ok: true, message: "ready"))
         XCTAssertEqual(commands.values, ["on", "status"])
+    }
+
+    func testTimedOutOnFailsClosedWhenEnabledStatusHasDisabledActivation() throws {
+        let parent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-disabled-on-control-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let socketURL = parent.appendingPathComponent("agent.sock")
+        let commands = ControlActionLog()
+        let incoherentStatus = AgentStatus(
+            enabled: true,
+            activationState: .disabled,
+            daemonRunning: true,
+            persistedState: .enabled,
+            serverEnabledSurfaces: [.codexDesktop, .codexCLI],
+            compiledAdapters: [.codexDesktop: .available, .codexCLI: .available],
+            queuedEventCount: 0,
+            lastSuccessfulUploadMS: nil,
+            activeRunCount: 0
+        )
+        let server = ControlSocketServer(socketURL: socketURL)
+        try server.start { command in
+            commands.append(command.rawValue)
+            switch command {
+            case .on:
+                Thread.sleep(forTimeInterval: 1.25)
+                return ControlResponse(ok: true, message: "enabled")
+            case .status:
+                return ControlResponse(ok: true, message: incoherentStatus.description)
+            case .off:
+                return ControlResponse(ok: true, message: "disabled")
+            default:
+                return ControlResponse(ok: false, message: "unexpected command")
+            }
+        }
+        defer { server.stop() }
+
+        let response = try ControlSocketClient.send(
+            request: ControlRequest(command: .on),
+            to: socketURL,
+            initialTimeoutSeconds: 1,
+            enableCompletionTimeoutSeconds: 3
+        )
+
+        XCTAssertEqual(response, ControlResponse(ok: false, message: "unable to enable"))
+        XCTAssertEqual(commands.values, ["on", "status", "off"])
     }
 
     func testTimedOutOnFailsClosedWhenReadinessBarrierIsInconclusive() throws {

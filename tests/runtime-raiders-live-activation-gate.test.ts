@@ -119,7 +119,9 @@ case "${'$'}{1:-}" in
   on)
     printf preparing > '${state}/activation'
     if [ "${'$'}{GATE_SCENARIO:-}" = on-fail ]; then exit 1; fi
-    if [ "${'$'}{GATE_SCENARIO:-}" = on-wrong ]; then printf 'ready\n'; else printf 'preparing\n'; fi
+    printf '%s\n' \
+      'Runtime Raiders collection is ON' \
+      'Status: Preparing safely in the background.'
     ;;
   off)
     off_count="${'$'}(/bin/cat '${state}/off-count' 2>/dev/null || printf 0)"
@@ -369,7 +371,6 @@ describe('Runtime Raiders one-shot live activation gate', () => {
     ['history-drift', 'server history changed before the synthetic Run'],
     ['ready-timeout', 'agent did not become ready'],
     ['on-fail', 'raiders on failed'],
-    ['on-wrong', 'raiders on did not return preparing'],
     ['score-mismatch', 'synthetic Run scoring did not reconcile'],
     ['signal', 'interrupted by termination'],
     ['signal-quiet', 'interrupted by termination'],

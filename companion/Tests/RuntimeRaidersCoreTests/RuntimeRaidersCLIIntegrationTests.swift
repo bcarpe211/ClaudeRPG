@@ -263,6 +263,55 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         }
     }
 
+    func testTimedOutControlOnRendersRecoveredPreparingStateThroughActualExecutable() throws {
+        try withActualVersionOnlyApp { fixture in
+            let status = AgentStatus(
+                enabled: true,
+                activationState: .preparing,
+                daemonRunning: true,
+                persistedState: .enabled,
+                serverEnabledSurfaces: [.codexDesktop, .codexCLI],
+                compiledAdapters: [.codexDesktop: .available, .codexCLI: .available],
+                queuedEventCount: 0,
+                lastSuccessfulUploadMS: nil,
+                activeRunCount: 0,
+                installedCompanionVersion: "1.2.3",
+                availableCompanionVersion: nil,
+                updateCommand: nil
+            )
+            let commands = RequestRecorder()
+            let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
+            try server.start { command in
+                commands.record(command)
+                switch command {
+                case .on:
+                    Thread.sleep(forTimeInterval: 30.25)
+                    return ControlResponse(ok: true, message: "enabled")
+                case .status:
+                    return ControlResponse(ok: true, message: status.description)
+                default:
+                    return ControlResponse(ok: false, message: "unexpected command")
+                }
+            }
+            defer { server.stop() }
+
+            let result = try runCLI(
+                fixture,
+                arguments: ["on"],
+                includeVerificationGate: false,
+                includeSupportOverride: false,
+                completionTimeout: .seconds(40)
+            )
+
+            XCTAssertEqual(result.exitStatus, 0, result.stderr)
+            XCTAssertEqual(
+                result.stdout,
+                "Runtime Raiders collection is ON\nStatus: Preparing safely in the background.\n"
+            )
+            XCTAssertEqual(commands.commands, [.on, .status])
+        }
+    }
+
     func testControlCommandsRejectUnexpectedSuccessfulDaemonMessages() throws {
         try withActualVersionOnlyApp { fixture in
             let server = ControlSocketServer(socketURL: fixture.paths.controlSocket)
@@ -291,6 +340,24 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                     result.stderr
                 )
             }
+        }
+    }
+
+    func testInvalidPublicArgumentsPrintExactCurrentUsage() throws {
+        try withActualVersionOnlyApp { fixture in
+            let result = try runCLI(
+                fixture,
+                arguments: ["status", "--json", "extra"],
+                includeVerificationGate: false,
+                includeSupportOverride: false
+            )
+
+            XCTAssertNotEqual(result.exitStatus, 0)
+            XCTAssertEqual(result.stdout, "")
+            XCTAssertEqual(
+                result.stderr,
+                "usage: raiders on|off|status|status --json|doctor|uninstall|update|help\n"
+            )
         }
     }
 
@@ -661,7 +728,8 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         includeVerificationGate: Bool = true,
         includeSupportOverride: Bool = true,
         supportOverridePath: String? = nil,
-        versionResponsePath: String? = nil
+        versionResponsePath: String? = nil,
+        completionTimeout: DispatchTimeInterval = .seconds(5)
     ) throws -> ProcessResult {
         let process = Process()
         process.executableURL = fixture.executable
@@ -689,7 +757,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         process.terminationHandler = { _ in completed.signal() }
 
         try process.run()
-        guard completed.wait(timeout: .now() + 5) == .success else {
+        guard completed.wait(timeout: .now() + completionTimeout) == .success else {
             Darwin.kill(process.processIdentifier, SIGKILL)
             _ = completed.wait(timeout: .now() + 1)
             throw FixtureError.processTimedOut

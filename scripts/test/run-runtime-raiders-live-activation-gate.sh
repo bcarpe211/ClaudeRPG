@@ -364,8 +364,7 @@ report_line "baseline_player_effective=${BASE_FIELDS[15]}"
 report_line "baseline_player_gold=${BASE_FIELDS[16]}"
 
 echo 'Runtime Raiders live gate: enabling collection for the bounded proof...'
-ON_RESPONSE="$("$RAIDERS_TOOL" on)" || gate_fail 'raiders on failed'
-[ "$ON_RESPONSE" = preparing ] || gate_fail 'raiders on did not return preparing'
+"$RAIDERS_TOOL" on >/dev/null || gate_fail 'raiders on failed'
 READY=0
 READINESS_STARTED=1
 for ((attempt = 0; attempt < READY_ATTEMPTS; attempt++)); do

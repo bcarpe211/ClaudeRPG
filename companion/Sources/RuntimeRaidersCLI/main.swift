@@ -40,7 +40,7 @@ private enum CLIError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .usage: "usage: raiders on|off|status|doctor|uninstall|update"
+        case .usage: "usage: raiders on|off|status|status --json|doctor|uninstall|update|help"
         case .invalidRuntimeConfiguration: "Runtime Raiders enrollment configuration is invalid"
         case .updateCheckUnavailable: "Unable to check for a Runtime Raiders update."
         case .invalidStatusResponse: "Runtime Raiders status response was invalid."

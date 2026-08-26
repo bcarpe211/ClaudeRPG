@@ -161,7 +161,7 @@ function buildFixture() {
     'set -eu',
     'operation=${1:-status}',
     '[ "$operation" != __runtime-raiders-managed-agent ] || operation="$operation:${2:-}"',
-    `printf 'agent:%s home=%s verify=%s support=%s response=%s\\n' "$operation" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" >> '${agentLog}'`,
+    `printf 'agent:%s home=%s verify=%s support=%s response=%s argv=%s\\n' "$operation" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" "$*" >> '${agentLog}'`,
     'expected_support="$HOME/Library/Application Support"',
     '[ "${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-}" = 1 ] && [ "${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-}" = "$expected_support" ] || { echo unsafeVerificationEnvironment >&2; exit 79; }',
     'managed_state="$HOME/Library/Application Support/Runtime Raiders/state/managed-service-state"',
@@ -180,7 +180,12 @@ function buildFixture() {
     '    [ "$(printf %s "$socket_path" | /usr/bin/wc -c | /usr/bin/tr -d " ")" -lt 104 ] || { echo unsafeSocketPath >&2; exit 78; };;',
     'esac',
     'case "${1:-status}" in',
-    `  status) printf '%s\\n' '${agentStatus({ persistedState: 'missing' }).replace(version, '0.4.0')}';;`,
+    '  status)',
+    '    if [ "${2:-}" = --json ] && [ "$#" -eq 2 ]; then',
+    `      printf '%s\\n' '${agentStatus({ persistedState: 'missing' }).replace(version, '0.4.0')}'`,
+    '    else',
+    "      printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
+    '    fi;;',
     '  daemon) exit 0;;',
     '  update)',
     '    response=${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-}',
@@ -1002,6 +1007,8 @@ describe('Runtime Raiders release build', () => {
     expect(invocations[2]).toContain('response=unset');
     expect(invocations[3]).toContain('response=unset');
     expect(invocations[4]).not.toContain('response=unset');
+    expect(invocations[2]).toContain('argv=status --json');
+    expect(invocations[3]).toContain('argv=status --json');
   });
 
   it.each([

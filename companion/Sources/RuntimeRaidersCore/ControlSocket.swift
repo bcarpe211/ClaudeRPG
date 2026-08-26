@@ -652,14 +652,15 @@ public enum ControlSocketClient {
               let status = try? JSONDecoder().decode(AgentStatus.self, from: statusData),
               status.daemonRunning,
               status.enabled,
-              status.persistedState == .enabled else {
+              status.persistedState == .enabled,
+              status.activationState == .preparing || status.activationState == .ready else {
             return try failClosedAfterTimedOutEnable(
                 socketURL: socketURL,
                 maximumFrameBytes: maximumFrameBytes,
                 timeoutSeconds: timeoutSeconds
             )
         }
-        return ControlResponse(ok: true, message: "enabled")
+        return ControlResponse(ok: true, message: status.activationState.rawValue)
     }
 
     private static func failClosedAfterTimedOutEnable(
