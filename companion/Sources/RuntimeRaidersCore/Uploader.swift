@@ -34,6 +34,56 @@ public enum UploaderError: Error, Equatable {
     case invalidCompanionVersion
 }
 
+enum UploadBatchWire {
+    static func request(
+        records: [OutboxRecord],
+        configuration: UploadConfiguration
+    ) throws -> URLRequest {
+        var request = URLRequest(
+            url: configuration.origin.appendingPathComponent("api/runs/events")
+        )
+        request.httpMethod = "POST"
+        request.timeoutInterval = 2
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(
+            "Bearer \(configuration.deviceToken)",
+            forHTTPHeaderField: "Authorization"
+        )
+        request.httpBody = try batchBody(records)
+        return request
+    }
+
+    static func accepts(_ response: UploadHTTPResponse, expectedCount: Int) -> Bool {
+        response.statusCode == 200
+            && validAcknowledgement(response.body, expectedCount: expectedCount)
+    }
+
+    private static func batchBody(_ records: [OutboxRecord]) throws -> Data {
+        let events = try records.map { record -> Any in
+            try JSONSerialization.jsonObject(with: record.encodedEvent)
+        }
+        return try JSONSerialization.data(withJSONObject: ["events": events], options: [.sortedKeys])
+    }
+
+    private static func validAcknowledgement(_ body: Data, expectedCount: Int) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              Set(object.keys) == ["accepted", "duplicate", "ignored"] else { return false }
+        var total: Int64 = 0
+        for key in ["accepted", "duplicate", "ignored"] {
+            guard let number = object[key] as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID() else { return false }
+            let value = number.doubleValue
+            guard value >= 0,
+                  value <= 9_007_199_254_740_991,
+                  value.rounded(.towardZero) == value else { return false }
+            let integer = number.int64Value
+            guard total <= Int64.max - integer else { return false }
+            total += integer
+        }
+        return total == Int64(expectedCount)
+    }
+}
+
 public final class RequestCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
@@ -432,14 +482,7 @@ public final class Uploader: @unchecked Sendable {
         let records = try outbox.records(limit: 100)
         guard !records.isEmpty else { return .empty }
 
-        var request = URLRequest(
-            url: configuration.origin.appendingPathComponent("api/runs/events")
-        )
-        request.httpMethod = "POST"
-        request.timeoutInterval = 2
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(configuration.deviceToken)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try Self.batchBody(records)
+        let request = try UploadBatchWire.request(records: records, configuration: configuration)
 
         let cancellation = RequestCancellation()
         let maySend = lock.withLock { () -> Bool in
@@ -463,8 +506,7 @@ public final class Uploader: @unchecked Sendable {
         guard lock.withLock({ deliveryEnabled && generation == attemptGeneration }) else {
             return .disabled
         }
-        guard response.statusCode == 200,
-              Self.validAcknowledgement(response.body, expectedCount: records.count) else {
+        guard UploadBatchWire.accepts(response, expectedCount: records.count) else {
             return scheduleFailure(now: now, generation: attemptGeneration)
         }
         return try lock.withLock {
@@ -552,32 +594,7 @@ public final class Uploader: @unchecked Sendable {
         }
     }
 
-    private static func batchBody(_ records: [OutboxRecord]) throws -> Data {
-        let events = try records.map { record -> Any in
-            try JSONSerialization.jsonObject(with: record.encodedEvent)
-        }
-        return try JSONSerialization.data(withJSONObject: ["events": events], options: [.sortedKeys])
-    }
-
-    private static func validAcknowledgement(_ body: Data, expectedCount: Int) -> Bool {
-        guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-              Set(object.keys) == ["accepted", "duplicate", "ignored"] else { return false }
-        var total: Int64 = 0
-        for key in ["accepted", "duplicate", "ignored"] {
-            guard let number = object[key] as? NSNumber,
-                  CFGetTypeID(number) != CFBooleanGetTypeID() else { return false }
-            let value = number.doubleValue
-            guard value >= 0,
-                  value <= 9_007_199_254_740_991,
-                  value.rounded(.towardZero) == value else { return false }
-            let integer = number.int64Value
-            guard total <= Int64.max - integer else { return false }
-            total += integer
-        }
-        return total == Int64(expectedCount)
-    }
-
-    fileprivate static func isProductionOrigin(_ url: URL) -> Bool {
+    static func isProductionOrigin(_ url: URL) -> Bool {
         url.absoluteString == "https://raiders.redlattice.com"
     }
 }

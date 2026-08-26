@@ -198,6 +198,101 @@ final class OutboxTests: XCTestCase {
         }
     }
 
+    func testDiscardAllValidatedDeletesEveryCanonicalRecordAndLeavesUnownedNames() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            for sequence in 1...3 {
+                try outbox.enqueue(makeEvent(
+                    sequence: Int64(sequence),
+                    observedAtMS: 1_700_000_001_000 + Int64(sequence)
+                ))
+            }
+            let unrelated = directory.appendingPathComponent("unrelated.txt")
+            try Data("keep".utf8).write(to: unrelated)
+
+            XCTAssertEqual(try outbox.discardAllValidated(), 3)
+
+            XCTAssertEqual(try outbox.queuedCount(), 0)
+            XCTAssertEqual(try Data(contentsOf: unrelated), Data("keep".utf8))
+        }
+    }
+
+    func testDiscardAllValidatedRejectsMalformedOwnedRecordBeforeDeletingCanonicalRecords() throws {
+        try assertDiscardBlocked { directory, _ in
+            let malformed = directory.appendingPathComponent(String(repeating: "f", count: 64) + ".json")
+            try Data("malformed".utf8).write(to: malformed)
+            XCTAssertEqual(Darwin.chmod(malformed.path, 0o600), 0)
+        }
+    }
+
+    func testDiscardAllValidatedRejectsOwnedSymlinkBeforeDeletingCanonicalRecords() throws {
+        try assertDiscardBlocked { directory, _ in
+            let outside = directory.appendingPathComponent("outside.json")
+            try Data("outside".utf8).write(to: outside)
+            try FileManager.default.createSymbolicLink(
+                at: directory.appendingPathComponent(String(repeating: "e", count: 64) + ".json"),
+                withDestinationURL: outside
+            )
+        }
+    }
+
+    func testDiscardAllValidatedRejectsHardLinkedRecordBeforeDeletingCanonicalRecords() throws {
+        try assertDiscardBlocked { directory, canonicalURL in
+            let outside = directory.appendingPathComponent("hard-link-unowned")
+            try FileManager.default.linkItem(at: canonicalURL, to: outside)
+        }
+    }
+
+    func testDiscardAllValidatedRejectsWrongModeBeforeDeletingCanonicalRecords() throws {
+        try assertDiscardBlocked { _, canonicalURL in
+            XCTAssertEqual(Darwin.chmod(canonicalURL.path, 0o640), 0)
+        }
+    }
+
+    func testDiscardAllValidatedRejectsWrongOwnerBeforeDeletingCanonicalRecords() throws {
+        try withTemporaryDirectory { directory in
+            let writer = try Outbox(directory: directory)
+            try writer.enqueue(makeEvent(sequence: 1, observedAtMS: 1_700_000_001_001))
+            let canonicalURL = try XCTUnwrap(writer.records(limit: 1).first?.url)
+            let outbox = try Outbox(
+                directory: directory,
+                expectedRecordOwnerID: geteuid() ^ 1
+            )
+
+            XCTAssertThrowsError(try outbox.discardAllValidated())
+            XCTAssertTrue(FileManager.default.fileExists(atPath: canonicalURL.path))
+        }
+    }
+
+    func testDiscardAllValidatedRejectsCanonicalNameContentMismatchBeforeDeletingRecords() throws {
+        try assertDiscardBlocked { directory, canonicalURL in
+            let mismatched = directory.appendingPathComponent(String(repeating: "d", count: 64) + ".json")
+            try FileManager.default.moveItem(at: canonicalURL, to: mismatched)
+        }
+    }
+
+    func testDiscardAllValidatedRejectsDirectoryPathSwapWithoutDeletingEitherDirectory() throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1, observedAtMS: 1_700_000_001_001))
+            let originalRecord = try XCTUnwrap(outbox.records(limit: 1).first?.url)
+            let movedDirectory = directory.deletingLastPathComponent()
+                .appendingPathComponent("moved-outbox-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: movedDirectory) }
+            try FileManager.default.moveItem(at: directory, to: movedDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+            let replacement = directory.appendingPathComponent("replacement.txt")
+            try Data("replacement".utf8).write(to: replacement)
+
+            XCTAssertThrowsError(try outbox.discardAllValidated())
+
+            XCTAssertTrue(FileManager.default.fileExists(
+                atPath: movedDirectory.appendingPathComponent(originalRecord.lastPathComponent).path
+            ))
+            XCTAssertEqual(try Data(contentsOf: replacement), Data("replacement".utf8))
+        }
+    }
+
     private func makeEvent(sequence: Int64, observedAtMS: Int64) -> RunEventV1 {
         let startedAt = observedAtMS - 1_000
         return RunEventV1(
@@ -226,6 +321,22 @@ final class OutboxTests: XCTestCase {
 
     private func directoryNames(_ directory: URL) throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: directory.path)
+    }
+
+    private func assertDiscardBlocked(
+        by corrupting: (URL, URL) throws -> Void
+    ) throws {
+        try withTemporaryDirectory { directory in
+            let outbox = try Outbox(directory: directory)
+            try outbox.enqueue(makeEvent(sequence: 1, observedAtMS: 1_700_000_001_001))
+            try outbox.enqueue(makeEvent(sequence: 2, observedAtMS: 1_700_000_001_002))
+            let canonicalURLs = try outbox.records(limit: 100).map(\.url)
+            try corrupting(directory, try XCTUnwrap(canonicalURLs.first))
+            let namesBeforeDiscard = try directoryNames(directory).sorted()
+
+            XCTAssertThrowsError(try outbox.discardAllValidated())
+            XCTAssertEqual(try directoryNames(directory).sorted(), namesBeforeDiscard)
+        }
     }
 
     private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {
