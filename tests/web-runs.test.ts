@@ -234,7 +234,7 @@ async function lifecycleFixture() {
     operation_id: randomUUID(),
     replacement_device_id: randomUUID(),
     replacement_device_token: `${randomUUID().replaceAll('-', '')}${'R'.repeat(11)}`,
-    companion_version: '0.4.9',
+    companion_version: 'replacement-v1',
   };
   return {
     old,
@@ -395,6 +395,7 @@ describe('Raider enrollment routes', () => {
       .post('/api/raiders/enroll')
       .send({ code, device_id: deviceId, companion_version: '0.1.0' });
     expect(exchanged.status).toBe(201);
+    expect(exchanged.headers['cache-control']).toBe('private, no-store');
     expect(exchanged.body).toEqual({
       device_token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       dedupe_secret: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -491,6 +492,13 @@ describe('Raider device lifecycle routes', () => {
       .send(fixture.body);
     expect(created.status).toBe(201);
     expect(created.body).toEqual(expectedConfiguration);
+    expect(created.headers['cache-control']).toBe('private, no-store');
+
+    const heartbeat = await request(app)
+      .post('/api/runs/heartbeat')
+      .set('Authorization', `Bearer ${fixture.body.replacement_device_token}`)
+      .send({ companion_version: 'heartbeat-v2' });
+    expect(heartbeat.status).toBe(204);
 
     const replayed = await request(app)
       .post('/api/raiders/re-enroll')
@@ -498,6 +506,14 @@ describe('Raider device lifecycle routes', () => {
       .send(fixture.body);
     expect(replayed.status).toBe(200);
     expect(replayed.body).toEqual(expectedConfiguration);
+    expect(replayed.headers['cache-control']).toBe('private, no-store');
+
+    const changedSubmittedVersion = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .send({ ...fixture.body, companion_version: 'different-submission-v3' });
+    expect(changedSubmittedVersion.status).toBe(409);
+    expect(changedSubmittedVersion.body).toEqual({ reason: 'replacement_conflict' });
 
     for (const response of [created, replayed]) {
       expect(response.text).not.toContain(fixture.old.deviceToken);
@@ -510,6 +526,7 @@ describe('Raider device lifecycle routes', () => {
       .set('Authorization', `Bearer ${fixture.body.replacement_device_token}`);
     expect(configured.status).toBe(200);
     expect(configured.body).toEqual(expectedConfiguration);
+    expect(configured.headers['cache-control']).toBe('private, no-store');
     expect(configured.text).not.toContain(fixture.body.replacement_device_token);
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -534,6 +551,13 @@ describe('Raider device lifecycle routes', () => {
       .send({ events: [runEvent(fixture.body.replacement_device_id)] });
     expect(rejectedEvent.status).toBe(401);
     expect(rejectedEvent.body).toEqual({ reason: 'unauthorized' });
+
+    const rejectedHeartbeat = await request(app)
+      .post('/api/runs/heartbeat')
+      .set('Authorization', `Bearer ${fixture.body.replacement_device_token}`)
+      .send({ companion_version: 'heartbeat-v3' });
+    expect(rejectedHeartbeat.status).toBe(401);
+    expect(rejectedHeartbeat.body).toEqual({ reason: 'unauthorized' });
   });
 
   it('rejects every malformed or non-strict replacement body without logging credentials', async () => {
@@ -657,7 +681,7 @@ describe('Raider device lifecycle routes', () => {
       .send({
         code: consumedFixture.body.code,
         device_id: randomUUID(),
-        companion_version: '0.4.9',
+        companion_version: 'replacement-v1',
       });
     expect(consumed.status).toBe(201);
     const rejected = await request(app)

@@ -91,20 +91,30 @@ function insertReplacementFixture(
     oldDeviceId = '11111111-1111-4111-8111-111111111111',
     replacementDeviceId = '22222222-2222-4222-8222-222222222222',
     codeHash = 'e'.repeat(64),
+    companionVersion = 'replacement-v1',
     createdAt = 300,
   }: {
     operationId?: unknown;
     oldDeviceId?: unknown;
     replacementDeviceId?: unknown;
     codeHash?: unknown;
+    companionVersion?: unknown;
     createdAt?: unknown;
   } = {},
 ): void {
   db.prepare(`
     INSERT INTO raider_device_replacements
-      (operation_id, old_device_id, replacement_device_id, code_hash, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(operationId, oldDeviceId, replacementDeviceId, codeHash, createdAt);
+      (operation_id, old_device_id, replacement_device_id, code_hash,
+       companion_version, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    operationId,
+    oldDeviceId,
+    replacementDeviceId,
+    codeHash,
+    companionVersion,
+    createdAt,
+  );
 }
 
 function insertRunFixture(
@@ -217,6 +227,7 @@ describe('Runtime Raiders persistence migrations', () => {
         'old_device_id',
         'replacement_device_id',
         'code_hash',
+        'companion_version',
         'created_at',
       ]);
       expect(columns(db, 'runs')).toEqual([
@@ -295,6 +306,15 @@ describe('Runtime Raiders persistence migrations', () => {
       expect(() => insertReplacementFixture(db, {
         codeHash: 'c'.repeat(64),
       }), 'missing enrollment').toThrow();
+      expect(() => insertReplacementFixture(db, {
+        companionVersion: '',
+      }), 'empty companion version').toThrow();
+      expect(() => insertReplacementFixture(db, {
+        companionVersion: 'v'.repeat(101),
+      }), 'oversized companion version').toThrow();
+      expect(() => insertReplacementFixture(db, {
+        companionVersion: Buffer.from('replacement-v1'),
+      }), 'non-text companion version').toThrow();
       expect(() => insertReplacementFixture(db, {
         createdAt: 1.5,
       }), 'non-integer timestamp').toThrow();

@@ -229,8 +229,8 @@ export function replaceDeviceEnrollment(
           operation.operation_id,
           operation.code_hash,
           operation.replacement_device_id,
+          operation.companion_version,
           replacement.token_hash AS replacement_token_hash,
-          replacement.companion_version,
           identity.dedupe_secret
         FROM raider_device_replacements AS operation
         JOIN raider_devices AS replacement
@@ -330,13 +330,15 @@ export function replaceDeviceEnrollment(
 
     const recorded = db.prepare(`
       INSERT INTO raider_device_replacements
-        (operation_id, old_device_id, replacement_device_id, code_hash, created_at)
-      VALUES (?, ?, ?, ?, ?)
+        (operation_id, old_device_id, replacement_device_id, code_hash,
+         companion_version, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       request.operationId,
       old.device_id,
       request.replacementDeviceId,
       codeHash,
+      request.companionVersion,
       now,
     );
     if (recorded.changes !== 1) {

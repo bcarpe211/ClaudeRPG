@@ -1029,6 +1029,11 @@ export const migrations: Migration[] = [
           REFERENCES raider_devices(device_id) ON DELETE CASCADE,
         code_hash TEXT NOT NULL UNIQUE
           REFERENCES raider_enrollments(code_hash) ON DELETE CASCADE,
+        companion_version TEXT NOT NULL
+          CHECK (
+            typeof(companion_version) = 'text'
+            AND length(companion_version) BETWEEN 1 AND 100
+          ),
         created_at INTEGER NOT NULL
           CHECK (
             typeof(created_at) = 'integer'

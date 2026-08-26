@@ -611,7 +611,7 @@ describe('Runtime Raiders local integration gate', () => {
       operation_id: randomUUID(),
       replacement_device_id: replacementDeviceId,
       replacement_device_token: replacementDeviceToken,
-      companion_version: '0.4.9',
+      companion_version: 'replacement-v1',
     };
     const replacementRequestBytes = JSON.stringify(replacementRequest);
     expect(Object.keys(replacementRequest).sort()).toEqual([

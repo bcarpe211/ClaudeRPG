@@ -184,7 +184,7 @@ function replacementFixture(
     operationId: randomUUID(),
     replacementDeviceId: randomUUID(),
     replacementDeviceToken: 'R'.repeat(43),
-    companionVersion: '0.4.9',
+    companionVersion: 'replacement-v1',
   };
   return {
     oldDeviceId,
@@ -475,7 +475,7 @@ describe('raider enrollment', () => {
       expect(authenticateDevice(db, fixture.request.replacementDeviceToken, NOW + 11)).toEqual({
         deviceId: fixture.request.replacementDeviceId,
         playerId: targetId,
-        companionVersion: '0.4.9',
+        companionVersion: 'replacement-v1',
       });
       expect(db.prepare(`
         SELECT consumed_at
@@ -483,13 +483,15 @@ describe('raider enrollment', () => {
         WHERE code_hash = ?
       `).get(sha256(fixture.targetCode))).toEqual({ consumed_at: NOW + 10 });
       expect(db.prepare(`
-        SELECT operation_id, old_device_id, replacement_device_id, code_hash, created_at
+        SELECT operation_id, old_device_id, replacement_device_id, code_hash,
+               companion_version, created_at
         FROM raider_device_replacements
       `).get()).toEqual({
         operation_id: fixture.request.operationId,
         old_device_id: fixture.oldDeviceId,
         replacement_device_id: fixture.request.replacementDeviceId,
         code_hash: sha256(fixture.targetCode),
+        companion_version: 'replacement-v1',
         created_at: NOW + 10,
       });
       expect(db.prepare(`
@@ -684,7 +686,7 @@ describe('raider enrollment', () => {
         operationId: fixture.request.operationId,
         replacementDeviceId: newDeviceId(),
         replacementDeviceToken: 'Q'.repeat(43),
-        companionVersion: '0.4.9',
+        companionVersion: 'replacement-v1',
       }, NOW + 10)).toMatchObject({ kind: 'created' });
 
       const beforeConflict = snapshotTables(db);
@@ -745,13 +747,18 @@ describe('raider enrollment', () => {
     }
   });
 
-  it('replays only the exact committed request and keeps every replay path read-only', () => {
+  it('replays against the submitted version after mutable device version changes', () => {
     const db = enrollmentDb();
     try {
       const fixture = replacementFixture(db, 2);
       expect(replaceDeviceEnrollment(db, fixture.request, NOW + 10)).toMatchObject({
         kind: 'created',
       });
+      db.prepare(`
+        UPDATE raider_devices
+        SET companion_version = ?, last_seen_at = ?
+        WHERE device_id = ?
+      `).run('heartbeat-v2', NOW + 15, fixture.request.replacementDeviceId);
       const committed = snapshotTables(db);
 
       expect(replaceDeviceEnrollment(db, fixture.request, NOW + 20)).toEqual({
@@ -766,7 +773,7 @@ describe('raider enrollment', () => {
         { ...fixture.request, code: 'C'.repeat(43) },
         { ...fixture.request, replacementDeviceId: randomUUID() },
         { ...fixture.request, replacementDeviceToken: 'S'.repeat(43) },
-        { ...fixture.request, companionVersion: '0.4.10' },
+        { ...fixture.request, companionVersion: 'different-submission-v3' },
       ];
       for (const request of conflicts) {
         expect(replaceDeviceEnrollment(db, request, NOW + 21)).toEqual({ kind: 'conflict' });

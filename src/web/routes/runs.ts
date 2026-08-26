@@ -318,7 +318,7 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       res.status(401).json({ reason: 'invalid_enrollment' });
       return;
     }
-    res.status(201).json({
+    res.status(201).set('Cache-Control', 'private, no-store').json({
       device_token: exchanged.deviceToken,
       dedupe_secret: exchanged.dedupeSecret,
       server_url: config.publicUrl,
@@ -363,10 +363,14 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       }, Date.now());
       switch (result.kind) {
         case 'created':
-          res.status(201).json(configurationResponse(result));
+          res.status(201)
+            .set('Cache-Control', 'private, no-store')
+            .json(configurationResponse(result));
           return;
         case 'replayed':
-          res.status(200).json(configurationResponse(result));
+          res.status(200)
+            .set('Cache-Control', 'private, no-store')
+            .json(configurationResponse(result));
           return;
         case 'invalid_enrollment':
           res.status(401).json({ reason: 'invalid_enrollment' });
@@ -409,7 +413,9 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
         res.status(401).json({ reason: 'unauthorized' });
         return;
       }
-      res.status(200).json(configurationResponse(configuration));
+      res.status(200)
+        .set('Cache-Control', 'private, no-store')
+        .json(configurationResponse(configuration));
     },
   );
 
