@@ -192,10 +192,10 @@ async function postChunkedGzipWithDelayedEnd(
   }
 }
 
-async function createEnrollment() {
+async function createEnrollment(targetPlayer = player) {
   const response = await request(app)
     .post('/api/raiders/enrollments')
-    .send({ raider_key: player.auth_token });
+    .send({ raider_key: targetPlayer.auth_token });
   expect(response.status).toBe(201);
   const code = response.body.enrollment_code as unknown;
   expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -204,8 +204,8 @@ async function createEnrollment() {
   return { response, code: code as string };
 }
 
-async function enrollDevice(deviceId = randomUUID()) {
-  const { code } = await createEnrollment();
+async function enrollDevice(deviceId = randomUUID(), targetPlayer = player) {
+  const { code } = await createEnrollment(targetPlayer);
   const response = await request(app)
     .post('/api/raiders/enroll')
     .send({ code, device_id: deviceId, companion_version: '0.1.0' });
@@ -215,6 +215,32 @@ async function enrollDevice(deviceId = randomUUID()) {
     deviceToken: response.body.device_token as string,
     dedupeSecret: response.body.dedupe_secret as string,
     response,
+  };
+}
+
+async function lifecycleFixture() {
+  const old = await enrollDevice();
+  const targetPlayer = createPlayer(
+    db,
+    { name: `Target Raider ${randomUUID()}`, class_key: 'mage', gender: 'F' },
+    NOW,
+  );
+  const { code } = await createEnrollment(targetPlayer);
+  const identity = db.prepare(`
+    SELECT dedupe_secret FROM raider_identities WHERE player_id = ?
+  `).get(targetPlayer.id) as { dedupe_secret: string };
+  const body = {
+    code,
+    operation_id: randomUUID(),
+    replacement_device_id: randomUUID(),
+    replacement_device_token: `${randomUUID().replaceAll('-', '')}${'R'.repeat(11)}`,
+    companion_version: '0.4.9',
+  };
+  return {
+    old,
+    targetPlayer,
+    targetDedupeSecret: identity.dedupe_secret,
+    body,
   };
 }
 
@@ -236,6 +262,8 @@ describe('private Run JSON boundaries', () => {
   it.each([
     '/api/raiders/enrollments',
     '/api/raiders/enroll',
+    '/api/raiders/re-enroll',
+    '/api/raiders/devices/revoke-current',
     '/api/runs/events',
     '/api/runs/heartbeat',
   ])('requires JSON on %s', async (path) => {
@@ -250,6 +278,8 @@ describe('private Run JSON boundaries', () => {
   it.each([
     '/api/raiders/enrollments',
     '/api/raiders/enroll',
+    '/api/raiders/re-enroll',
+    '/api/raiders/devices/revoke-current',
     '/api/runs/events',
     '/api/runs/heartbeat',
   ])('rejects malformed JSON privately on %s', async (path) => {
@@ -441,6 +471,379 @@ describe('Raider enrollment routes', () => {
       .set('X-Forwarded-For', '198.51.100.11')
       .send({ raider_key: 'invalid' });
     expect(isolatedClient.status).toBe(401);
+  });
+});
+
+describe('Raider device lifecycle routes', () => {
+  it('replaces, replays, recovers, and revokes a device without echoing request credentials', async () => {
+    const fixture = await lifecycleFixture();
+    const expectedConfiguration = {
+      device_id: fixture.body.replacement_device_id,
+      dedupe_secret: fixture.targetDedupeSecret,
+      server_url: 'https://raiders.test',
+      cutover_at: CUTOVER,
+      enabled_surfaces: ['codex_desktop', 'codex_cli'],
+    };
+
+    const created = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .send(fixture.body);
+    expect(created.status).toBe(201);
+    expect(created.body).toEqual(expectedConfiguration);
+
+    const replayed = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .send(fixture.body);
+    expect(replayed.status).toBe(200);
+    expect(replayed.body).toEqual(expectedConfiguration);
+
+    for (const response of [created, replayed]) {
+      expect(response.text).not.toContain(fixture.old.deviceToken);
+      expect(response.text).not.toContain(fixture.body.replacement_device_token);
+      expect(response.text).not.toContain(fixture.body.code);
+    }
+
+    const configured = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('Authorization', `Bearer ${fixture.body.replacement_device_token}`);
+    expect(configured.status).toBe(200);
+    expect(configured.body).toEqual(expectedConfiguration);
+    expect(configured.text).not.toContain(fixture.body.replacement_device_token);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const revoked = await request(app)
+        .post('/api/raiders/devices/revoke-current')
+        .set('Authorization', `Bearer ${fixture.body.replacement_device_token}`)
+        .send({});
+      expect(revoked.status).toBe(200);
+      expect(revoked.body).toEqual({ revoked: true });
+      expect(revoked.text).not.toContain(fixture.body.replacement_device_token);
+    }
+
+    const rejectedConfiguration = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('Authorization', `Bearer ${fixture.body.replacement_device_token}`);
+    expect(rejectedConfiguration.status).toBe(401);
+    expect(rejectedConfiguration.body).toEqual({ reason: 'unauthorized' });
+
+    const rejectedEvent = await request(app)
+      .post('/api/runs/events')
+      .set('Authorization', `Bearer ${fixture.body.replacement_device_token}`)
+      .send({ events: [runEvent(fixture.body.replacement_device_id)] });
+    expect(rejectedEvent.status).toBe(401);
+    expect(rejectedEvent.body).toEqual({ reason: 'unauthorized' });
+  });
+
+  it('rejects every malformed or non-strict replacement body without logging credentials', async () => {
+    const fixture = await lifecycleFixture();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const invalidBodies: Array<Record<string, unknown>> = [
+      { ...fixture.body, extra: true },
+      { ...fixture.body, code: undefined },
+      { ...fixture.body, code: 'A'.repeat(42) },
+      { ...fixture.body, operation_id: 'not-a-uuid' },
+      { ...fixture.body, replacement_device_id: 'not-a-uuid' },
+      { ...fixture.body, replacement_device_token: 'R'.repeat(42) },
+      { ...fixture.body, companion_version: '' },
+      { ...fixture.body, companion_version: 'v'.repeat(101) },
+    ];
+
+    for (const body of invalidBodies) {
+      const response = await request(app)
+        .post('/api/raiders/re-enroll')
+        .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+        .send(body);
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ reason: 'invalid_request' });
+      expect(response.text).not.toContain(fixture.old.deviceToken);
+      expect(response.text).not.toContain(fixture.body.replacement_device_token);
+      expect(response.text).not.toContain(fixture.body.code);
+    }
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported replacement content encoding without logging or echoing credentials', async () => {
+    const fixture = await lifecycleFixture();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const response = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'compress')
+      .send(JSON.stringify(fixture.body));
+    expect(response.status).toBe(415);
+    expect(response.text).not.toContain(fixture.old.deviceToken);
+    expect(response.text).not.toContain(fixture.body.replacement_device_token);
+    expect(response.text).not.toContain(fixture.body.code);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('enforces raw, inflated, and chunked 256 KiB replacement body limits', async () => {
+    const fixture = await lifecycleFixture();
+    const oversized = JSON.stringify({ ...fixture.body, padding: 'x'.repeat(256 * 1_024) });
+    const raw = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .set('Content-Type', 'application/json')
+      .send(oversized);
+    expect(raw.status).toBe(413);
+    expect(raw.body).toEqual({ reason: 'payload_too_large' });
+
+    const inflated = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'gzip')
+      .serialize((value: unknown) => value as string)
+      .send(gzipSync(Buffer.from(oversized)) as unknown as string);
+    expect(inflated.status).toBe(413);
+    expect(inflated.body).toEqual({ reason: 'payload_too_large' });
+
+    const chunkedRaw = Buffer.from(oversized);
+    const chunked = await postChunkedGzip(
+      '/api/raiders/re-enroll',
+      gzipSync(chunkedRaw, { level: 0 }),
+    );
+    expect(chunked.status).toBe(413);
+    expect(chunked.body).toEqual({ reason: 'payload_too_large' });
+  });
+
+  it('returns private unauthorized responses for missing, malformed, and unknown lifecycle bearers', async () => {
+    const fixture = await lifecycleFixture();
+    const credentials = [
+      undefined,
+      'Basic private',
+      'Bearer',
+      'Bearer malformed',
+      `Bearer ${'A'.repeat(43)}`,
+    ];
+    for (const authorization of credentials) {
+      const replacement = request(app).post('/api/raiders/re-enroll').send(fixture.body);
+      const configuration = request(app).get('/api/raiders/enrollment-config');
+      const revocation = request(app)
+        .post('/api/raiders/devices/revoke-current')
+        .send({});
+      if (authorization !== undefined) {
+        replacement.set('Authorization', authorization);
+        configuration.set('Authorization', authorization);
+        revocation.set('Authorization', authorization);
+      }
+      for (const response of [await replacement, await configuration, await revocation]) {
+        expect(response.status).toBe(401);
+        expect(response.body).toEqual({ reason: 'unauthorized' });
+        expect(response.text).not.toContain('A'.repeat(43));
+      }
+    }
+  });
+
+  it('maps expired and consumed replacement codes to invalid_enrollment without echoing them', async () => {
+    const fixture = await lifecycleFixture();
+    db.prepare('UPDATE raider_enrollments SET expires_at = ? WHERE player_id = ?')
+      .run(NOW, fixture.targetPlayer.id);
+
+    const expired = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .send(fixture.body);
+    expect(expired.status).toBe(401);
+    expect(expired.body).toEqual({ reason: 'invalid_enrollment' });
+    expect(expired.text).not.toContain(fixture.body.code);
+
+    const consumedFixture = await lifecycleFixture();
+    const consumed = await request(app)
+      .post('/api/raiders/enroll')
+      .send({
+        code: consumedFixture.body.code,
+        device_id: randomUUID(),
+        companion_version: '0.4.9',
+      });
+    expect(consumed.status).toBe(201);
+    const rejected = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${consumedFixture.old.deviceToken}`)
+      .send(consumedFixture.body);
+    expect(rejected.status).toBe(401);
+    expect(rejected.body).toEqual({ reason: 'invalid_enrollment' });
+    expect(rejected.text).not.toContain(consumedFixture.body.code);
+  });
+
+  it('maps conflicting replay to replacement_conflict without echoing request credentials', async () => {
+    const fixture = await lifecycleFixture();
+    const created = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .send(fixture.body);
+    expect(created.status).toBe(201);
+
+    const conflict = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${fixture.old.deviceToken}`)
+      .send({ ...fixture.body, operation_id: randomUUID() });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body).toEqual({ reason: 'replacement_conflict' });
+    expect(conflict.text).not.toContain(fixture.old.deviceToken);
+    expect(conflict.text).not.toContain(fixture.body.replacement_device_token);
+    expect(conflict.text).not.toContain(fixture.body.code);
+  });
+
+  it('rejects an unrelated revoked device from replacement', async () => {
+    const fixture = await lifecycleFixture();
+    const unrelated = await enrollDevice();
+    const revoked = await request(app)
+      .post('/api/raiders/devices/revoke-current')
+      .set('Authorization', `Bearer ${unrelated.deviceToken}`)
+      .send({});
+    expect(revoked.status).toBe(200);
+
+    const rejected = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('Authorization', `Bearer ${unrelated.deviceToken}`)
+      .send(fixture.body);
+    expect(rejected.status).toBe(401);
+    expect(rejected.body).toEqual({ reason: 'unauthorized' });
+    expect(rejected.text).not.toContain(unrelated.deviceToken);
+  });
+
+  it('requires configuration recovery to have no request body', async () => {
+    const device = await enrollDevice();
+    const response = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('Authorization', `Bearer ${device.deviceToken}`)
+      .send({ unexpected: true });
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ reason: 'invalid_request' });
+  });
+
+  it('requires revocation to receive exactly an empty JSON object', async () => {
+    const device = await enrollDevice();
+    const missingJson = await request(app)
+      .post('/api/raiders/devices/revoke-current')
+      .set('Authorization', `Bearer ${device.deviceToken}`);
+    expect(missingJson.status).toBe(415);
+    expect(missingJson.body).toEqual({ reason: 'unsupported_media_type' });
+
+    for (const body of [{ extra: true }, []]) {
+      const response = await request(app)
+        .post('/api/raiders/devices/revoke-current')
+        .set('Authorization', `Bearer ${device.deviceToken}`)
+        .send(body);
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ reason: 'invalid_request' });
+    }
+  });
+
+  it.each([
+    ['/api/raiders/re-enroll', { malformed: true }],
+    ['/api/raiders/devices/revoke-current', {}],
+  ])('rate-limits %s by IP before parsing or credential database work', async (path, body) => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await request(app)
+        .post(path)
+        .set('Authorization', `Bearer ${'A'.repeat(43)}`)
+        .send(body);
+      expect([400, 401]).toContain(response.status);
+    }
+    db.close();
+    const response = await request(app)
+      .post(path)
+      .set('Authorization', `Bearer ${'A'.repeat(43)}`)
+      .set('Content-Type', 'application/json')
+      .send('{');
+    expect(response.status).toBe(429);
+    expect(response.body).toEqual({ reason: 'rate_limited' });
+  });
+
+  it('rate-limits configuration recovery by IP before credential database work', async () => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await request(app)
+        .get('/api/raiders/enrollment-config')
+        .set('Authorization', `Bearer ${'A'.repeat(43)}`);
+      expect(response.status).toBe(401);
+    }
+    db.close();
+    const response = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('Authorization', `Bearer ${'A'.repeat(43)}`);
+    expect(response.status).toBe(429);
+    expect(response.body).toEqual({ reason: 'rate_limited' });
+  });
+
+  it('isolates configuration recovery device quotas by device ID', async () => {
+    const first = await enrollDevice();
+    const second = await enrollDevice();
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await request(app)
+        .get('/api/raiders/enrollment-config')
+        .set('X-Forwarded-For', `198.51.100.${attempt + 1}`)
+        .set('Authorization', `Bearer ${first.deviceToken}`);
+      expect(response.status).toBe(200);
+    }
+    const limited = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('X-Forwarded-For', '198.51.101.1')
+      .set('Authorization', `Bearer ${first.deviceToken}`);
+    expect(limited.status).toBe(429);
+
+    const isolated = await request(app)
+      .get('/api/raiders/enrollment-config')
+      .set('X-Forwarded-For', '198.51.101.2')
+      .set('Authorization', `Bearer ${second.deviceToken}`);
+    expect(isolated.status).toBe(200);
+  });
+
+  it('isolates replacement device quotas by device ID', async () => {
+    const first = await lifecycleFixture();
+    const second = await lifecycleFixture();
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await request(app)
+        .post('/api/raiders/re-enroll')
+        .set('X-Forwarded-For', `198.51.100.${attempt + 1}`)
+        .set('Authorization', `Bearer ${first.old.deviceToken}`)
+        .send(first.body);
+      expect(response.status).toBe(attempt === 0 ? 201 : 200);
+    }
+    const limited = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('X-Forwarded-For', '198.51.101.1')
+      .set('Authorization', `Bearer ${first.old.deviceToken}`)
+      .send(first.body);
+    expect(limited.status).toBe(429);
+
+    const isolated = await request(app)
+      .post('/api/raiders/re-enroll')
+      .set('X-Forwarded-For', '198.51.101.2')
+      .set('Authorization', `Bearer ${second.old.deviceToken}`)
+      .send(second.body);
+    expect(isolated.status).toBe(201);
+  });
+
+  it('isolates revocation device quotas by device ID', async () => {
+    const first = await enrollDevice();
+    const second = await enrollDevice();
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await request(app)
+        .post('/api/raiders/devices/revoke-current')
+        .set('X-Forwarded-For', `198.51.100.${attempt + 1}`)
+        .set('Authorization', `Bearer ${first.deviceToken}`)
+        .send({});
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ revoked: true });
+    }
+    const limited = await request(app)
+      .post('/api/raiders/devices/revoke-current')
+      .set('X-Forwarded-For', '198.51.101.1')
+      .set('Authorization', `Bearer ${first.deviceToken}`)
+      .send({});
+    expect(limited.status).toBe(429);
+
+    const isolated = await request(app)
+      .post('/api/raiders/devices/revoke-current')
+      .set('X-Forwarded-For', '198.51.101.2')
+      .set('Authorization', `Bearer ${second.deviceToken}`)
+      .send({});
+    expect(isolated.status).toBe(200);
   });
 });
 
