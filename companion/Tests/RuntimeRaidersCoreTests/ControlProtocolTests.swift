@@ -533,6 +533,75 @@ final class ControlProtocolTests: XCTestCase {
         }
     }
 
+    func testLifecycleTerminalReaderFailsClosedForCompletedCrossThreadTemporaryHandler() throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        XCTAssertEqual(Darwin.pipe(&descriptors), 0)
+        let readDescriptor = descriptors[0]
+        let writeDescriptor = descriptors[1]
+        defer {
+            lifecycleRestorationSignalWriteDescriptor = -1
+            Darwin.close(readDescriptor)
+            Darwin.close(writeDescriptor)
+        }
+        let readFlags = Darwin.fcntl(readDescriptor, F_GETFL)
+        XCTAssertGreaterThanOrEqual(readFlags, 0)
+        XCTAssertEqual(Darwin.fcntl(readDescriptor, F_SETFL, readFlags | O_NONBLOCK), 0)
+
+        lifecycleRestorationSignalWriteDescriptor = writeDescriptor
+        let previousHandler = Darwin.signal(SIGQUIT, lifecycleRestorationPriorSignalHandler)
+        defer { _ = Darwin.signal(SIGQUIT, previousHandler) }
+
+        let workerReady = DispatchSemaphore(value: 0)
+        let deliverSignal = DispatchSemaphore(value: 0)
+        let handlerDeliveryCompleted = DispatchSemaphore(value: 0)
+        let worker = Thread {
+            var signalSet = sigset_t()
+            _ = Darwin.sigemptyset(&signalSet)
+            _ = Darwin.sigaddset(&signalSet, SIGQUIT)
+            _ = Darwin.pthread_sigmask(SIG_UNBLOCK, &signalSet, nil)
+            workerReady.signal()
+            deliverSignal.wait()
+            _ = Darwin.raise(SIGQUIT)
+            handlerDeliveryCompleted.signal()
+        }
+        worker.start()
+        defer { deliverSignal.signal() }
+        XCTAssertEqual(workerReady.wait(timeout: .now() + 1), .success)
+
+        try withPseudoTerminal { master, path in
+            let writer = TerminalReadResult()
+            let reader = LifecycleTerminalReader(
+                testPath: path,
+                transitionHook: { transition in
+                    guard transition == .signalHandlersRestoring else { return }
+                    deliverSignal.signal()
+                    XCTAssertEqual(
+                        handlerDeliveryCompleted.wait(timeout: .now() + 1),
+                        .success
+                    )
+                }
+            )
+            DispatchQueue.global().async {
+                writer.start()
+                writer.finish(Result {
+                    try waitForPrompt("Private input: ", from: master)
+                    try writeAll(Data("CONFIRM\n".utf8), to: master)
+                    return "written"
+                })
+            }
+            XCTAssertEqual(writer.started.wait(timeout: .now() + 1), .success)
+
+            XCTAssertThrowsError(
+                try reader.readLine(prompt: "Private input: ", maximumBytes: 64)
+            ) { error in
+                XCTAssertEqual(error as? LifecycleTerminalError, .interrupted)
+            }
+            XCTAssertEqual(try writer.value(), "written")
+            XCTAssertNil(readSignalByte(from: readDescriptor))
+            XCTAssertTrue(terminalEchoEnabled(at: path))
+        }
+    }
+
     func testLifecycleTerminalReaderRejectsEmptyInvalidUTF8AndNonCharacterDevice() throws {
         for input in [Data([0x0A]), Data([0xFF, 0x0A])] {
             try withPseudoTerminal { master, path in
@@ -1290,6 +1359,11 @@ private func waitForSignalByte(from descriptor: Int32) -> UInt8? {
         Darwin.usleep(10_000)
     }
     return nil
+}
+
+private func readSignalByte(from descriptor: Int32) -> UInt8? {
+    var byte: UInt8 = 0
+    return Darwin.read(descriptor, &byte, 1) == 1 ? byte : nil
 }
 
 private func startTerminalRead(path: String, maximumBytes: Int) -> TerminalReadResult {

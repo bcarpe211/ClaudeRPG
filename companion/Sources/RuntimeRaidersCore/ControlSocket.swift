@@ -360,9 +360,12 @@ private final class LifecycleTerminalSignalTrap {
 
         var protectedSignalArrived = checkForProtectedSignal && consumeSignal()
         restored = true
-        for (index, handler) in previousHandlers.reversed().enumerated() {
+        transitionHook?()
+        for handler in previousHandlers.reversed() {
             _ = Darwin.signal(handler.0, handler.1)
-            if index == 0 { transitionHook?() }
+        }
+        if checkForProtectedSignal, consumeSignal() {
+            protectedSignalArrived = true
         }
 
         if checkForProtectedSignal {
