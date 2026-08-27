@@ -252,8 +252,9 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
 
         let echoRestored = setAttributes(descriptor, TCSANOW, &original) == 0
         transitionHook(.echoRestored)
-        let protectedSignalArrived = signalTrap.consumeSignal()
-        signalTrap.restore()
+        let protectedSignalArrived = signalTrap.restoreAfterFinalSignalCheck {
+            transitionHook(.signalHandlersRestoring)
+        }
         if protectedSignalArrived { throw LifecycleTerminalError.interrupted }
         guard echoRestored else { throw LifecycleTerminalError.unavailable }
         return try readResult.get()
@@ -293,6 +294,7 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
 enum LifecycleTerminalTransition: Equatable, Sendable {
     case signalProtectionInstalled
     case echoRestored
+    case signalHandlersRestoring
 }
 
 private final class LifecycleTerminalSignalTrap {
@@ -326,7 +328,64 @@ private final class LifecycleTerminalSignalTrap {
     }
 
     func restore() {
-        guard !restored else { return }
+        _ = restoreWhileSignalsBlocked(checkForProtectedSignal: false, transitionHook: nil)
+    }
+
+    func restoreAfterFinalSignalCheck(
+        transitionHook: @escaping () -> Void
+    ) -> Bool {
+        restoreWhileSignalsBlocked(
+            checkForProtectedSignal: true,
+            transitionHook: transitionHook
+        )
+    }
+
+    private func restoreWhileSignalsBlocked(
+        checkForProtectedSignal: Bool,
+        transitionHook: (() -> Void)?
+    ) -> Bool {
+        guard !restored else { return false }
+        var protectedSignals = sigset_t()
+        guard Darwin.sigemptyset(&protectedSignals) == 0,
+              Self.signals.allSatisfy({ Darwin.sigaddset(&protectedSignals, $0) == 0 }) else {
+            restoreWithoutSignalBlock()
+            return checkForProtectedSignal
+        }
+
+        var previousMask = sigset_t()
+        guard Darwin.pthread_sigmask(SIG_BLOCK, &protectedSignals, &previousMask) == 0 else {
+            restoreWithoutSignalBlock()
+            return checkForProtectedSignal
+        }
+
+        var protectedSignalArrived = checkForProtectedSignal && consumeSignal()
+        restored = true
+        for (index, handler) in previousHandlers.reversed().enumerated() {
+            _ = Darwin.signal(handler.0, handler.1)
+            if index == 0 { transitionHook?() }
+        }
+
+        if checkForProtectedSignal {
+            var pendingSignals = sigset_t()
+            if Darwin.sigpending(&pendingSignals) != 0 {
+                protectedSignalArrived = true
+            } else {
+                for signalValue in Self.signals {
+                    let membership = Darwin.sigismember(&pendingSignals, signalValue)
+                    if membership != 0 {
+                        protectedSignalArrived = true
+                    }
+                }
+            }
+        }
+        if Darwin.pthread_sigmask(SIG_SETMASK, &previousMask, nil) != 0 {
+            protectedSignalArrived = true
+        }
+        lifecycleTerminalSignalLock.unlock()
+        return protectedSignalArrived
+    }
+
+    private func restoreWithoutSignalBlock() {
         restored = true
         for (signalValue, previous) in previousHandlers.reversed() {
             _ = Darwin.signal(signalValue, previous)

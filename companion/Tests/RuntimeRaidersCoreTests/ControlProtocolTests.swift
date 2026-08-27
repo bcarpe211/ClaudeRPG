@@ -3,6 +3,15 @@ import Foundation
 import XCTest
 @testable import RuntimeRaidersCore
 
+nonisolated(unsafe) private var lifecycleRestorationSignalWriteDescriptor: Int32 = -1
+
+private func lifecycleRestorationPriorSignalHandler(_ signal: Int32) {
+    let descriptor = lifecycleRestorationSignalWriteDescriptor
+    guard descriptor >= 0 else { return }
+    var byte = UInt8(truncatingIfNeeded: signal)
+    _ = Darwin.write(descriptor, &byte, 1)
+}
+
 final class ControlProtocolTests: XCTestCase {
     func testCompanionLifecyclePathsExposeOnlyTheExactOwnedInventory() throws {
         let paths = try CompanionLifecyclePaths(
@@ -427,6 +436,7 @@ final class ControlProtocolTests: XCTestCase {
                     switch transition {
                     case .signalProtectionInstalled: protectionInstalled.signal()
                     case .echoRestored: echoRestored.signal()
+                    case .signalHandlersRestoring: break
                     }
                     _ = Darwin.raise(SIGINT)
                 }
@@ -472,6 +482,54 @@ final class ControlProtocolTests: XCTestCase {
                 XCTAssertEqual(try writer.value(), "written")
                 XCTAssertTrue(terminalEchoEnabled(at: path))
             }
+        }
+    }
+
+    func testLifecycleTerminalReaderFailsClosedAndDeliversSignalFromFinalRestorationWindow() throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        XCTAssertEqual(Darwin.pipe(&descriptors), 0)
+        let readDescriptor = descriptors[0]
+        let writeDescriptor = descriptors[1]
+        defer {
+            lifecycleRestorationSignalWriteDescriptor = -1
+            Darwin.close(readDescriptor)
+            Darwin.close(writeDescriptor)
+        }
+        let readFlags = Darwin.fcntl(readDescriptor, F_GETFL)
+        XCTAssertGreaterThanOrEqual(readFlags, 0)
+        XCTAssertEqual(Darwin.fcntl(readDescriptor, F_SETFL, readFlags | O_NONBLOCK), 0)
+
+        lifecycleRestorationSignalWriteDescriptor = writeDescriptor
+        let previousHandler = Darwin.signal(SIGQUIT, lifecycleRestorationPriorSignalHandler)
+        defer { _ = Darwin.signal(SIGQUIT, previousHandler) }
+
+        try withPseudoTerminal { master, path in
+            let writer = TerminalReadResult()
+            let reader = LifecycleTerminalReader(
+                testPath: path,
+                transitionHook: { transition in
+                    guard transition == .signalHandlersRestoring else { return }
+                    _ = Darwin.raise(SIGQUIT)
+                }
+            )
+            DispatchQueue.global().async {
+                writer.start()
+                writer.finish(Result {
+                    try waitForPrompt("Private input: ", from: master)
+                    try writeAll(Data("CONFIRM\n".utf8), to: master)
+                    return "written"
+                })
+            }
+            XCTAssertEqual(writer.started.wait(timeout: .now() + 1), .success)
+
+            XCTAssertThrowsError(
+                try reader.readLine(prompt: "Private input: ", maximumBytes: 64)
+            ) { error in
+                XCTAssertEqual(error as? LifecycleTerminalError, .interrupted)
+            }
+            XCTAssertEqual(try writer.value(), "written")
+            XCTAssertEqual(waitForSignalByte(from: readDescriptor), UInt8(SIGQUIT))
+            XCTAssertTrue(terminalEchoEnabled(at: path))
         }
     }
 
@@ -1223,6 +1281,15 @@ private func readAvailable(_ descriptor: Int32) -> String {
     let count = bytes.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
     guard count > 0 else { return "" }
     return String(decoding: bytes.prefix(Int(count)), as: UTF8.self)
+}
+
+private func waitForSignalByte(from descriptor: Int32) -> UInt8? {
+    for _ in 0..<100 {
+        var byte: UInt8 = 0
+        if Darwin.read(descriptor, &byte, 1) == 1 { return byte }
+        Darwin.usleep(10_000)
+    }
+    return nil
 }
 
 private func startTerminalRead(path: String, maximumBytes: Int) -> TerminalReadResult {
