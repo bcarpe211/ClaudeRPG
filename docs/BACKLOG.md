@@ -45,10 +45,9 @@ sections below for history but is not repeated here.
 | #28/#30/#32 | Optional audit metadata, UI evidence, and internal-name cleanup | Optional | 1–2 | 1–5 | No |
 
 **Recommended work order:** correct new-Run scoring in #34 → align dungeon
-presence in #35 → verify one bounded collection-off canary boundary → complete
-the post-install guidance/status slice of #33 → observe corrected Momentum →
-Potion Lab evidence audit → fight/economy snapshot → monster title clamp →
-floor-data validation. Do not start higher potion tiers, provider
+presence in #35 → verify one bounded collection-off canary boundary → observe
+corrected Momentum → Potion Lab evidence audit → fight/economy snapshot →
+monster title clamp → floor-data validation. Do not start higher potion tiers, provider
 expansion, equipment, or pets until their stated evidence/dependency gates pass.
 
 ---
