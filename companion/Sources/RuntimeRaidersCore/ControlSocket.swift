@@ -333,25 +333,19 @@ private final class LifecycleTerminalSignalTrap {
         transitionHook: (() -> Void)?
     ) -> Bool {
         guard !restored else { return false }
-        var protectedSignals = sigset_t()
-        guard Darwin.sigemptyset(&protectedSignals) == 0,
-              Self.signals.allSatisfy({ Darwin.sigaddset(&protectedSignals, $0) == 0 }) else {
-            restoreWithoutSignalBlock()
-            return checkForProtectedSignal
-        }
-
-        var previousMask = sigset_t()
-        guard Darwin.pthread_sigmask(SIG_BLOCK, &protectedSignals, &previousMask) == 0 else {
-            restoreWithoutSignalBlock()
-            return checkForProtectedSignal
-        }
-
         var protectedSignalArrived = checkForProtectedSignal && consumeSignal()
         restored = true
+        guard rrs_terminal_signal_trap_prepare_restore() else {
+            Darwin._exit(1)
+        }
         transitionHook?()
         var lateSignal = false
-        if !rrs_terminal_signal_trap_restore(&lateSignal) || lateSignal {
-            protectedSignalArrived = checkForProtectedSignal
+        let restoration = rrs_terminal_signal_trap_restore(&lateSignal)
+        guard restoration != RRS_SIGNAL_RESTORE_NOT_STARTED else {
+            Darwin._exit(1)
+        }
+        if restoration == RRS_SIGNAL_RESTORE_POISONED || lateSignal {
+            protectedSignalArrived = true
         }
         if checkForProtectedSignal, consumeSignal() {
             protectedSignalArrived = true
@@ -370,18 +364,11 @@ private final class LifecycleTerminalSignalTrap {
                 }
             }
         }
-        if Darwin.pthread_sigmask(SIG_SETMASK, &previousMask, nil) != 0 {
-            protectedSignalArrived = true
+        guard rrs_terminal_signal_trap_finish_mask() else {
+            Darwin._exit(1)
         }
         lifecycleTerminalSignalLock.unlock()
         return protectedSignalArrived
-    }
-
-    private func restoreWithoutSignalBlock() {
-        restored = true
-        var lateSignal = false
-        _ = rrs_terminal_signal_trap_restore(&lateSignal)
-        lifecycleTerminalSignalLock.unlock()
     }
 }
 

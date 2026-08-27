@@ -428,6 +428,11 @@ final class ControlProtocolTests: XCTestCase {
     }
 
     func testLifecycleTerminalReaderProtectsSignalsAcrossBothEchoTransitionWindows() throws {
+        let signalDelivered = try descriptorPipe()
+        defer {
+            Darwin.close(signalDelivered.read)
+            Darwin.close(signalDelivered.write)
+        }
         try withPseudoTerminal { _, path in
             let protectionInstalled = DispatchSemaphore(value: 0)
             let echoRestored = DispatchSemaphore(value: 0)
@@ -439,7 +444,12 @@ final class ControlProtocolTests: XCTestCase {
                     case .echoRestored: echoRestored.signal()
                     case .signalHandlersRestoring: return
                     }
-                    _ = Darwin.raise(SIGINT)
+                    raiseSignalOnUnblockedWorker(
+                        SIGINT,
+                        expectedErrno: ENOTTY,
+                        completionDescriptor: signalDelivered.write
+                    )
+                    XCTAssertEqual(readDescriptorByte(signalDelivered.read), 1)
                 }
             )
 
@@ -456,13 +466,23 @@ final class ControlProtocolTests: XCTestCase {
 
     func testLifecycleTerminalReaderCancelsValidInputWhenSignalArrivesAfterEchoRestore() throws {
         for protectedSignal in [SIGINT, SIGTERM] {
+            let signalDelivered = try descriptorPipe()
+            defer {
+                Darwin.close(signalDelivered.read)
+                Darwin.close(signalDelivered.write)
+            }
             try withPseudoTerminal { master, path in
                 let writer = TerminalReadResult()
                 let reader = LifecycleTerminalReader(
                     testPath: path,
                     transitionHook: { transition in
                         guard transition == .echoRestored else { return }
-                        _ = Darwin.raise(protectedSignal)
+                        raiseSignalOnUnblockedWorker(
+                            protectedSignal,
+                            expectedErrno: ENOTTY,
+                            completionDescriptor: signalDelivered.write
+                        )
+                        XCTAssertEqual(readDescriptorByte(signalDelivered.read), 1)
                     }
                 )
                 DispatchQueue.global().async {
@@ -634,23 +654,45 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(errno == EAGAIN || errno == EWOULDBLOCK)
 
         XCTAssertTrue(rrs_terminal_signal_trap_install(fullPipe.write))
-        errno = ERANGE
-        let firstRaiseResult = Darwin.raise(SIGQUIT)
-        let errnoAfterFullPipeHandler = errno
+        let firstWorker = try descriptorPipe()
+        defer {
+            Darwin.close(firstWorker.read)
+            Darwin.close(firstWorker.write)
+        }
+        raiseSignalOnUnblockedWorker(
+            SIGQUIT,
+            expectedErrno: ERANGE,
+            completionDescriptor: firstWorker.write
+        )
+        XCTAssertEqual(readDescriptorByte(firstWorker.read), 1)
         var sawDeliveryFailure = false
-        XCTAssertTrue(rrs_terminal_signal_trap_restore(&sawDeliveryFailure))
-        XCTAssertEqual(firstRaiseResult, 0)
-        XCTAssertEqual(errnoAfterFullPipeHandler, ERANGE)
+        XCTAssertTrue(rrs_terminal_signal_trap_prepare_restore())
+        XCTAssertEqual(
+            rrs_terminal_signal_trap_restore(&sawDeliveryFailure),
+            RRS_SIGNAL_RESTORE_COMPLETE
+        )
+        XCTAssertTrue(rrs_terminal_signal_trap_finish_mask())
         XCTAssertTrue(sawDeliveryFailure)
 
         XCTAssertTrue(rrs_terminal_signal_trap_install(nextPipe.write))
-        errno = EDOM
-        let secondRaiseResult = Darwin.raise(SIGQUIT)
-        let errnoAfterNextHandler = errno
+        let secondWorker = try descriptorPipe()
+        defer {
+            Darwin.close(secondWorker.read)
+            Darwin.close(secondWorker.write)
+        }
+        raiseSignalOnUnblockedWorker(
+            SIGQUIT,
+            expectedErrno: EDOM,
+            completionDescriptor: secondWorker.write
+        )
+        XCTAssertEqual(readDescriptorByte(secondWorker.read), 1)
         var sawSecondFailure = false
-        XCTAssertTrue(rrs_terminal_signal_trap_restore(&sawSecondFailure))
-        XCTAssertEqual(secondRaiseResult, 0)
-        XCTAssertEqual(errnoAfterNextHandler, EDOM)
+        XCTAssertTrue(rrs_terminal_signal_trap_prepare_restore())
+        XCTAssertEqual(
+            rrs_terminal_signal_trap_restore(&sawSecondFailure),
+            RRS_SIGNAL_RESTORE_COMPLETE
+        )
+        XCTAssertTrue(rrs_terminal_signal_trap_finish_mask())
         XCTAssertFalse(sawSecondFailure)
         XCTAssertEqual(readDescriptorByte(nextPipe.read), UInt8(SIGQUIT))
     }
@@ -679,11 +721,163 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(readDescriptorByte(priorDelivery.read), UInt8(SIGINT))
 
         XCTAssertTrue(rrs_terminal_signal_trap_install(signalPipe.write))
-        XCTAssertEqual(Darwin.raise(SIGQUIT), 0)
+        let worker = try descriptorPipe()
+        defer {
+            Darwin.close(worker.read)
+            Darwin.close(worker.write)
+        }
+        raiseSignalOnUnblockedWorker(
+            SIGQUIT,
+            expectedErrno: EBUSY,
+            completionDescriptor: worker.write
+        )
+        XCTAssertEqual(readDescriptorByte(worker.read), 1)
         var sawFailure = false
-        XCTAssertTrue(rrs_terminal_signal_trap_restore(&sawFailure))
+        XCTAssertTrue(rrs_terminal_signal_trap_prepare_restore())
+        XCTAssertEqual(
+            rrs_terminal_signal_trap_restore(&sawFailure),
+            RRS_SIGNAL_RESTORE_COMPLETE
+        )
+        XCTAssertTrue(rrs_terminal_signal_trap_finish_mask())
         XCTAssertFalse(sawFailure)
         XCTAssertEqual(readDescriptorByte(signalPipe.read), UInt8(SIGQUIT))
+    }
+
+    func testLifecycleSignalSupportBlocksInstallingThreadAcrossPartialRollback() throws {
+        let handlerEntered = try descriptorPipe()
+        let handlerRelease = try descriptorPipe()
+        let installCompleted = try descriptorPipe()
+        let priorDelivery = try descriptorPipe()
+        let signalPipe = try descriptorPipe()
+        let allDescriptors = [
+            handlerEntered.read, handlerEntered.write,
+            handlerRelease.read, handlerRelease.write,
+            installCompleted.read, installCompleted.write,
+            priorDelivery.read, priorDelivery.write,
+            signalPipe.read, signalPipe.write,
+        ]
+        defer { allDescriptors.forEach { Darwin.close($0) } }
+
+        lifecycleRestorationSignalWriteDescriptor = priorDelivery.write
+        let previousHandler = Darwin.signal(SIGINT, lifecycleRestorationPriorSignalHandler)
+        defer {
+            rrs_terminal_signal_test_reset()
+            lifecycleRestorationSignalWriteDescriptor = -1
+            _ = Darwin.signal(SIGINT, previousHandler)
+        }
+        rrs_terminal_signal_test_configure(
+            RRS_TEST_PAUSE_BEFORE_CLAIM,
+            SIGINT,
+            handlerEntered.write,
+            handlerRelease.read,
+            -1,
+            -1
+        )
+        rrs_terminal_signal_test_fail_install_at(2)
+        rrs_terminal_signal_test_interrupt_partial_rollback(SIGINT, true)
+
+        Thread {
+            let installed = rrs_terminal_signal_trap_install(signalPipe.write)
+            writeDescriptorByte(installCompleted.write, installed ? 1 : 0)
+        }.start()
+
+        var observations = [
+            pollfd(fd: installCompleted.read, events: Int16(POLLIN), revents: 0),
+            pollfd(fd: handlerEntered.read, events: Int16(POLLIN), revents: 0),
+        ]
+        XCTAssertEqual(Darwin.poll(&observations, 2, -1), 1)
+        let rollbackCompletedFirst = observations[0].revents & Int16(POLLIN) != 0
+        if rollbackCompletedFirst {
+            XCTAssertEqual(readDescriptorByte(installCompleted.read), 0)
+            XCTAssertEqual(readDescriptorByte(priorDelivery.read), UInt8(SIGINT))
+        } else {
+            _ = readDescriptorByte(handlerEntered.read)
+            writeDescriptorByte(handlerRelease.write, 1)
+            XCTAssertEqual(readDescriptorByte(installCompleted.read), 0)
+        }
+        XCTAssertTrue(
+            rollbackCompletedFirst,
+            "temporary handler interrupted the installing thread during rollback"
+        )
+    }
+
+    func testLifecycleSignalSupportPoisonsFailedPartialRestoreAndReleasesMaskLease() throws {
+        let signalPipe = try descriptorPipe()
+        defer {
+            Darwin.close(signalPipe.read)
+            Darwin.close(signalPipe.write)
+        }
+        let previousHandler = Darwin.signal(SIGINT, lifecycleRestorationPriorSignalHandler)
+        defer {
+            rrs_terminal_signal_test_reset()
+            _ = Darwin.signal(SIGINT, previousHandler)
+        }
+
+        rrs_terminal_signal_test_fail_install_at(1)
+        rrs_terminal_signal_test_fail_restore_at(0)
+        XCTAssertFalse(rrs_terminal_signal_trap_install(signalPipe.write))
+        XCTAssertTrue(rrs_terminal_signal_test_action_is_poisoned(SIGINT))
+
+        rrs_terminal_signal_test_fail_install_at(-1)
+        rrs_terminal_signal_test_fail_restore_at(-1)
+        _ = Darwin.signal(SIGINT, lifecycleRestorationPriorSignalHandler)
+        XCTAssertTrue(rrs_terminal_signal_trap_install(signalPipe.write))
+        var lateSignal = false
+        XCTAssertTrue(rrs_terminal_signal_trap_prepare_restore())
+        XCTAssertEqual(
+            rrs_terminal_signal_trap_restore(&lateSignal),
+            RRS_SIGNAL_RESTORE_COMPLETE
+        )
+        XCTAssertTrue(rrs_terminal_signal_trap_finish_mask())
+    }
+
+    func testLifecycleSignalSupportRejectsWrongOwnerWithoutClosingGateAndReusesLease() throws {
+        let signalPipe = try descriptorPipe()
+        let wrongOwnerCompleted = try descriptorPipe()
+        let signalWorkerCompleted = try descriptorPipe()
+        let allDescriptors = [
+            signalPipe.read, signalPipe.write,
+            wrongOwnerCompleted.read, wrongOwnerCompleted.write,
+            signalWorkerCompleted.read, signalWorkerCompleted.write,
+        ]
+        defer { allDescriptors.forEach { Darwin.close($0) } }
+
+        XCTAssertTrue(rrs_terminal_signal_trap_install(signalPipe.write))
+        Thread {
+            var lateSignal = false
+            let prepared = rrs_terminal_signal_trap_prepare_restore()
+            let result = rrs_terminal_signal_trap_restore(&lateSignal)
+            writeDescriptorByte(
+                wrongOwnerCompleted.write,
+                !prepared && result == RRS_SIGNAL_RESTORE_NOT_STARTED && !lateSignal ? 1 : 0
+            )
+        }.start()
+        XCTAssertEqual(readDescriptorByte(wrongOwnerCompleted.read), 1)
+
+        raiseSignalOnUnblockedWorker(
+            SIGQUIT,
+            expectedErrno: ENOTRECOVERABLE,
+            completionDescriptor: signalWorkerCompleted.write
+        )
+        XCTAssertEqual(readDescriptorByte(signalWorkerCompleted.read), 1)
+        XCTAssertEqual(readDescriptorByte(signalPipe.read), UInt8(SIGQUIT))
+
+        var lateSignal = false
+        XCTAssertTrue(rrs_terminal_signal_trap_prepare_restore())
+        XCTAssertEqual(
+            rrs_terminal_signal_trap_restore(&lateSignal),
+            RRS_SIGNAL_RESTORE_COMPLETE
+        )
+        XCTAssertFalse(lateSignal)
+        XCTAssertTrue(rrs_terminal_signal_trap_finish_mask())
+
+        XCTAssertTrue(rrs_terminal_signal_trap_install(signalPipe.write))
+        XCTAssertTrue(rrs_terminal_signal_trap_prepare_restore())
+        XCTAssertEqual(
+            rrs_terminal_signal_trap_restore(&lateSignal),
+            RRS_SIGNAL_RESTORE_COMPLETE
+        )
+        XCTAssertTrue(rrs_terminal_signal_trap_finish_mask())
     }
 
     func testLifecycleTerminalReaderRejectsEmptyInvalidUTF8AndNonCharacterDevice() throws {
@@ -1448,6 +1642,25 @@ private func waitForSignalByte(from descriptor: Int32) -> UInt8? {
 private func readSignalByte(from descriptor: Int32) -> UInt8? {
     var byte: UInt8 = 0
     return Darwin.read(descriptor, &byte, 1) == 1 ? byte : nil
+}
+
+private func raiseSignalOnUnblockedWorker(
+    _ signalValue: Int32,
+    expectedErrno: Int32,
+    completionDescriptor: Int32
+) {
+    Thread {
+        var signalSet = sigset_t()
+        _ = Darwin.sigemptyset(&signalSet)
+        _ = Darwin.sigaddset(&signalSet, signalValue)
+        _ = Darwin.pthread_sigmask(SIG_UNBLOCK, &signalSet, nil)
+        errno = expectedErrno
+        let raised = Darwin.raise(signalValue)
+        writeDescriptorByte(
+            completionDescriptor,
+            raised == 0 && errno == expectedErrno ? 1 : 0
+        )
+    }.start()
 }
 
 private func assertLifecycleHandlerHandoff(
