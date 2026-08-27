@@ -8,6 +8,12 @@ export type RunRateLimitScope =
   | 'enrollment-exchange'
   | 'unauthenticated-events'
   | 'unauthenticated-heartbeat'
+  | 'unauthenticated-re-enroll'
+  | 'device-re-enroll'
+  | 'unauthenticated-config'
+  | 'device-config'
+  | 'unauthenticated-revoke'
+  | 'device-revoke'
   | 'device-events'
   | 'device-heartbeat';
 

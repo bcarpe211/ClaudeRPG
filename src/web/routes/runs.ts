@@ -5,6 +5,7 @@ import express, {
   type Request,
   type Response,
 } from 'express';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { AppDeps } from '../app';
 import { getPlayerByToken } from '../../domain/players';
@@ -12,8 +13,12 @@ import {
   authenticateDevice,
   createEnrollment,
   exchangeEnrollment,
+  getDeviceEnrollmentConfiguration,
   recordDeviceContact,
+  replaceDeviceEnrollment,
+  revokeDeviceCredential,
   type AuthenticatedDevice,
+  type DeviceEnrollmentConfiguration,
 } from '../../domain/raider-enrollment';
 import {
   parseRunEventBatch,
@@ -63,6 +68,16 @@ const enrollmentBody = z.object({
 const heartbeatBody = z.object({
   companion_version: z.string().min(1).max(100),
 }).strict();
+
+const reEnrollmentBody = z.object({
+  code: z.string().regex(CREDENTIAL_PATTERN),
+  operation_id: z.string().uuid(),
+  replacement_device_id: z.string().uuid(),
+  replacement_device_token: z.string().regex(CREDENTIAL_PATTERN),
+  companion_version: z.string().min(1).max(100),
+}).strict();
+
+const emptyBody = z.object({}).strict();
 
 function clientIp(req: Request): string {
   return req.ip || req.socket.remoteAddress || 'unknown';
@@ -149,6 +164,10 @@ function bearerToken(req: Request): string | null {
   return match?.[1] ?? null;
 }
 
+function tokenHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 function hasDisabledSurface(
   input: unknown,
   enabledSurfaces: ReadonlySet<RunSurface>,
@@ -194,6 +213,14 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     : null;
   const enabledSurfaces = new Set(config.enabledRunSurfaces);
 
+  const configurationResponse = (configuration: DeviceEnrollmentConfiguration) => ({
+    device_id: configuration.deviceId,
+    dedupe_secret: configuration.dedupeSecret,
+    server_url: config.publicUrl,
+    cutover_at: config.runCutoverAt,
+    enabled_surfaces: config.enabledRunSurfaces,
+  });
+
   const applyRateLimit = (
     req: Request,
     res: Response,
@@ -228,6 +255,13 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
     next: NextFunction,
   ): void => {
     if (applyRateLimit(req, res, scope, clientIp(req))) next();
+  };
+
+  const resolveDeviceId = (token: string): string | null => {
+    const row = db.prepare(`
+      SELECT device_id FROM raider_devices WHERE token_hash = ?
+    `).get(tokenHash(token)) as { device_id: string } | undefined;
+    return row?.device_id ?? null;
   };
 
   const recordContact = (device: AuthenticatedDevice, res: Response): boolean => {
@@ -284,7 +318,7 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       res.status(401).json({ reason: 'invalid_enrollment' });
       return;
     }
-    res.status(201).json({
+    res.status(201).set('Cache-Control', 'private, no-store').json({
       device_token: exchanged.deviceToken,
       dedupe_secret: exchanged.dedupeSecret,
       server_url: config.publicUrl,
@@ -292,6 +326,128 @@ export function registerRunRoutes(app: Express, { db, config }: AppDeps): void {
       enabled_surfaces: config.enabledRunSurfaces,
     });
   });
+
+  router.post(
+    '/raiders/re-enroll',
+    limitClientIp('unauthenticated-re-enroll'),
+    ...parseJson,
+    (req, res) => {
+      const parsed = reEnrollmentBody.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ reason: 'invalid_request' });
+        return;
+      }
+      const token = bearerToken(req);
+      if (token === null) {
+        res.status(401).json({ reason: 'unauthorized' });
+        return;
+      }
+      const currentDeviceId = resolveDeviceId(token);
+      if (
+        currentDeviceId === null
+        || !applyRateLimit(req, res, 'device-re-enroll', currentDeviceId)
+      ) {
+        if (currentDeviceId === null) {
+          res.status(401).json({ reason: 'unauthorized' });
+        }
+        return;
+      }
+
+      const result = replaceDeviceEnrollment(db, {
+        bearerToken: token,
+        code: parsed.data.code,
+        operationId: parsed.data.operation_id,
+        replacementDeviceId: parsed.data.replacement_device_id,
+        replacementDeviceToken: parsed.data.replacement_device_token,
+        companionVersion: parsed.data.companion_version,
+      }, Date.now());
+      switch (result.kind) {
+        case 'created':
+          res.status(201)
+            .set('Cache-Control', 'private, no-store')
+            .json(configurationResponse(result));
+          return;
+        case 'replayed':
+          res.status(200)
+            .set('Cache-Control', 'private, no-store')
+            .json(configurationResponse(result));
+          return;
+        case 'invalid_enrollment':
+          res.status(401).json({ reason: 'invalid_enrollment' });
+          return;
+        case 'unauthorized':
+          res.status(401).json({ reason: 'unauthorized' });
+          return;
+        case 'conflict':
+          res.status(409).json({ reason: 'replacement_conflict' });
+          return;
+      }
+    },
+  );
+
+  router.get(
+    '/raiders/enrollment-config',
+    limitClientIp('unauthenticated-config'),
+    (req, res) => {
+      const contentLength = req.get('content-length');
+      if (
+        req.get('transfer-encoding') !== undefined
+        || (contentLength !== undefined && contentLength !== '0')
+      ) {
+        res.status(400).json({ reason: 'invalid_request' });
+        return;
+      }
+      const token = bearerToken(req);
+      if (token === null) {
+        res.status(401).json({ reason: 'unauthorized' });
+        return;
+      }
+      const deviceId = resolveDeviceId(token);
+      if (deviceId === null) {
+        res.status(401).json({ reason: 'unauthorized' });
+        return;
+      }
+      if (!applyRateLimit(req, res, 'device-config', deviceId)) return;
+      const configuration = getDeviceEnrollmentConfiguration(db, token, Date.now());
+      if (configuration === null) {
+        res.status(401).json({ reason: 'unauthorized' });
+        return;
+      }
+      res.status(200)
+        .set('Cache-Control', 'private, no-store')
+        .json(configurationResponse(configuration));
+    },
+  );
+
+  router.post(
+    '/raiders/devices/revoke-current',
+    limitClientIp('unauthenticated-revoke'),
+    ...parseJson,
+    (req, res) => {
+      const parsed = emptyBody.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ reason: 'invalid_request' });
+        return;
+      }
+      const token = bearerToken(req);
+      if (token === null) {
+        res.status(401).json({ reason: 'unauthorized' });
+        return;
+      }
+      const deviceId = resolveDeviceId(token);
+      if (deviceId === null) {
+        res.status(401).json({ reason: 'unauthorized' });
+        return;
+      }
+      if (!applyRateLimit(req, res, 'device-revoke', deviceId)) return;
+      const result = revokeDeviceCredential(db, token, Date.now());
+      if (result === null) {
+        res.status(401).json({ reason: 'unauthorized' });
+        return;
+      }
+      res.status(200).json({ revoked: true });
+    },
+  );
 
   router.post(
     '/runs/events',

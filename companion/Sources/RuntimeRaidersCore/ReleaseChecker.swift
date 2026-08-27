@@ -37,7 +37,8 @@ public final class UpdateStateStore: @unchecked Sendable {
         file = paths.updateState
         directoryDescriptor = try OwnerOnlyDirectory.openOrCreate(paths.stateDirectory)
         lockDescriptor = Darwin.openat(
-            directoryDescriptor, "update-state.lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
+            directoryDescriptor, paths.updateLock.lastPathComponent,
+            O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
             mode_t(0o600)
         )
         guard lockDescriptor >= 0 else {

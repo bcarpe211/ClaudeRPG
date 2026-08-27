@@ -161,9 +161,17 @@ function buildFixture() {
     'set -eu',
     'operation=${1:-status}',
     '[ "$operation" != __runtime-raiders-managed-agent ] || operation="$operation:${2:-}"',
-    `printf 'agent:%s home=%s verify=%s support=%s response=%s\\n' "$operation" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" >> '${agentLog}'`,
+    `printf 'agent:%s home=%s verify=%s support=%s response=%s argv=%s\\n' "$operation" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" "$*" >> '${agentLog}'`,
     'expected_support="$HOME/Library/Application Support"',
     '[ "${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-}" = 1 ] && [ "${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-}" = "$expected_support" ] || { echo unsafeVerificationEnvironment >&2; exit 79; }',
+    'if [ "$#" -eq 2 ] && [ "$1" = __runtime-raiders-lifecycle-lock-hold ]; then',
+    '  [ "$2" = "$0" ] || exit 64',
+    '  printf "locked\\n"',
+    '  while IFS= read -r _lock_input; do',
+    '    case "$_lock_input" in held) printf "held\\n";; release) printf "released\\n"; exit 0;; *) exit 64;; esac',
+    '  done',
+    '  exit 0',
+    'fi',
     'managed_state="$HOME/Library/Application Support/Runtime Raiders/state/managed-service-state"',
     'managed_running="$HOME/Library/Application Support/Runtime Raiders/managed-running"',
     'case "${1:-} ${2:-}" in',
@@ -180,7 +188,12 @@ function buildFixture() {
     '    [ "$(printf %s "$socket_path" | /usr/bin/wc -c | /usr/bin/tr -d " ")" -lt 104 ] || { echo unsafeSocketPath >&2; exit 78; };;',
     'esac',
     'case "${1:-status}" in',
-    `  status) printf '%s\\n' '${agentStatus({ persistedState: 'missing' }).replace(version, '0.4.0')}';;`,
+    '  status)',
+    '    if [ "${2:-}" = --json ] && [ "$#" -eq 2 ]; then',
+    `      printf '%s\\n' '${agentStatus({ persistedState: 'missing' }).replace(version, '0.4.0')}'`,
+    '    else',
+    "      printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
+    '    fi;;',
     '  daemon) exit 0;;',
     '  update)',
     '    response=${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-}',
@@ -408,6 +421,25 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     : '${RR_FAIL_RESTORED_STATUS:-0}';
   return [
     `printf "agent:${identity}:%s\\n" "$*" >> "$RR_EVENT_LOG"`,
+    'if [ "$#" -eq 2 ] && [ "$1" = __runtime-raiders-lifecycle-lock-hold ]; then',
+    '  [ "$2" = "$0" ] || exit 64',
+    '  [ "${RR_FAIL_LIFECYCLE_LOCK:-0}" != 1 ] || exit 75',
+    '  if [ "${RR_COMPLETE_REMOVAL_BEFORE_LOCK:-0}" = 1 ]; then',
+    '    if /usr/bin/find "$RR_SUPPORT" -mindepth 1 -maxdepth 1 -name \'.runtime-raiders-install.*\' -print -quit 2>/dev/null | /usr/bin/grep . >/dev/null; then',
+    '      printf "removal:prelock-work-present\\n" >> "$RR_EVENT_LOG"',
+    '    fi',
+    '    /bin/rm -rf "$RR_SUPPORT" "$RR_COMMAND_DIRECTORY"',
+    '  fi',
+    `  printf "lock:${identity}:acquired\\n" >> "$RR_EVENT_LOG"`,
+    '  : > "$RR_LOCK_HELD"',
+    `  trap '/bin/rm -f "$RR_LOCK_HELD"; printf "lock:${identity}:released\\n" >> "$RR_EVENT_LOG"' EXIT`,
+    '  printf "locked\\n"',
+    '  [ "${RR_EXIT_LIFECYCLE_LOCK_AFTER_READY:-0}" != 1 ] || exit 75',
+    '  while IFS= read -r _lock_input; do',
+    '    case "$_lock_input" in held) printf "held\\n";; release) printf "released\\n"; exit 0;; *) exit 64;; esac',
+    '  done',
+    '  exit 0',
+    'fi',
     'case "${1:-} ${2:-}" in',
     '  "__runtime-raiders-managed-agent status")',
     ...(identity === 'candidate' ? [
@@ -415,6 +447,7 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ] : []),
     '    /bin/cat "$RR_MANAGED_STATE"; exit 0;;',
     '  "__runtime-raiders-managed-agent register")',
+    '    [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:register\\n" >> "$RR_EVENT_LOG"',
     `    [ "${registerFailure}" != 1 ] || exit 79`,
     '    printf "enabled\\n" > "$RR_MANAGED_STATE"',
     '    : > "$RR_RUNNING"',
@@ -424,6 +457,7 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ] : []),
     '    printf "enabled\\n"; exit 0;;',
     '  "__runtime-raiders-managed-agent unregister")',
+    '    [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:unregister\\n" >> "$RR_EVENT_LOG"',
     `    [ "${unregisterFailure}" != 1 ] || exit 80`,
     '    printf "not-registered\\n" > "$RR_MANAGED_STATE"',
     '    /bin/rm -f "$RR_RUNNING"',
@@ -436,6 +470,10 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     'esac',
     ...(identity === 'candidate' ? [`[ "${statusFailure}" != 1 ] || exit 78`] : []),
     '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
+    'if [ "${1:-}" = status ] && [ "${2:-}" != --json ]; then',
+    "  printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
+    '  exit 0',
+    'fi',
     ...(identity === 'candidate' ? [
       'status_calls=0',
       'if [ -e "$RR_STATUS_CALLS" ]; then status_calls=$(/bin/cat "$RR_STATUS_CALLS"); fi',
@@ -474,6 +512,19 @@ function enrollmentObject(): Record<string, unknown> {
 
 function enrollment(value: Record<string, unknown> = enrollmentObject()): string {
   return JSON.stringify(value) + '\n';
+}
+
+function recoveryJournal(value: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    version: 1,
+    operation_id: '00000000-0000-4000-8000-000000000010',
+    replacement_device_id: '00000000-0000-4000-8000-000000000011',
+    replacement_device_token: 'R'.repeat(43),
+    companion_version: version,
+    queue_disposition: 'empty',
+    phase: 'replacementPrepared',
+    ...value,
+  }) + '\n';
 }
 
 function fakeTools(root: string): string {
@@ -600,6 +651,7 @@ function fakeTools(root: string): string {
     'fi',
     'if [ -n "$boundary" ]; then',
     '  printf "mv:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
+    '  [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
     'fi',
     'if [ -n "$boundary" ] && { [ "${RR_FAIL_MV_BOUNDARY:-}" = "$boundary" ] || [ "${RR_FAIL_RESTORE_BOUNDARY:-}" = "$boundary" ]; }; then exit 74; fi',
     '/bin/mv "$source" "$destination"',
@@ -634,6 +686,8 @@ function fixture() {
   const archive = join(root, 'runtime-raiders-agent.zip');
   const enrollmentResponse = join(root, 'enrollment-response.json');
   const tty = join(root, 'tty');
+  const history = join(root, 'immutable-history');
+  const lockHeld = join(root, 'lifecycle-lock-held');
   mkdirSync(join(candidate, 'Contents/MacOS'), { recursive: true });
   mkdirSync(join(candidate, 'Contents/Resources'));
   mkdirSync(join(candidate, 'Contents/Library/LaunchAgents'), { recursive: true });
@@ -659,12 +713,13 @@ function fixture() {
   writeFileSync(tty, `${enrollmentCode}\n`);
   writeFileSync(eventLog, '');
   writeFileSync(argvLog, '');
+  writeFileSync(history, 'Raider/account/Run/score/reward/beta history stays immutable\n');
   writeFileSync(managedState, 'not-registered\n');
   const bin = fakeTools(root);
   return {
     root, home, support, state, outbox, app, plist: plistPath, shim, command,
     candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running, managedState,
-    legacyJob, statusCalls, dateCalls,
+    legacyJob, statusCalls, dateCalls, history, lockHeld,
     environment: {
       ...process.env,
       HOME: home,
@@ -693,12 +748,15 @@ function fixture() {
       RR_LEGACY_PLIST: plistPath,
       RR_SHIM: shim,
       RR_COMMAND: command,
+      RR_COMMAND_DIRECTORY: join(home, '.local/bin'),
+      RR_SUPPORT: support,
       RR_OWNER: String(process.getuid!()),
       RR_SERVICE_STOPPED: join(root, 'service-stopped'),
       RR_EXPECT_CANDIDATE: join(root, 'expected-candidate'),
       RR_TEAM_ID: teamId,
       RR_TTY: tty,
       RR_FAKE_BIN: bin,
+      RR_LOCK_HELD: lockHeld,
     } as NodeJS.ProcessEnv,
   };
 }
@@ -721,6 +779,7 @@ function renderInstaller(value: Fixture, mutate: (source: string) => string = (s
     .replaceAll('__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__', '2')
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_VALIDATOR_SHA256__', 'c'.repeat(64))
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__', readFileSync(validator).toString('base64'))
+    .replaceAll("PRIVATE_TEMP_ROOT='/private/tmp'", `PRIVATE_TEMP_ROOT='${value.root}'`)
     .replaceAll('/usr/bin/curl', join(fake, 'curl'))
     .replaceAll('/usr/bin/ditto', join(fake, 'ditto'))
     .replaceAll('/usr/bin/codesign', join(fake, 'codesign'))
@@ -752,6 +811,10 @@ function writeExistingInstall(value: Fixture, enabled: boolean): void {
   writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.4.2', legacyLabel));
   executable(join(value.app, 'Contents/MacOS/runtime-raiders-agent'), [
     'printf "agent:legacy:%s\\n" "$*" >> "$RR_EVENT_LOG"',
+    'if [ "${1:-}" = status ] && [ "${2:-}" != --json ]; then',
+    "  printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
+    '  exit 0',
+    'fi',
     'if [ -e "$RR_SERVICE_STOPPED" ]; then',
     '  [ "${RR_FAIL_RESTORED_STATUS:-0}" != 1 ] || exit 78',
     '  if [ -e "$RR_LEGACY_JOB" ]; then',
@@ -812,6 +875,34 @@ function writeManagedInstall(value: Fixture): void {
   writeFileSync(value.running, 'old managed daemon running\n');
 }
 
+function writePreservedUninstall(value: Fixture): void {
+  writeManagedInstall(value);
+  rmSync(value.app, { recursive: true });
+  rmSync(value.shim);
+  rmSync(value.command);
+  writeFileSync(value.managedState, 'not-registered\n');
+  rmSync(value.running);
+}
+
+function assertNoHistoryMutation(value: Fixture, before: string, output: string): void {
+  expect(readFileSync(value.history, 'utf8')).toBe(before);
+  expect(events(value)).not.toContain('history:mutate');
+  expect(output).not.toMatch(/(?:move|delete|transfer).*(?:Raider|account|Run|score|reward|history)/i);
+}
+
+function expectPreservedStateFailure(value: Fixture, result: ReturnType<typeof run>): void {
+  expect(result.status).not.toBe(0);
+  expect(existsSync(value.app)).toBe(false);
+  expect(existsSync(value.shim)).toBe(false);
+  expect(existsSync(value.command)).toBe(false);
+  expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+  expect(existsSync(value.running)).toBe(false);
+  expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+  expect(events(value).some((line) => line.startsWith('curl:'))).toBe(false);
+  expect(events(value).some((line) => line.startsWith('tty:'))).toBe(false);
+  expect(events(value).some((line) => line.startsWith('agent:candidate:'))).toBe(false);
+}
+
 function treeSnapshot(root: string): Record<string, string> {
   const result: Record<string, string> = {};
   if (!existsSync(root)) return result;
@@ -863,6 +954,9 @@ function lstatIfPresent(path: string) {
 function recoveryDirectories(value: Fixture): string[] {
   const launchAgents = join(value.home, 'Library/LaunchAgents');
   return [
+    ...readdirSync(value.root)
+      .filter((name) => name.startsWith('.runtime-raiders-install.'))
+      .map((name) => join(value.root, name)),
     ...(existsSync(value.support)
       ? readdirSync(value.support).filter((name) => name.startsWith('.runtime-raiders-install.')).map((name) => join(value.support, name))
       : []),
@@ -973,8 +1067,9 @@ describe('Runtime Raiders release build', () => {
     expect(result.status, result.stderr + result.stdout).toBe(0);
 
     const invocations = readFileSync(value.agentLog, 'utf8').trim().split('\n');
-    expect(invocations).toHaveLength(5);
+    expect(invocations).toHaveLength(6);
     expect(invocations.map((line) => line.split(' ')[0])).toEqual([
+      'agent:__runtime-raiders-lifecycle-lock-hold',
       'agent:__runtime-raiders-managed-agent:register',
       'agent:__runtime-raiders-managed-agent:status',
       'agent:status',
@@ -983,7 +1078,7 @@ describe('Runtime Raiders release build', () => {
     ]);
     for (const line of invocations) {
       const matched = line.match(
-        /^agent:(?:__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
+        /^agent:(?:__runtime-raiders-lifecycle-lock-hold|__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
       );
       expect(matched, line).not.toBeNull();
       expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
@@ -993,7 +1088,10 @@ describe('Runtime Raiders release build', () => {
     expect(invocations[1]).toContain('response=unset');
     expect(invocations[2]).toContain('response=unset');
     expect(invocations[3]).toContain('response=unset');
-    expect(invocations[4]).not.toContain('response=unset');
+    expect(invocations[4]).toContain('response=unset');
+    expect(invocations[5]).not.toContain('response=unset');
+    expect(invocations[3]).toContain('argv=status --json');
+    expect(invocations[4]).toContain('argv=status --json');
   });
 
   it.each([
@@ -1676,10 +1774,27 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     const result = run(value);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('Runtime Raiders local canary requires valid existing enrollment.');
+    expect(result.stderr).toContain('Runtime Raiders refuses an invalid existing enrollment.');
     expect(events(value)).not.toContain('curl:archive');
     expect(events(value)).not.toContain('curl:enroll');
     expectNoBootout(value);
+  });
+
+  it('corrupt preserved state cannot create missing owned directories before rejection', () => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    rmSync(value.outbox, { recursive: true });
+    rmSync(join(value.home, '.local'), { recursive: true });
+    writeFileSync(join(value.state, 'enrollment.json'), '{}\n', { mode: 0o600 });
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Runtime Raiders refuses an invalid existing enrollment.');
+    expect(existsSync(value.outbox)).toBe(false);
+    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('curl:'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
   });
 
   it('fresh install uses the managed service without creating a legacy LaunchAgent plist', () => {
@@ -1704,6 +1819,14 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
     expect(existsSync(value.running)).toBe(true);
     expect(existsSync(join(value.state, 'collector-state.json'))).toBe(false);
+    expect(log).toContain('agent:candidate:status --json');
+    expect(result.stdout).toBe([
+      'Runtime Raiders is installed.',
+      'Collection is OFF.',
+      'Run `raiders status` to check the setup.',
+      'Run `raiders on` when you want to join the game.',
+      '',
+    ].join('\n'));
   });
 
   it.each([
@@ -1856,6 +1979,98 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(join(value.state, 'collector-state.json'), 'utf8')).toContain('"enabled":false');
   });
 
+  it('holds the shared lifecycle lock continuously across service and filesystem mutation', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+
+    const result = run(value);
+    const log = events(value);
+    const acquired = log.indexOf('lock:candidate:acquired');
+    const firstMutation = log.indexOf('agent:old-managed:__runtime-raiders-managed-agent unregister');
+    const finalProof = log.lastIndexOf('agent:candidate:status --json');
+    const released = log.indexOf('lock:candidate:released');
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(acquired).toBeGreaterThanOrEqual(0);
+    expect(firstMutation).toBeGreaterThan(acquired);
+    expect(released).toBeGreaterThan(finalProof);
+    expect(log.some((line) => line.startsWith('lock:missing:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('fails before service or filesystem mutation when the shared lifecycle lock is busy', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const before = treeSnapshot(value.home);
+    value.environment.RR_FAIL_LIFECYCLE_LOCK = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(treeSnapshot(value.home)).toEqual(before);
+    expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('a busy lifecycle lock cannot create missing Runtime Raiders owned directories', () => {
+    const value = fixture();
+    value.environment.RR_FAIL_LIFECYCLE_LOCK = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(value.support)).toBe(false);
+    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('complete removal before lock acquisition cannot race installer owned mutation', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    value.environment.RR_COMPLETE_REMOVAL_BEFORE_LOCK = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(events(value)).not.toContain('removal:prelock-work-present');
+    expect(existsSync(value.support)).toBe(false);
+    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('fails before service or filesystem mutation when the lock holder exits after handshake', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const before = treeSnapshot(value.home);
+    value.environment.RR_EXIT_LIFECYCLE_LOCK_AFTER_READY = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(treeSnapshot(value.home)).toEqual(before);
+    expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('releases the lifecycle lock helper after interrupted rollback without a background leak', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    value.environment.RR_SIGNAL_AFTER_MV_BOUNDARY = 'replace-app';
+
+    const result = run(value);
+    const log = events(value);
+
+    expect(result.status).not.toBe(0);
+    expect(log).toContain('lock:candidate:acquired');
+    expect(log).toContain('lock:candidate:released');
+    expect(log.some((line) => line.startsWith('lock:missing:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
   it.each(
     (['legacy', 'managed'] as const).flatMap((form) =>
       nonDisabledStatuses.map(([state, wire]) => [form, state, wire] as const)),
@@ -1995,6 +2210,252 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(events(value)).not.toContain('curl:enroll');
   });
 
+  it('ordinary uninstall then reinstall restores executable artifacts while preserving disabled local state', () => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    const enrollmentBefore = readFileSync(join(value.state, 'enrollment.json'), 'utf8');
+    const stateBefore = treeSnapshot(value.state);
+    const outboxBefore = treeSnapshot(value.outbox);
+    const historyBefore = readFileSync(value.history, 'utf8');
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollmentBefore);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(treeSnapshot(value.outbox)).toEqual(outboxBefore);
+    expect(existsSync(value.app)).toBe(true);
+    expect(existsSync(value.shim)).toBe(true);
+    expect(readlinkSync(value.command)).toBe(value.shim);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
+    expect(events(value)).toContain('agent:candidate:status --json');
+    expect(events(value)).not.toContain('agent:candidate:status');
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(events(value).some((line) => line.startsWith('tty:'))).toBe(false);
+    expect(result.stdout).toContain('Collection is OFF.');
+    assertNoHistoryMutation(value, historyBefore, `${result.stdout}${result.stderr}`);
+  });
+
+  it('complete removal then reinstall privately obtains a fresh enrollment without retaining identity', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const oldEnrollment = readFileSync(join(value.state, 'enrollment.json'), 'utf8');
+    const historyBefore = readFileSync(value.history, 'utf8');
+    rmSync(value.support, { recursive: true });
+    rmSync(value.command);
+    value.environment.RR_UUID = '00000000-0000-4000-8000-000000000099';
+    writeFileSync(value.enrollmentResponse, JSON.stringify({
+      device_token: 'N'.repeat(43),
+      dedupe_secret: 'b'.repeat(64),
+      server_url: 'https://raiders.redlattice.com',
+      cutover_at: 1_800_000_000_001,
+      enabled_surfaces: ['codex_desktop', 'codex_cli'],
+    }) + '\n');
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value)).toContain('curl:enroll');
+    expect(events(value).some((line) => line.startsWith('tty:'))).toBe(true);
+    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).not.toBe(oldEnrollment);
+    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toContain('"device_id":"00000000-0000-4000-8000-000000000099"');
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(result.stdout).toContain('Collection is OFF.');
+    assertNoHistoryMutation(value, historyBefore, `${result.stdout}${result.stderr}`);
+  });
+
+  it('interrupted re-enrollment reinstall preserves the valid journal and directs recovery without prompting', () => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    const journalPath = join(value.state, 're-enrollment.json');
+    const journalBefore = recoveryJournal();
+    const replacementToken = JSON.parse(journalBefore).replacement_device_token as string;
+    writeFileSync(journalPath, journalBefore, { mode: 0o600 });
+    const stateBefore = treeSnapshot(value.state);
+    const outboxBefore = treeSnapshot(value.outbox);
+    const historyBefore = readFileSync(value.history, 'utf8');
+    value.environment.RR_DISABLED_STATUS = agentStatus({ daemonRunning: false });
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(readFileSync(journalPath, 'utf8')).toBe(journalBefore);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(treeSnapshot(value.outbox)).toEqual(outboxBefore);
+    expect(existsSync(value.app)).toBe(true);
+    expect(existsSync(value.shim)).toBe(true);
+    expect(readlinkSync(value.command)).toBe(value.shim);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(false);
+    expect(events(value)).toContain('agent:candidate:status --json');
+    expect(events(value).some((line) => line.startsWith('agent:candidate:__runtime-raiders-managed-agent'))).toBe(false);
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(events(value).some((line) => line.startsWith('tty:'))).toBe(false);
+    expect(result.stdout).toContain('Run `raiders re-enroll` to resume recovery.');
+    expect(result.stdout).toContain('Collection is OFF.');
+    expect(result.stdout).not.toContain('Run `raiders on` when you want to join the game.');
+    for (const output of [
+      result.stdout,
+      result.stderr,
+      readFileSync(value.argvLog, 'utf8'),
+      readFileSync(value.eventLog, 'utf8'),
+    ]) expect(output).not.toContain(replacementToken);
+    assertNoHistoryMutation(value, historyBefore, `${result.stdout}${result.stderr}`);
+  });
+
+  it('installed but unregistered recovery companion is reinstalled without registration or start', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const journalPath = join(value.state, 're-enrollment.json');
+    const journalBefore = recoveryJournal();
+    writeFileSync(journalPath, journalBefore, { mode: 0o600 });
+    writeFileSync(value.managedState, 'not-registered\n');
+    rmSync(value.running);
+    value.environment.RR_EXISTING_COLLECTION_STATUS = agentStatus({
+      daemonRunning: false,
+      installedCompanionVersion: '0.4.2',
+    });
+    value.environment.RR_DISABLED_STATUS = agentStatus({ daemonRunning: false });
+    const stateBefore = treeSnapshot(value.state);
+    const outboxBefore = treeSnapshot(value.outbox);
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(treeSnapshot(value.outbox)).toEqual(outboxBefore);
+    expect(readFileSync(journalPath, 'utf8')).toBe(journalBefore);
+    expect(existsSync(value.app)).toBe(true);
+    expect(existsSync(value.shim)).toBe(true);
+    expect(readlinkSync(value.command)).toBe(value.shim);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(false);
+    expect(events(value)).not.toContain('agent:candidate:__runtime-raiders-managed-agent register');
+    expect(events(value)).not.toContain('agent:old-managed:__runtime-raiders-managed-agent unregister');
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(result.stdout).toContain('Run `raiders re-enroll` to resume recovery.');
+  });
+
+  it.each([
+    'version',
+    'operation_id',
+    'replacement_device_id',
+    'replacement_device_token',
+    'companion_version',
+    'queue_disposition',
+    'phase',
+  ] as const)('missing required recovery journal key %s fails closed before installation', (key) => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    const journal = JSON.parse(recoveryJournal()) as Record<string, unknown>;
+    delete journal[key];
+    writeFileSync(join(value.state, 're-enrollment.json'), JSON.stringify(journal) + '\n', { mode: 0o600 });
+
+    const result = run(value);
+
+    expectPreservedStateFailure(value, result);
+  });
+
+  it.each([
+    ['version', '1'],
+    ['operation_id', 1],
+    ['replacement_device_id', 1],
+    ['replacement_device_token', 1],
+    ['companion_version', 1],
+    ['queue_disposition', 1],
+    ['phase', 1],
+  ] as const)('wrong required recovery journal type for %s fails closed before installation', (key, replacement) => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    const journal = JSON.parse(recoveryJournal()) as Record<string, unknown>;
+    journal[key] = replacement;
+    writeFileSync(join(value.state, 're-enrollment.json'), JSON.stringify(journal) + '\n', { mode: 0o600 });
+
+    const result = run(value);
+
+    expectPreservedStateFailure(value, result);
+  });
+
+  it.each([
+    ['version', 2],
+    ['operation_id', 'not-a-uuid'],
+    ['replacement_device_id', 'not-a-uuid'],
+    ['replacement_device_token', 'R'.repeat(42)],
+    ['companion_version', 'V'.repeat(101)],
+    ['queue_disposition', 'transferred'],
+    ['phase', 'unknown'],
+  ] as const)('invalid required recovery journal value for %s fails closed before installation', (key, replacement) => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    const journal = JSON.parse(recoveryJournal()) as Record<string, unknown>;
+    journal[key] = replacement;
+    writeFileSync(join(value.state, 're-enrollment.json'), JSON.stringify(journal) + '\n', { mode: 0o600 });
+
+    const result = run(value);
+
+    expectPreservedStateFailure(value, result);
+  });
+
+  it.each([
+    ['mode is not owner-only', (value: Fixture) => {
+      chmodSync(join(value.state, 're-enrollment.json'), 0o644);
+    }],
+    ['hard-linked recovery journal', (value: Fixture) => {
+      linkSync(join(value.state, 're-enrollment.json'), join(value.state, 're-enrollment-copy.json'));
+    }],
+  ] as const)('unsafe recovery journal metadata (%s) fails closed before installation', (_case, mutate) => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    writeFileSync(join(value.state, 're-enrollment.json'), recoveryJournal(), { mode: 0o600 });
+    mutate(value);
+
+    const result = run(value);
+
+    expectPreservedStateFailure(value, result);
+  });
+
+  it.each([
+    ['hard-linked enrollment', (value: Fixture) => {
+      linkSync(join(value.state, 'enrollment.json'), join(value.state, 'enrollment-copy.json'));
+    }],
+    ['hard-linked recovery journal', (value: Fixture) => {
+      writeFileSync(join(value.state, 're-enrollment.json'), recoveryJournal(), { mode: 0o600 });
+      linkSync(join(value.state, 're-enrollment.json'), join(value.state, 're-enrollment-copy.json'));
+    }],
+  ] as const)('%s is rejected without destructive, install, network, registration, or start side effects', (_case, mutate) => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    mutate(value);
+
+    const result = run(value);
+
+    expectPreservedStateFailure(value, result);
+  });
+
+  it.each([
+    ['corrupt recovery journal', (value: Fixture) => {
+      writeFileSync(join(value.state, 're-enrollment.json'), '{"version":2}\n', { mode: 0o600 });
+    }],
+    ['corrupt enrollment', (value: Fixture) => {
+      writeFileSync(join(value.state, 'enrollment.json'), '{"version":2}\n', { mode: 0o600 });
+    }],
+  ] as const)('%s after removal fails closed without replacing preserved local state', (_case, corrupt) => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    corrupt(value);
+    const stateBefore = treeSnapshot(value.state);
+    const outboxBefore = treeSnapshot(value.outbox);
+    const historyBefore = readFileSync(value.history, 'utf8');
+
+    const result = run(value);
+
+    expectPreservedStateFailure(value, result);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(treeSnapshot(value.outbox)).toEqual(outboxBefore);
+    assertNoHistoryMutation(value, historyBefore, `${result.stdout}${result.stderr}`);
+  });
+
   it('reuses every nonempty unique subset of runtime-supported surfaces', () => {
     const value = fixture();
     writeExistingInstall(value, false);
@@ -2025,17 +2486,19 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     ['duplicate surfaces', (wire: Record<string, unknown>) => { wire.enabled_surfaces = ['codex_cli', 'codex_cli']; }],
     ['unsupported surface', (wire: Record<string, unknown>) => { wire.enabled_surfaces = ['codex_desktop', 'terminal']; }],
     ['non-array surfaces', (wire: Record<string, unknown>) => { wire.enabled_surfaces = 'codex_desktop'; }],
-  ] as const)('invalid existing enrollment (%s) cannot suppress a fresh prompt', (_, mutate) => {
+  ] as const)('invalid existing enrollment (%s) fails closed without replacing it', (_, mutate) => {
     const value = fixture();
     writeExistingInstall(value, false);
     const malformed = enrollmentObject();
     mutate(malformed);
     writeFileSync(join(value.state, 'enrollment.json'), enrollment(malformed), { mode: 0o600 });
+    const before = treeSnapshot(value.home);
     const result = run(value);
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    expect(events(value).filter((line) => line === 'curl:enroll')).toHaveLength(1);
-    expect(events(value).some((line) => line.startsWith('tty:'))).toBe(true);
-    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollment());
+    expect(result.status).not.toBe(0);
+    expect(treeSnapshot(value.home)).toEqual(before);
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(events(value).some((line) => line.startsWith('tty:'))).toBe(false);
+    expect(events(value)).not.toContain('agent:candidate:__runtime-raiders-managed-agent register');
   });
 
   it.each([
@@ -2047,14 +2510,17 @@ describe('Runtime Raiders reinstall-safe installer', () => {
       const converted = spawnSync('/usr/bin/plutil', ['-convert', 'xml1', path], { encoding: 'utf8' });
       expect(converted.status, converted.stderr).toBe(0);
     }],
-  ] as const)('%s cannot suppress a fresh enrollment prompt', (_, writeMalformed) => {
+  ] as const)('%s existing enrollment fails closed without prompting', (_, writeMalformed) => {
     const value = fixture();
     writeExistingInstall(value, false);
     writeMalformed(join(value.state, 'enrollment.json'));
+    const before = treeSnapshot(value.home);
     const result = run(value);
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    expect(events(value).filter((line) => line === 'curl:enroll')).toHaveLength(1);
-    expect(readFileSync(join(value.state, 'enrollment.json'), 'utf8')).toBe(enrollment());
+    expect(result.status).not.toBe(0);
+    expect(treeSnapshot(value.home)).toEqual(before);
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(events(value).some((line) => line.startsWith('tty:'))).toBe(false);
+    expect(events(value)).not.toContain('agent:candidate:__runtime-raiders-managed-agent register');
   });
 
   it.each([
@@ -2602,7 +3068,7 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(installed.status, installed.stderr + installed.stdout).toBe(0);
     const invoked = spawnSync(value.command, ['status'], { env: value.environment, encoding: 'utf8' });
     expect(invoked.status, invoked.stderr).toBe(0);
-    expect(invoked.stdout).toBe(`${agentStatus({ persistedState: 'missing' })}\n`);
+    expect(invoked.stdout).toBe('Runtime Raiders\nCollection: OFF\nStatus: Off\n');
     expect(readFileSync(value.shim, 'utf8')).not.toContain('launcher');
   });
 

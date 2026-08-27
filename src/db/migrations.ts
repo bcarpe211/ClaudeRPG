@@ -1014,4 +1014,33 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '021_raider_device_replacements',
+    sql: `
+      CREATE TABLE raider_device_replacements (
+        operation_id TEXT NOT NULL PRIMARY KEY
+          CHECK (
+            typeof(operation_id) = 'text'
+            AND length(operation_id) = 36
+          ),
+        old_device_id TEXT NOT NULL UNIQUE
+          REFERENCES raider_devices(device_id) ON DELETE CASCADE,
+        replacement_device_id TEXT NOT NULL UNIQUE
+          REFERENCES raider_devices(device_id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL UNIQUE
+          REFERENCES raider_enrollments(code_hash) ON DELETE CASCADE,
+        companion_version TEXT NOT NULL
+          CHECK (
+            typeof(companion_version) = 'text'
+            AND length(companion_version) BETWEEN 1 AND 100
+          ),
+        created_at INTEGER NOT NULL
+          CHECK (
+            typeof(created_at) = 'integer'
+            AND created_at BETWEEN 0 AND 9007199254740991
+          ),
+        CHECK (old_device_id <> replacement_device_id)
+      );
+    `,
+  },
 ];

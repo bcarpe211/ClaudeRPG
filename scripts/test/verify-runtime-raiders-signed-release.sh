@@ -454,7 +454,7 @@ cat > "$SMOKE_BIN/codesign" <<'EOF'
 set -eu
 last=''; for last in "$@"; do :; done
 case "$last" in
-  "$RR_VERIFY_SMOKE_HOME"'/Library/Application Support/Runtime Raiders/.runtime-raiders-install.'*'/unpacked/Runtime Raiders.app') : ;;
+  /private/tmp/.runtime-raiders-install.??????'/unpacked/Runtime Raiders.app') : ;;
   *) exit 65 ;;
 esac
 if [ "$#" -eq 5 ] && [ "$1" = --verify ] && [ "$2" = --deep ] && [ "$3" = --strict ] && [ "$4" = --verbose=2 ]; then
@@ -473,7 +473,7 @@ cat > "$SMOKE_BIN/spctl" <<'EOF'
 #!/bin/sh
 set -eu
 last=''; for last in "$@"; do :; done
-case "$last" in *'/unpacked/Runtime Raiders.app') : ;; *) exit 65 ;; esac
+case "$last" in /private/tmp/.runtime-raiders-install.??????'/unpacked/Runtime Raiders.app') : ;; *) exit 65 ;; esac
 EOF
 cat > "$SMOKE_BIN/launchctl" <<'EOF'
 #!/bin/sh
@@ -516,7 +516,7 @@ INSTALLED_EXECUTABLE="$SMOKE_HOME/Library/Application Support/Runtime Raiders/Ru
   exit 1
 }
 STATUS_OUTPUT="$(/usr/bin/env -i PATH=/usr/bin:/bin "${SMOKE_ENV[@]}" \
-  "$INSTALLED_COMMAND" status)"
+  "$INSTALLED_COMMAND" status --json)"
 printf '%s\n' "$STATUS_OUTPUT" | /usr/bin/grep -F '"activationState":"disabled"' >/dev/null || {
   echo "fake-HOME status smoke was not disabled" >&2
   exit 1

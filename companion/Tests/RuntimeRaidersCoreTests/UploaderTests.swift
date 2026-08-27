@@ -393,6 +393,59 @@ final class UploaderTests: XCTestCase {
         XCTAssertEqual(called.wait(timeout: .now() + 0.05), .timedOut)
     }
 
+    func testUploaderAndOneShotDeliveryUseByteIdenticalBatchWire() throws {
+        try withTemporaryDirectory { directory in
+            let uploaderOutbox = try Outbox(
+                directory: directory.appendingPathComponent("uploader", isDirectory: true)
+            )
+            let oneShotOutbox = try Outbox(
+                directory: directory.appendingPathComponent("one-shot", isDirectory: true)
+            )
+            let event = makeEvent(sequence: 1)
+            try uploaderOutbox.enqueue(event)
+            try oneShotOutbox.enqueue(event)
+            let configuration = UploadConfiguration(
+                origin: URL(string: "http://localhost:8765")!,
+                deviceToken: "old-device-token",
+                allowsTestOrigin: true
+            )
+            var uploaderRequest: URLRequest?
+            var oneShotRequest: URLRequest?
+            let uploader = try Uploader(
+                outbox: uploaderOutbox,
+                configuration: configuration,
+                transport: { request in
+                    uploaderRequest = request
+                    return .init(
+                        statusCode: 200,
+                        body: Data(#"{"accepted":1,"duplicate":0,"ignored":0}"#.utf8)
+                    )
+                },
+                clockMS: { 1_700_000_002_000 }
+            )
+            let oneShot = try OneShotOutboxDelivery(
+                outbox: oneShotOutbox,
+                configuration: configuration,
+                transport: { request in
+                    oneShotRequest = request
+                    return .init(
+                        statusCode: 200,
+                        body: Data(#"{"accepted":1,"duplicate":0,"ignored":0}"#.utf8)
+                    )
+                }
+            )
+
+            XCTAssertEqual(try uploader.performAttempt(enabled: true), .uploaded(1))
+            XCTAssertEqual(try oneShot.drain(), 1)
+
+            XCTAssertEqual(uploaderRequest?.url, oneShotRequest?.url)
+            XCTAssertEqual(uploaderRequest?.httpMethod, oneShotRequest?.httpMethod)
+            XCTAssertEqual(uploaderRequest?.timeoutInterval, oneShotRequest?.timeoutInterval)
+            XCTAssertEqual(uploaderRequest?.allHTTPHeaderFields, oneShotRequest?.allHTTPHeaderFields)
+            XCTAssertEqual(uploaderRequest?.httpBody, oneShotRequest?.httpBody)
+        }
+    }
+
     private enum SyntheticTransportError: Error { case failed }
 
     private func makeEvent(sequence: Int64) -> RunEventV1 {

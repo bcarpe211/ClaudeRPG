@@ -24,12 +24,44 @@ public final class Outbox: @unchecked Sendable {
     private let maximumBytes: Int
     private let maximumAgeMS: Int64
     private let directoryDescriptor: Int32
+    private let directoryDevice: dev_t
+    private let directoryInode: ino_t
+    private let expectedRecordOwnerID: uid_t
+    private let directorySynchronizationObserver: () -> Void
     private let lock = NSLock()
 
-    public init(
+    public convenience init(
         directory: URL,
         maximumBytes: Int = Outbox.defaultMaximumBytes,
         maximumAgeMS: Int64 = Outbox.defaultMaximumAgeMS
+    ) throws {
+        try self.init(
+            directory: directory,
+            maximumBytes: maximumBytes,
+            maximumAgeMS: maximumAgeMS,
+            expectedRecordOwnerID: geteuid()
+        )
+    }
+
+    convenience init(
+        directory: URL,
+        directorySynchronizationObserver: @escaping () -> Void
+    ) throws {
+        try self.init(
+            directory: directory,
+            maximumBytes: Self.defaultMaximumBytes,
+            maximumAgeMS: Self.defaultMaximumAgeMS,
+            expectedRecordOwnerID: geteuid(),
+            directorySynchronizationObserver: directorySynchronizationObserver
+        )
+    }
+
+    init(
+        directory: URL,
+        maximumBytes: Int = Outbox.defaultMaximumBytes,
+        maximumAgeMS: Int64 = Outbox.defaultMaximumAgeMS,
+        expectedRecordOwnerID: uid_t,
+        directorySynchronizationObserver: @escaping () -> Void = {}
     ) throws {
         guard directory.isFileURL, directory.path.hasPrefix("/"),
               maximumBytes >= 0, maximumAgeMS >= 0 else {
@@ -39,6 +71,15 @@ public final class Outbox: @unchecked Sendable {
         self.maximumBytes = maximumBytes
         self.maximumAgeMS = maximumAgeMS
         directoryDescriptor = try Self.openOrCreatePrivateDirectory(self.directory)
+        var metadata = stat()
+        guard Darwin.fstat(directoryDescriptor, &metadata) == 0 else {
+            Darwin.close(directoryDescriptor)
+            throw Self.currentPOSIXError()
+        }
+        directoryDevice = metadata.st_dev
+        directoryInode = metadata.st_ino
+        self.expectedRecordOwnerID = expectedRecordOwnerID
+        self.directorySynchronizationObserver = directorySynchronizationObserver
     }
 
     private init(
@@ -51,6 +92,12 @@ public final class Outbox: @unchecked Sendable {
         self.maximumBytes = maximumBytes
         self.maximumAgeMS = maximumAgeMS
         self.directoryDescriptor = directoryDescriptor
+        var metadata = stat()
+        precondition(Darwin.fstat(directoryDescriptor, &metadata) == 0)
+        directoryDevice = metadata.st_dev
+        directoryInode = metadata.st_ino
+        expectedRecordOwnerID = geteuid()
+        directorySynchronizationObserver = {}
     }
 
     deinit { Darwin.close(directoryDescriptor) }
@@ -96,8 +143,92 @@ public final class Outbox: @unchecked Sendable {
         try lock.withLock { try unlockedRecords().count }
     }
 
+    public func validatedQueuedCount() throws -> Int {
+        try lock.withLock {
+            try ensureDirectoryIdentity()
+            let validated = try validatedOwnedRecords()
+            defer { validated.forEach { Darwin.close($0.descriptor) } }
+            try revalidateAll(validated)
+            return validated.count
+        }
+    }
+
     public func totalBytes() throws -> Int {
         try lock.withLock { try unlockedRecords().reduce(0) { $0 + $1.encodedEvent.count } }
+    }
+
+    public func discardAllValidated() throws -> Int {
+        try lock.withLock {
+            try ensureDirectoryIdentity()
+            let validated = try validatedOwnedRecords()
+            defer { validated.forEach { Darwin.close($0.descriptor) } }
+
+            try revalidateAll(validated)
+            for item in validated {
+                try ensureDirectoryIdentity()
+                guard try pathStillIdentifies(item) else { throw OutboxError.invalidRecord }
+                guard Darwin.unlinkat(directoryDescriptor, item.name, 0) == 0 else {
+                    throw Self.currentPOSIXError()
+                }
+            }
+            try synchronizeDirectory()
+            return validated.count
+        }
+    }
+
+    final class ValidatedDeliveryBatch {
+        fileprivate let outboxIdentity: ObjectIdentifier
+        fileprivate let validated: [ValidatedRecord]
+        fileprivate var wasAcknowledged = false
+
+        var records: [OutboxRecord] { validated.map(\.record) }
+
+        fileprivate init(outbox: Outbox, validated: [ValidatedRecord]) {
+            outboxIdentity = ObjectIdentifier(outbox)
+            self.validated = validated
+        }
+
+        deinit { validated.forEach { Darwin.close($0.descriptor) } }
+    }
+
+    func validatedDeliveryBatch(limit: Int) throws -> ValidatedDeliveryBatch {
+        guard (0...100).contains(limit) else { throw OutboxError.invalidLimit }
+        return try lock.withLock {
+            try ensureDirectoryIdentity()
+            let validated = try validatedOwnedRecords()
+            do {
+                try revalidateAll(validated)
+                let ordered = validated.sorted { Self.recordsPrecede($0.record, $1.record) }
+                let selected = Array(ordered.prefix(limit))
+                ordered.dropFirst(selected.count).forEach { Darwin.close($0.descriptor) }
+                return ValidatedDeliveryBatch(outbox: self, validated: selected)
+            } catch {
+                validated.forEach { Darwin.close($0.descriptor) }
+                throw error
+            }
+        }
+    }
+
+    func acknowledge(_ batch: ValidatedDeliveryBatch) throws {
+        try lock.withLock {
+            guard batch.outboxIdentity == ObjectIdentifier(self),
+                  !batch.wasAcknowledged else {
+                throw OutboxError.invalidRecord
+            }
+            try ensureDirectoryIdentity()
+            for item in batch.validated {
+                try revalidateForAcknowledgement(item)
+            }
+            for item in batch.validated {
+                try ensureDirectoryIdentity()
+                try revalidateForAcknowledgement(item)
+                guard Darwin.unlinkat(directoryDescriptor, item.name, 0) == 0 else {
+                    throw OutboxError.invalidRecord
+                }
+            }
+            try synchronizeDirectory()
+            batch.wasAcknowledged = true
+        }
     }
 
     public func acknowledge(_ records: [OutboxRecord]) throws {
@@ -144,20 +275,145 @@ public final class Outbox: @unchecked Sendable {
         let names = try directoryNames()
             .filter(Self.isOwnedRecordName)
             .sorted()
-        return names.compactMap { try? decodedRecord(name: $0) }.compactMap { $0 }.sorted { lhs, rhs in
-            let left = (
-                lhs.event.runKey,
-                lhs.event.sequence,
-                lhs.event.idempotencyKey,
-                lhs.event.observedAtMS
+        return names.compactMap { try? decodedRecord(name: $0) }.compactMap { $0 }
+            .sorted(by: Self.recordsPrecede)
+    }
+
+    fileprivate struct ValidatedRecord {
+        let name: String
+        let descriptor: Int32
+        let metadata: stat
+        let record: OutboxRecord
+    }
+
+    private func validatedOwnedRecords() throws -> [ValidatedRecord] {
+        let names = try directoryNames().filter(Self.isOwnedRecordName).sorted()
+        var validated: [ValidatedRecord] = []
+        do {
+            for name in names {
+                let descriptor = Darwin.openat(
+                    directoryDescriptor,
+                    name,
+                    O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+                )
+                guard descriptor >= 0 else { throw OutboxError.invalidRecord }
+                do {
+                    let result = try validateRecord(
+                        name: name,
+                        descriptor: descriptor,
+                        expectedMetadata: nil
+                    )
+                    validated.append(ValidatedRecord(
+                        name: name,
+                        descriptor: descriptor,
+                        metadata: result.metadata,
+                        record: result.record
+                    ))
+                } catch {
+                    Darwin.close(descriptor)
+                    throw error
+                }
+            }
+            return validated
+        } catch {
+            validated.forEach { Darwin.close($0.descriptor) }
+            throw error
+        }
+    }
+
+    private func revalidateAll(_ validated: [ValidatedRecord]) throws {
+        try ensureDirectoryIdentity()
+        let currentNames = try directoryNames().filter(Self.isOwnedRecordName).sorted()
+        guard currentNames == validated.map(\.name) else { throw OutboxError.invalidRecord }
+        for item in validated {
+            guard try pathStillIdentifies(item) else { throw OutboxError.invalidRecord }
+            _ = try validateRecord(
+                name: item.name,
+                descriptor: item.descriptor,
+                expectedMetadata: item.metadata
             )
-            let right = (
-                rhs.event.runKey,
-                rhs.event.sequence,
-                rhs.event.idempotencyKey,
-                rhs.event.observedAtMS
+        }
+    }
+
+    private func revalidateForAcknowledgement(_ item: ValidatedRecord) throws {
+        guard try pathStillIdentifies(item) else { throw OutboxError.invalidRecord }
+        _ = try validateRecord(
+            name: item.name,
+            descriptor: item.descriptor,
+            expectedMetadata: item.metadata,
+            expectedContent: item.record.encodedEvent
+        )
+    }
+
+    private func validateRecord(
+        name: String,
+        descriptor: Int32,
+        expectedMetadata: stat?,
+        expectedContent: Data? = nil
+    ) throws -> (metadata: stat, record: OutboxRecord) {
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == expectedRecordOwnerID,
+              metadata.st_mode & 0o7777 == 0o600,
+              metadata.st_nlink == 1,
+              metadata.st_size >= 0,
+              metadata.st_size <= Self.maximumRecordBytes else {
+            throw OutboxError.invalidRecord
+        }
+        if let expectedMetadata {
+            guard Self.sameIdentityAndMetadata(metadata, expectedMetadata) else {
+                throw OutboxError.invalidRecord
+            }
+        }
+        guard Darwin.lseek(descriptor, 0, SEEK_SET) == 0 else {
+            throw Self.currentPOSIXError()
+        }
+        let data = try Self.readAll(descriptor: descriptor, size: Int(metadata.st_size))
+        guard let event = try? JSONDecoder().decode(RunEventV1.self, from: data),
+              let canonical = try? PrivacyEncoder().encode(event),
+              canonical == data,
+              expectedContent == nil || expectedContent == data,
+              name == Self.fileName(for: event) else {
+            throw OutboxError.invalidRecord
+        }
+        return (
+            metadata,
+            OutboxRecord(
+                url: directory.appendingPathComponent(name),
+                event: event,
+                encodedEvent: data
             )
-            return left < right
+        )
+    }
+
+    private func pathStillIdentifies(_ item: ValidatedRecord) throws -> Bool {
+        var metadata = stat()
+        guard Darwin.fstatat(
+            directoryDescriptor,
+            item.name,
+            &metadata,
+            AT_SYMLINK_NOFOLLOW
+        ) == 0 else { return false }
+        return Self.sameIdentityAndMetadata(metadata, item.metadata)
+    }
+
+    private func ensureDirectoryIdentity() throws {
+        var descriptorMetadata = stat()
+        var pathMetadata = stat()
+        guard Darwin.fstat(directoryDescriptor, &descriptorMetadata) == 0,
+              Darwin.lstat(directory.path, &pathMetadata) == 0,
+              descriptorMetadata.st_mode & S_IFMT == S_IFDIR,
+              pathMetadata.st_mode & S_IFMT == S_IFDIR,
+              descriptorMetadata.st_uid == geteuid(),
+              pathMetadata.st_uid == geteuid(),
+              descriptorMetadata.st_mode & 0o7777 == 0o700,
+              pathMetadata.st_mode & 0o7777 == 0o700,
+              descriptorMetadata.st_dev == directoryDevice,
+              descriptorMetadata.st_ino == directoryInode,
+              pathMetadata.st_dev == directoryDevice,
+              pathMetadata.st_ino == directoryInode else {
+            throw OutboxError.invalidDirectory
         }
     }
 
@@ -260,6 +516,28 @@ public final class Outbox: @unchecked Sendable {
         return data
     }
 
+    private static func readAll(descriptor: Int32, size: Int) throws -> Data {
+        var data = Data(count: size)
+        var offset = 0
+        try data.withUnsafeMutableBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            while offset < bytes.count {
+                let count = Darwin.read(descriptor, base.advanced(by: offset), bytes.count - offset)
+                if count > 0 { offset += count }
+                else if count < 0, errno == EINTR { continue }
+                else { throw OutboxError.invalidRecord }
+            }
+        }
+        var extra: UInt8 = 0
+        while true {
+            let count = Darwin.read(descriptor, &extra, 1)
+            if count == 0 { break }
+            if count < 0, errno == EINTR { continue }
+            throw OutboxError.invalidRecord
+        }
+        return data
+    }
+
     private func atomicWrite(_ data: Data, name: String) throws {
         let temporary = ".\(name).runtime-raiders-tmp-\(UUID().uuidString)"
         let descriptor = Darwin.openat(
@@ -296,6 +574,7 @@ public final class Outbox: @unchecked Sendable {
             if errno == EINTR { continue }
             throw Self.currentPOSIXError()
         }
+        directorySynchronizationObserver()
     }
 
     private static func writeAll(_ data: Data, descriptor: Int32) throws {
@@ -359,6 +638,31 @@ public final class Outbox: @unchecked Sendable {
             of: #"^[0-9a-f]{64}\.json$"#,
             options: .regularExpression
         ) != nil
+    }
+
+    private static func recordsPrecede(_ lhs: OutboxRecord, _ rhs: OutboxRecord) -> Bool {
+        let left = (
+            lhs.event.runKey,
+            lhs.event.sequence,
+            lhs.event.idempotencyKey,
+            lhs.event.observedAtMS
+        )
+        let right = (
+            rhs.event.runKey,
+            rhs.event.sequence,
+            rhs.event.idempotencyKey,
+            rhs.event.observedAtMS
+        )
+        return left < right
+    }
+
+    private static func sameIdentityAndMetadata(_ lhs: stat, _ rhs: stat) -> Bool {
+        lhs.st_dev == rhs.st_dev
+            && lhs.st_ino == rhs.st_ino
+            && lhs.st_mode == rhs.st_mode
+            && lhs.st_uid == rhs.st_uid
+            && lhs.st_nlink == rhs.st_nlink
+            && lhs.st_size == rhs.st_size
     }
 
     private static func storageTimestampMS(_ metadata: stat) -> Int64 {

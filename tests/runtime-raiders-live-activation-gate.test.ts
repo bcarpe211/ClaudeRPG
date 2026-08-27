@@ -85,6 +85,10 @@ case "${'$'}{1:-}" in
     status_count=${'$'}((status_count + 1))
     printf '%s' "${'$'}status_count" > '${state}/status-count'
     if [ "${'$'}{GATE_SCENARIO:-}" = status-fail ] && [ "${'$'}status_count" -eq 1 ]; then exit 1; fi
+    if [ "${'$'}{2:-}" != --json ]; then
+      printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'
+      exit 0
+    fi
     current="${'$'}(/bin/cat '${state}/activation' 2>/dev/null || printf disabled)"
     if [ "${'$'}{GATE_SCENARIO:-}" = initial-enabled ] && [ "${'$'}status_count" -eq 1 ]; then current=ready; fi
     if [ "${'$'}current" = preparing ] && [ "${'$'}{GATE_SCENARIO:-}" = ready-disabled ]; then
@@ -115,7 +119,9 @@ case "${'$'}{1:-}" in
   on)
     printf preparing > '${state}/activation'
     if [ "${'$'}{GATE_SCENARIO:-}" = on-fail ]; then exit 1; fi
-    if [ "${'$'}{GATE_SCENARIO:-}" = on-wrong ]; then printf 'ready\n'; else printf 'preparing\n'; fi
+    printf '%s\n' \
+      'Runtime Raiders collection is ON' \
+      'Status: Preparing safely in the background.'
     ;;
   off)
     off_count="${'$'}(/bin/cat '${state}/off-count' 2>/dev/null || printf 0)"
@@ -261,6 +267,7 @@ describe('Runtime Raiders one-shot live activation gate', () => {
     ]) expect(gateReport).toContain(field);
     const commands = readFileSync(value.log, 'utf8');
     expect(commands).toMatch(/raiders:on[\s\S]*raiders:off/);
+    expect(commands).toContain('raiders:status --json');
     expect(commands).toContain('rluser@raiders.redlattice.com');
     expect(commands).toContain('ProxyCommand=\/usr\/bin\/nc -b en0 %h %p');
     expect(commands).not.toMatch(/10\.1\.6\./);
@@ -364,7 +371,6 @@ describe('Runtime Raiders one-shot live activation gate', () => {
     ['history-drift', 'server history changed before the synthetic Run'],
     ['ready-timeout', 'agent did not become ready'],
     ['on-fail', 'raiders on failed'],
-    ['on-wrong', 'raiders on did not return preparing'],
     ['score-mismatch', 'synthetic Run scoring did not reconcile'],
     ['signal', 'interrupted by termination'],
     ['signal-quiet', 'interrupted by termination'],

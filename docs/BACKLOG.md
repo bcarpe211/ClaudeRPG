@@ -19,7 +19,6 @@ sections below for history but is not repeated here.
 | Backlog | Current work | Importance | Impact | Effort | Quick win |
 |---|---|---:|---:|---:|:---:|
 | #31 | Onboard the employee beta and observe first-install, opt-in, and Run behavior | High | 5 | 2 | Yes |
-| #33 | Add official re-enrollment, post-install guidance, and readable companion status | High | 5 | 3 | No |
 | #34 | Correct nested Codex usage scoring for new Runs, then reassess Momentum | Critical | 5 | 4 | No |
 | #35 | Align dungeon presence with accepted fresh Run activity without awarding points | High | 4 | 3 | No |
 | #22 | Audit Potion Lab evidence against the higher-tier launch threshold | High | 4 | 2 | Yes |
@@ -46,10 +45,9 @@ sections below for history but is not repeated here.
 | #28/#30/#32 | Optional audit metadata, UI evidence, and internal-name cleanup | Optional | 1–2 | 1–5 | No |
 
 **Recommended work order:** correct new-Run scoring in #34 → align dungeon
-presence in #35 → verify one bounded collection-off canary boundary → complete
-the post-install guidance/status slice of #33 → observe corrected Momentum →
-Potion Lab evidence audit → fight/economy snapshot → monster title clamp →
-floor-data validation. Do not start higher potion tiers, provider
+presence in #35 → verify one bounded collection-off canary boundary → observe
+corrected Momentum → Potion Lab evidence audit → fight/economy snapshot →
+monster title clamp → floor-data validation. Do not start higher potion tiers, provider
 expansion, equipment, or pets until their stated evidence/dependency gates pass.
 
 ---
@@ -685,63 +683,79 @@ change, controlled canary, and explicit release approval.
       `effective_tokens`. This must preserve history and is not required for
       player-facing Runtime Raiders behavior.
 
-## 33. Official Raider re-enrollment and readable companion status
+## 33. Official Raider re-enrollment and readable companion status ✅ DONE (2026-08-26)
 
 **Observed during the employee beta (2026-08-24):** an employee can create a
 duplicate Level 1 Raider, then discover that browser login does not change the
-already-installed companion's device enrollment. The current `raiders uninstall`
-command safely stops collection but deliberately preserves enrollment, queued
-events, and cursors. It is therefore not a re-enrollment flow. Recovering today
-requires an operator to reason about device revocation, pending-event disposal,
-managed-agent removal, and local state cleanup. That is too easy to perform
-partially or to misunderstand.
+already-installed companion's device enrollment. The completed supported
+commands replace the former undocumented cleanup approach: `raiders re-enroll`
+changes an enrollment with collection off; `raiders uninstall` preserves
+recovery state; and `raiders uninstall --everything` is the confirmed complete
+local removal.
 
 The same beta exposed that `raiders status` emits a correct but operator-oriented
 single-line JSON document. Employees need a concise answer to “is it on?”, “is
 it ready?”, “will it send work?”, and “what should I do next?” without exposing
 credentials, local paths, or provider-record content.
 
-- [ ] **Design and implement an explicit `raiders re-enroll` flow.** It must
+- [x] **Design and implement an explicit `raiders re-enroll` flow.** It must
       require collection to be off, show only a content-free summary of the
       current state, require an unambiguous confirmation, unregister the managed
       background agent, and remove only Runtime Raiders-owned local state. It
       must finish by prompting for a new short-lived enrollment code from the
       Raider selected in **Raider settings → Companion Setup**. Browser login
       alone must never silently retarget an installed device.
-- [ ] **Make pending-event disposition explicit.** Before replacing enrollment,
+  - [x] Server: atomically consume the target enrollment, revoke the old
+        device, insert the client-generated replacement, and make exact replay
+        deterministic without changing account or game history.
+  - [x] Server: provide active-device configuration recovery for an ambiguous
+        response or interrupted local commit.
+  - [x] Local: implement and verify the owner-only coordinator, recovery
+        journal, private prompt, safe state reset, and managed-agent lifecycle.
+- [x] **Make pending-event disposition explicit.** Before replacing enrollment,
       show the queued-event count and require either a deliberate, documented
       delivery-to-current-Raider choice or a deliberate discard choice. Never
       transfer queued work or already awarded points to another Raider. A
       re-enrollment must revoke the prior device credential before the new one
       can collect, and historical scores/Runs remain attached to their original
       Raider.
-- [ ] **Provide a true, equally bounded removal option.** It must unregister the
+  - [x] Server: reject the old credential after replacement and preserve every
+        Run, event, score, reward, inventory row, player total, and Run owner
+        across replacement, recovery, and revocation.
+  - [x] Local: implement and verify bounded delivery, explicit discard, cancel,
+        partial-failure recovery, and the rule that queued work is never sent in
+        a replacement request.
+- [x] **Provide a true, equally bounded removal option.** It must unregister the
       managed agent and remove only the companion's app, launcher, owner-only
       state, and outbox; it must not touch Codex sessions or unrelated user data.
       Distinguish “stop and preserve state” from “remove local companion state”
       in both command names and output.
-- [ ] **Make `raiders status` human-readable by default.** Render collection
+  - [x] Server: provide idempotent current-device revocation that immediately
+        blocks configuration recovery, events, and heartbeat.
+  - [x] Local: implement and verify recoverable uninstall and confirmed
+        `--everything` allowlisted removal.
+- [x] **Make `raiders status` human-readable by default.** Render collection
       state (`Off`, `Preparing`, or `Ready`), daemon/background-agent health,
       supported surfaces, active Runs, queued events, installed/available
       version, last successful upload when present, and one bounded next action.
       Keep it content-free: no Raider Key, device token, native Run ID, local
       path, cursor, prompt, response, or provider-record content.
-- [ ] **Preserve automation compatibility with `raiders status --json`.** Keep
+- [x] **Preserve automation compatibility with `raiders status --json`.** Keep
       the existing structured fields stable and sorted, and exercise both the
       live-daemon and daemon-unavailable local-status paths. The pretty output
       must be deterministic enough for snapshot tests but must not be parsed by
       automation.
-- [ ] **Give a successful install a plain-language handoff.** Say that Runtime
+- [x] **Give a successful install a plain-language handoff.** Say that Runtime
       Raiders is installed, collection starts off, `raiders status` checks the
       setup, and `raiders on` opts into the game. Keep secondary commands behind
       `raiders help` instead of printing an operator runbook after installation.
-- [ ] **Acceptance coverage:** test duplicate-account recovery, prior-device
+- [x] **Acceptance coverage:** test duplicate-account recovery, prior-device
       rejection, re-enrollment onto the intended Raider, explicit queue
       delivery/discard behavior, managed-agent cleanup, interrupted recovery,
-      no score transfer, and no secret/content leakage. Update the employee
-      runbook with the new supported commands; retire the undocumented cleanup
-      sequence only after the fresh install, reinstall, and recovery matrices
-      pass.
+      no score transfer, and no secret/content leakage. The employee runbook
+      names only the supported commands, and fresh install, reinstall, and
+      recovery matrices pass. This completion does not create, publish, or
+      authorize a release or change production collection.
 
 ## 34. Correct nested Codex usage scoring, then reassess Raid Momentum
 

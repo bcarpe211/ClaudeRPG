@@ -5,9 +5,11 @@ import Security
 
 private let runtimeInputsVerificationArgument = "__runtime-raiders-verify-runtime-inputs"
 private let managedAgentArgument = "__runtime-raiders-managed-agent"
+private let installerLifecycleLockArgument = "__runtime-raiders-lifecycle-lock-hold"
 private let runtimeInputsVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS"
 private let applicationSupportVerificationEnvironment =
     "RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY"
+private let lifecycleVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_LIFECYCLE_SCENARIO"
 
 private struct RuntimeInputs {
     let codexRoot: URL
@@ -35,15 +37,79 @@ private enum CLIError: Error, CustomStringConvertible {
     case usage
     case invalidRuntimeConfiguration
     case updateCheckUnavailable
+    case invalidStatusResponse
+    case invalidControlResponse
+    case lifecycleRequiresTerminal
+    case invalidLifecycleConfirmation
+    case lifecycleInputEnded
+    case lifecycleInputInterrupted
+    case lifecycleInputUnavailable
+    case collectionMustBeOff
+    case invalidEnrollment
+    case recoveryRequired
+    case revocationRequired
+    case assistedRecoveryRequired
+    case lifecycleFailed
 
     var description: String {
         switch self {
-        case .usage: "usage: raiders on|off|status|doctor|uninstall|update"
+        case .usage: "usage: raiders on|off|status|status --json|doctor|re-enroll|uninstall|uninstall --everything|update|help"
         case .invalidRuntimeConfiguration: "Runtime Raiders enrollment configuration is invalid"
         case .updateCheckUnavailable: "Unable to check for a Runtime Raiders update."
+        case .invalidStatusResponse: "Runtime Raiders status response was invalid."
+        case .invalidControlResponse: "Runtime Raiders control response was invalid."
+        case .lifecycleRequiresTerminal:
+            "Runtime Raiders lifecycle commands require an interactive terminal.\n" +
+            "Next: run the command again from an interactive terminal."
+        case .invalidLifecycleConfirmation:
+            "Lifecycle confirmation was not exact. No lifecycle change was authorized.\n" +
+            "Next: review the prompt and run the command again."
+        case .lifecycleInputEnded:
+            "Private lifecycle input ended before confirmation. No lifecycle change was authorized.\n" +
+            "Next: run the command again from an interactive terminal."
+        case .lifecycleInputInterrupted:
+            "Lifecycle input was interrupted. No lifecycle change was authorized.\n" +
+            "Next: run the command again from an interactive terminal."
+        case .lifecycleInputUnavailable:
+            "Private lifecycle input could not be controlled safely. No lifecycle change was authorized.\n" +
+            "Next: run the command again from an interactive terminal."
+        case .collectionMustBeOff:
+            "Collection is ON. No enrollment change was made.\n" +
+            "Next: run raiders off, then run raiders re-enroll again."
+        case .invalidEnrollment:
+            "The enrollment code was not accepted. Collection remains OFF.\n" +
+            "Next: create a fresh code and run raiders re-enroll again."
+        case .recoveryRequired:
+            "Runtime Raiders needs assisted recovery. Collection remains OFF.\n" +
+            "Next: run raiders re-enroll again; if it still fails, seek assisted recovery."
+        case .revocationRequired:
+            "Device revocation could not be confirmed. No local data was deleted.\n" +
+            "Next: reconnect and run raiders uninstall --everything again."
+        case .assistedRecoveryRequired:
+            "Local enrollment needs assisted recovery. No local data was deleted.\n" +
+            "Next: seek assisted recovery before removing local state."
+        case .lifecycleFailed:
+            "Runtime Raiders lifecycle operation could not be completed safely.\n" +
+            "Next: run raiders status, then retry the lifecycle command."
         }
     }
 }
+
+private let helpText = """
+Usage: raiders <command>
+
+Commands:
+  on                       Turn collection on
+  off                      Turn collection off
+  status                   Show collection and agent status
+  status --json            Show machine-readable status
+  doctor                   Run content-free health checks
+  update                   Check for a companion update
+  re-enroll                Change this device's Raider enrollment
+  uninstall                Remove the app and preserve local state
+  uninstall --everything   Revoke and remove all local Runtime Raiders data
+  help                     Show this help
+"""
 
 private final class CancellableDispatchTimer: @unchecked Sendable {
     private let workItem: DispatchWorkItem
@@ -397,14 +463,61 @@ private func runUpdateCheck(
 private func run() throws {
     let environment = ProcessInfo.processInfo.environment
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if let verificationPaths = try verificationPaths(environment: environment) {
+    let style = outputStyle(
+        isTTY: Darwin.isatty(STDOUT_FILENO) == 1,
+        environment: environment
+    )
+    let verifiedPaths = try verificationPaths(environment: environment)
+    if arguments.count == 2, arguments.first == installerLifecycleLockArgument {
+        try runInstallerLifecycleLockHolder(
+            expectedExecutablePath: arguments[1],
+            verificationPaths: verifiedPaths
+        )
+        return
+    }
+    if let verificationPaths = verifiedPaths {
+        if let rawScenario = environment[lifecycleVerificationEnvironment] {
+            guard let scenario = LifecycleVerificationScenario(rawValue: rawScenario),
+                  let executableURL = Bundle.main.executableURL,
+                  let route = CompanionCommandRouter.route(
+                      arguments: arguments,
+                      executableURL: executableURL,
+                      paths: verificationPaths
+                  ),
+                  route.isLifecycle else {
+                throw CLIError.usage
+            }
+            let home = verificationPaths.supportDirectory
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            try runLifecycleCommand(
+                route,
+                paths: verificationPaths,
+                homeDirectory: home,
+                scenario: scenario
+            )
+            return
+        }
         switch arguments {
         case ["status"]:
-            print(try localStatus(
+            try printLocalStatus(
                 paths: verificationPaths,
+                format: .pretty,
+                style: style,
                 readCachedUpdateState: false,
                 daemonRunning: true
-            ).description)
+            )
+        case ["status", "--json"]:
+            try printLocalStatus(
+                paths: verificationPaths,
+                format: .json,
+                style: style,
+                readCachedUpdateState: false,
+                daemonRunning: true
+            )
+        case ["help"], ["--help"]:
+            print(helpText)
         case ["update"]:
             try runUpdateCheck(
                 paths: verificationPaths,
@@ -453,8 +566,921 @@ private func run() throws {
     case .updateCheck:
         try runUpdateCheck(paths: paths, environment: environment)
         return
+    case .reEnroll, .uninstall:
+        try runLifecycleCommand(
+            route,
+            paths: paths,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            scenario: nil
+        )
+        return
+    case .help:
+        print(helpText)
+        return
+    case let .status(format):
+        try runStatusCommand(paths: paths, format: format, style: style)
+        return
     case let .control(command):
-        try runUserControlCommand(command, paths: paths)
+        try runUserControlCommand(command, paths: paths, style: style)
+    }
+}
+
+private func runInstallerLifecycleLockHolder(
+    expectedExecutablePath: String,
+    verificationPaths: AgentPaths?
+) throws {
+    guard expectedExecutablePath.hasPrefix("/"),
+          let bundleExecutable = Bundle.main.executableURL,
+          URL(fileURLWithPath: expectedExecutablePath, isDirectory: false)
+            .standardizedFileURL.path == bundleExecutable.standardizedFileURL.path else {
+        throw CLIError.usage
+    }
+    let homeDirectory: URL
+    if let verificationPaths {
+        homeDirectory = verificationPaths.supportDirectory
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    } else {
+        homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+    }
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let lock = try verificationPaths == nil
+        ? LifecycleLock.acquire(at: lifecyclePaths.lifecycleLock)
+        : LifecycleLock.acquireLifecycleVerification(at: lifecyclePaths.lifecycleLock)
+    _ = Darwin.signal(SIGHUP, SIG_IGN)
+    _ = Darwin.signal(SIGINT, SIG_IGN)
+    _ = Darwin.signal(SIGTERM, SIG_IGN)
+    FileHandle.standardOutput.write(Data("locked\n".utf8))
+    try withExtendedLifetime(lock) {
+        while let request = readLine(strippingNewline: true) {
+            switch request {
+            case "held":
+                FileHandle.standardOutput.write(Data("held\n".utf8))
+            case "release":
+                FileHandle.standardOutput.write(Data("released\n".utf8))
+                return
+            default:
+                throw CLIError.usage
+            }
+        }
+    }
+}
+
+private extension CompanionCommandRoute {
+    var isLifecycle: Bool {
+        switch self {
+        case .reEnroll, .uninstall:
+            true
+        case .daemon, .managedAgent, .control, .status, .updateCheck, .help:
+            false
+        }
+    }
+}
+
+private enum LifecycleVerificationScenario: String, Sendable {
+    case reEnrollCompletedEmpty = "re-enroll-completed-empty"
+    case reEnrollCompletedQueued = "re-enroll-completed-queued"
+    case reEnrollCollectionOn = "re-enroll-collection-on"
+    case reEnrollInvalidEnrollmentEmpty = "re-enroll-invalid-enrollment-empty"
+    case reEnrollRecoveryRequiredEmpty = "re-enroll-recovery-required-empty"
+    case reEnrollSetupFailure = "re-enroll-setup-failure"
+    case uninstallPreserveCompleted = "uninstall-preserve-completed"
+    case uninstallEverythingCompletedEmpty = "uninstall-everything-completed-empty"
+    case uninstallEverythingCompletedQueued = "uninstall-everything-completed-queued"
+    case uninstallEverythingRevocationRequiredEmpty =
+        "uninstall-everything-revocation-required-empty"
+    case uninstallEverythingAssistedRecoveryEmpty =
+        "uninstall-everything-assisted-recovery-empty"
+    case uninstallSetupFailure = "uninstall-setup-failure"
+}
+
+private final class LifecyclePromptErrorBox {
+    private(set) var error: CLIError?
+
+    func record<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CLIError {
+            self.error = error
+            throw error
+        }
+    }
+
+    func recover<T>(with fallback: T, _ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CLIError {
+            self.error = error
+            return fallback
+        }
+    }
+}
+
+private func runLifecycleCommand(
+    _ route: CompanionCommandRoute,
+    paths: AgentPaths,
+    homeDirectory: URL,
+    scenario: LifecycleVerificationScenario?
+) throws {
+    let terminal = LifecycleTerminalReader()
+    do {
+        switch route {
+        case .reEnroll:
+            try requireLifecycleTerminal(terminal)
+            if let scenario {
+                try runVerificationReEnrollment(
+                    scenario,
+                    terminal: terminal,
+                    homeDirectory: homeDirectory
+                )
+            } else {
+                try runLiveReEnrollment(
+                    terminal: terminal,
+                    paths: paths,
+                    homeDirectory: homeDirectory
+                )
+            }
+        case let .uninstall(mode):
+            if mode == .everything { try requireLifecycleTerminal(terminal) }
+            if let scenario {
+                try runVerificationRemoval(
+                    scenario,
+                    mode: mode,
+                    terminal: terminal,
+                    homeDirectory: homeDirectory
+                )
+            } else {
+                try runLiveRemoval(
+                    mode: mode,
+                    terminal: terminal,
+                    paths: paths,
+                    homeDirectory: homeDirectory
+                )
+            }
+        case .daemon, .managedAgent, .control, .status, .updateCheck, .help:
+            throw CLIError.usage
+        }
+    } catch let error as CLIError {
+        throw error
+    } catch {
+        throw CLIError.lifecycleFailed
+    }
+}
+
+private func requireLifecycleTerminal(_ terminal: LifecycleTerminalReader) throws {
+    do {
+        try terminal.validate()
+    } catch {
+        throw CLIError.lifecycleRequiresTerminal
+    }
+}
+
+private func privateLine(
+    terminal: LifecycleTerminalReader,
+    prompt: String,
+    maximumBytes: Int
+) throws -> String {
+    do {
+        return try terminal.readLine(prompt: prompt, maximumBytes: maximumBytes)
+    } catch let error as LifecycleTerminalError {
+        switch error {
+        case .endOfFile: throw CLIError.lifecycleInputEnded
+        case .interrupted: throw CLIError.lifecycleInputInterrupted
+        case .invalidInput: throw CLIError.invalidLifecycleConfirmation
+        case .unavailable: throw CLIError.lifecycleInputUnavailable
+        }
+    } catch {
+        throw CLIError.lifecycleInputUnavailable
+    }
+}
+
+private func isExactEnrollmentCode(_ value: String) -> Bool {
+    let bytes = Array(value.utf8)
+    guard bytes.count == 43 else { return false }
+    return bytes.allSatisfy { byte in
+        (0x41...0x5A).contains(byte) ||
+            (0x61...0x7A).contains(byte) ||
+            (0x30...0x39).contains(byte) ||
+            byte == 0x5F ||
+            byte == 0x2D
+    }
+}
+
+private func requireExactPrivateLine(
+    _ expected: String,
+    terminal: LifecycleTerminalReader,
+    prompt: String,
+    maximumBytes: Int
+) throws {
+    guard try privateLine(
+        terminal: terminal,
+        prompt: prompt,
+        maximumBytes: maximumBytes
+    ) == expected else {
+        throw CLIError.invalidLifecycleConfirmation
+    }
+}
+
+private func queueDisposition(
+    count: Int,
+    terminal: LifecycleTerminalReader
+) throws -> QueueDisposition {
+    guard count > 0 else { return .cancel }
+    switch try privateLine(
+        terminal: terminal,
+        prompt: "Choose deliver, discard, or cancel: ",
+        maximumBytes: 32
+    ) {
+    case "deliver":
+        return .deliver
+    case "discard":
+        try requireExactPrivateLine(
+            "DISCARD",
+            terminal: terminal,
+            prompt: "Type DISCARD to discard \(count) queued events: ",
+            maximumBytes: 64
+        )
+        return .discard
+    case "cancel":
+        return .cancel
+    default:
+        throw CLIError.invalidLifecycleConfirmation
+    }
+}
+
+private func printReEnrollmentSummary(queueCount: Int, version: String) {
+    print("Runtime Raiders re-enrollment")
+    print("Collection: OFF")
+    print("Background agent: Stopped")
+    print("Queued events: \(queueCount)")
+    print("Installed version: \(version)")
+    print("Runs, scores, and rewards remain with their original Raider.")
+}
+
+private func printReEnrollmentOutcome(_ outcome: ReEnrollmentOutcome) throws {
+    switch outcome {
+    case .completed:
+        print("Runtime Raiders re-enrollment succeeded.")
+        print("Collection remains OFF.")
+        print("History was not transferred; Runs, scores, and rewards remain with their original Raider.")
+        print("Next: run raiders status, then deliberately run raiders on.")
+    case .cancelled:
+        print("Runtime Raiders re-enrollment was cancelled.")
+        print("Collection remains OFF; enrollment and queued events were unchanged.")
+        print("Next: run raiders status.")
+    case .collectionMustBeOff:
+        throw CLIError.collectionMustBeOff
+    case .invalidEnrollment:
+        throw CLIError.invalidEnrollment
+    case .recoveryRequired:
+        throw CLIError.recoveryRequired
+    }
+}
+
+private struct ReEnrollmentExecutionBoundaries {
+    let version: String
+    let managedAgent: ManagedAgentServiceController
+    let enrollmentTransport: EnrollmentClient.Transport
+    let uploadTransport: Uploader.Transport
+    let stopDaemon: () throws -> Void
+    let delayMilliseconds: (Int) throws -> Void
+    let observe: (String) throws -> Void
+    let acquireLock: (() throws -> any ReEnrollmentLock)?
+}
+
+private func runComposedReEnrollment(
+    terminal: LifecycleTerminalReader,
+    lifecyclePaths: CompanionLifecyclePaths,
+    boundaries: ReEnrollmentExecutionBoundaries
+) throws {
+    let enrollment = try EnrollmentConfiguration.loadExisting(from: lifecyclePaths.enrollment)
+    guard try AgentController.persistedCollectorState(
+        paths: lifecyclePaths.agent,
+        surfaces: enrollment.enabledSurfaces
+    ) == .disabled else {
+        throw CLIError.collectionMustBeOff
+    }
+    try boundaries.stopDaemon()
+
+    let outbox = try Outbox(directory: lifecyclePaths.agent.outboxDirectory)
+    let client = try EnrollmentClient(
+        origin: enrollment.serverURL,
+        transport: boundaries.enrollmentTransport
+    )
+    let promptErrors = LifecyclePromptErrorBox()
+    let codePromptErrors = LifecyclePromptErrorBox()
+    let baseOperations = try ReEnrollmentOperations.live(
+        paths: lifecyclePaths,
+        companionVersion: boundaries.version,
+        managedAgent: boundaries.managedAgent,
+        outbox: outbox,
+        enrollmentClient: client,
+        uploadTransport: boundaries.uploadTransport,
+        summarize: {
+            printReEnrollmentSummary(queueCount: $0, version: boundaries.version)
+        },
+        confirmReEnrollment: {
+            try promptErrors.recover(with: false) {
+                try requireExactPrivateLine(
+                    "RE-ENROLL",
+                    terminal: terminal,
+                    prompt: "Type RE-ENROLL to continue: ",
+                    maximumBytes: 64
+                )
+                return true
+            }
+        },
+        resolveQueue: { count in
+            let disposition = try promptErrors.recover(with: QueueDisposition.cancel) {
+                try queueDisposition(count: count, terminal: terminal)
+            }
+            if count > 0 { try boundaries.observe("queue:\(disposition)") }
+            return disposition
+        },
+        requestCode: {
+            try codePromptErrors.record {
+                try privateLine(
+                    terminal: terminal,
+                    prompt: "Enrollment code: ",
+                    maximumBytes: 64
+                )
+            }
+        },
+        delayMilliseconds: boundaries.delayMilliseconds,
+        acquireLock: boundaries.acquireLock
+    )
+    let operations = baseOperations.mappingMalformedCodeToInvalidEnrollment { code in
+        guard isExactEnrollmentCode(code) else { throw EnrollmentClientError.invalidRequest }
+    }
+    let outcome: ReEnrollmentOutcome
+    do {
+        outcome = try ReEnrollmentCoordinator(operations: operations).run()
+    } catch {
+        if codePromptErrors.error != nil { throw CLIError.recoveryRequired }
+        if let promptError = promptErrors.error { throw promptError }
+        if let cliError = error as? CLIError { throw cliError }
+        throw CLIError.lifecycleFailed
+    }
+    if let promptError = promptErrors.error { throw promptError }
+    try printReEnrollmentOutcome(outcome)
+}
+
+private func runLiveReEnrollment(
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths,
+    homeDirectory: URL
+) throws {
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let version = try InstalledCompanionVersion.load(from: .main)
+    try runComposedReEnrollment(
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: ReEnrollmentExecutionBoundaries(
+            version: version,
+            managedAgent: .live,
+            enrollmentTransport: Uploader.liveTransport,
+            uploadTransport: Uploader.liveTransport,
+            stopDaemon: {
+                try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: false)
+            },
+            delayMilliseconds: {
+                Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
+            },
+            observe: { _ in },
+            acquireLock: nil
+        )
+    )
+}
+
+private func printCompleteRemovalSummary(queueCount: Int) {
+    print("Runtime Raiders complete removal")
+    print("Collection: OFF")
+    print("Background agent: Stopped")
+    print("Queued events: \(queueCount)")
+    print("Remove: app, background agent, command, enrollment, collector state, queued events, and recovery state.")
+    print("Raider, account, Runs, scores, rewards, and history will remain on the server.")
+}
+
+private func printRemovalOutcome(_ outcome: RemovalOutcome) throws {
+    switch outcome {
+    case .removedPreservingState:
+        print("Runtime Raiders was removed.")
+        print("Preserved: enrollment, collector state, queued events, and recovery state.")
+        print("Browser login does not change the preserved enrollment.")
+        print("Raider, account, Runs, scores, rewards, and history were preserved.")
+        print("Next: reinstall Runtime Raiders to restore the companion; collection will remain OFF.")
+    case .removedEverything:
+        print("Runtime Raiders was removed and this device enrollment was revoked.")
+        print("Removed: app, background agent, command, enrollment, collector state, queued events, and recovery state.")
+        print("Raider, account, Runs, scores, rewards, and history were preserved.")
+        print("Next: reinstall Runtime Raiders if you want to enroll this device again.")
+    case .cancelled:
+        print("Runtime Raiders removal was cancelled.")
+        print("Collection remains OFF; no local data was deleted.")
+        print("Next: run raiders status.")
+    case .revocationRequired:
+        throw CLIError.revocationRequired
+    case .assistedRecoveryRequired:
+        throw CLIError.assistedRecoveryRequired
+    }
+}
+
+private struct RemovalExecutionBoundaries {
+    let managedAgent: ManagedAgentServiceController
+    let enrollmentTransport: EnrollmentClient.Transport
+    let stopDaemon: () throws -> Void
+    let delayMilliseconds: (Int) throws -> Void
+    let observe: (String) throws -> Void
+    let acquireLock: (() throws -> any RemovalLock)?
+}
+
+private func runComposedRemoval(
+    mode: RemovalMode,
+    terminal: LifecycleTerminalReader,
+    lifecyclePaths: CompanionLifecyclePaths,
+    boundaries: RemovalExecutionBoundaries
+) throws {
+    let client = try EnrollmentClient(
+        origin: URL(string: "https://raiders.redlattice.com")!,
+        transport: boundaries.enrollmentTransport
+    )
+    let promptErrors = LifecyclePromptErrorBox()
+    let operations = RemovalOperations.live(
+        paths: lifecyclePaths,
+        managedAgent: boundaries.managedAgent,
+        enrollmentClient: client,
+        persistCollectionOff: {
+            var metadata = stat()
+            if Darwin.lstat(lifecyclePaths.enrollment.path, &metadata) != 0, errno == ENOENT {
+                try boundaries.observe("collection:persist-off")
+                return
+            }
+            let enrollment = try EnrollmentConfiguration.loadExisting(
+                from: lifecyclePaths.enrollment
+            )
+            try AgentController.persistDisabledForRecovery(
+                paths: lifecyclePaths.agent,
+                surfaces: enrollment.enabledSurfaces
+            )
+            try boundaries.observe("collection:persist-off")
+        },
+        stopDaemon: boundaries.stopDaemon,
+        summarize: { printCompleteRemovalSummary(queueCount: $0) },
+        confirmDiscard: { count in
+            try promptErrors.record {
+                try requireExactPrivateLine(
+                    "DISCARD",
+                    terminal: terminal,
+                    prompt: "Type DISCARD to discard \(count) queued events: ",
+                    maximumBytes: 64
+                )
+                try boundaries.observe("prompt:discard-confirmed")
+                return true
+            }
+        },
+        confirmEverything: {
+            try promptErrors.record {
+                try requireExactPrivateLine(
+                    "UNINSTALL EVERYTHING",
+                    terminal: terminal,
+                    prompt: "Type UNINSTALL EVERYTHING to continue: ",
+                    maximumBytes: 64
+                )
+                try boundaries.observe("prompt:everything-confirmed")
+                return true
+            }
+        },
+        delayMilliseconds: boundaries.delayMilliseconds,
+        acquireLock: boundaries.acquireLock
+    )
+    do {
+        try printRemovalOutcome(try RemovalCoordinator(operations: operations).run(mode: mode))
+    } catch {
+        if let promptError = promptErrors.error { throw promptError }
+        if let cliError = error as? CLIError { throw cliError }
+        throw CLIError.lifecycleFailed
+    }
+}
+
+private func runLiveRemoval(
+    mode: RemovalMode,
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths,
+    homeDirectory: URL
+) throws {
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    try runComposedRemoval(
+        mode: mode,
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: RemovalExecutionBoundaries(
+            managedAgent: .live,
+            enrollmentTransport: Uploader.liveTransport,
+            stopDaemon: {
+                try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: true)
+            },
+            delayMilliseconds: {
+                Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
+            },
+            observe: { _ in },
+            acquireLock: nil
+        )
+    )
+}
+
+private struct LifecycleVerificationContext {
+    let directory: URL
+
+    init(homeDirectory: URL) throws {
+        let applicationSupport = homeDirectory.appendingPathComponent(
+            "Library/Application Support",
+            isDirectory: true
+        )
+        guard verificationRoot(forApplicationSupportPath: applicationSupport.path)?.path ==
+                homeDirectory.standardized.path else {
+            throw CLIError.usage
+        }
+        let directory = homeDirectory.appendingPathComponent(
+            "lifecycle-verification",
+            isDirectory: true
+        )
+        guard isExactOwnerOnlyPhysicalDirectory(directory) else { throw CLIError.usage }
+        self.directory = directory
+    }
+}
+
+private final class LifecycleVerificationManagedAgentState: @unchecked Sendable {
+    private let lock = NSLock()
+    private let context: LifecycleVerificationContext
+    private var registered: Bool
+
+    init(registered: Bool, context: LifecycleVerificationContext) {
+        self.registered = registered
+        self.context = context
+    }
+
+    func status() -> ManagedAgentStatus {
+        let value: ManagedAgentStatus = lock.withLock {
+            registered ? .enabled : .notRegistered
+        }
+        do {
+            try appendLifecycleVerificationAction("service:status:\(value.rawValue)", in: context)
+            return value
+        } catch {
+            return .requiresApproval
+        }
+    }
+
+    func register() throws {
+        try appendLifecycleVerificationAction("service:register", in: context)
+        lock.withLock { registered = true }
+    }
+
+    func unregister() throws {
+        try appendLifecycleVerificationAction("service:unregister", in: context)
+        lock.withLock { registered = false }
+    }
+}
+
+private func lifecycleVerificationManagedAgent(
+    registered: Bool,
+    context: LifecycleVerificationContext
+) -> ManagedAgentServiceController {
+    let state = LifecycleVerificationManagedAgentState(
+        registered: registered,
+        context: context
+    )
+    return ManagedAgentServiceController(operations: ManagedAgentServiceOperations(
+        register: { try state.register() },
+        unregister: { try state.unregister() },
+        status: { state.status() }
+    ))
+}
+
+private func captureLifecycleVerificationRequest(
+    _ request: URLRequest,
+    context: LifecycleVerificationContext
+) throws {
+    guard let path = request.url?.path,
+          let method = request.httpMethod,
+          request.url?.query == nil,
+          let authorization = request.value(forHTTPHeaderField: "Authorization"),
+          authorization.hasPrefix("Bearer "),
+          isExactEnrollmentCode(String(authorization.dropFirst("Bearer ".count))) else {
+        throw CLIError.lifecycleFailed
+    }
+    switch path {
+    case "/api/raiders/re-enroll":
+        guard method == "POST",
+              request.value(forHTTPHeaderField: "Content-Type") == "application/json",
+              let body = request.httpBody,
+              let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              Set(object.keys) == [
+                  "code", "operation_id", "replacement_device_id",
+                  "replacement_device_token", "companion_version",
+              ],
+              let code = object["code"] as? String,
+              isExactEnrollmentCode(code),
+              let operationValue = object["operation_id"] as? String,
+              let operationID = UUID(uuidString: operationValue),
+              operationValue == operationID.uuidString.lowercased(),
+              let deviceValue = object["replacement_device_id"] as? String,
+              let deviceID = UUID(uuidString: deviceValue),
+              deviceValue == deviceID.uuidString.lowercased(),
+              operationID != deviceID,
+              let token = object["replacement_device_token"] as? String,
+              isExactEnrollmentCode(token),
+              object["companion_version"] as? String == "1.2.3" else {
+            throw CLIError.lifecycleFailed
+        }
+    case "/api/raiders/devices/revoke-current":
+        guard method == "POST",
+              request.value(forHTTPHeaderField: "Content-Type") == "application/json",
+              request.httpBody == Data("{}".utf8) else {
+            throw CLIError.lifecycleFailed
+        }
+    case "/api/runs/events":
+        guard method == "POST",
+              request.value(forHTTPHeaderField: "Content-Type") == "application/json",
+              let body = request.httpBody,
+              let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              Set(object.keys) == ["events"],
+              object["events"] is [Any] else {
+            throw CLIError.lifecycleFailed
+        }
+    case "/api/raiders/enrollment-config":
+        guard method == "GET",
+              request.httpBody == nil,
+              request.value(forHTTPHeaderField: "Content-Type") == nil else {
+            throw CLIError.lifecycleFailed
+        }
+    default:
+        throw CLIError.lifecycleFailed
+    }
+    let capture =
+        #"{"path":"\#(path)","method":"\#(method)","contract":"exact","authorization":"[REDACTED]","body":"[REDACTED]"}"#
+    try appendLifecycleVerificationCapture(
+        capture,
+        named: "lifecycle-request-capture.json",
+        in: context
+    )
+    try appendLifecycleVerificationAction("network:request:\(path)", in: context)
+}
+
+private func verificationReplacementResponse(for request: URLRequest) throws -> Data {
+    guard let body = request.httpBody,
+          let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+          let deviceID = object["replacement_device_id"] as? String else {
+        throw CLIError.lifecycleFailed
+    }
+    return try JSONSerialization.data(withJSONObject: [
+        "device_id": deviceID,
+        "dedupe_secret": String(repeating: "cc", count: 32),
+        "server_url": "https://raiders.redlattice.com",
+        "cutover_at": 2,
+        "enabled_surfaces": ["codex_cli"],
+    ], options: [.sortedKeys])
+}
+
+private func verificationRecoveryResponse(
+    paths: CompanionLifecyclePaths
+) throws -> Data {
+    let journal = try RecoveryJournalStore(paths: paths).load()
+    guard let journal else { throw CLIError.lifecycleFailed }
+    return try JSONSerialization.data(withJSONObject: [
+        "device_id": journal.replacementDeviceID.uuidString.lowercased(),
+        "dedupe_secret": String(repeating: "cc", count: 32),
+        "server_url": "https://raiders.redlattice.com",
+        "cutover_at": 2,
+        "enabled_surfaces": ["codex_cli"],
+    ], options: [.sortedKeys])
+}
+
+private func verificationReEnrollmentResponse(
+    scenario: LifecycleVerificationScenario,
+    request: URLRequest,
+    paths: CompanionLifecyclePaths,
+    context: LifecycleVerificationContext
+) throws -> UploadHTTPResponse {
+    try captureLifecycleVerificationRequest(request, context: context)
+    switch request.url?.path {
+    case "/api/raiders/re-enroll":
+        switch scenario {
+        case .reEnrollCompletedEmpty, .reEnrollCompletedQueued:
+            return UploadHTTPResponse(
+                statusCode: 200,
+                body: try verificationReplacementResponse(for: request)
+            )
+        case .reEnrollInvalidEnrollmentEmpty:
+            return UploadHTTPResponse(
+                statusCode: 401,
+                body: Data(#"{"reason":"invalid_enrollment"}"#.utf8)
+            )
+        case .reEnrollRecoveryRequiredEmpty:
+            throw POSIXError(.EIO)
+        default:
+            throw CLIError.usage
+        }
+    case "/api/raiders/enrollment-config":
+        switch scenario {
+        case .reEnrollCompletedEmpty, .reEnrollCompletedQueued:
+            return UploadHTTPResponse(
+                statusCode: 200,
+                body: try verificationRecoveryResponse(paths: paths)
+            )
+        case .reEnrollRecoveryRequiredEmpty:
+            throw POSIXError(.EIO)
+        case .reEnrollInvalidEnrollmentEmpty:
+            return UploadHTTPResponse(
+                statusCode: 401,
+                body: Data(#"{"reason":"unauthorized"}"#.utf8)
+            )
+        default:
+            throw CLIError.usage
+        }
+    default:
+        throw CLIError.lifecycleFailed
+    }
+}
+
+private func verificationUploadResponse(
+    _ request: URLRequest,
+    context: LifecycleVerificationContext
+) throws -> UploadHTTPResponse {
+    try captureLifecycleVerificationRequest(request, context: context)
+    guard let body = request.httpBody,
+          let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+          Set(object.keys) == ["events"],
+          let events = object["events"] as? [Any] else {
+        throw CLIError.lifecycleFailed
+    }
+    return UploadHTTPResponse(
+        statusCode: 200,
+        body: try JSONSerialization.data(withJSONObject: [
+            "accepted": events.count,
+            "duplicate": 0,
+            "ignored": 0,
+        ], options: [.sortedKeys])
+    )
+}
+
+private func runVerificationReEnrollment(
+    _ scenario: LifecycleVerificationScenario,
+    terminal: LifecycleTerminalReader,
+    homeDirectory: URL
+) throws {
+    guard scenario.rawValue.hasPrefix("re-enroll-") else { throw CLIError.usage }
+    if scenario == .reEnrollSetupFailure { throw POSIXError(.EIO) }
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let context = try LifecycleVerificationContext(homeDirectory: homeDirectory)
+    let resuming = try RecoveryJournalStore(paths: lifecyclePaths).load() != nil
+    let managedAgent = lifecycleVerificationManagedAgent(
+        registered: !resuming,
+        context: context
+    )
+    try runComposedReEnrollment(
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: ReEnrollmentExecutionBoundaries(
+            version: "1.2.3",
+            managedAgent: managedAgent,
+            enrollmentTransport: { request in
+                try verificationReEnrollmentResponse(
+                    scenario: scenario,
+                    request: request,
+                    paths: lifecyclePaths,
+                    context: context
+                )
+            },
+            uploadTransport: { request in
+                try verificationUploadResponse(request, context: context)
+            },
+            stopDaemon: {
+                try appendLifecycleVerificationAction("control:uninstall", in: context)
+            },
+            delayMilliseconds: { _ in },
+            observe: { try appendLifecycleVerificationAction($0, in: context) },
+            acquireLock: {
+                try LifecycleLock.acquireLifecycleVerification(
+                    at: lifecyclePaths.lifecycleLock
+                )
+            }
+        )
+    )
+}
+
+private func runVerificationRemoval(
+    _ scenario: LifecycleVerificationScenario,
+    mode: RemovalMode,
+    terminal: LifecycleTerminalReader,
+    homeDirectory: URL
+) throws {
+    guard scenario.rawValue.hasPrefix("uninstall-") else { throw CLIError.usage }
+    if scenario == .uninstallSetupFailure { throw POSIXError(.EIO) }
+    guard (mode == .preserveState) == (scenario == .uninstallPreserveCompleted) else {
+        throw CLIError.usage
+    }
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let context = try LifecycleVerificationContext(homeDirectory: homeDirectory)
+    let managedAgent = lifecycleVerificationManagedAgent(
+        registered: true,
+        context: context
+    )
+    try runComposedRemoval(
+        mode: mode,
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: RemovalExecutionBoundaries(
+            managedAgent: managedAgent,
+            enrollmentTransport: { request in
+                try captureLifecycleVerificationRequest(request, context: context)
+                if scenario == .uninstallEverythingRevocationRequiredEmpty {
+                    return UploadHTTPResponse(
+                        statusCode: 401,
+                        body: Data(#"{"reason":"unauthorized"}"#.utf8)
+                    )
+                }
+                return UploadHTTPResponse(
+                    statusCode: 200,
+                    body: Data(#"{"revoked":true}"#.utf8)
+                )
+            },
+            stopDaemon: {
+                try appendLifecycleVerificationAction("control:uninstall", in: context)
+                if scenario == .uninstallEverythingAssistedRecoveryEmpty {
+                    try Data(#"{"version":1}"#.utf8).write(
+                        to: lifecyclePaths.enrollment,
+                        options: .atomic
+                    )
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: 0o600],
+                        ofItemAtPath: lifecyclePaths.enrollment.path
+                    )
+                }
+            },
+            delayMilliseconds: { _ in },
+            observe: { try appendLifecycleVerificationAction($0, in: context) },
+            acquireLock: {
+                try LifecycleLock.acquireLifecycleVerification(
+                    at: lifecyclePaths.lifecycleLock
+                )
+            }
+        )
+    )
+}
+
+private func appendLifecycleVerificationAction(
+    _ action: String,
+    in context: LifecycleVerificationContext
+) throws {
+    let file = context.directory.appendingPathComponent(
+        "lifecycle-actions.log",
+        isDirectory: false
+    )
+    let existing = (try? Data(contentsOf: file)) ?? Data()
+    var data = existing
+    data.append(Data((action + "\n").utf8))
+    try data.write(to: file, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+}
+
+private func appendLifecycleVerificationCapture(
+    _ value: String,
+    named name: String,
+    in context: LifecycleVerificationContext
+) throws {
+    let file = context.directory.appendingPathComponent(name, isDirectory: false)
+    var data = (try? Data(contentsOf: file)) ?? Data()
+    data.append(Data((value + "\n").utf8))
+    try data.write(to: file, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+}
+
+private func stopDaemonAndPersistOff(
+    paths: AgentPaths,
+    allowMissingEnrollment: Bool
+) throws {
+    do {
+        let response = try ControlSocketClient.send(.uninstall, to: paths.controlSocket)
+        guard response.ok else { throw CLIError.lifecycleFailed }
+    } catch {
+        guard daemonIsUnavailable(error) else { throw error }
+        let enrollmentFile = paths.stateDirectory.appendingPathComponent(
+            "enrollment.json",
+            isDirectory: false
+        )
+        var metadata = stat()
+        if Darwin.lstat(enrollmentFile.path, &metadata) != 0,
+           errno == ENOENT,
+           allowMissingEnrollment {
+            return
+        }
+        let enrollment = try EnrollmentConfiguration.loadExisting(from: enrollmentFile)
+        try AgentController.persistDisabledForRecovery(
+            paths: paths,
+            surfaces: enrollment.enabledSurfaces
+        )
     }
 }
 
@@ -477,7 +1503,7 @@ private func verificationPaths(environment: [String: String]) throws -> AgentPat
           let root = verificationRoot(forApplicationSupportPath: path) else {
         throw CLIError.usage
     }
-    let home = root.appendingPathComponent("home", isDirectory: true)
+    let home = root
     let library = home.appendingPathComponent("Library", isDirectory: true)
     let applicationSupport = library.appendingPathComponent("Application Support", isDirectory: true)
     let paths = AgentPaths(applicationSupportDirectory: applicationSupport)
@@ -497,7 +1523,7 @@ private func verificationPaths(environment: [String: String]) throws -> AgentPat
 
 private func verificationRoot(forApplicationSupportPath path: String) -> URL? {
     let prefix = "/private/tmp/rrv."
-    let suffix = "/home/Library/Application Support"
+    let suffix = "/Library/Application Support"
     guard path.hasPrefix(prefix), path.hasSuffix(suffix) else { return nil }
     let tokenStart = path.index(path.startIndex, offsetBy: prefix.count)
     let tokenEnd = path.index(path.endIndex, offsetBy: -suffix.count)
@@ -537,28 +1563,105 @@ private func isExactOwnerOnlyPhysicalDirectory(_ directory: URL) -> Bool {
         openedMetadata.st_ino == pathMetadata.st_ino
 }
 
-private func runUserControlCommand(_ command: ControlCommand, paths: AgentPaths) throws {
+private func runStatusCommand(
+    paths: AgentPaths,
+    format: StatusOutputFormat,
+    style: OutputStyle
+) throws {
+    do {
+        let request = ControlRequest(command: .status)
+        let response = try ControlSocketClient.send(
+            request: request,
+            to: paths.controlSocket
+        )
+        guard response.ok,
+              let data = response.message.data(using: .utf8),
+              let status = try? JSONDecoder().decode(AgentStatus.self, from: data) else {
+            throw CLIError.invalidStatusResponse
+        }
+        print(renderStatus(status, format: format, style: style))
+    } catch {
+        guard daemonIsUnavailable(error) else { throw error }
+        try printLocalStatus(paths: paths, format: format, style: style)
+    }
+}
+
+private func runUserControlCommand(
+    _ command: ControlCommand,
+    paths: AgentPaths,
+    style: OutputStyle
+) throws {
     do {
         let request = ControlRequest.invocation(
             command: command,
             environment: ProcessInfo.processInfo.environment
         )
-        let response = try ControlSocketClient.send(
-            request: request,
-            to: paths.controlSocket
-        )
-        print(response.message)
-        if !response.ok { Foundation.exit(EXIT_FAILURE) }
+        let response = try ControlSocketClient.send(request: request, to: paths.controlSocket)
+        if !response.ok {
+            print(response.message)
+            Foundation.exit(EXIT_FAILURE)
+        }
+        switch command {
+        case .on:
+            let state: CollectorActivationState
+            switch response.message {
+            case "preparing": state = .preparing
+            case "ready": state = .ready
+            default: throw CLIError.invalidControlResponse
+            }
+            print(CollectionCommandRenderer.render(enabled: true, activationState: state, style: style))
+        case .off:
+            guard response.message == "disabled" else { throw CLIError.invalidControlResponse }
+            print(CollectionCommandRenderer.render(
+                enabled: false,
+                activationState: .disabled,
+                style: style
+            ))
+        case .doctor, .uninstall:
+            print(response.message)
+        case .daemon, .status:
+            throw CLIError.invalidControlResponse
+        }
     } catch {
         guard daemonIsUnavailable(error) else { throw error }
         switch command {
-        case .status:
-            print(try localStatus(paths: paths).description)
         case .doctor:
             print(localDoctor(paths: paths).description)
-        default:
+        case .on, .off, .daemon, .status, .uninstall:
             throw error
         }
+    }
+}
+
+private func printLocalStatus(
+    paths: AgentPaths,
+    format: StatusOutputFormat,
+    style: OutputStyle,
+    readCachedUpdateState: Bool = true,
+    daemonRunning: Bool = false
+) throws {
+    let status = try localStatus(
+        paths: paths,
+        readCachedUpdateState: readCachedUpdateState,
+        daemonRunning: daemonRunning
+    )
+    print(renderStatus(status, format: format, style: style))
+}
+
+private func renderStatus(
+    _ status: AgentStatus,
+    format: StatusOutputFormat,
+    style: OutputStyle
+) -> String {
+    switch format {
+    case .json:
+        return status.description
+    case .pretty:
+        return StatusRenderer.render(
+            status,
+            nowMS: Int64(Date().timeIntervalSince1970 * 1_000),
+            style: style
+        )
     }
 }
 

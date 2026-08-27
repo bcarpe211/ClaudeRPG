@@ -17,7 +17,7 @@ public struct AgentPaths: Equatable, Sendable {
         outboxDirectory = supportDirectory.appendingPathComponent("outbox", isDirectory: true)
         controlSocket = supportDirectory.appendingPathComponent("agent.sock", isDirectory: false)
         updateState = stateDirectory.appendingPathComponent("update-state.json", isDirectory: false)
-        updateLock = stateDirectory.appendingPathComponent("update.lock", isDirectory: false)
+        updateLock = stateDirectory.appendingPathComponent("update-state.lock", isDirectory: false)
         agentApplication = supportDirectory.appendingPathComponent(
             "Runtime Raiders.app",
             isDirectory: true

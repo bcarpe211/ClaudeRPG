@@ -147,7 +147,7 @@ status_wire_is_disabled() {
 
 status_is_disabled() {
   local status
-  status="$("$RAIDERS_TOOL" status 2>/dev/null)" || return 1
+  status="$("$RAIDERS_TOOL" status --json 2>/dev/null)" || return 1
   status_wire_is_disabled "$status"
 }
 
@@ -320,7 +320,7 @@ reconciles_post_snapshot() {
     [ "${POST_FIELDS[18]}" = "${BASE_FIELDS[18]}" ]
 }
 
-INITIAL_STATUS="$("$RAIDERS_TOOL" status 2>/dev/null)" || gate_fail 'raiders status failed'
+INITIAL_STATUS="$("$RAIDERS_TOOL" status --json 2>/dev/null)" || gate_fail 'raiders status failed'
 status_wire_is_disabled "$INITIAL_STATUS" || gate_fail 'collection was not disabled at the start'
 INSTALLED_VERSION="$(/usr/bin/sed -n 's/.*"installedCompanionVersion":"\([^"]*\)".*/\1/p' <<<"$INITIAL_STATUS")"
 [[ "$INSTALLED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || gate_fail 'installed companion version was invalid'
@@ -364,12 +364,11 @@ report_line "baseline_player_effective=${BASE_FIELDS[15]}"
 report_line "baseline_player_gold=${BASE_FIELDS[16]}"
 
 echo 'Runtime Raiders live gate: enabling collection for the bounded proof...'
-ON_RESPONSE="$("$RAIDERS_TOOL" on)" || gate_fail 'raiders on failed'
-[ "$ON_RESPONSE" = preparing ] || gate_fail 'raiders on did not return preparing'
+"$RAIDERS_TOOL" on >/dev/null || gate_fail 'raiders on failed'
 READY=0
 READINESS_STARTED=1
 for ((attempt = 0; attempt < READY_ATTEMPTS; attempt++)); do
-  STATUS="$("$RAIDERS_TOOL" status 2>/dev/null)" || true
+  STATUS="$("$RAIDERS_TOOL" status --json 2>/dev/null)" || true
   READINESS_ATTEMPTS=$((READINESS_ATTEMPTS + 1))
   READINESS_LAST_STATE="$(/usr/bin/sed -n 's/.*"activationState":"\([^"]*\)".*/\1/p' <<<"$STATUS")"
   case "$READINESS_LAST_STATE" in
@@ -412,7 +411,7 @@ FIXTURE_FILE="$FIXTURE_DIRECTORY/synthetic.jsonl"
 
 RECONCILED=0
 for ((attempt = 0; attempt < UPLOAD_ATTEMPTS; attempt++)); do
-  STATUS="$("$RAIDERS_TOOL" status 2>/dev/null)" || true
+  STATUS="$("$RAIDERS_TOOL" status --json 2>/dev/null)" || true
   if /usr/bin/grep -F '"activationState":"ready"' <<<"$STATUS" >/dev/null &&
     /usr/bin/grep -F '"queuedEventCount":0' <<<"$STATUS" >/dev/null &&
     /usr/bin/grep -E '"lastSuccessfulUploadMS":[0-9]+' <<<"$STATUS" >/dev/null; then

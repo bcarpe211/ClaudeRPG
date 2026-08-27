@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import RuntimeRaidersSignalSupport
 
 @_silgen_name("flock")
 private func runtimeRaidersFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
@@ -13,11 +14,24 @@ public enum ControlCommand: String, CaseIterable, Codable, Sendable {
     case uninstall
 }
 
+public enum StatusOutputFormat: Equatable, Sendable {
+    case pretty
+    case json
+}
+
 public enum CompanionCommandRoute: Equatable, Sendable {
     case daemon
     case managedAgent(ManagedAgentAction)
     case control(ControlCommand)
+    case status(StatusOutputFormat)
     case updateCheck
+    case reEnroll
+    case uninstall(RemovalMode)
+    case help
+}
+
+public func outputStyle(isTTY: Bool, environment: [String: String]) -> OutputStyle {
+    isTTY && environment["NO_COLOR"] == nil ? .ansi : .plain
 }
 
 public enum CompanionCommandRouter {
@@ -28,11 +42,23 @@ public enum CompanionCommandRouter {
     ) -> CompanionCommandRoute? {
         switch arguments {
         case []:
-            return .control(.status)
-        case ["on"], ["off"], ["status"], ["doctor"], ["uninstall"]:
+            return .status(.pretty)
+        case ["status"]:
+            return .status(.pretty)
+        case ["status", "--json"]:
+            return .status(.json)
+        case ["help"], ["--help"]:
+            return .help
+        case ["on"], ["off"], ["doctor"]:
             guard let argument = arguments.first,
                   let command = ControlCommand(rawValue: argument) else { return nil }
             return .control(command)
+        case ["re-enroll"]:
+            return .reEnroll
+        case ["uninstall"]:
+            return .uninstall(.preserveState)
+        case ["uninstall", "--everything"]:
+            return .uninstall(.everything)
         case ["update"]:
             return .updateCheck
         case ["daemon"]:
@@ -52,6 +78,374 @@ public enum CompanionCommandRouter {
         first.isFileURL &&
             second.isFileURL &&
             first.standardizedFileURL.path == second.standardizedFileURL.path
+    }
+}
+
+public enum LifecycleTerminalError: Error, Equatable, Sendable {
+    case unavailable
+    case invalidInput
+    case endOfFile
+    case interrupted
+}
+
+typealias TerminalSetAttributes = (
+    Int32,
+    Int32,
+    UnsafePointer<termios>
+) -> Int32
+typealias TerminalWriteBytes = (
+    Int32,
+    UnsafeRawPointer?,
+    Int
+) -> Int
+
+private let lifecycleTerminalSignalLock = NSLock()
+
+private struct LifecycleTerminalSignalPipe {
+    let readDescriptor: Int32
+    let writeDescriptor: Int32
+
+    init() throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard descriptors.withUnsafeMutableBufferPointer({ Darwin.pipe($0.baseAddress!) }) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+        let readDescriptor = descriptors[0]
+        let writeDescriptor = descriptors[1]
+        guard Self.configure(readDescriptor), Self.configure(writeDescriptor) else {
+            Darwin.close(readDescriptor)
+            Darwin.close(writeDescriptor)
+            throw LifecycleTerminalError.unavailable
+        }
+        self.readDescriptor = readDescriptor
+        self.writeDescriptor = writeDescriptor
+    }
+
+    private static func configure(_ descriptor: Int32) -> Bool {
+        let descriptorFlags = Darwin.fcntl(descriptor, F_GETFD)
+        guard descriptorFlags >= 0,
+              Darwin.fcntl(descriptor, F_SETFD, descriptorFlags | FD_CLOEXEC) == 0 else {
+            return false
+        }
+        let statusFlags = Darwin.fcntl(descriptor, F_GETFL)
+        return statusFlags >= 0 &&
+            Darwin.fcntl(descriptor, F_SETFL, statusFlags | O_NONBLOCK) == 0
+    }
+
+    func drain() {
+        var bytes = [UInt8](repeating: 0, count: 64)
+        while bytes.withUnsafeMutableBytes({
+            Darwin.read(readDescriptor, $0.baseAddress, $0.count)
+        }) > 0 {}
+    }
+}
+
+private let lifecycleTerminalSignalPipe = try? LifecycleTerminalSignalPipe()
+public struct LifecycleTerminalReader: @unchecked Sendable {
+    private let path: String
+    private let setAttributes: TerminalSetAttributes
+    private let writeBytes: TerminalWriteBytes
+    private let transitionHook: @Sendable (LifecycleTerminalTransition) -> Void
+
+    public init(path: String = "/dev/tty") {
+        self.path = path
+        setAttributes = { Darwin.tcsetattr($0, $1, $2) }
+        writeBytes = { Darwin.write($0, $1, $2) }
+        transitionHook = { _ in }
+    }
+
+    init(
+        testPath path: String,
+        setAttributes: @escaping TerminalSetAttributes = { Darwin.tcsetattr($0, $1, $2) },
+        writeBytes: @escaping TerminalWriteBytes = { Darwin.write($0, $1, $2) },
+        transitionHook: @escaping @Sendable (LifecycleTerminalTransition) -> Void = { _ in }
+    ) {
+        self.path = path
+        self.setAttributes = setAttributes
+        self.writeBytes = writeBytes
+        self.transitionHook = transitionHook
+    }
+
+    public func validate() throws {
+        let descriptor = try openValidatedTerminal()
+        defer { Darwin.close(descriptor) }
+        var attributes = termios()
+        guard Darwin.tcgetattr(descriptor, &attributes) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+    }
+
+    public func readLine(prompt: String, maximumBytes: Int) throws -> String {
+        guard (1...64).contains(maximumBytes) else {
+            throw LifecycleTerminalError.invalidInput
+        }
+        let descriptor = try openValidatedTerminal()
+        defer { Darwin.close(descriptor) }
+
+        var original = termios()
+        guard Darwin.tcgetattr(descriptor, &original) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+        let signalTrap = try LifecycleTerminalSignalTrap()
+        defer { signalTrap.restore() }
+        transitionHook(.signalProtectionInstalled)
+
+        var privateInput = original
+        privateInput.c_lflag &= ~tcflag_t(ECHO)
+        guard setAttributes(descriptor, TCSANOW, &privateInput) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+        let readResult = Result<String, Error> {
+            let originalFlags = Darwin.fcntl(descriptor, F_GETFL)
+            guard originalFlags >= 0,
+                  Darwin.fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
+                throw LifecycleTerminalError.unavailable
+            }
+            defer { _ = Darwin.fcntl(descriptor, F_SETFL, originalFlags) }
+            try write(prompt, to: descriptor)
+
+            var bytes = [UInt8]()
+            var oversized = false
+            while true {
+                if signalTrap.consumeSignal() { throw LifecycleTerminalError.interrupted }
+                var byte: UInt8 = 0
+                let count = withUnsafeMutablePointer(to: &byte) {
+                    Darwin.read(descriptor, $0, 1)
+                }
+                if count == 0 {
+                    throw oversized ? LifecycleTerminalError.invalidInput : .endOfFile
+                }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    if errno == EAGAIN || errno == EWOULDBLOCK {
+                        Darwin.usleep(10_000)
+                        continue
+                    }
+                    throw LifecycleTerminalError.unavailable
+                }
+                if byte == 0x0A || byte == 0x0D {
+                    try write("\n", to: descriptor)
+                    if oversized { throw LifecycleTerminalError.invalidInput }
+                    break
+                }
+                if oversized { continue }
+                if bytes.count == maximumBytes {
+                    oversized = true
+                    continue
+                }
+                bytes.append(byte)
+            }
+            guard !bytes.isEmpty, let line = String(bytes: bytes, encoding: .utf8) else {
+                throw LifecycleTerminalError.invalidInput
+            }
+            return line
+        }
+
+        let echoRestored = setAttributes(descriptor, TCSANOW, &original) == 0
+        transitionHook(.echoRestored)
+        let protectedSignalArrived = signalTrap.restoreAfterFinalSignalCheck {
+            transitionHook(.signalHandlersRestoring)
+        }
+        if protectedSignalArrived { throw LifecycleTerminalError.interrupted }
+        guard echoRestored else { throw LifecycleTerminalError.unavailable }
+        return try readResult.get()
+    }
+
+    private func openValidatedTerminal() throws -> Int32 {
+        let descriptor = Darwin.open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw LifecycleTerminalError.unavailable }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFCHR,
+              metadata.st_uid == 0 || metadata.st_uid == Darwin.geteuid() else {
+            Darwin.close(descriptor)
+            throw LifecycleTerminalError.unavailable
+        }
+        return descriptor
+    }
+
+    private func write(_ value: String, to descriptor: Int32) throws {
+        let data = Data(value.utf8)
+        var offset = 0
+        while offset < data.count {
+            let count = data.withUnsafeBytes { bytes in
+                writeBytes(
+                    descriptor,
+                    bytes.baseAddress?.advanced(by: offset),
+                    data.count - offset
+                )
+            }
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { throw LifecycleTerminalError.unavailable }
+            offset += count
+        }
+    }
+}
+
+enum LifecycleTerminalTransition: Equatable, Sendable {
+    case signalProtectionInstalled
+    case echoRestored
+    case signalHandlersRestoring
+}
+
+private final class LifecycleTerminalSignalTrap {
+    private static let signals = [SIGINT, SIGTERM, SIGHUP, SIGQUIT]
+    private let readDescriptor: Int32
+    private var restored = false
+
+    init() throws {
+        lifecycleTerminalSignalLock.lock()
+        guard let signalPipe = lifecycleTerminalSignalPipe,
+              rrs_terminal_signal_atomics_are_lock_free() else {
+            lifecycleTerminalSignalLock.unlock()
+            throw LifecycleTerminalError.unavailable
+        }
+        readDescriptor = signalPipe.readDescriptor
+        signalPipe.drain()
+        guard rrs_terminal_signal_trap_install(signalPipe.writeDescriptor) else {
+            lifecycleTerminalSignalLock.unlock()
+            throw LifecycleTerminalError.unavailable
+        }
+    }
+
+    deinit { restore() }
+
+    func consumeSignal() -> Bool {
+        var signalByte: UInt8 = 0
+        return Darwin.read(readDescriptor, &signalByte, 1) == 1
+    }
+
+    func restore() {
+        _ = restoreWhileSignalsBlocked(checkForProtectedSignal: false, transitionHook: nil)
+    }
+
+    func restoreAfterFinalSignalCheck(
+        transitionHook: @escaping () -> Void
+    ) -> Bool {
+        restoreWhileSignalsBlocked(
+            checkForProtectedSignal: true,
+            transitionHook: transitionHook
+        )
+    }
+
+    private func restoreWhileSignalsBlocked(
+        checkForProtectedSignal: Bool,
+        transitionHook: (() -> Void)?
+    ) -> Bool {
+        guard !restored else { return false }
+        var protectedSignalArrived = checkForProtectedSignal && consumeSignal()
+        restored = true
+        guard rrs_terminal_signal_trap_prepare_restore() else {
+            Darwin._exit(1)
+        }
+        transitionHook?()
+        var lateSignal = false
+        let restoration = rrs_terminal_signal_trap_restore(&lateSignal)
+        guard restoration != RRS_SIGNAL_RESTORE_NOT_STARTED else {
+            Darwin._exit(1)
+        }
+        if restoration == RRS_SIGNAL_RESTORE_POISONED || lateSignal {
+            protectedSignalArrived = true
+        }
+        if checkForProtectedSignal, consumeSignal() {
+            protectedSignalArrived = true
+        }
+
+        if checkForProtectedSignal {
+            var pendingSignals = sigset_t()
+            if Darwin.sigpending(&pendingSignals) != 0 {
+                protectedSignalArrived = true
+            } else {
+                for signalValue in Self.signals {
+                    let membership = Darwin.sigismember(&pendingSignals, signalValue)
+                    if membership != 0 {
+                        protectedSignalArrived = true
+                    }
+                }
+            }
+        }
+        guard rrs_terminal_signal_trap_finish_mask() else {
+            Darwin._exit(1)
+        }
+        lifecycleTerminalSignalLock.unlock()
+        return protectedSignalArrived
+    }
+}
+
+public extension ReEnrollmentOperations {
+    func mappingMalformedCodeToInvalidEnrollment(
+        _ validate: @escaping (String) throws -> Void
+    ) -> ReEnrollmentOperations {
+        let base = self
+        return ReEnrollmentOperations(
+            companionVersion: companionVersion,
+            acquireLock: acquireLock,
+            loadJournal: loadJournal,
+            readEnrollment: readEnrollment,
+            proveCollectionOff: proveCollectionOff,
+            unregisterAgent: unregisterAgent,
+            verifyAgentUnregistered: verifyAgentUnregistered,
+            countQueue: countQueue,
+            summarize: summarize,
+            confirmReEnrollment: confirmReEnrollment,
+            resolveQueue: resolveQueue,
+            deliverQueue: deliverQueue,
+            discardQueue: discardQueue,
+            generateMaterial: generateMaterial,
+            writeJournal: writeJournal,
+            requestCode: requestCode,
+            replace: { old, code, material, version in
+                do {
+                    return try base.replace(old, code, material, version)
+                } catch {
+                    do {
+                        try validate(code)
+                    } catch {
+                        return .invalidEnrollment
+                    }
+                    throw error
+                }
+            },
+            recover: recover,
+            persistEnrollment: persistEnrollment,
+            resetCollector: resetCollector,
+            registerAgent: registerAgent,
+            verifyEnrollmentAndOff: verifyEnrollmentAndOff,
+            delayMilliseconds: delayMilliseconds,
+            removeJournal: removeJournal,
+            interruptionPoint: interruptionPoint
+        )
+    }
+}
+
+public extension LifecycleLock {
+    static func acquireLifecycleVerification(at url: URL) throws -> LifecycleLock {
+        let prefix = "/private/tmp/rrv."
+        let suffix = "/Library/Application Support/.runtime-raiders.lifecycle.lock"
+        let path = url.path
+        guard url.isFileURL,
+              url.standardized.path == path,
+              path.hasPrefix(prefix),
+              path.hasSuffix(suffix) else {
+            throw LifecycleStorageError.invalidPath
+        }
+        let tokenStart = path.index(path.startIndex, offsetBy: prefix.count)
+        let tokenEnd = path.index(path.endIndex, offsetBy: -suffix.count)
+        let token = path[tokenStart..<tokenEnd]
+        guard token.utf8.count == 6,
+              token.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte) ||
+                      (65...90).contains(byte) ||
+                      (97...122).contains(byte)
+              }),
+              path == prefix + String(token) + suffix else {
+            throw LifecycleStorageError.invalidPath
+        }
+        return try LifecycleLock.acquire(at: url) { parent in
+            var modeled = parent
+            modeled.st_mode &= ~mode_t(S_IWGRP | S_IWOTH)
+            return modeled
+        }
     }
 }
 
@@ -635,14 +1029,15 @@ public enum ControlSocketClient {
               let status = try? JSONDecoder().decode(AgentStatus.self, from: statusData),
               status.daemonRunning,
               status.enabled,
-              status.persistedState == .enabled else {
+              status.persistedState == .enabled,
+              status.activationState == .preparing || status.activationState == .ready else {
             return try failClosedAfterTimedOutEnable(
                 socketURL: socketURL,
                 maximumFrameBytes: maximumFrameBytes,
                 timeoutSeconds: timeoutSeconds
             )
         }
-        return ControlResponse(ok: true, message: "enabled")
+        return ControlResponse(ok: true, message: status.activationState.rawValue)
     }
 
     private static func failClosedAfterTimedOutEnable(
