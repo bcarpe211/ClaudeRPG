@@ -99,7 +99,49 @@ typealias TerminalWriteBytes = (
 ) -> Int
 
 private let lifecycleTerminalSignalLock = NSLock()
-private nonisolated(unsafe) var lifecycleTerminalSignalWriteDescriptor: Int32 = -1
+
+private struct LifecycleTerminalSignalPipe {
+    let readDescriptor: Int32
+    let writeDescriptor: Int32
+
+    init() throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard descriptors.withUnsafeMutableBufferPointer({ Darwin.pipe($0.baseAddress!) }) == 0 else {
+            throw LifecycleTerminalError.unavailable
+        }
+        let readDescriptor = descriptors[0]
+        let writeDescriptor = descriptors[1]
+        guard Self.configure(readDescriptor), Self.configure(writeDescriptor) else {
+            Darwin.close(readDescriptor)
+            Darwin.close(writeDescriptor)
+            throw LifecycleTerminalError.unavailable
+        }
+        self.readDescriptor = readDescriptor
+        self.writeDescriptor = writeDescriptor
+    }
+
+    private static func configure(_ descriptor: Int32) -> Bool {
+        let descriptorFlags = Darwin.fcntl(descriptor, F_GETFD)
+        guard descriptorFlags >= 0,
+              Darwin.fcntl(descriptor, F_SETFD, descriptorFlags | FD_CLOEXEC) == 0 else {
+            return false
+        }
+        let statusFlags = Darwin.fcntl(descriptor, F_GETFL)
+        return statusFlags >= 0 &&
+            Darwin.fcntl(descriptor, F_SETFL, statusFlags | O_NONBLOCK) == 0
+    }
+
+    func drain() {
+        var bytes = [UInt8](repeating: 0, count: 64)
+        while bytes.withUnsafeMutableBytes({
+            Darwin.read(readDescriptor, $0.baseAddress, $0.count)
+        }) > 0 {}
+    }
+}
+
+private let lifecycleTerminalSignalPipe = try? LifecycleTerminalSignalPipe()
+private let lifecycleTerminalSignalWriteDescriptor =
+    lifecycleTerminalSignalPipe?.writeDescriptor ?? -1
 
 private func lifecycleTerminalSignalHandler(_ signal: Int32) {
     let descriptor = lifecycleTerminalSignalWriteDescriptor
@@ -112,21 +154,25 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
     private let path: String
     private let setAttributes: TerminalSetAttributes
     private let writeBytes: TerminalWriteBytes
+    private let transitionHook: @Sendable (LifecycleTerminalTransition) -> Void
 
     public init(path: String = "/dev/tty") {
         self.path = path
         setAttributes = { Darwin.tcsetattr($0, $1, $2) }
         writeBytes = { Darwin.write($0, $1, $2) }
+        transitionHook = { _ in }
     }
 
     init(
         testPath path: String,
         setAttributes: @escaping TerminalSetAttributes = { Darwin.tcsetattr($0, $1, $2) },
-        writeBytes: @escaping TerminalWriteBytes = { Darwin.write($0, $1, $2) }
+        writeBytes: @escaping TerminalWriteBytes = { Darwin.write($0, $1, $2) },
+        transitionHook: @escaping @Sendable (LifecycleTerminalTransition) -> Void = { _ in }
     ) {
         self.path = path
         self.setAttributes = setAttributes
         self.writeBytes = writeBytes
+        self.transitionHook = transitionHook
     }
 
     public func validate() throws {
@@ -149,15 +195,19 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
         guard Darwin.tcgetattr(descriptor, &original) == 0 else {
             throw LifecycleTerminalError.unavailable
         }
+        let signalTrap = try LifecycleTerminalSignalTrap()
+        defer { signalTrap.restore() }
+        transitionHook(.signalProtectionInstalled)
+
         var privateInput = original
         privateInput.c_lflag &= ~tcflag_t(ECHO)
         guard setAttributes(descriptor, TCSANOW, &privateInput) == 0 else {
             throw LifecycleTerminalError.unavailable
         }
-        defer { _ = setAttributes(descriptor, TCSANOW, &original) }
-
-        let signalTrap = try LifecycleTerminalSignalTrap()
-        defer { signalTrap.restore() }
+        defer {
+            _ = setAttributes(descriptor, TCSANOW, &original)
+            transitionHook(.echoRestored)
+        }
         let originalFlags = Darwin.fcntl(descriptor, F_GETFL)
         guard originalFlags >= 0,
               Darwin.fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
@@ -167,13 +217,16 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
         try write(prompt, to: descriptor)
 
         var bytes = [UInt8]()
+        var oversized = false
         while true {
             if signalTrap.consumeSignal() { throw LifecycleTerminalError.interrupted }
             var byte: UInt8 = 0
             let count = withUnsafeMutablePointer(to: &byte) {
                 Darwin.read(descriptor, $0, 1)
             }
-            if count == 0 { throw LifecycleTerminalError.endOfFile }
+            if count == 0 {
+                throw oversized ? LifecycleTerminalError.invalidInput : .endOfFile
+            }
             if count < 0 {
                 if errno == EINTR { continue }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
@@ -184,10 +237,13 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
             }
             if byte == 0x0A || byte == 0x0D {
                 try write("\n", to: descriptor)
+                if oversized { throw LifecycleTerminalError.invalidInput }
                 break
             }
-            guard bytes.count < maximumBytes else {
-                throw LifecycleTerminalError.invalidInput
+            if oversized { continue }
+            if bytes.count == maximumBytes {
+                oversized = true
+                continue
             }
             bytes.append(byte)
         }
@@ -228,35 +284,28 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
     }
 }
 
+enum LifecycleTerminalTransition: Equatable, Sendable {
+    case signalProtectionInstalled
+    case echoRestored
+}
+
 private final class LifecycleTerminalSignalTrap {
     private static let signals = [SIGINT, SIGTERM, SIGHUP, SIGQUIT]
-    private var descriptors = [Int32](repeating: -1, count: 2)
+    private let readDescriptor: Int32
     private var previousHandlers: [(Int32, sig_t?)] = []
     private var restored = false
 
     init() throws {
         lifecycleTerminalSignalLock.lock()
-        guard lifecycleTerminalSignalWriteDescriptor < 0 else {
+        let signalWriteDescriptor = lifecycleTerminalSignalWriteDescriptor
+        guard let signalPipe = lifecycleTerminalSignalPipe,
+              signalWriteDescriptor == signalPipe.writeDescriptor,
+              signalWriteDescriptor >= 0 else {
             lifecycleTerminalSignalLock.unlock()
             throw LifecycleTerminalError.unavailable
         }
-        guard descriptors.withUnsafeMutableBufferPointer({ Darwin.pipe($0.baseAddress!) }) == 0 else {
-            lifecycleTerminalSignalLock.unlock()
-            throw LifecycleTerminalError.unavailable
-        }
-        _ = Darwin.fcntl(descriptors[0], F_SETFD, FD_CLOEXEC)
-        _ = Darwin.fcntl(descriptors[1], F_SETFD, FD_CLOEXEC)
-        _ = Darwin.fcntl(
-            descriptors[0],
-            F_SETFL,
-            Darwin.fcntl(descriptors[0], F_GETFL) | O_NONBLOCK
-        )
-        _ = Darwin.fcntl(
-            descriptors[1],
-            F_SETFL,
-            Darwin.fcntl(descriptors[1], F_GETFL) | O_NONBLOCK
-        )
-        lifecycleTerminalSignalWriteDescriptor = descriptors[1]
+        readDescriptor = signalPipe.readDescriptor
+        signalPipe.drain()
         for signalValue in Self.signals {
             let previous = Darwin.signal(signalValue, lifecycleTerminalSignalHandler)
             previousHandlers.append((signalValue, previous))
@@ -267,7 +316,7 @@ private final class LifecycleTerminalSignalTrap {
 
     func consumeSignal() -> Bool {
         var signalByte: UInt8 = 0
-        return Darwin.read(descriptors[0], &signalByte, 1) == 1
+        return Darwin.read(readDescriptor, &signalByte, 1) == 1
     }
 
     func restore() {
@@ -276,10 +325,178 @@ private final class LifecycleTerminalSignalTrap {
         for (signalValue, previous) in previousHandlers.reversed() {
             _ = Darwin.signal(signalValue, previous)
         }
-        lifecycleTerminalSignalWriteDescriptor = -1
-        if descriptors[0] >= 0 { Darwin.close(descriptors[0]) }
-        if descriptors[1] >= 0 { Darwin.close(descriptors[1]) }
         lifecycleTerminalSignalLock.unlock()
+    }
+}
+
+private final class DeferredInitialJournalState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resuming = false
+    private var pending: RecoveryJournal?
+    private var flushed = false
+
+    func recordLoaded(_ journal: RecoveryJournal?) {
+        lock.withLock { resuming = journal != nil }
+    }
+
+    func stageIfInitial(_ journal: RecoveryJournal) -> Bool {
+        lock.withLock {
+            guard !resuming,
+                  !flushed,
+                  pending == nil,
+                  journal.phase == .replacementPrepared else {
+                return false
+            }
+            pending = journal
+            return true
+        }
+    }
+
+    func takePending() -> RecoveryJournal? {
+        lock.withLock {
+            let journal = pending
+            pending = nil
+            if journal != nil { flushed = true }
+            return journal
+        }
+    }
+}
+
+public extension ReEnrollmentOperations {
+    func validatingCodeBeforeInitialJournal(
+        _ validate: @escaping (String) throws -> Void
+    ) -> ReEnrollmentOperations {
+        let base = self
+        let state = DeferredInitialJournalState()
+        return ReEnrollmentOperations(
+            companionVersion: companionVersion,
+            acquireLock: acquireLock,
+            loadJournal: {
+                let journal = try base.loadJournal()
+                state.recordLoaded(journal)
+                return journal
+            },
+            readEnrollment: readEnrollment,
+            proveCollectionOff: proveCollectionOff,
+            unregisterAgent: unregisterAgent,
+            verifyAgentUnregistered: verifyAgentUnregistered,
+            countQueue: countQueue,
+            summarize: summarize,
+            confirmReEnrollment: confirmReEnrollment,
+            resolveQueue: resolveQueue,
+            deliverQueue: deliverQueue,
+            discardQueue: discardQueue,
+            generateMaterial: generateMaterial,
+            writeJournal: { journal in
+                if !state.stageIfInitial(journal) { try base.writeJournal(journal) }
+            },
+            requestCode: {
+                let code = try base.requestCode()
+                try validate(code)
+                if let journal = state.takePending() { try base.writeJournal(journal) }
+                return code
+            },
+            replace: replace,
+            recover: recover,
+            persistEnrollment: persistEnrollment,
+            resetCollector: resetCollector,
+            registerAgent: registerAgent,
+            verifyEnrollmentAndOff: verifyEnrollmentAndOff,
+            delayMilliseconds: delayMilliseconds,
+            removeJournal: removeJournal,
+            interruptionPoint: interruptionPoint
+        )
+    }
+}
+
+private final class LifecycleVerificationRemovalLock: RemovalLock, @unchecked Sendable {}
+private final class LifecycleVerificationRemovalSession: RemovalSession, @unchecked Sendable {}
+private final class LifecycleVerificationRemovalState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var queueCount: Int
+
+    init(queueCount: Int) {
+        self.queueCount = queueCount
+    }
+
+    func snapshot(for session: any RemovalSession) -> RemovalQueueSnapshot {
+        lock.withLock {
+            RemovalQueueSnapshot(
+                sessionIdentifier: ObjectIdentifier(session),
+                names: (0..<queueCount).map { "event-\($0)" }
+            )
+        }
+    }
+
+    func discard() {
+        lock.withLock { queueCount = 0 }
+    }
+
+    func isEmpty() -> Bool {
+        lock.withLock { queueCount == 0 }
+    }
+}
+
+public extension RemovalOperations {
+    static func lifecycleVerification(
+        queueCount: Int,
+        enrollment: EnrollmentConfiguration?,
+        enrollmentLoadFails: Bool,
+        record: @escaping (String) throws -> Void,
+        summarize: @escaping (Int) throws -> Void,
+        confirmDiscard: @escaping (Int) throws -> Bool,
+        confirmEverything: @escaping () throws -> Bool,
+        revoke: @escaping (EnrollmentConfiguration) throws -> Bool
+    ) -> RemovalOperations {
+        let state = LifecycleVerificationRemovalState(queueCount: queueCount)
+        return RemovalOperations(
+            acquireLock: {
+                try record("coordinator:lock")
+                return LifecycleVerificationRemovalLock()
+            },
+            persistCollectionOff: { try record("coordinator:persist-off") },
+            stopDaemon: { try record("control:uninstall") },
+            unregisterAgent: { try record("coordinator:unregister-agent") },
+            verifyAgentUnregistered: {
+                try record("coordinator:verify-agent-unregistered")
+                return true
+            },
+            prepareSession: {
+                try record("coordinator:prepare-session")
+                return LifecycleVerificationRemovalSession()
+            },
+            queueSnapshot: { session in
+                try record("coordinator:queue-snapshot")
+                return state.snapshot(for: session)
+            },
+            summarize: summarize,
+            confirmDiscard: confirmDiscard,
+            confirmEverything: confirmEverything,
+            loadEnrollment: { _ in
+                try record("coordinator:load-enrollment")
+                if enrollmentLoadFails { throw RemovalCoordinatorError.operationFailed }
+                return enrollment
+            },
+            revoke: revoke,
+            delayMilliseconds: { _ in },
+            discardQueue: { _, _ in
+                state.discard()
+                try record("queue:discard")
+            },
+            verifyQueueEmpty: { _, _ in
+                try record("coordinator:verify-queue-empty")
+                return state.isEmpty()
+            },
+            removeExecutableArtifacts: { _ in
+                try record("coordinator:remove-preserving-state")
+            },
+            verifyPreservedState: { _ in
+                try record("coordinator:verify-preserved-state")
+                return true
+            },
+            removeAllArtifacts: { _, _ in try record("remove:everything") },
+            revocationProof: { try record("coordinator:revocation-proof") }
+        )
     }
 }
 

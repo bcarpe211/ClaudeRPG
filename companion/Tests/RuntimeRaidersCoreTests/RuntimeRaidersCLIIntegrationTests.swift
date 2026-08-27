@@ -387,7 +387,8 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 XCTAssertEqual(result.stdout, "")
                 XCTAssertEqual(
                     result.stderr,
-                    "Runtime Raiders lifecycle commands require an interactive terminal.\n"
+                    "Runtime Raiders lifecycle commands require an interactive terminal.\n" +
+                    "Next: run the command again from an interactive terminal.\n"
                 )
                 XCTAssertEqual(
                     try treeFingerprint(fixture.paths.supportDirectory),
@@ -421,14 +422,26 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             )
             XCTAssertEqual(result.stderr, "")
             try assertLifecycleOutputIsContentFree(result.stdout + result.stderr, fixture: fixture)
-            XCTAssertEqual(try lifecycleActionLines(fixture).first, "control:uninstall")
+            try assertOrderedLifecycleActions(
+                [
+                    "coordinator:lock",
+                    "coordinator:persist-off",
+                    "control:uninstall",
+                    "coordinator:unregister-agent",
+                    "coordinator:prepare-session",
+                    "coordinator:remove-preserving-state",
+                    "coordinator:verify-preserved-state",
+                ],
+                in: fixture
+            )
             XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
         }
     }
 
     func testReEnrollmentPTYSuccessKeepsCodePrivateAndRedactsCapturedArtifacts() throws {
         try withActualVersionOnlyApp { fixture in
-            let code = "private-\(UUID().uuidString)"
+            let code = syntheticEnrollmentCode()
+            XCTAssertEqual(code.utf8.count, 43)
             let process = try startPTYCLI(
                 fixture,
                 arguments: ["re-enroll"],
@@ -461,6 +474,25 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 XCTAssertFalse(contents.contains(code))
                 XCTAssertTrue(contents.contains("[REDACTED]"))
             }
+            try assertOrderedLifecycleActions(
+                [
+                    "control:uninstall",
+                    "coordinator:lock",
+                    "coordinator:read-enrollment",
+                    "coordinator:prove-collection-off",
+                    "coordinator:unregister-agent",
+                    "coordinator:count-queue",
+                    "coordinator:confirm-re-enrollment",
+                    "coordinator:write-journal",
+                    "network:request",
+                    "coordinator:persist-enrollment",
+                    "coordinator:reset-collector",
+                    "coordinator:register-agent",
+                    "coordinator:verify-enrollment-off",
+                    "coordinator:remove-journal",
+                ],
+                in: fixture
+            )
             try assertLifecycleOutputIsContentFree(
                 result.stdout + result.stderr + process.terminalTranscript,
                 fixture: fixture,
@@ -469,10 +501,42 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         }
     }
 
+    func testReEnrollmentPTYRejectsMalformedCodeBeforeJournalOrRequest() throws {
+        try withActualVersionOnlyApp { fixture in
+            let malformedCode = "private-\(UUID().uuidString)"
+            XCTAssertEqual(malformedCode.utf8.count, 44)
+            let process = try startPTYCLI(
+                fixture,
+                arguments: ["re-enroll"],
+                lifecycleScenario: "re-enroll-completed-empty"
+            )
+            try process.waitForPrompt("Type RE-ENROLL to continue: ")
+            try process.sendLine("RE-ENROLL")
+            try process.waitForPrompt("Enrollment code: ")
+            try process.sendLine(malformedCode)
+
+            let result = try process.wait()
+            XCTAssertNotEqual(result.exitStatus, 0)
+            XCTAssertEqual(
+                result.stderr,
+                "The enrollment code was not accepted. Collection remains OFF.\n" +
+                "Next: create a fresh code and run raiders re-enroll again.\n"
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleJournal(fixture).path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
+            XCTAssertFalse(try lifecycleActionLines(fixture).contains("network:request"))
+            try assertLifecycleOutputIsContentFree(
+                result.stdout + result.stderr + process.terminalTranscript,
+                fixture: fixture,
+                additionalSecrets: [malformedCode]
+            )
+        }
+    }
+
     func testReEnrollmentPTYAcceptsOnlyDeliverDiscardOrCancelAndRequiresExactDiscard() throws {
         for disposition in ["deliver", "discard", "cancel"] {
             try withActualVersionOnlyApp { fixture in
-                let code = "private-\(UUID().uuidString)"
+                let code = syntheticEnrollmentCode()
                 let process = try startPTYCLI(
                     fixture,
                     arguments: ["re-enroll"],
@@ -593,6 +657,24 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             XCTAssertEqual(result.stderr, "")
             XCTAssertTrue(try lifecycleActionLines(fixture).contains("queue:discard"))
             XCTAssertTrue(try lifecycleActionLines(fixture).contains("remove:everything"))
+            try assertOrderedLifecycleActions(
+                [
+                    "coordinator:lock",
+                    "coordinator:persist-off",
+                    "control:uninstall",
+                    "coordinator:unregister-agent",
+                    "coordinator:prepare-session",
+                    "coordinator:queue-snapshot",
+                    "coordinator:confirm-discard",
+                    "coordinator:confirm-everything",
+                    "coordinator:load-enrollment",
+                    "network:request",
+                    "coordinator:revocation-proof",
+                    "queue:discard",
+                    "remove:everything",
+                ],
+                in: fixture
+            )
             try assertLifecycleOutputIsContentFree(
                 result.stdout + result.stderr + process.terminalTranscript,
                 fixture: fixture
@@ -667,6 +749,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
     }
 
     func testLifecycleFailuresRemainContentFreeAndNameSafeNextActions() throws {
+        let validCode = syntheticEnrollmentCode()
         let cases: [(scenario: String, arguments: [String], inputs: [(String, String)], expected: String)] = [
             (
                 "re-enroll-collection-on", ["re-enroll"], [],
@@ -674,12 +757,12 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             ),
             (
                 "re-enroll-invalid-enrollment-empty", ["re-enroll"],
-                [("Type RE-ENROLL to continue: ", "RE-ENROLL"), ("Enrollment code: ", "private-code")],
+                [("Type RE-ENROLL to continue: ", "RE-ENROLL"), ("Enrollment code: ", validCode)],
                 "The enrollment code was not accepted. Collection remains OFF.\nNext: create a fresh code and run raiders re-enroll again.\n"
             ),
             (
                 "re-enroll-recovery-required-empty", ["re-enroll"],
-                [("Type RE-ENROLL to continue: ", "RE-ENROLL"), ("Enrollment code: ", "private-code")],
+                [("Type RE-ENROLL to continue: ", "RE-ENROLL"), ("Enrollment code: ", validCode)],
                 "Runtime Raiders needs assisted recovery. Collection remains OFF.\nNext: run raiders re-enroll again; if it still fails, seek assisted recovery.\n"
             ),
             (
@@ -716,6 +799,36 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                     }
                 )
             }
+        }
+    }
+
+    func testLifecycleSetupFailuresMapToContentFreeErrorWithSafeNextAction() throws {
+        let expected =
+            "Runtime Raiders lifecycle operation could not be completed safely.\n" +
+            "Next: run raiders status, then retry the lifecycle command.\n"
+        try withActualVersionOnlyApp { fixture in
+            let reEnroll = try startPTYCLI(
+                fixture,
+                arguments: ["re-enroll"],
+                lifecycleScenario: "re-enroll-setup-failure"
+            )
+            let reEnrollResult = try reEnroll.wait()
+            XCTAssertNotEqual(reEnrollResult.exitStatus, 0)
+            XCTAssertEqual(reEnrollResult.stderr, expected)
+            try assertLifecycleOutputIsContentFree(
+                reEnrollResult.stdout + reEnrollResult.stderr + reEnroll.terminalTranscript,
+                fixture: fixture
+            )
+        }
+        try withActualVersionOnlyApp { fixture in
+            let removal = try runCLI(
+                fixture,
+                arguments: ["uninstall"],
+                lifecycleScenario: "uninstall-setup-failure"
+            )
+            XCTAssertNotEqual(removal.exitStatus, 0)
+            XCTAssertEqual(removal.stderr, expected)
+            try assertLifecycleOutputIsContentFree(removal.stdout + removal.stderr, fixture: fixture)
         }
     }
 
@@ -936,18 +1049,50 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             self.arguments = arguments
             var stdoutPipe = [Int32](repeating: -1, count: 2)
             var stderrPipe = [Int32](repeating: -1, count: 2)
-            guard Darwin.pipe(&stdoutPipe) == 0, Darwin.pipe(&stderrPipe) == 0 else {
+            guard Darwin.pipe(&stdoutPipe) == 0 else {
                 throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
-            var masterDescriptor: Int32 = -1
-            var argv = ([executable.path] + arguments).map { strdup($0) }
-            argv.append(nil)
-            var envp = environment.sorted { $0.key < $1.key }.map { strdup("\($0.key)=\($0.value)") }
-            envp.append(nil)
-            defer {
-                for pointer in argv.dropLast() { free(pointer) }
-                for pointer in envp.dropLast() { free(pointer) }
+            guard Darwin.pipe(&stderrPipe) == 0 else {
+                let saved = errno
+                Darwin.close(stdoutPipe[0])
+                Darwin.close(stdoutPipe[1])
+                throw POSIXError(POSIXErrorCode(rawValue: saved) ?? .EIO)
             }
+            var masterDescriptor: Int32 = -1
+            let argumentStrings = [executable.path] + arguments
+            let environmentStrings = environment.sorted { $0.key < $1.key }
+                .map { "\($0.key)=\($0.value)" }
+            let argv = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(
+                capacity: argumentStrings.count + 1
+            )
+            argv.initialize(repeating: nil, count: argumentStrings.count + 1)
+            let envp = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(
+                capacity: environmentStrings.count + 1
+            )
+            envp.initialize(repeating: nil, count: environmentStrings.count + 1)
+            for (index, value) in argumentStrings.enumerated() { argv[index] = strdup(value) }
+            for (index, value) in environmentStrings.enumerated() { envp[index] = strdup(value) }
+            defer {
+                for index in argumentStrings.indices { free(argv[index]) }
+                for index in environmentStrings.indices { free(envp[index]) }
+                argv.deinitialize(count: argumentStrings.count + 1)
+                envp.deinitialize(count: environmentStrings.count + 1)
+                argv.deallocate()
+                envp.deallocate()
+            }
+            guard argumentStrings.indices.allSatisfy({ argv[$0] != nil }),
+                  environmentStrings.indices.allSatisfy({ envp[$0] != nil }) else {
+                Darwin.close(stdoutPipe[0])
+                Darwin.close(stdoutPipe[1])
+                Darwin.close(stderrPipe[0])
+                Darwin.close(stderrPipe[1])
+                throw POSIXError(.ENOMEM)
+            }
+            let executablePath = argv[0]!
+            let stdoutReadDescriptor = stdoutPipe[0]
+            let stdoutWriteDescriptor = stdoutPipe[1]
+            let stderrReadDescriptor = stderrPipe[0]
+            let stderrWriteDescriptor = stderrPipe[1]
 
             let child = forkPseudoTerminal(&masterDescriptor, nil, nil, nil)
             guard child >= 0 else {
@@ -958,34 +1103,24 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 throw POSIXError(POSIXErrorCode(rawValue: saved) ?? .EIO)
             }
             if child == 0 {
-                Darwin.close(stdoutPipe[0])
-                Darwin.close(stderrPipe[0])
-                guard Darwin.dup2(stdoutPipe[1], STDOUT_FILENO) >= 0,
-                      Darwin.dup2(stderrPipe[1], STDERR_FILENO) >= 0 else {
+                Darwin.close(stdoutReadDescriptor)
+                Darwin.close(stderrReadDescriptor)
+                guard Darwin.dup2(stdoutWriteDescriptor, STDOUT_FILENO) >= 0,
+                      Darwin.dup2(stderrWriteDescriptor, STDERR_FILENO) >= 0 else {
                     Darwin._exit(126)
                 }
-                Darwin.close(stdoutPipe[1])
-                Darwin.close(stderrPipe[1])
-                executable.path.withCString { executablePath in
-                    argv.withUnsafeMutableBufferPointer { argumentBuffer in
-                        envp.withUnsafeMutableBufferPointer { environmentBuffer in
-                            _ = Darwin.execve(
-                                executablePath,
-                                argumentBuffer.baseAddress,
-                                environmentBuffer.baseAddress
-                            )
-                        }
-                    }
-                }
+                Darwin.close(stdoutWriteDescriptor)
+                Darwin.close(stderrWriteDescriptor)
+                _ = Darwin.execve(executablePath, argv, envp)
                 Darwin._exit(127)
             }
 
             processID = child
             master = masterDescriptor
-            stdoutRead = stdoutPipe[0]
-            stderrRead = stderrPipe[0]
-            Darwin.close(stdoutPipe[1])
-            Darwin.close(stderrPipe[1])
+            stdoutRead = stdoutReadDescriptor
+            stderrRead = stderrReadDescriptor
+            Darwin.close(stdoutWriteDescriptor)
+            Darwin.close(stderrWriteDescriptor)
             _ = Darwin.fcntl(master, F_SETFL, Darwin.fcntl(master, F_GETFL) | O_NONBLOCK)
         }
 
@@ -1322,6 +1457,31 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             decoding: try Data(contentsOf: lifecycleActions(fixture)),
             as: UTF8.self
         ).split(separator: "\n").map(String.init)
+    }
+
+    private func assertOrderedLifecycleActions(
+        _ expected: [String],
+        in fixture: Fixture,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let actual = try lifecycleActionLines(fixture)
+        var nextIndex = actual.startIndex
+        for action in expected {
+            guard let found = actual[nextIndex...].firstIndex(of: action) else {
+                XCTFail(
+                    "missing ordered lifecycle action \(action); actual=\(actual)",
+                    file: file,
+                    line: line
+                )
+                return
+            }
+            nextIndex = actual.index(after: found)
+        }
+    }
+
+    private func syntheticEnrollmentCode() -> String {
+        "private\(UUID().uuidString)"
     }
 
     private func removeLifecycleCaptures(_ fixture: Fixture) throws {

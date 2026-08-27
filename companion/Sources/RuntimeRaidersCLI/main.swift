@@ -58,7 +58,8 @@ private enum CLIError: Error, CustomStringConvertible {
         case .invalidStatusResponse: "Runtime Raiders status response was invalid."
         case .invalidControlResponse: "Runtime Raiders control response was invalid."
         case .lifecycleRequiresTerminal:
-            "Runtime Raiders lifecycle commands require an interactive terminal."
+            "Runtime Raiders lifecycle commands require an interactive terminal.\n" +
+            "Next: run the command again from an interactive terminal."
         case .invalidLifecycleConfirmation:
             "Lifecycle confirmation was not exact. No lifecycle change was authorized.\n" +
             "Next: review the prompt and run the command again."
@@ -586,12 +587,13 @@ private extension CompanionCommandRoute {
     }
 }
 
-private enum LifecycleVerificationScenario: String {
+private enum LifecycleVerificationScenario: String, Sendable {
     case reEnrollCompletedEmpty = "re-enroll-completed-empty"
     case reEnrollCompletedQueued = "re-enroll-completed-queued"
     case reEnrollCollectionOn = "re-enroll-collection-on"
     case reEnrollInvalidEnrollmentEmpty = "re-enroll-invalid-enrollment-empty"
     case reEnrollRecoveryRequiredEmpty = "re-enroll-recovery-required-empty"
+    case reEnrollSetupFailure = "re-enroll-setup-failure"
     case uninstallPreserveCompleted = "uninstall-preserve-completed"
     case uninstallEverythingCompletedEmpty = "uninstall-everything-completed-empty"
     case uninstallEverythingCompletedQueued = "uninstall-everything-completed-queued"
@@ -599,6 +601,7 @@ private enum LifecycleVerificationScenario: String {
         "uninstall-everything-revocation-required-empty"
     case uninstallEverythingAssistedRecoveryEmpty =
         "uninstall-everything-assisted-recovery-empty"
+    case uninstallSetupFailure = "uninstall-setup-failure"
 
     var queueCount: Int {
         switch self {
@@ -628,41 +631,47 @@ private func runLifecycleCommand(
     scenario: LifecycleVerificationScenario?
 ) throws {
     let terminal = LifecycleTerminalReader()
-    switch route {
-    case .reEnroll:
-        try requireLifecycleTerminal(terminal)
-        if let scenario {
-            try runVerificationReEnrollment(
-                scenario,
-                terminal: terminal,
-                paths: paths
-            )
-        } else {
-            try runLiveReEnrollment(
-                terminal: terminal,
-                paths: paths,
-                homeDirectory: homeDirectory
-            )
+    do {
+        switch route {
+        case .reEnroll:
+            try requireLifecycleTerminal(terminal)
+            if let scenario {
+                try runVerificationReEnrollment(
+                    scenario,
+                    terminal: terminal,
+                    paths: paths
+                )
+            } else {
+                try runLiveReEnrollment(
+                    terminal: terminal,
+                    paths: paths,
+                    homeDirectory: homeDirectory
+                )
+            }
+        case let .uninstall(mode):
+            if mode == .everything { try requireLifecycleTerminal(terminal) }
+            if let scenario {
+                try runVerificationRemoval(
+                    scenario,
+                    mode: mode,
+                    terminal: terminal,
+                    paths: paths
+                )
+            } else {
+                try runLiveRemoval(
+                    mode: mode,
+                    terminal: terminal,
+                    paths: paths,
+                    homeDirectory: homeDirectory
+                )
+            }
+        case .daemon, .managedAgent, .control, .status, .updateCheck, .help:
+            throw CLIError.usage
         }
-    case let .uninstall(mode):
-        if mode == .everything { try requireLifecycleTerminal(terminal) }
-        if let scenario {
-            try runVerificationRemoval(
-                scenario,
-                mode: mode,
-                terminal: terminal,
-                paths: paths
-            )
-        } else {
-            try runLiveRemoval(
-                mode: mode,
-                terminal: terminal,
-                paths: paths,
-                homeDirectory: homeDirectory
-            )
-        }
-    case .daemon, .managedAgent, .control, .status, .updateCheck, .help:
-        throw CLIError.usage
+    } catch let error as CLIError {
+        throw error
+    } catch {
+        throw CLIError.lifecycleFailed
     }
 }
 
@@ -690,6 +699,18 @@ private func privateLine(
         }
     } catch {
         throw CLIError.lifecycleInputUnavailable
+    }
+}
+
+private func isExactEnrollmentCode(_ value: String) -> Bool {
+    let bytes = Array(value.utf8)
+    guard bytes.count == 43 else { return false }
+    return bytes.allSatisfy { byte in
+        (0x41...0x5A).contains(byte) ||
+            (0x61...0x7A).contains(byte) ||
+            (0x30...0x39).contains(byte) ||
+            byte == 0x5F ||
+            byte == 0x2D
     }
 }
 
@@ -785,7 +806,7 @@ private func runLiveReEnrollment(
         try Uploader.liveTransport(request)
     }
     let promptErrors = LifecyclePromptErrorBox()
-    let operations = try ReEnrollmentOperations.live(
+    let baseOperations = try ReEnrollmentOperations.live(
         paths: lifecyclePaths,
         companionVersion: version,
         managedAgent: .live,
@@ -820,6 +841,11 @@ private func runLiveReEnrollment(
             Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
         }
     )
+    let operations = baseOperations.validatingCodeBeforeInitialJournal { code in
+        try promptErrors.record {
+            guard isExactEnrollmentCode(code) else { throw CLIError.invalidEnrollment }
+        }
+    }
     do {
         try printReEnrollmentOutcome(try ReEnrollmentCoordinator(operations: operations).run())
     } catch {
@@ -868,7 +894,6 @@ private func runLiveRemoval(
     paths: AgentPaths,
     homeDirectory: URL
 ) throws {
-    try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: true)
     let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
     let client = try EnrollmentClient(
         origin: URL(string: "https://raiders.redlattice.com")!
@@ -932,54 +957,218 @@ private func runLiveRemoval(
     }
 }
 
+private final class LifecycleVerificationReEnrollmentLock:
+    ReEnrollmentLock, @unchecked Sendable {}
+
+private final class LifecycleVerificationReEnrollmentState: @unchecked Sendable {
+    var installed: EnrollmentConfiguration
+    var queueCount: Int
+    var agentRegistered = true
+
+    init(installed: EnrollmentConfiguration, queueCount: Int) {
+        self.installed = installed
+        self.queueCount = queueCount
+    }
+}
+
+private func lifecycleVerificationEnrollment() throws -> EnrollmentConfiguration {
+    try EnrollmentConfiguration(
+        deviceID: "00000000-0000-4000-8000-000000000001",
+        deviceToken: String(repeating: "A", count: 43),
+        dedupeSecret: Data(repeating: 0xBB, count: 32),
+        serverURL: URL(string: "https://raiders.redlattice.com")!,
+        cutoverAtMS: 1,
+        enabledSurfaces: [.codexCLI]
+    )
+}
+
+private func captureLifecycleVerificationRequest(
+    _ request: URLRequest,
+    paths: AgentPaths
+) throws {
+    guard let path = request.url?.path,
+          ["/api/raiders/re-enroll", "/api/raiders/devices/revoke-current"].contains(path),
+          request.value(forHTTPHeaderField: "Authorization") != nil else {
+        throw CLIError.lifecycleFailed
+    }
+    let capture =
+        #"{"path":"\#(path)","authorization":"[REDACTED]","body":"[REDACTED]"}"#
+    try writeLifecycleVerificationCapture(
+        capture,
+        named: "lifecycle-request-capture.json",
+        paths: paths
+    )
+    try appendLifecycleVerificationAction("network:request", paths: paths)
+}
+
+private func verificationReplacementResponse(for request: URLRequest) throws -> Data {
+    guard let body = request.httpBody,
+          let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+          let deviceID = object["replacement_device_id"] as? String else {
+        throw CLIError.lifecycleFailed
+    }
+    return try JSONSerialization.data(withJSONObject: [
+        "device_id": deviceID,
+        "dedupe_secret": String(repeating: "cc", count: 32),
+        "server_url": "https://raiders.redlattice.com",
+        "cutover_at": 2,
+        "enabled_surfaces": ["codex_cli"],
+    ], options: [.sortedKeys])
+}
+
 private func runVerificationReEnrollment(
     _ scenario: LifecycleVerificationScenario,
     terminal: LifecycleTerminalReader,
     paths: AgentPaths
 ) throws {
     guard scenario.rawValue.hasPrefix("re-enroll-") else { throw CLIError.usage }
-    if scenario == .reEnrollCollectionOn { throw CLIError.collectionMustBeOff }
+    if scenario == .reEnrollSetupFailure { throw POSIXError(.EIO) }
+    let oldEnrollment = try lifecycleVerificationEnrollment()
+    let state = LifecycleVerificationReEnrollmentState(
+        installed: oldEnrollment,
+        queueCount: scenario.queueCount
+    )
+    let promptErrors = LifecyclePromptErrorBox()
+    let client = try EnrollmentClient(origin: oldEnrollment.serverURL) { request in
+        try captureLifecycleVerificationRequest(request, paths: paths)
+        switch scenario {
+        case .reEnrollCompletedEmpty, .reEnrollCompletedQueued:
+            return UploadHTTPResponse(
+                statusCode: 200,
+                body: try verificationReplacementResponse(for: request)
+            )
+        case .reEnrollInvalidEnrollmentEmpty:
+            return UploadHTTPResponse(
+                statusCode: 401,
+                body: Data(#"{"reason":"invalid_enrollment"}"#.utf8)
+            )
+        case .reEnrollRecoveryRequiredEmpty:
+            throw POSIXError(.EIO)
+        default:
+            throw CLIError.usage
+        }
+    }
     try appendLifecycleVerificationAction("control:uninstall", paths: paths)
-    printReEnrollmentSummary(queueCount: scenario.queueCount, version: "1.2.3")
-    try requireExactPrivateLine(
-        "RE-ENROLL",
-        terminal: terminal,
-        prompt: "Type RE-ENROLL to continue: ",
-        maximumBytes: 64
+    let baseOperations = ReEnrollmentOperations(
+        companionVersion: "1.2.3",
+        acquireLock: {
+            try appendLifecycleVerificationAction("coordinator:lock", paths: paths)
+            return LifecycleVerificationReEnrollmentLock()
+        },
+        loadJournal: { nil },
+        readEnrollment: {
+            try appendLifecycleVerificationAction("coordinator:read-enrollment", paths: paths)
+            return oldEnrollment
+        },
+        proveCollectionOff: {
+            try appendLifecycleVerificationAction("coordinator:prove-collection-off", paths: paths)
+            return scenario != .reEnrollCollectionOn
+        },
+        unregisterAgent: {
+            state.agentRegistered = false
+            try appendLifecycleVerificationAction("coordinator:unregister-agent", paths: paths)
+        },
+        verifyAgentUnregistered: {
+            try appendLifecycleVerificationAction(
+                "coordinator:verify-agent-unregistered",
+                paths: paths
+            )
+            return !state.agentRegistered
+        },
+        countQueue: {
+            try appendLifecycleVerificationAction("coordinator:count-queue", paths: paths)
+            return state.queueCount
+        },
+        summarize: { printReEnrollmentSummary(queueCount: $0, version: "1.2.3") },
+        confirmReEnrollment: {
+            try appendLifecycleVerificationAction("coordinator:confirm-re-enrollment", paths: paths)
+            return try promptErrors.record {
+                try requireExactPrivateLine(
+                    "RE-ENROLL",
+                    terminal: terminal,
+                    prompt: "Type RE-ENROLL to continue: ",
+                    maximumBytes: 64
+                )
+                return true
+            }
+        },
+        resolveQueue: { count in
+            let disposition = try promptErrors.record {
+                try queueDisposition(count: count, terminal: terminal)
+            }
+            if count > 0 {
+                try appendLifecycleVerificationAction("queue:\(disposition)", paths: paths)
+            }
+            return disposition
+        },
+        deliverQueue: { _ in state.queueCount = 0 },
+        discardQueue: { state.queueCount = 0 },
+        generateMaterial: {
+            ReplacementMaterial(
+                operationID: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
+                deviceID: UUID(uuidString: "00000000-0000-4000-8000-000000000003")!,
+                deviceToken: String(repeating: "D", count: 43)
+            )
+        },
+        writeJournal: { journal in
+            try writeLifecycleVerificationCapture(
+                #"{"phase":"\#(journal.phase.rawValue)","replacement_device_token":"[REDACTED]"}"#,
+                named: "lifecycle-journal-capture.json",
+                paths: paths
+            )
+            try appendLifecycleVerificationAction("coordinator:write-journal", paths: paths)
+        },
+        requestCode: {
+            try promptErrors.record {
+                try privateLine(
+                    terminal: terminal,
+                    prompt: "Enrollment code: ",
+                    maximumBytes: 64
+                )
+            }
+        },
+        replace: { old, code, material, version in
+            try client.replace(
+                oldToken: old.deviceToken,
+                code: code,
+                material: material,
+                companionVersion: version
+            )
+        },
+        recover: { _ in throw POSIXError(.EIO) },
+        persistEnrollment: {
+            state.installed = $0
+            try appendLifecycleVerificationAction("coordinator:persist-enrollment", paths: paths)
+        },
+        resetCollector: { _ in
+            try appendLifecycleVerificationAction("coordinator:reset-collector", paths: paths)
+        },
+        registerAgent: {
+            state.agentRegistered = true
+            try appendLifecycleVerificationAction("coordinator:register-agent", paths: paths)
+        },
+        verifyEnrollmentAndOff: { expected, requireEmptyQueue in
+            try appendLifecycleVerificationAction("coordinator:verify-enrollment-off", paths: paths)
+            return state.installed == expected &&
+                state.agentRegistered &&
+                (!requireEmptyQueue || state.queueCount == 0)
+        },
+        delayMilliseconds: { _ in },
+        removeJournal: {
+            try appendLifecycleVerificationAction("coordinator:remove-journal", paths: paths)
+        }
     )
-    let disposition = try queueDisposition(count: scenario.queueCount, terminal: terminal)
-    if scenario.queueCount > 0 {
-        try appendLifecycleVerificationAction("queue:\(disposition)", paths: paths)
+    let operations = baseOperations.validatingCodeBeforeInitialJournal { code in
+        try promptErrors.record {
+            guard isExactEnrollmentCode(code) else { throw CLIError.invalidEnrollment }
+        }
     }
-    if disposition == .cancel, scenario.queueCount > 0 {
-        try printReEnrollmentOutcome(.cancelled)
-        return
-    }
-    _ = try privateLine(
-        terminal: terminal,
-        prompt: "Enrollment code: ",
-        maximumBytes: 64
-    )
-    try writeLifecycleVerificationCapture(
-        #"{"phase":"replacementPrepared","replacement_device_token":"[REDACTED]"}"#,
-        named: "lifecycle-journal-capture.json",
-        paths: paths
-    )
-    try writeLifecycleVerificationCapture(
-        #"{"path":"/api/raiders/re-enroll","authorization":"[REDACTED]","code":"[REDACTED]"}"#,
-        named: "lifecycle-request-capture.json",
-        paths: paths
-    )
-    try appendLifecycleVerificationAction("network:request", paths: paths)
-    switch scenario {
-    case .reEnrollCompletedEmpty, .reEnrollCompletedQueued:
-        try printReEnrollmentOutcome(.completed)
-    case .reEnrollInvalidEnrollmentEmpty:
-        try printReEnrollmentOutcome(.invalidEnrollment)
-    case .reEnrollRecoveryRequiredEmpty:
-        try printReEnrollmentOutcome(.recoveryRequired)
-    default:
-        throw CLIError.usage
+    do {
+        try printReEnrollmentOutcome(try ReEnrollmentCoordinator(operations: operations).run())
+    } catch {
+        if let promptError = promptErrors.error { throw promptError }
+        if let cliError = error as? CLIError { throw cliError }
+        throw CLIError.lifecycleFailed
     }
 }
 
@@ -990,45 +1179,60 @@ private func runVerificationRemoval(
     paths: AgentPaths
 ) throws {
     guard scenario.rawValue.hasPrefix("uninstall-") else { throw CLIError.usage }
-    try appendLifecycleVerificationAction("control:uninstall", paths: paths)
-    if mode == .preserveState {
-        guard scenario == .uninstallPreserveCompleted else { throw CLIError.usage }
-        try printRemovalOutcome(.removedPreservingState)
-        return
-    }
-    guard scenario != .uninstallPreserveCompleted else { throw CLIError.usage }
-    printCompleteRemovalSummary(queueCount: scenario.queueCount)
-    if scenario.queueCount > 0 {
-        try requireExactPrivateLine(
-            "DISCARD",
-            terminal: terminal,
-            prompt: "Type DISCARD to discard \(scenario.queueCount) queued events: ",
-            maximumBytes: 64
-        )
-        try appendLifecycleVerificationAction("queue:discard", paths: paths)
-    }
-    try requireExactPrivateLine(
-        "UNINSTALL EVERYTHING",
-        terminal: terminal,
-        prompt: "Type UNINSTALL EVERYTHING to continue: ",
-        maximumBytes: 64
-    )
-    try writeLifecycleVerificationCapture(
-        #"{"path":"/api/raiders/devices/revoke-current","authorization":"[REDACTED]"}"#,
-        named: "lifecycle-request-capture.json",
-        paths: paths
-    )
-    try appendLifecycleVerificationAction("network:request", paths: paths)
-    switch scenario {
-    case .uninstallEverythingCompletedEmpty, .uninstallEverythingCompletedQueued:
-        try appendLifecycleVerificationAction("remove:everything", paths: paths)
-        try printRemovalOutcome(.removedEverything)
-    case .uninstallEverythingRevocationRequiredEmpty:
-        try printRemovalOutcome(.revocationRequired)
-    case .uninstallEverythingAssistedRecoveryEmpty:
-        try printRemovalOutcome(.assistedRecoveryRequired)
-    default:
+    if scenario == .uninstallSetupFailure { throw POSIXError(.EIO) }
+    guard (mode == .preserveState) == (scenario == .uninstallPreserveCompleted) else {
         throw CLIError.usage
+    }
+    let enrollment = try lifecycleVerificationEnrollment()
+    let promptErrors = LifecyclePromptErrorBox()
+    let client = try EnrollmentClient(origin: enrollment.serverURL) { request in
+        try captureLifecycleVerificationRequest(request, paths: paths)
+        if scenario == .uninstallEverythingRevocationRequiredEmpty {
+            return UploadHTTPResponse(
+                statusCode: 401,
+                body: Data(#"{"reason":"unauthorized"}"#.utf8)
+            )
+        }
+        return UploadHTTPResponse(statusCode: 200, body: Data(#"{"revoked":true}"#.utf8))
+    }
+    let operations = RemovalOperations.lifecycleVerification(
+        queueCount: scenario.queueCount,
+        enrollment: enrollment,
+        enrollmentLoadFails: scenario == .uninstallEverythingAssistedRecoveryEmpty,
+        record: { try appendLifecycleVerificationAction($0, paths: paths) },
+        summarize: { printCompleteRemovalSummary(queueCount: $0) },
+        confirmDiscard: { count in
+            try appendLifecycleVerificationAction("coordinator:confirm-discard", paths: paths)
+            return try promptErrors.record {
+                try requireExactPrivateLine(
+                    "DISCARD",
+                    terminal: terminal,
+                    prompt: "Type DISCARD to discard \(count) queued events: ",
+                    maximumBytes: 64
+                )
+                return true
+            }
+        },
+        confirmEverything: {
+            try appendLifecycleVerificationAction("coordinator:confirm-everything", paths: paths)
+            return try promptErrors.record {
+                try requireExactPrivateLine(
+                    "UNINSTALL EVERYTHING",
+                    terminal: terminal,
+                    prompt: "Type UNINSTALL EVERYTHING to continue: ",
+                    maximumBytes: 64
+                )
+                return true
+            }
+        },
+        revoke: { try client.revoke(token: $0.deviceToken) }
+    )
+    do {
+        try printRemovalOutcome(try RemovalCoordinator(operations: operations).run(mode: mode))
+    } catch {
+        if let promptError = promptErrors.error { throw promptError }
+        if let cliError = error as? CLIError { throw cliError }
+        throw CLIError.lifecycleFailed
     }
 }
 

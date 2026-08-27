@@ -337,6 +337,54 @@ final class ControlProtocolTests: XCTestCase {
         }
     }
 
+    func testLifecycleTerminalReaderDrainsOversizedPrivateRecordBeforeReturning() throws {
+        try withPseudoTerminal { master, path in
+            let heldSlave = Darwin.open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW)
+            guard heldSlave >= 0 else { throw POSIXError(.EIO) }
+            defer { Darwin.close(heldSlave) }
+            let oversized = String(repeating: "s", count: 96)
+            let first = startTerminalRead(path: path, maximumBytes: 32)
+            try waitForPrompt("Private input: ", from: master)
+            try writeAll(Data((oversized + "\nNEXT\n").utf8), to: master)
+
+            XCTAssertThrowsError(try first.value()) { error in
+                XCTAssertEqual(error as? LifecycleTerminalError, .invalidInput)
+            }
+            XCTAssertTrue(terminalEchoEnabled(at: path))
+
+            let second = startTerminalRead(path: path, maximumBytes: 32)
+            try waitForPrompt("Private input: ", from: master)
+            XCTAssertEqual(try second.value(), "NEXT")
+            XCTAssertTrue(terminalEchoEnabled(at: path))
+        }
+    }
+
+    func testLifecycleTerminalReaderProtectsSignalsAcrossBothEchoTransitionWindows() throws {
+        try withPseudoTerminal { _, path in
+            let protectionInstalled = DispatchSemaphore(value: 0)
+            let echoRestored = DispatchSemaphore(value: 0)
+            let reader = LifecycleTerminalReader(
+                testPath: path,
+                transitionHook: { transition in
+                    switch transition {
+                    case .signalProtectionInstalled: protectionInstalled.signal()
+                    case .echoRestored: echoRestored.signal()
+                    }
+                    _ = Darwin.raise(SIGINT)
+                }
+            )
+
+            XCTAssertThrowsError(
+                try reader.readLine(prompt: "Private input: ", maximumBytes: 64)
+            ) { error in
+                XCTAssertEqual(error as? LifecycleTerminalError, .interrupted)
+            }
+            XCTAssertEqual(protectionInstalled.wait(timeout: .now()), .success)
+            XCTAssertEqual(echoRestored.wait(timeout: .now()), .success)
+            XCTAssertTrue(terminalEchoEnabled(at: path))
+        }
+    }
+
     func testLifecycleTerminalReaderRejectsEmptyInvalidUTF8AndNonCharacterDevice() throws {
         for input in [Data([0x0A]), Data([0xFF, 0x0A])] {
             try withPseudoTerminal { master, path in
