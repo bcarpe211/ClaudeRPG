@@ -249,6 +249,7 @@ validate_enrollment() {
   [ -f "$ENROLLMENT" ] && [ ! -L "$ENROLLMENT" ] &&
     [ "$(/usr/bin/stat -f %u "$ENROLLMENT")" = "$OWNER" ] &&
     [ "$(/usr/bin/stat -f %Lp "$ENROLLMENT")" = 600 ] &&
+    [ "$(/usr/bin/stat -f %l "$ENROLLMENT")" = 1 ] &&
     validate_enrollment_contents "$ENROLLMENT"
 }
 
@@ -292,6 +293,7 @@ validate_recovery_journal() {
   [ -f "$RECOVERY_JOURNAL" ] && [ ! -L "$RECOVERY_JOURNAL" ] &&
     [ "$(/usr/bin/stat -f %u "$RECOVERY_JOURNAL")" = "$OWNER" ] &&
     [ "$(/usr/bin/stat -f %Lp "$RECOVERY_JOURNAL")" = 600 ] &&
+    [ "$(/usr/bin/stat -f %l "$RECOVERY_JOURNAL")" = 1 ] &&
     validate_recovery_journal_contents "$RECOVERY_JOURNAL"
 }
 
@@ -883,40 +885,54 @@ if [ -n "$STAGED_COMMAND" ]; then
   /bin/mv "$STAGED_COMMAND" "$COMMAND"
 fi
 
-new_managed_register_attempted=1
-if managed_result="$("$AGENT" __runtime-raiders-managed-agent register)"; then
-  [ "$managed_result" = enabled ] || {
+installed_status_file="$WORK/installed-status.json"
+if [ "$has_recovery_journal" -eq 1 ]; then
+  if ! wait_for_installation_status "$COMMAND" "$installed_status_file" \
+    "$COMPANION_VERSION" false; then
+    print_installation_status_diagnostic "$installed_status_file" "$COMPANION_VERSION" >&2
+    echo 'Runtime Raiders could not prove its stopped recovery companion was healthy with collection disabled.' >&2
+    exit 1
+  fi
+else
+  new_managed_register_attempted=1
+  if managed_result="$("$AGENT" __runtime-raiders-managed-agent register)"; then
+    [ "$managed_result" = enabled ] || {
+      echo 'Runtime Raiders could not register its managed background agent.' >&2
+      exit 1
+    }
+  else
     echo 'Runtime Raiders could not register its managed background agent.' >&2
     exit 1
+  fi
+  installed_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || {
+    echo 'Runtime Raiders could not verify its managed background agent.' >&2
+    exit 1
   }
-else
-  echo 'Runtime Raiders could not register its managed background agent.' >&2
-  exit 1
-fi
-installed_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || {
-  echo 'Runtime Raiders could not verify its managed background agent.' >&2
-  exit 1
-}
-[ "$installed_managed_status" = enabled ] || {
-  echo 'Runtime Raiders could not verify its managed background agent.' >&2
-  exit 1
-}
-installed_status_file="$WORK/installed-status.json"
-if ! wait_for_installation_status "$COMMAND" "$installed_status_file" \
-  "$COMPANION_VERSION" true; then
-  print_installation_status_diagnostic "$installed_status_file" "$COMPANION_VERSION" >&2
-  echo 'Runtime Raiders could not prove its registered agent was healthy with collection disabled.' >&2
-  exit 1
+  [ "$installed_managed_status" = enabled ] || {
+    echo 'Runtime Raiders could not verify its managed background agent.' >&2
+    exit 1
+  }
+  if ! wait_for_installation_status "$COMMAND" "$installed_status_file" \
+    "$COMPANION_VERSION" true; then
+    print_installation_status_diagnostic "$installed_status_file" "$COMPANION_VERSION" >&2
+    echo 'Runtime Raiders could not prove its registered agent was healthy with collection disabled.' >&2
+    exit 1
+  fi
 fi
 
 transaction_committed=1
 trap - EXIT HUP INT TERM
 /bin/rm -rf "$WORK"
-printf '%s\n' \
-  'Runtime Raiders is installed.' \
-  'Collection is OFF.' \
-  'Run `raiders status` to check the setup.' \
-  'Run `raiders on` when you want to join the game.'
 if [ "$has_recovery_journal" -eq 1 ]; then
-  printf '%s\n' 'Run `raiders re-enroll` to resume recovery.'
+  printf '%s\n' \
+    'Runtime Raiders is installed.' \
+    'Collection is OFF.' \
+    'Run `raiders status` to check the setup.' \
+    'Run `raiders re-enroll` to resume recovery.'
+else
+  printf '%s\n' \
+    'Runtime Raiders is installed.' \
+    'Collection is OFF.' \
+    'Run `raiders status` to check the setup.' \
+    'Run `raiders on` when you want to join the game.'
 fi
