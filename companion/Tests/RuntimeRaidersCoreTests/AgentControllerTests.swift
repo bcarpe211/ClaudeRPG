@@ -2018,6 +2018,32 @@ final class AgentControllerTests: XCTestCase {
         )
     }
 
+    func testEnrollmentLoadRejectsOwnerOnlyHardLinkedCredentialFile() throws {
+        let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("rr-enrollment-hard-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lifecycle = try CompanionLifecyclePaths(homeDirectory: root)
+        try FileManager.default.createDirectory(
+            at: lifecycle.agent.stateDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let configuration = try makeEnrollmentConfiguration()
+        try configuration.persist(to: lifecycle.enrollment)
+        let outside = root.appendingPathComponent("retained-enrollment-copy")
+        try FileManager.default.linkItem(at: lifecycle.enrollment, to: outside)
+
+        XCTAssertEqual(Darwin.chmod(lifecycle.enrollment.path, 0o600), 0)
+        XCTAssertThrowsError(
+            try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment)
+        )
+        XCTAssertThrowsError(try EnrollmentConfiguration.load(from: lifecycle.enrollment))
+        XCTAssertEqual(
+            try Data(contentsOf: outside),
+            try Data(contentsOf: lifecycle.enrollment)
+        )
+    }
+
     func testEnrollmentInitializerRejectsNonASCIIControlAndWrongByteLengthTokens() {
         let invalidTokens = [
             String(repeating: "A", count: 42),

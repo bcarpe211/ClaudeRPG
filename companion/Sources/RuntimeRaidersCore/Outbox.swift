@@ -143,6 +143,16 @@ public final class Outbox: @unchecked Sendable {
         try lock.withLock { try unlockedRecords().count }
     }
 
+    public func validatedQueuedCount() throws -> Int {
+        try lock.withLock {
+            try ensureDirectoryIdentity()
+            let validated = try validatedOwnedRecords()
+            defer { validated.forEach { Darwin.close($0.descriptor) } }
+            try revalidateAll(validated)
+            return validated.count
+        }
+    }
+
     public func totalBytes() throws -> Int {
         try lock.withLock { try unlockedRecords().reduce(0) { $0 + $1.encodedEvent.count } }
     }

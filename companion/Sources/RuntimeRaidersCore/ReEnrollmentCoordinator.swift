@@ -182,7 +182,7 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
                     return false
                 }
             },
-            countQueue: { try outbox.queuedCount() },
+            countQueue: { try outbox.validatedQueuedCount() },
             summarize: summarize,
             confirmReEnrollment: confirmReEnrollment,
             resolveQueue: resolveQueue,
@@ -196,13 +196,13 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
                     transport: uploadTransport
                 )
                 _ = try delivery.drain()
-                guard try outbox.queuedCount() == 0 else {
+                guard try outbox.validatedQueuedCount() == 0 else {
                     throw OneShotOutboxDeliveryError.deliveryFailed
                 }
             },
             discardQueue: {
                 _ = try outbox.discardAllValidated()
-                guard try outbox.queuedCount() == 0 else {
+                guard try outbox.validatedQueuedCount() == 0 else {
                     throw OutboxError.invalidRecord
                 }
             },
@@ -235,7 +235,7 @@ public struct ReEnrollmentOperations: @unchecked Sendable {
                     return false
                 }
                 if requireEmptyQueue {
-                    return try outbox.queuedCount() == 0
+                    return try outbox.validatedQueuedCount() == 0
                 }
                 return true
             },

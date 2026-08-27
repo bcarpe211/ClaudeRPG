@@ -443,6 +443,38 @@ final class ControlProtocolTests: XCTestCase {
         }
     }
 
+    func testLifecycleTerminalReaderCancelsValidInputWhenSignalArrivesAfterEchoRestore() throws {
+        for protectedSignal in [SIGINT, SIGTERM] {
+            try withPseudoTerminal { master, path in
+                let writer = TerminalReadResult()
+                let reader = LifecycleTerminalReader(
+                    testPath: path,
+                    transitionHook: { transition in
+                        guard transition == .echoRestored else { return }
+                        _ = Darwin.raise(protectedSignal)
+                    }
+                )
+                DispatchQueue.global().async {
+                    writer.start()
+                    writer.finish(Result {
+                        try waitForPrompt("Private input: ", from: master)
+                        try writeAll(Data("CONFIRM\n".utf8), to: master)
+                        return "written"
+                    })
+                }
+                XCTAssertTrue(writer.started.wait(timeout: .now() + 1) == .success)
+
+                XCTAssertThrowsError(
+                    try reader.readLine(prompt: "Private input: ", maximumBytes: 64)
+                ) { error in
+                    XCTAssertEqual(error as? LifecycleTerminalError, .interrupted)
+                }
+                XCTAssertEqual(try writer.value(), "written")
+                XCTAssertTrue(terminalEchoEnabled(at: path))
+            }
+        }
+    }
+
     func testLifecycleTerminalReaderRejectsEmptyInvalidUTF8AndNonCharacterDevice() throws {
         for input in [Data([0x0A]), Data([0xFF, 0x0A])] {
             try withPseudoTerminal { master, path in

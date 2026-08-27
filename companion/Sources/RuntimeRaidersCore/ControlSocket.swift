@@ -204,53 +204,59 @@ public struct LifecycleTerminalReader: @unchecked Sendable {
         guard setAttributes(descriptor, TCSANOW, &privateInput) == 0 else {
             throw LifecycleTerminalError.unavailable
         }
-        defer {
-            _ = setAttributes(descriptor, TCSANOW, &original)
-            transitionHook(.echoRestored)
-        }
-        let originalFlags = Darwin.fcntl(descriptor, F_GETFL)
-        guard originalFlags >= 0,
-              Darwin.fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
-            throw LifecycleTerminalError.unavailable
-        }
-        defer { _ = Darwin.fcntl(descriptor, F_SETFL, originalFlags) }
-        try write(prompt, to: descriptor)
-
-        var bytes = [UInt8]()
-        var oversized = false
-        while true {
-            if signalTrap.consumeSignal() { throw LifecycleTerminalError.interrupted }
-            var byte: UInt8 = 0
-            let count = withUnsafeMutablePointer(to: &byte) {
-                Darwin.read(descriptor, $0, 1)
-            }
-            if count == 0 {
-                throw oversized ? LifecycleTerminalError.invalidInput : .endOfFile
-            }
-            if count < 0 {
-                if errno == EINTR { continue }
-                if errno == EAGAIN || errno == EWOULDBLOCK {
-                    Darwin.usleep(10_000)
-                    continue
-                }
+        let readResult = Result<String, Error> {
+            let originalFlags = Darwin.fcntl(descriptor, F_GETFL)
+            guard originalFlags >= 0,
+                  Darwin.fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
                 throw LifecycleTerminalError.unavailable
             }
-            if byte == 0x0A || byte == 0x0D {
-                try write("\n", to: descriptor)
-                if oversized { throw LifecycleTerminalError.invalidInput }
-                break
+            defer { _ = Darwin.fcntl(descriptor, F_SETFL, originalFlags) }
+            try write(prompt, to: descriptor)
+
+            var bytes = [UInt8]()
+            var oversized = false
+            while true {
+                if signalTrap.consumeSignal() { throw LifecycleTerminalError.interrupted }
+                var byte: UInt8 = 0
+                let count = withUnsafeMutablePointer(to: &byte) {
+                    Darwin.read(descriptor, $0, 1)
+                }
+                if count == 0 {
+                    throw oversized ? LifecycleTerminalError.invalidInput : .endOfFile
+                }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    if errno == EAGAIN || errno == EWOULDBLOCK {
+                        Darwin.usleep(10_000)
+                        continue
+                    }
+                    throw LifecycleTerminalError.unavailable
+                }
+                if byte == 0x0A || byte == 0x0D {
+                    try write("\n", to: descriptor)
+                    if oversized { throw LifecycleTerminalError.invalidInput }
+                    break
+                }
+                if oversized { continue }
+                if bytes.count == maximumBytes {
+                    oversized = true
+                    continue
+                }
+                bytes.append(byte)
             }
-            if oversized { continue }
-            if bytes.count == maximumBytes {
-                oversized = true
-                continue
+            guard !bytes.isEmpty, let line = String(bytes: bytes, encoding: .utf8) else {
+                throw LifecycleTerminalError.invalidInput
             }
-            bytes.append(byte)
+            return line
         }
-        guard !bytes.isEmpty, let line = String(bytes: bytes, encoding: .utf8) else {
-            throw LifecycleTerminalError.invalidInput
-        }
-        return line
+
+        let echoRestored = setAttributes(descriptor, TCSANOW, &original) == 0
+        transitionHook(.echoRestored)
+        let protectedSignalArrived = signalTrap.consumeSignal()
+        signalTrap.restore()
+        if protectedSignalArrived { throw LifecycleTerminalError.interrupted }
+        guard echoRestored else { throw LifecycleTerminalError.unavailable }
+        return try readResult.get()
     }
 
     private func openValidatedTerminal() throws -> Int32 {

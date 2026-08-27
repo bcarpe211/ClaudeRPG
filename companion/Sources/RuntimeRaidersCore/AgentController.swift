@@ -343,6 +343,7 @@ public struct EnrollmentConfiguration: Equatable, Sendable,
               metadata.st_mode & S_IFMT == S_IFREG,
               metadata.st_uid == Darwin.geteuid(),
               metadata.st_mode & 0o7777 == 0o600,
+              metadata.st_nlink == 1,
               metadata.st_size > 0,
               metadata.st_size <= 65_536 else {
             throw EnrollmentConfigurationError.invalidFile

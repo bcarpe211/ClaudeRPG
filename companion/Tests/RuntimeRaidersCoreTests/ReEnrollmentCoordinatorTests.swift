@@ -219,6 +219,80 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         XCTAssertTrue(try operations.verifyEnrollmentAndOff(expected, true))
     }
 
+    func testLiveOperationsFailClosedOnEveryInvalidCanonicalQueueObservation() throws {
+        let cases: [(String, (URL, URL) throws -> Void)] = [
+            ("malformed", { directory, _ in
+                let record = directory.appendingPathComponent(String(repeating: "a", count: 64) + ".json")
+                try Data("malformed".utf8).write(to: record)
+                XCTAssertEqual(Darwin.chmod(record.path, 0o600), 0)
+            }),
+            ("nominally-empty", { directory, _ in
+                let record = directory.appendingPathComponent(String(repeating: "b", count: 64) + ".json")
+                try Data().write(to: record)
+                XCTAssertEqual(Darwin.chmod(record.path, 0o600), 0)
+            }),
+            ("symlink", { directory, root in
+                let outside = root.appendingPathComponent("outside-record")
+                try Data("outside".utf8).write(to: outside)
+                try FileManager.default.createSymbolicLink(
+                    at: directory.appendingPathComponent(String(repeating: "c", count: 64) + ".json"),
+                    withDestinationURL: outside
+                )
+            }),
+            ("hard-link", { directory, root in
+                let event = makeLiveQueueEvent(idempotencyKey: String(repeating: "d", count: 64))
+                let record = directory.appendingPathComponent(event.idempotencyKey + ".json")
+                try PrivacyEncoder().encode(event).write(to: record)
+                XCTAssertEqual(Darwin.chmod(record.path, 0o600), 0)
+                try FileManager.default.linkItem(
+                    at: record,
+                    to: root.appendingPathComponent("outside-hard-link")
+                )
+            }),
+            ("replaced", { directory, root in
+                let event = makeLiveQueueEvent(idempotencyKey: String(repeating: "e", count: 64))
+                let record = directory.appendingPathComponent(event.idempotencyKey + ".json")
+                try PrivacyEncoder().encode(event).write(to: record)
+                XCTAssertEqual(Darwin.chmod(record.path, 0o600), 0)
+                let replacement = root.appendingPathComponent("replacement-record")
+                try Data().write(to: replacement)
+                XCTAssertEqual(Darwin.chmod(replacement.path, 0o600), 0)
+                _ = Darwin.rename(replacement.path, record.path)
+            }),
+        ]
+
+        for (name, corrupt) in cases {
+            let fixture = try makeLiveQueueProofFixture(name: name)
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            try corrupt(fixture.paths.agent.outboxDirectory, fixture.root)
+
+            XCTAssertThrowsError(
+                try ReEnrollmentCoordinator(operations: fixture.operations).run(),
+                "initial queue proof accepted \(name)"
+            )
+            XCTAssertNil(try fixture.journalStore.load(), "journaled queue as empty for \(name)")
+            XCTAssertEqual(fixture.networkRequests.value, 0, "requested replacement for \(name)")
+            try fixture.operations.registerAgent()
+            XCTAssertThrowsError(
+                try fixture.operations.verifyEnrollmentAndOff(fixture.enrollment, true),
+                "final empty proof accepted \(name)"
+            )
+        }
+    }
+
+    func testLiveReEnrollmentPreflightRejectsHardLinkedEnrollmentBeforeNetworkMutation() throws {
+        let fixture = try makeLiveQueueProofFixture(name: "hard-linked-enrollment")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try FileManager.default.linkItem(
+            at: fixture.paths.enrollment,
+            to: fixture.root.appendingPathComponent("outside-enrollment")
+        )
+
+        XCTAssertThrowsError(try ReEnrollmentCoordinator(operations: fixture.operations).run())
+        XCTAssertEqual(fixture.networkRequests.value, 0)
+        XCTAssertNil(try fixture.journalStore.load())
+    }
+
     func testEmptyQueueCompletesInExactOrderAndRemainsOff() throws {
         let harness = Harness(queueCount: 0)
 
@@ -1006,6 +1080,120 @@ final class ReEnrollmentCoordinatorTests: XCTestCase {
         "register", "journal(agentRegistered)", "verify-new-config-and-off",
         "delete-journal",
     ]
+}
+
+private struct LiveQueueProofFixture {
+    let root: URL
+    let paths: CompanionLifecyclePaths
+    let enrollment: EnrollmentConfiguration
+    let journalStore: RecoveryJournalStore
+    let operations: ReEnrollmentOperations
+    let networkRequests: LockedInteger
+}
+
+private func makeLiveQueueProofFixture(name: String) throws -> LiveQueueProofFixture {
+    let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        .appendingPathComponent("rr-queue-proof-\(name)-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: root,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let paths = try CompanionLifecyclePaths(homeDirectory: root)
+    try FileManager.default.createDirectory(
+        at: paths.agent.stateDirectory,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let enrollment = try EnrollmentConfiguration(
+        deviceID: "11111111-1111-4111-8111-111111111111",
+        deviceToken: String(repeating: "o", count: 43),
+        dedupeSecret: Data(repeating: 0x11, count: 32),
+        serverURL: URL(string: "https://raiders.redlattice.com")!,
+        cutoverAtMS: 0,
+        enabledSurfaces: [.codexCLI, .codexDesktop]
+    )
+    try enrollment.persist(to: paths.enrollment)
+    let collectorState = paths.agent.stateDirectory.appendingPathComponent("collector-state.json")
+    try Data(#"{"enabled":false,"files":{},"version":1}"#.utf8).write(to: collectorState)
+    XCTAssertEqual(Darwin.chmod(collectorState.path, 0o600), 0)
+    let outbox = try Outbox(directory: paths.agent.outboxDirectory)
+    let service = ServiceState()
+    let managed = ManagedAgentServiceController(operations: ManagedAgentServiceOperations(
+        register: { service.registered = true },
+        unregister: { service.registered = false },
+        status: { service.registered ? .enabled : .notRegistered }
+    ))
+    let networkRequests = LockedInteger()
+    let client = try EnrollmentClient(
+        origin: URL(string: "https://raiders.redlattice.com")!,
+        transport: { _ in
+            networkRequests.increment()
+            throw TestError.recovery
+        }
+    )
+    let operations = try ReEnrollmentOperations.live(
+        paths: paths,
+        companionVersion: "test",
+        managedAgent: managed,
+        outbox: outbox,
+        enrollmentClient: client,
+        uploadTransport: { _ in
+            networkRequests.increment()
+            throw TestError.recovery
+        },
+        summarize: { _ in XCTFail("invalid queue reached summary") },
+        confirmReEnrollment: {
+            XCTFail("invalid queue reached confirmation")
+            return false
+        },
+        resolveQueue: { _ in
+            XCTFail("invalid queue reached disposition")
+            return .cancel
+        },
+        requestCode: {
+            XCTFail("invalid queue requested a code")
+            return String(repeating: "c", count: 43)
+        },
+        delayMilliseconds: { _ in },
+        acquireLock: { TestLock() }
+    )
+    return LiveQueueProofFixture(
+        root: root,
+        paths: paths,
+        enrollment: enrollment,
+        journalStore: try RecoveryJournalStore(paths: paths),
+        operations: operations,
+        networkRequests: networkRequests
+    )
+}
+
+private func makeLiveQueueEvent(idempotencyKey: String) -> RunEventV1 {
+    RunEventV1(
+        schemaVersion: 1,
+        companionVersion: "test",
+        deviceID: "11111111-1111-4111-8111-111111111111",
+        provider: .codex,
+        surface: .codexCLI,
+        runKey: String(repeating: "f", count: 64),
+        sequence: 1,
+        eventTimeMS: 1,
+        observedAtMS: 1,
+        startedAtMS: 1,
+        state: .open,
+        usage: .init(input: 1, output: 0, cacheRead: 0, cacheWrite: 0, reasoningOutput: 0),
+        model: nil,
+        effort: nil,
+        idempotencyKey: idempotencyKey
+    )
+}
+
+private final class LockedInteger: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    var value: Int { lock.withLock { stored } }
+    func increment() { lock.withLock { stored += 1 } }
 }
 
 private enum TestError: Error { case recovery, crash }
