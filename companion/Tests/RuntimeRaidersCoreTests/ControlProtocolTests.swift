@@ -436,7 +436,7 @@ final class ControlProtocolTests: XCTestCase {
                     switch transition {
                     case .signalProtectionInstalled: protectionInstalled.signal()
                     case .echoRestored: echoRestored.signal()
-                    case .signalHandlersRestoring: break
+                    case .signalHandlersRestoring: return
                     }
                     _ = Darwin.raise(SIGINT)
                 }
