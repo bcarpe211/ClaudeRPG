@@ -424,6 +424,12 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     'if [ "$#" -eq 2 ] && [ "$1" = __runtime-raiders-lifecycle-lock-hold ]; then',
     '  [ "$2" = "$0" ] || exit 64',
     '  [ "${RR_FAIL_LIFECYCLE_LOCK:-0}" != 1 ] || exit 75',
+    '  if [ "${RR_COMPLETE_REMOVAL_BEFORE_LOCK:-0}" = 1 ]; then',
+    '    if /usr/bin/find "$RR_SUPPORT" -mindepth 1 -maxdepth 1 -name \'.runtime-raiders-install.*\' -print -quit 2>/dev/null | /usr/bin/grep . >/dev/null; then',
+    '      printf "removal:prelock-work-present\\n" >> "$RR_EVENT_LOG"',
+    '    fi',
+    '    /bin/rm -rf "$RR_SUPPORT" "$RR_COMMAND_DIRECTORY"',
+    '  fi',
     `  printf "lock:${identity}:acquired\\n" >> "$RR_EVENT_LOG"`,
     '  : > "$RR_LOCK_HELD"',
     `  trap '/bin/rm -f "$RR_LOCK_HELD"; printf "lock:${identity}:released\\n" >> "$RR_EVENT_LOG"' EXIT`,
@@ -742,6 +748,8 @@ function fixture() {
       RR_LEGACY_PLIST: plistPath,
       RR_SHIM: shim,
       RR_COMMAND: command,
+      RR_COMMAND_DIRECTORY: join(home, '.local/bin'),
+      RR_SUPPORT: support,
       RR_OWNER: String(process.getuid!()),
       RR_SERVICE_STOPPED: join(root, 'service-stopped'),
       RR_EXPECT_CANDIDATE: join(root, 'expected-candidate'),
@@ -771,6 +779,7 @@ function renderInstaller(value: Fixture, mutate: (source: string) => string = (s
     .replaceAll('__RUNTIME_RAIDERS_UPDATE_PROTOCOL_VERSION__', '2')
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_VALIDATOR_SHA256__', 'c'.repeat(64))
     .replaceAll('__RUNTIME_RAIDERS_RELEASE_VALIDATOR_BASE64__', readFileSync(validator).toString('base64'))
+    .replaceAll("PRIVATE_TEMP_ROOT='/private/tmp'", `PRIVATE_TEMP_ROOT='${value.root}'`)
     .replaceAll('/usr/bin/curl', join(fake, 'curl'))
     .replaceAll('/usr/bin/ditto', join(fake, 'ditto'))
     .replaceAll('/usr/bin/codesign', join(fake, 'codesign'))
@@ -945,6 +954,9 @@ function lstatIfPresent(path: string) {
 function recoveryDirectories(value: Fixture): string[] {
   const launchAgents = join(value.home, 'Library/LaunchAgents');
   return [
+    ...readdirSync(value.root)
+      .filter((name) => name.startsWith('.runtime-raiders-install.'))
+      .map((name) => join(value.root, name)),
     ...(existsSync(value.support)
       ? readdirSync(value.support).filter((name) => name.startsWith('.runtime-raiders-install.')).map((name) => join(value.support, name))
       : []),
@@ -1768,6 +1780,23 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expectNoBootout(value);
   });
 
+  it('corrupt preserved state cannot create missing owned directories before rejection', () => {
+    const value = fixture();
+    writePreservedUninstall(value);
+    rmSync(value.outbox, { recursive: true });
+    rmSync(join(value.home, '.local'), { recursive: true });
+    writeFileSync(join(value.state, 'enrollment.json'), '{}\n', { mode: 0o600 });
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Runtime Raiders refuses an invalid existing enrollment.');
+    expect(existsSync(value.outbox)).toBe(false);
+    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('curl:'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+  });
+
   it('fresh install uses the managed service without creating a legacy LaunchAgent plist', () => {
     const value = fixture();
 
@@ -1980,6 +2009,34 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(result.status).not.toBe(0);
     expect(treeSnapshot(value.home)).toEqual(before);
     expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('a busy lifecycle lock cannot create missing Runtime Raiders owned directories', () => {
+    const value = fixture();
+    value.environment.RR_FAIL_LIFECYCLE_LOCK = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(value.support)).toBe(false);
+    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('complete removal before lock acquisition cannot race installer owned mutation', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    value.environment.RR_COMPLETE_REMOVAL_BEFORE_LOCK = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(events(value)).not.toContain('removal:prelock-work-present');
+    expect(existsSync(value.support)).toBe(false);
+    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
     expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
     expect(existsSync(value.lockHeld)).toBe(false);
   });

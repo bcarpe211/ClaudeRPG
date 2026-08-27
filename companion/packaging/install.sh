@@ -42,6 +42,7 @@ LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 LEGACY_PLIST="$LAUNCH_AGENTS/$LEGACY_LABEL.plist"
 COMMAND_DIRECTORY="$HOME/.local/bin"
 COMMAND="$COMMAND_DIRECTORY/raiders"
+PRIVATE_TEMP_ROOT='/private/tmp'
 ENROLLMENT="$STATE/enrollment.json"
 RECOVERY_JOURNAL="$STATE/re-enrollment.json"
 RELEASES="$SUPPORT/releases"
@@ -182,9 +183,6 @@ elif [ "$app_present" -eq 1 ] && [ "$legacy_plist_present" -eq 0 ] && [ "$shim_p
 else
   reject_existing_layout
 fi
-
-/bin/mkdir -p "$STATE" "$OUTBOX" "$COMMAND_DIRECTORY"
-[ -e "$SUPPORT" ] || exit 1
 
 is_bounded_json_dictionary() {
   json_file=$1
@@ -472,7 +470,27 @@ fi
 fresh_enrollment=0
 if [ "$has_enrollment" -eq 0 ] && [ "$has_recovery_journal" -eq 0 ]; then fresh_enrollment=1; fi
 
-WORK="$(/usr/bin/mktemp -d "$SUPPORT/.runtime-raiders-install.XXXXXX")"
+private_temp_owner="$(/usr/bin/stat -f %u "$PRIVATE_TEMP_ROOT" 2>/dev/null || true)"
+private_temp_mode="$(/usr/bin/stat -f %p "$PRIVATE_TEMP_ROOT" 2>/dev/null || true)"
+[ -d "$PRIVATE_TEMP_ROOT" ] && [ ! -L "$PRIVATE_TEMP_ROOT" ] && {
+  [ "$private_temp_owner:$private_temp_mode" = '0:41777' ] ||
+    [ "$private_temp_owner:$private_temp_mode" = "$OWNER:40700" ]
+} || {
+  echo 'Runtime Raiders refuses an unsafe private temporary directory.' >&2
+  exit 1
+}
+WORK="$(/usr/bin/mktemp -d "$PRIVATE_TEMP_ROOT/.runtime-raiders-install.XXXXXX")" || {
+  echo 'Runtime Raiders could not create private staging.' >&2
+  exit 1
+}
+[ -d "$WORK" ] && [ ! -L "$WORK" ] &&
+  [ "$(/usr/bin/stat -f %u "$WORK")" = "$OWNER" ] &&
+  [ "$(/usr/bin/stat -f %p "$WORK")" = 40700 ] &&
+  [ "$(/usr/bin/stat -f %l "$WORK")" = 2 ] || {
+  /bin/rm -rf "$WORK"
+  echo 'Runtime Raiders could not prove private staging.' >&2
+  exit 1
+}
 transaction_active=0
 transaction_committed=0
 legacy_stop_attempted=0
@@ -914,6 +932,37 @@ fi
 
 prove_lifecycle_lock || {
   echo 'Runtime Raiders lost the lifecycle lock.' >&2
+  exit 1
+}
+
+for owned_path in \
+  "$HOME/Library" "$HOME/Library/Application Support" "$SUPPORT" "$STATE" "$OUTBOX" \
+  "$APP" "$LEGACY_APP" "$LAUNCH_AGENTS" "$LEGACY_PLIST" "$SHIM" "$HOME/.local" "$COMMAND_DIRECTORY" \
+  "$RELEASES" "$INSTALLATION" "$LAUNCHER" "$RECOVERY_JOURNAL"; do
+  refuse_symlink "$owned_path"
+done
+for owned_directory in \
+  "$HOME/Library" "$HOME/Library/Application Support" "$SUPPORT" "$STATE" "$OUTBOX" \
+  "$LAUNCH_AGENTS" "$HOME/.local" "$COMMAND_DIRECTORY"; do
+  if [ -e "$owned_directory" ] && {
+    [ ! -d "$owned_directory" ] ||
+      [ "$(/usr/bin/stat -f %u "$owned_directory")" != "$OWNER" ];
+  }; then
+    echo "Runtime Raiders refuses unsafe directory: $owned_directory" >&2
+    exit 1
+  fi
+done
+[ ! -e "$RELEASES" ] && [ ! -e "$INSTALLATION" ] && [ ! -e "$LAUNCHER" ] &&
+  [ ! -e "$LEGACY_APP" ] || reject_existing_layout
+
+/bin/mkdir -p "$STATE" "$OUTBOX" "$COMMAND_DIRECTORY"
+[ -d "$STATE" ] && [ ! -L "$STATE" ] &&
+  [ "$(/usr/bin/stat -f %u "$STATE")" = "$OWNER" ] &&
+  [ -d "$OUTBOX" ] && [ ! -L "$OUTBOX" ] &&
+  [ "$(/usr/bin/stat -f %u "$OUTBOX")" = "$OWNER" ] &&
+  [ -d "$COMMAND_DIRECTORY" ] && [ ! -L "$COMMAND_DIRECTORY" ] &&
+  [ "$(/usr/bin/stat -f %u "$COMMAND_DIRECTORY")" = "$OWNER" ] || {
+  echo 'Runtime Raiders could not prove owned installation directories.' >&2
   exit 1
 }
 
