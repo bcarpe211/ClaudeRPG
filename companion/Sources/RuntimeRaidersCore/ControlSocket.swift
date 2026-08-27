@@ -329,53 +329,15 @@ private final class LifecycleTerminalSignalTrap {
     }
 }
 
-private final class DeferredInitialJournalState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var resuming = false
-    private var pending: RecoveryJournal?
-    private var flushed = false
-
-    func recordLoaded(_ journal: RecoveryJournal?) {
-        lock.withLock { resuming = journal != nil }
-    }
-
-    func stageIfInitial(_ journal: RecoveryJournal) -> Bool {
-        lock.withLock {
-            guard !resuming,
-                  !flushed,
-                  pending == nil,
-                  journal.phase == .replacementPrepared else {
-                return false
-            }
-            pending = journal
-            return true
-        }
-    }
-
-    func takePending() -> RecoveryJournal? {
-        lock.withLock {
-            let journal = pending
-            pending = nil
-            if journal != nil { flushed = true }
-            return journal
-        }
-    }
-}
-
 public extension ReEnrollmentOperations {
-    func validatingCodeBeforeInitialJournal(
+    func mappingMalformedCodeToInvalidEnrollment(
         _ validate: @escaping (String) throws -> Void
     ) -> ReEnrollmentOperations {
         let base = self
-        let state = DeferredInitialJournalState()
         return ReEnrollmentOperations(
             companionVersion: companionVersion,
             acquireLock: acquireLock,
-            loadJournal: {
-                let journal = try base.loadJournal()
-                state.recordLoaded(journal)
-                return journal
-            },
+            loadJournal: loadJournal,
             readEnrollment: readEnrollment,
             proveCollectionOff: proveCollectionOff,
             unregisterAgent: unregisterAgent,
@@ -387,16 +349,20 @@ public extension ReEnrollmentOperations {
             deliverQueue: deliverQueue,
             discardQueue: discardQueue,
             generateMaterial: generateMaterial,
-            writeJournal: { journal in
-                if !state.stageIfInitial(journal) { try base.writeJournal(journal) }
+            writeJournal: writeJournal,
+            requestCode: requestCode,
+            replace: { old, code, material, version in
+                do {
+                    return try base.replace(old, code, material, version)
+                } catch {
+                    do {
+                        try validate(code)
+                    } catch {
+                        return .invalidEnrollment
+                    }
+                    throw error
+                }
             },
-            requestCode: {
-                let code = try base.requestCode()
-                try validate(code)
-                if let journal = state.takePending() { try base.writeJournal(journal) }
-                return code
-            },
-            replace: replace,
             recover: recover,
             persistEnrollment: persistEnrollment,
             resetCollector: resetCollector,
@@ -409,94 +375,34 @@ public extension ReEnrollmentOperations {
     }
 }
 
-private final class LifecycleVerificationRemovalLock: RemovalLock, @unchecked Sendable {}
-private final class LifecycleVerificationRemovalSession: RemovalSession, @unchecked Sendable {}
-private final class LifecycleVerificationRemovalState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var queueCount: Int
-
-    init(queueCount: Int) {
-        self.queueCount = queueCount
-    }
-
-    func snapshot(for session: any RemovalSession) -> RemovalQueueSnapshot {
-        lock.withLock {
-            RemovalQueueSnapshot(
-                sessionIdentifier: ObjectIdentifier(session),
-                names: (0..<queueCount).map { "event-\($0)" }
-            )
+public extension LifecycleLock {
+    static func acquireLifecycleVerification(at url: URL) throws -> LifecycleLock {
+        let prefix = "/private/tmp/rrv."
+        let suffix = "/Library/Application Support/.runtime-raiders.lifecycle.lock"
+        let path = url.path
+        guard url.isFileURL,
+              url.standardized.path == path,
+              path.hasPrefix(prefix),
+              path.hasSuffix(suffix) else {
+            throw LifecycleStorageError.invalidPath
         }
-    }
-
-    func discard() {
-        lock.withLock { queueCount = 0 }
-    }
-
-    func isEmpty() -> Bool {
-        lock.withLock { queueCount == 0 }
-    }
-}
-
-public extension RemovalOperations {
-    static func lifecycleVerification(
-        queueCount: Int,
-        enrollment: EnrollmentConfiguration?,
-        enrollmentLoadFails: Bool,
-        record: @escaping (String) throws -> Void,
-        summarize: @escaping (Int) throws -> Void,
-        confirmDiscard: @escaping (Int) throws -> Bool,
-        confirmEverything: @escaping () throws -> Bool,
-        revoke: @escaping (EnrollmentConfiguration) throws -> Bool
-    ) -> RemovalOperations {
-        let state = LifecycleVerificationRemovalState(queueCount: queueCount)
-        return RemovalOperations(
-            acquireLock: {
-                try record("coordinator:lock")
-                return LifecycleVerificationRemovalLock()
-            },
-            persistCollectionOff: { try record("coordinator:persist-off") },
-            stopDaemon: { try record("control:uninstall") },
-            unregisterAgent: { try record("coordinator:unregister-agent") },
-            verifyAgentUnregistered: {
-                try record("coordinator:verify-agent-unregistered")
-                return true
-            },
-            prepareSession: {
-                try record("coordinator:prepare-session")
-                return LifecycleVerificationRemovalSession()
-            },
-            queueSnapshot: { session in
-                try record("coordinator:queue-snapshot")
-                return state.snapshot(for: session)
-            },
-            summarize: summarize,
-            confirmDiscard: confirmDiscard,
-            confirmEverything: confirmEverything,
-            loadEnrollment: { _ in
-                try record("coordinator:load-enrollment")
-                if enrollmentLoadFails { throw RemovalCoordinatorError.operationFailed }
-                return enrollment
-            },
-            revoke: revoke,
-            delayMilliseconds: { _ in },
-            discardQueue: { _, _ in
-                state.discard()
-                try record("queue:discard")
-            },
-            verifyQueueEmpty: { _, _ in
-                try record("coordinator:verify-queue-empty")
-                return state.isEmpty()
-            },
-            removeExecutableArtifacts: { _ in
-                try record("coordinator:remove-preserving-state")
-            },
-            verifyPreservedState: { _ in
-                try record("coordinator:verify-preserved-state")
-                return true
-            },
-            removeAllArtifacts: { _, _ in try record("remove:everything") },
-            revocationProof: { try record("coordinator:revocation-proof") }
-        )
+        let tokenStart = path.index(path.startIndex, offsetBy: prefix.count)
+        let tokenEnd = path.index(path.endIndex, offsetBy: -suffix.count)
+        let token = path[tokenStart..<tokenEnd]
+        guard token.utf8.count == 6,
+              token.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte) ||
+                      (65...90).contains(byte) ||
+                      (97...122).contains(byte)
+              }),
+              path == prefix + String(token) + suffix else {
+            throw LifecycleStorageError.invalidPath
+        }
+        return try LifecycleLock.acquire(at: url) { parent in
+            var modeled = parent
+            modeled.st_mode &= ~mode_t(S_IWGRP | S_IWOTH)
+            return modeled
+        }
     }
 }
 

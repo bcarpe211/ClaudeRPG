@@ -602,13 +602,6 @@ private enum LifecycleVerificationScenario: String, Sendable {
     case uninstallEverythingAssistedRecoveryEmpty =
         "uninstall-everything-assisted-recovery-empty"
     case uninstallSetupFailure = "uninstall-setup-failure"
-
-    var queueCount: Int {
-        switch self {
-        case .reEnrollCompletedQueued, .uninstallEverythingCompletedQueued: 2
-        default: 0
-        }
-    }
 }
 
 private final class LifecyclePromptErrorBox {
@@ -620,6 +613,15 @@ private final class LifecyclePromptErrorBox {
         } catch let error as CLIError {
             self.error = error
             throw error
+        }
+    }
+
+    func recover<T>(with fallback: T, _ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CLIError {
+            self.error = error
+            return fallback
         }
     }
 }
@@ -639,7 +641,7 @@ private func runLifecycleCommand(
                 try runVerificationReEnrollment(
                     scenario,
                     terminal: terminal,
-                    paths: paths
+                    homeDirectory: homeDirectory
                 )
             } else {
                 try runLiveReEnrollment(
@@ -655,7 +657,7 @@ private func runLifecycleCommand(
                     scenario,
                     mode: mode,
                     terminal: terminal,
-                    paths: paths
+                    homeDirectory: homeDirectory
                 )
             } else {
                 try runLiveRemoval(
@@ -785,12 +787,22 @@ private func printReEnrollmentOutcome(_ outcome: ReEnrollmentOutcome) throws {
     }
 }
 
-private func runLiveReEnrollment(
+private struct ReEnrollmentExecutionBoundaries {
+    let version: String
+    let managedAgent: ManagedAgentServiceController
+    let enrollmentTransport: EnrollmentClient.Transport
+    let uploadTransport: Uploader.Transport
+    let stopDaemon: () throws -> Void
+    let delayMilliseconds: (Int) throws -> Void
+    let observe: (String) throws -> Void
+    let acquireLock: (() throws -> any ReEnrollmentLock)?
+}
+
+private func runComposedReEnrollment(
     terminal: LifecycleTerminalReader,
-    paths: AgentPaths,
-    homeDirectory: URL
+    lifecyclePaths: CompanionLifecyclePaths,
+    boundaries: ReEnrollmentExecutionBoundaries
 ) throws {
-    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
     let enrollment = try EnrollmentConfiguration.loadExisting(from: lifecyclePaths.enrollment)
     guard try AgentController.persistedCollectorState(
         paths: lifecyclePaths.agent,
@@ -798,24 +810,27 @@ private func runLiveReEnrollment(
     ) == .disabled else {
         throw CLIError.collectionMustBeOff
     }
-    try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: false)
+    try boundaries.stopDaemon()
 
-    let version = try InstalledCompanionVersion.load(from: .main)
     let outbox = try Outbox(directory: lifecyclePaths.agent.outboxDirectory)
-    let client = try EnrollmentClient(origin: enrollment.serverURL) { request in
-        try Uploader.liveTransport(request)
-    }
+    let client = try EnrollmentClient(
+        origin: enrollment.serverURL,
+        transport: boundaries.enrollmentTransport
+    )
     let promptErrors = LifecyclePromptErrorBox()
+    let codePromptErrors = LifecyclePromptErrorBox()
     let baseOperations = try ReEnrollmentOperations.live(
         paths: lifecyclePaths,
-        companionVersion: version,
-        managedAgent: .live,
+        companionVersion: boundaries.version,
+        managedAgent: boundaries.managedAgent,
         outbox: outbox,
         enrollmentClient: client,
-        uploadTransport: Uploader.liveTransport,
-        summarize: { printReEnrollmentSummary(queueCount: $0, version: version) },
+        uploadTransport: boundaries.uploadTransport,
+        summarize: {
+            printReEnrollmentSummary(queueCount: $0, version: boundaries.version)
+        },
         confirmReEnrollment: {
-            try promptErrors.record {
+            try promptErrors.recover(with: false) {
                 try requireExactPrivateLine(
                     "RE-ENROLL",
                     terminal: terminal,
@@ -826,10 +841,14 @@ private func runLiveReEnrollment(
             }
         },
         resolveQueue: { count in
-            try promptErrors.record { try queueDisposition(count: count, terminal: terminal) }
+            let disposition = try promptErrors.recover(with: QueueDisposition.cancel) {
+                try queueDisposition(count: count, terminal: terminal)
+            }
+            if count > 0 { try boundaries.observe("queue:\(disposition)") }
+            return disposition
         },
         requestCode: {
-            try promptErrors.record {
+            try codePromptErrors.record {
                 try privateLine(
                     terminal: terminal,
                     prompt: "Enrollment code: ",
@@ -837,22 +856,50 @@ private func runLiveReEnrollment(
                 )
             }
         },
-        delayMilliseconds: {
-            Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
-        }
+        delayMilliseconds: boundaries.delayMilliseconds,
+        acquireLock: boundaries.acquireLock
     )
-    let operations = baseOperations.validatingCodeBeforeInitialJournal { code in
-        try promptErrors.record {
-            guard isExactEnrollmentCode(code) else { throw CLIError.invalidEnrollment }
-        }
+    let operations = baseOperations.mappingMalformedCodeToInvalidEnrollment { code in
+        guard isExactEnrollmentCode(code) else { throw EnrollmentClientError.invalidRequest }
     }
+    let outcome: ReEnrollmentOutcome
     do {
-        try printReEnrollmentOutcome(try ReEnrollmentCoordinator(operations: operations).run())
+        outcome = try ReEnrollmentCoordinator(operations: operations).run()
     } catch {
+        if codePromptErrors.error != nil { throw CLIError.recoveryRequired }
         if let promptError = promptErrors.error { throw promptError }
         if let cliError = error as? CLIError { throw cliError }
         throw CLIError.lifecycleFailed
     }
+    if let promptError = promptErrors.error { throw promptError }
+    try printReEnrollmentOutcome(outcome)
+}
+
+private func runLiveReEnrollment(
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths,
+    homeDirectory: URL
+) throws {
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let version = try InstalledCompanionVersion.load(from: .main)
+    try runComposedReEnrollment(
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: ReEnrollmentExecutionBoundaries(
+            version: version,
+            managedAgent: .live,
+            enrollmentTransport: Uploader.liveTransport,
+            uploadTransport: Uploader.liveTransport,
+            stopDaemon: {
+                try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: false)
+            },
+            delayMilliseconds: {
+                Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
+            },
+            observe: { _ in },
+            acquireLock: nil
+        )
+    )
 }
 
 private func printCompleteRemovalSummary(queueCount: Int) {
@@ -888,26 +935,34 @@ private func printRemovalOutcome(_ outcome: RemovalOutcome) throws {
     }
 }
 
-private func runLiveRemoval(
+private struct RemovalExecutionBoundaries {
+    let managedAgent: ManagedAgentServiceController
+    let enrollmentTransport: EnrollmentClient.Transport
+    let stopDaemon: () throws -> Void
+    let delayMilliseconds: (Int) throws -> Void
+    let observe: (String) throws -> Void
+    let acquireLock: (() throws -> any RemovalLock)?
+}
+
+private func runComposedRemoval(
     mode: RemovalMode,
     terminal: LifecycleTerminalReader,
-    paths: AgentPaths,
-    homeDirectory: URL
+    lifecyclePaths: CompanionLifecyclePaths,
+    boundaries: RemovalExecutionBoundaries
 ) throws {
-    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
     let client = try EnrollmentClient(
-        origin: URL(string: "https://raiders.redlattice.com")!
-    ) { request in
-        try Uploader.liveTransport(request)
-    }
+        origin: URL(string: "https://raiders.redlattice.com")!,
+        transport: boundaries.enrollmentTransport
+    )
     let promptErrors = LifecyclePromptErrorBox()
     let operations = RemovalOperations.live(
         paths: lifecyclePaths,
-        managedAgent: .live,
+        managedAgent: boundaries.managedAgent,
         enrollmentClient: client,
         persistCollectionOff: {
             var metadata = stat()
             if Darwin.lstat(lifecyclePaths.enrollment.path, &metadata) != 0, errno == ENOENT {
+                try boundaries.observe("collection:persist-off")
                 return
             }
             let enrollment = try EnrollmentConfiguration.loadExisting(
@@ -917,10 +972,9 @@ private func runLiveRemoval(
                 paths: lifecyclePaths.agent,
                 surfaces: enrollment.enabledSurfaces
             )
+            try boundaries.observe("collection:persist-off")
         },
-        stopDaemon: {
-            try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: true)
-        },
+        stopDaemon: boundaries.stopDaemon,
         summarize: { printCompleteRemovalSummary(queueCount: $0) },
         confirmDiscard: { count in
             try promptErrors.record {
@@ -930,6 +984,7 @@ private func runLiveRemoval(
                     prompt: "Type DISCARD to discard \(count) queued events: ",
                     maximumBytes: 64
                 )
+                try boundaries.observe("prompt:discard-confirmed")
                 return true
             }
         },
@@ -941,12 +996,12 @@ private func runLiveRemoval(
                     prompt: "Type UNINSTALL EVERYTHING to continue: ",
                     maximumBytes: 64
                 )
+                try boundaries.observe("prompt:everything-confirmed")
                 return true
             }
         },
-        delayMilliseconds: {
-            Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
-        }
+        delayMilliseconds: boundaries.delayMilliseconds,
+        acquireLock: boundaries.acquireLock
     )
     do {
         try printRemovalOutcome(try RemovalCoordinator(operations: operations).run(mode: mode))
@@ -957,48 +1012,169 @@ private func runLiveRemoval(
     }
 }
 
-private final class LifecycleVerificationReEnrollmentLock:
-    ReEnrollmentLock, @unchecked Sendable {}
+private func runLiveRemoval(
+    mode: RemovalMode,
+    terminal: LifecycleTerminalReader,
+    paths: AgentPaths,
+    homeDirectory: URL
+) throws {
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    try runComposedRemoval(
+        mode: mode,
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: RemovalExecutionBoundaries(
+            managedAgent: .live,
+            enrollmentTransport: Uploader.liveTransport,
+            stopDaemon: {
+                try stopDaemonAndPersistOff(paths: paths, allowMissingEnrollment: true)
+            },
+            delayMilliseconds: {
+                Thread.sleep(forTimeInterval: TimeInterval($0) / 1_000)
+            },
+            observe: { _ in },
+            acquireLock: nil
+        )
+    )
+}
 
-private final class LifecycleVerificationReEnrollmentState: @unchecked Sendable {
-    var installed: EnrollmentConfiguration
-    var queueCount: Int
-    var agentRegistered = true
+private struct LifecycleVerificationContext {
+    let directory: URL
 
-    init(installed: EnrollmentConfiguration, queueCount: Int) {
-        self.installed = installed
-        self.queueCount = queueCount
+    init(homeDirectory: URL) throws {
+        let applicationSupport = homeDirectory.appendingPathComponent(
+            "Library/Application Support",
+            isDirectory: true
+        )
+        guard verificationRoot(forApplicationSupportPath: applicationSupport.path)?.path ==
+                homeDirectory.standardized.path else {
+            throw CLIError.usage
+        }
+        let directory = homeDirectory.appendingPathComponent(
+            "lifecycle-verification",
+            isDirectory: true
+        )
+        guard isExactOwnerOnlyPhysicalDirectory(directory) else { throw CLIError.usage }
+        self.directory = directory
     }
 }
 
-private func lifecycleVerificationEnrollment() throws -> EnrollmentConfiguration {
-    try EnrollmentConfiguration(
-        deviceID: "00000000-0000-4000-8000-000000000001",
-        deviceToken: String(repeating: "A", count: 43),
-        dedupeSecret: Data(repeating: 0xBB, count: 32),
-        serverURL: URL(string: "https://raiders.redlattice.com")!,
-        cutoverAtMS: 1,
-        enabledSurfaces: [.codexCLI]
+private final class LifecycleVerificationManagedAgentState: @unchecked Sendable {
+    private let lock = NSLock()
+    private let context: LifecycleVerificationContext
+    private var registered: Bool
+
+    init(registered: Bool, context: LifecycleVerificationContext) {
+        self.registered = registered
+        self.context = context
+    }
+
+    func status() -> ManagedAgentStatus {
+        let value: ManagedAgentStatus = lock.withLock {
+            registered ? .enabled : .notRegistered
+        }
+        do {
+            try appendLifecycleVerificationAction("service:status:\(value.rawValue)", in: context)
+            return value
+        } catch {
+            return .requiresApproval
+        }
+    }
+
+    func register() throws {
+        try appendLifecycleVerificationAction("service:register", in: context)
+        lock.withLock { registered = true }
+    }
+
+    func unregister() throws {
+        try appendLifecycleVerificationAction("service:unregister", in: context)
+        lock.withLock { registered = false }
+    }
+}
+
+private func lifecycleVerificationManagedAgent(
+    registered: Bool,
+    context: LifecycleVerificationContext
+) -> ManagedAgentServiceController {
+    let state = LifecycleVerificationManagedAgentState(
+        registered: registered,
+        context: context
     )
+    return ManagedAgentServiceController(operations: ManagedAgentServiceOperations(
+        register: { try state.register() },
+        unregister: { try state.unregister() },
+        status: { state.status() }
+    ))
 }
 
 private func captureLifecycleVerificationRequest(
     _ request: URLRequest,
-    paths: AgentPaths
+    context: LifecycleVerificationContext
 ) throws {
     guard let path = request.url?.path,
-          ["/api/raiders/re-enroll", "/api/raiders/devices/revoke-current"].contains(path),
-          request.value(forHTTPHeaderField: "Authorization") != nil else {
+          let method = request.httpMethod,
+          request.url?.query == nil,
+          let authorization = request.value(forHTTPHeaderField: "Authorization"),
+          authorization.hasPrefix("Bearer "),
+          isExactEnrollmentCode(String(authorization.dropFirst("Bearer ".count))) else {
+        throw CLIError.lifecycleFailed
+    }
+    switch path {
+    case "/api/raiders/re-enroll":
+        guard method == "POST",
+              request.value(forHTTPHeaderField: "Content-Type") == "application/json",
+              let body = request.httpBody,
+              let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              Set(object.keys) == [
+                  "code", "operation_id", "replacement_device_id",
+                  "replacement_device_token", "companion_version",
+              ],
+              let code = object["code"] as? String,
+              isExactEnrollmentCode(code),
+              let operationValue = object["operation_id"] as? String,
+              let operationID = UUID(uuidString: operationValue),
+              operationValue == operationID.uuidString.lowercased(),
+              let deviceValue = object["replacement_device_id"] as? String,
+              let deviceID = UUID(uuidString: deviceValue),
+              deviceValue == deviceID.uuidString.lowercased(),
+              operationID != deviceID,
+              let token = object["replacement_device_token"] as? String,
+              isExactEnrollmentCode(token),
+              object["companion_version"] as? String == "1.2.3" else {
+            throw CLIError.lifecycleFailed
+        }
+    case "/api/raiders/devices/revoke-current":
+        guard method == "POST",
+              request.value(forHTTPHeaderField: "Content-Type") == "application/json",
+              request.httpBody == Data("{}".utf8) else {
+            throw CLIError.lifecycleFailed
+        }
+    case "/api/runs/events":
+        guard method == "POST",
+              request.value(forHTTPHeaderField: "Content-Type") == "application/json",
+              let body = request.httpBody,
+              let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              Set(object.keys) == ["events"],
+              object["events"] is [Any] else {
+            throw CLIError.lifecycleFailed
+        }
+    case "/api/raiders/enrollment-config":
+        guard method == "GET",
+              request.httpBody == nil,
+              request.value(forHTTPHeaderField: "Content-Type") == nil else {
+            throw CLIError.lifecycleFailed
+        }
+    default:
         throw CLIError.lifecycleFailed
     }
     let capture =
-        #"{"path":"\#(path)","authorization":"[REDACTED]","body":"[REDACTED]"}"#
-    try writeLifecycleVerificationCapture(
+        #"{"path":"\#(path)","method":"\#(method)","contract":"exact","authorization":"[REDACTED]","body":"[REDACTED]"}"#
+    try appendLifecycleVerificationCapture(
         capture,
         named: "lifecycle-request-capture.json",
-        paths: paths
+        in: context
     )
-    try appendLifecycleVerificationAction("network:request", paths: paths)
+    try appendLifecycleVerificationAction("network:request:\(path)", in: context)
 }
 
 private func verificationReplacementResponse(for request: URLRequest) throws -> Data {
@@ -1016,21 +1192,29 @@ private func verificationReplacementResponse(for request: URLRequest) throws -> 
     ], options: [.sortedKeys])
 }
 
-private func runVerificationReEnrollment(
-    _ scenario: LifecycleVerificationScenario,
-    terminal: LifecycleTerminalReader,
-    paths: AgentPaths
-) throws {
-    guard scenario.rawValue.hasPrefix("re-enroll-") else { throw CLIError.usage }
-    if scenario == .reEnrollSetupFailure { throw POSIXError(.EIO) }
-    let oldEnrollment = try lifecycleVerificationEnrollment()
-    let state = LifecycleVerificationReEnrollmentState(
-        installed: oldEnrollment,
-        queueCount: scenario.queueCount
-    )
-    let promptErrors = LifecyclePromptErrorBox()
-    let client = try EnrollmentClient(origin: oldEnrollment.serverURL) { request in
-        try captureLifecycleVerificationRequest(request, paths: paths)
+private func verificationRecoveryResponse(
+    paths: CompanionLifecyclePaths
+) throws -> Data {
+    let journal = try RecoveryJournalStore(paths: paths).load()
+    guard let journal else { throw CLIError.lifecycleFailed }
+    return try JSONSerialization.data(withJSONObject: [
+        "device_id": journal.replacementDeviceID.uuidString.lowercased(),
+        "dedupe_secret": String(repeating: "cc", count: 32),
+        "server_url": "https://raiders.redlattice.com",
+        "cutover_at": 2,
+        "enabled_surfaces": ["codex_cli"],
+    ], options: [.sortedKeys])
+}
+
+private func verificationReEnrollmentResponse(
+    scenario: LifecycleVerificationScenario,
+    request: URLRequest,
+    paths: CompanionLifecyclePaths,
+    context: LifecycleVerificationContext
+) throws -> UploadHTTPResponse {
+    try captureLifecycleVerificationRequest(request, context: context)
+    switch request.url?.path {
+    case "/api/raiders/re-enroll":
         switch scenario {
         case .reEnrollCompletedEmpty, .reEnrollCompletedQueued:
             return UploadHTTPResponse(
@@ -1047,197 +1231,159 @@ private func runVerificationReEnrollment(
         default:
             throw CLIError.usage
         }
-    }
-    try appendLifecycleVerificationAction("control:uninstall", paths: paths)
-    let baseOperations = ReEnrollmentOperations(
-        companionVersion: "1.2.3",
-        acquireLock: {
-            try appendLifecycleVerificationAction("coordinator:lock", paths: paths)
-            return LifecycleVerificationReEnrollmentLock()
-        },
-        loadJournal: { nil },
-        readEnrollment: {
-            try appendLifecycleVerificationAction("coordinator:read-enrollment", paths: paths)
-            return oldEnrollment
-        },
-        proveCollectionOff: {
-            try appendLifecycleVerificationAction("coordinator:prove-collection-off", paths: paths)
-            return scenario != .reEnrollCollectionOn
-        },
-        unregisterAgent: {
-            state.agentRegistered = false
-            try appendLifecycleVerificationAction("coordinator:unregister-agent", paths: paths)
-        },
-        verifyAgentUnregistered: {
-            try appendLifecycleVerificationAction(
-                "coordinator:verify-agent-unregistered",
-                paths: paths
+    case "/api/raiders/enrollment-config":
+        switch scenario {
+        case .reEnrollCompletedEmpty, .reEnrollCompletedQueued:
+            return UploadHTTPResponse(
+                statusCode: 200,
+                body: try verificationRecoveryResponse(paths: paths)
             )
-            return !state.agentRegistered
-        },
-        countQueue: {
-            try appendLifecycleVerificationAction("coordinator:count-queue", paths: paths)
-            return state.queueCount
-        },
-        summarize: { printReEnrollmentSummary(queueCount: $0, version: "1.2.3") },
-        confirmReEnrollment: {
-            try appendLifecycleVerificationAction("coordinator:confirm-re-enrollment", paths: paths)
-            return try promptErrors.record {
-                try requireExactPrivateLine(
-                    "RE-ENROLL",
-                    terminal: terminal,
-                    prompt: "Type RE-ENROLL to continue: ",
-                    maximumBytes: 64
-                )
-                return true
-            }
-        },
-        resolveQueue: { count in
-            let disposition = try promptErrors.record {
-                try queueDisposition(count: count, terminal: terminal)
-            }
-            if count > 0 {
-                try appendLifecycleVerificationAction("queue:\(disposition)", paths: paths)
-            }
-            return disposition
-        },
-        deliverQueue: { _ in state.queueCount = 0 },
-        discardQueue: { state.queueCount = 0 },
-        generateMaterial: {
-            ReplacementMaterial(
-                operationID: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
-                deviceID: UUID(uuidString: "00000000-0000-4000-8000-000000000003")!,
-                deviceToken: String(repeating: "D", count: 43)
+        case .reEnrollRecoveryRequiredEmpty:
+            throw POSIXError(.EIO)
+        case .reEnrollInvalidEnrollmentEmpty:
+            return UploadHTTPResponse(
+                statusCode: 401,
+                body: Data(#"{"reason":"unauthorized"}"#.utf8)
             )
-        },
-        writeJournal: { journal in
-            try writeLifecycleVerificationCapture(
-                #"{"phase":"\#(journal.phase.rawValue)","replacement_device_token":"[REDACTED]"}"#,
-                named: "lifecycle-journal-capture.json",
-                paths: paths
-            )
-            try appendLifecycleVerificationAction("coordinator:write-journal", paths: paths)
-        },
-        requestCode: {
-            try promptErrors.record {
-                try privateLine(
-                    terminal: terminal,
-                    prompt: "Enrollment code: ",
-                    maximumBytes: 64
-                )
-            }
-        },
-        replace: { old, code, material, version in
-            try client.replace(
-                oldToken: old.deviceToken,
-                code: code,
-                material: material,
-                companionVersion: version
-            )
-        },
-        recover: { _ in throw POSIXError(.EIO) },
-        persistEnrollment: {
-            state.installed = $0
-            try appendLifecycleVerificationAction("coordinator:persist-enrollment", paths: paths)
-        },
-        resetCollector: { _ in
-            try appendLifecycleVerificationAction("coordinator:reset-collector", paths: paths)
-        },
-        registerAgent: {
-            state.agentRegistered = true
-            try appendLifecycleVerificationAction("coordinator:register-agent", paths: paths)
-        },
-        verifyEnrollmentAndOff: { expected, requireEmptyQueue in
-            try appendLifecycleVerificationAction("coordinator:verify-enrollment-off", paths: paths)
-            return state.installed == expected &&
-                state.agentRegistered &&
-                (!requireEmptyQueue || state.queueCount == 0)
-        },
-        delayMilliseconds: { _ in },
-        removeJournal: {
-            try appendLifecycleVerificationAction("coordinator:remove-journal", paths: paths)
+        default:
+            throw CLIError.usage
         }
-    )
-    let operations = baseOperations.validatingCodeBeforeInitialJournal { code in
-        try promptErrors.record {
-            guard isExactEnrollmentCode(code) else { throw CLIError.invalidEnrollment }
-        }
-    }
-    do {
-        try printReEnrollmentOutcome(try ReEnrollmentCoordinator(operations: operations).run())
-    } catch {
-        if let promptError = promptErrors.error { throw promptError }
-        if let cliError = error as? CLIError { throw cliError }
+    default:
         throw CLIError.lifecycleFailed
     }
+}
+
+private func verificationUploadResponse(
+    _ request: URLRequest,
+    context: LifecycleVerificationContext
+) throws -> UploadHTTPResponse {
+    try captureLifecycleVerificationRequest(request, context: context)
+    guard let body = request.httpBody,
+          let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+          Set(object.keys) == ["events"],
+          let events = object["events"] as? [Any] else {
+        throw CLIError.lifecycleFailed
+    }
+    return UploadHTTPResponse(
+        statusCode: 200,
+        body: try JSONSerialization.data(withJSONObject: [
+            "accepted": events.count,
+            "duplicate": 0,
+            "ignored": 0,
+        ], options: [.sortedKeys])
+    )
+}
+
+private func runVerificationReEnrollment(
+    _ scenario: LifecycleVerificationScenario,
+    terminal: LifecycleTerminalReader,
+    homeDirectory: URL
+) throws {
+    guard scenario.rawValue.hasPrefix("re-enroll-") else { throw CLIError.usage }
+    if scenario == .reEnrollSetupFailure { throw POSIXError(.EIO) }
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let context = try LifecycleVerificationContext(homeDirectory: homeDirectory)
+    let resuming = try RecoveryJournalStore(paths: lifecyclePaths).load() != nil
+    let managedAgent = lifecycleVerificationManagedAgent(
+        registered: !resuming,
+        context: context
+    )
+    try runComposedReEnrollment(
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: ReEnrollmentExecutionBoundaries(
+            version: "1.2.3",
+            managedAgent: managedAgent,
+            enrollmentTransport: { request in
+                try verificationReEnrollmentResponse(
+                    scenario: scenario,
+                    request: request,
+                    paths: lifecyclePaths,
+                    context: context
+                )
+            },
+            uploadTransport: { request in
+                try verificationUploadResponse(request, context: context)
+            },
+            stopDaemon: {
+                try appendLifecycleVerificationAction("control:uninstall", in: context)
+            },
+            delayMilliseconds: { _ in },
+            observe: { try appendLifecycleVerificationAction($0, in: context) },
+            acquireLock: {
+                try LifecycleLock.acquireLifecycleVerification(
+                    at: lifecyclePaths.lifecycleLock
+                )
+            }
+        )
+    )
 }
 
 private func runVerificationRemoval(
     _ scenario: LifecycleVerificationScenario,
     mode: RemovalMode,
     terminal: LifecycleTerminalReader,
-    paths: AgentPaths
+    homeDirectory: URL
 ) throws {
     guard scenario.rawValue.hasPrefix("uninstall-") else { throw CLIError.usage }
     if scenario == .uninstallSetupFailure { throw POSIXError(.EIO) }
     guard (mode == .preserveState) == (scenario == .uninstallPreserveCompleted) else {
         throw CLIError.usage
     }
-    let enrollment = try lifecycleVerificationEnrollment()
-    let promptErrors = LifecyclePromptErrorBox()
-    let client = try EnrollmentClient(origin: enrollment.serverURL) { request in
-        try captureLifecycleVerificationRequest(request, paths: paths)
-        if scenario == .uninstallEverythingRevocationRequiredEmpty {
-            return UploadHTTPResponse(
-                statusCode: 401,
-                body: Data(#"{"reason":"unauthorized"}"#.utf8)
-            )
-        }
-        return UploadHTTPResponse(statusCode: 200, body: Data(#"{"revoked":true}"#.utf8))
-    }
-    let operations = RemovalOperations.lifecycleVerification(
-        queueCount: scenario.queueCount,
-        enrollment: enrollment,
-        enrollmentLoadFails: scenario == .uninstallEverythingAssistedRecoveryEmpty,
-        record: { try appendLifecycleVerificationAction($0, paths: paths) },
-        summarize: { printCompleteRemovalSummary(queueCount: $0) },
-        confirmDiscard: { count in
-            try appendLifecycleVerificationAction("coordinator:confirm-discard", paths: paths)
-            return try promptErrors.record {
-                try requireExactPrivateLine(
-                    "DISCARD",
-                    terminal: terminal,
-                    prompt: "Type DISCARD to discard \(count) queued events: ",
-                    maximumBytes: 64
-                )
-                return true
-            }
-        },
-        confirmEverything: {
-            try appendLifecycleVerificationAction("coordinator:confirm-everything", paths: paths)
-            return try promptErrors.record {
-                try requireExactPrivateLine(
-                    "UNINSTALL EVERYTHING",
-                    terminal: terminal,
-                    prompt: "Type UNINSTALL EVERYTHING to continue: ",
-                    maximumBytes: 64
-                )
-                return true
-            }
-        },
-        revoke: { try client.revoke(token: $0.deviceToken) }
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let context = try LifecycleVerificationContext(homeDirectory: homeDirectory)
+    let managedAgent = lifecycleVerificationManagedAgent(
+        registered: true,
+        context: context
     )
-    do {
-        try printRemovalOutcome(try RemovalCoordinator(operations: operations).run(mode: mode))
-    } catch {
-        if let promptError = promptErrors.error { throw promptError }
-        if let cliError = error as? CLIError { throw cliError }
-        throw CLIError.lifecycleFailed
-    }
+    try runComposedRemoval(
+        mode: mode,
+        terminal: terminal,
+        lifecyclePaths: lifecyclePaths,
+        boundaries: RemovalExecutionBoundaries(
+            managedAgent: managedAgent,
+            enrollmentTransport: { request in
+                try captureLifecycleVerificationRequest(request, context: context)
+                if scenario == .uninstallEverythingRevocationRequiredEmpty {
+                    return UploadHTTPResponse(
+                        statusCode: 401,
+                        body: Data(#"{"reason":"unauthorized"}"#.utf8)
+                    )
+                }
+                return UploadHTTPResponse(
+                    statusCode: 200,
+                    body: Data(#"{"revoked":true}"#.utf8)
+                )
+            },
+            stopDaemon: {
+                try appendLifecycleVerificationAction("control:uninstall", in: context)
+                if scenario == .uninstallEverythingAssistedRecoveryEmpty {
+                    try Data(#"{"version":1}"#.utf8).write(
+                        to: lifecyclePaths.enrollment,
+                        options: .atomic
+                    )
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: 0o600],
+                        ofItemAtPath: lifecyclePaths.enrollment.path
+                    )
+                }
+            },
+            delayMilliseconds: { _ in },
+            observe: { try appendLifecycleVerificationAction($0, in: context) },
+            acquireLock: {
+                try LifecycleLock.acquireLifecycleVerification(
+                    at: lifecyclePaths.lifecycleLock
+                )
+            }
+        )
+    )
 }
 
-private func appendLifecycleVerificationAction(_ action: String, paths: AgentPaths) throws {
-    let file = paths.stateDirectory.appendingPathComponent(
+private func appendLifecycleVerificationAction(
+    _ action: String,
+    in context: LifecycleVerificationContext
+) throws {
+    let file = context.directory.appendingPathComponent(
         "lifecycle-actions.log",
         isDirectory: false
     )
@@ -1248,13 +1394,15 @@ private func appendLifecycleVerificationAction(_ action: String, paths: AgentPat
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
 }
 
-private func writeLifecycleVerificationCapture(
+private func appendLifecycleVerificationCapture(
     _ value: String,
     named name: String,
-    paths: AgentPaths
+    in context: LifecycleVerificationContext
 ) throws {
-    let file = paths.stateDirectory.appendingPathComponent(name, isDirectory: false)
-    try Data(value.utf8).write(to: file, options: .atomic)
+    let file = context.directory.appendingPathComponent(name, isDirectory: false)
+    var data = (try? Data(contentsOf: file)) ?? Data()
+    data.append(Data((value + "\n").utf8))
+    try data.write(to: file, options: .atomic)
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
 }
 
@@ -1304,7 +1452,7 @@ private func verificationPaths(environment: [String: String]) throws -> AgentPat
           let root = verificationRoot(forApplicationSupportPath: path) else {
         throw CLIError.usage
     }
-    let home = root.appendingPathComponent("home", isDirectory: true)
+    let home = root
     let library = home.appendingPathComponent("Library", isDirectory: true)
     let applicationSupport = library.appendingPathComponent("Application Support", isDirectory: true)
     let paths = AgentPaths(applicationSupportDirectory: applicationSupport)
@@ -1324,7 +1472,7 @@ private func verificationPaths(environment: [String: String]) throws -> AgentPat
 
 private func verificationRoot(forApplicationSupportPath path: String) -> URL? {
     let prefix = "/private/tmp/rrv."
-    let suffix = "/home/Library/Application Support"
+    let suffix = "/Library/Application Support"
     guard path.hasPrefix(prefix), path.hasSuffix(suffix) else { return nil }
     let tokenStart = path.index(path.startIndex, offsetBy: prefix.count)
     let tokenEnd = path.index(path.endIndex, offsetBy: -suffix.count)

@@ -403,8 +403,49 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         }
     }
 
+    func testReEnrollmentExecutableUsesRealLifecycleLockExclusion() throws {
+        try withActualVersionOnlyApp { fixture in
+            let lifecycle = try lifecyclePaths(fixture)
+            let heldLock = try LifecycleLock.acquireLifecycleVerification(
+                at: lifecycle.lifecycleLock
+            )
+            defer { _ = heldLock }
+            let enrollmentBefore = try Data(contentsOf: lifecycle.enrollment)
+            let outboxBefore = try treeFingerprint(lifecycle.agent.outboxDirectory)
+            let process = try startPTYCLI(
+                fixture,
+                arguments: ["re-enroll"],
+                lifecycleScenario: "re-enroll-completed-empty"
+            )
+
+            let result = try process.wait(timeoutIterations: 100)
+
+            XCTAssertNotEqual(result.exitStatus, 0)
+            XCTAssertEqual(
+                result.stderr,
+                "Runtime Raiders lifecycle operation could not be completed safely.\n" +
+                "Next: run raiders status, then retry the lifecycle command.\n"
+            )
+            XCTAssertEqual(try Data(contentsOf: lifecycle.enrollment), enrollmentBefore)
+            XCTAssertEqual(try treeFingerprint(lifecycle.agent.outboxDirectory), outboxBefore)
+            XCTAssertNil(try RecoveryJournalStore(paths: lifecycle).load())
+            let actions = try lifecycleActionLines(fixture)
+            XCTAssertFalse(actions.contains { $0.hasPrefix("service:") })
+            XCTAssertFalse(actions.contains { $0.hasPrefix("network:") })
+        }
+    }
+
     func testOrdinaryUninstallRemainsNoninteractiveAndReportsPreservedState() throws {
         try withActualVersionOnlyApp { fixture in
+            let lifecycle = try lifecyclePaths(fixture)
+            let enrollmentBefore = try Data(contentsOf: lifecycle.enrollment)
+            let collectorBefore = try Data(
+                contentsOf: lifecycle.agent.stateDirectory.appendingPathComponent(
+                    "collector-state.json"
+                )
+            )
+            let outboxBefore = try treeFingerprint(lifecycle.agent.outboxDirectory)
+            let outsideBefore = try Data(contentsOf: fixture.versionResponse)
             let result = try runCLI(
                 fixture,
                 arguments: ["uninstall"],
@@ -421,16 +462,28 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 "Next: reinstall Runtime Raiders to restore the companion; collection will remain OFF.\n"
             )
             XCTAssertEqual(result.stderr, "")
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: lifecycle.agent.agentApplication.path)
+            )
+            XCTAssertEqual(try Data(contentsOf: lifecycle.enrollment), enrollmentBefore)
+            XCTAssertEqual(
+                try Data(
+                    contentsOf: lifecycle.agent.stateDirectory.appendingPathComponent(
+                        "collector-state.json"
+                    )
+                ),
+                collectorBefore
+            )
+            XCTAssertEqual(try treeFingerprint(lifecycle.agent.outboxDirectory), outboxBefore)
+            XCTAssertEqual(try Data(contentsOf: fixture.versionResponse), outsideBefore)
             try assertLifecycleOutputIsContentFree(result.stdout + result.stderr, fixture: fixture)
             try assertOrderedLifecycleActions(
                 [
-                    "coordinator:lock",
-                    "coordinator:persist-off",
+                    "collection:persist-off",
                     "control:uninstall",
-                    "coordinator:unregister-agent",
-                    "coordinator:prepare-session",
-                    "coordinator:remove-preserving-state",
-                    "coordinator:verify-preserved-state",
+                    "service:status:enabled",
+                    "service:unregister",
+                    "service:status:not-registered",
                 ],
                 in: fixture
             )
@@ -442,6 +495,9 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         try withActualVersionOnlyApp { fixture in
             let code = syntheticEnrollmentCode()
             XCTAssertEqual(code.utf8.count, 43)
+            let lifecycle = try lifecyclePaths(fixture)
+            let oldEnrollment = try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment)
+            let journalStore = try RecoveryJournalStore(paths: lifecycle)
             let process = try startPTYCLI(
                 fixture,
                 arguments: ["re-enroll"],
@@ -452,6 +508,8 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             try process.sendLine("RE-ENROLL")
             try process.waitForPrompt("Enrollment code: ")
             XCTAssertFalse(process.terminalTranscript.contains(code))
+            let pending = try XCTUnwrap(journalStore.load())
+            XCTAssertEqual(pending.phase, .replacementPrepared)
             try process.sendLine(code)
 
             let result = try process.wait()
@@ -469,42 +527,62 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             XCTAssertFalse(result.stdout.contains(code))
             XCTAssertFalse(result.stderr.contains(code))
             XCTAssertFalse(result.contentFreeDiagnostics.contains(code))
-            for capture in [lifecycleJournal(fixture), lifecycleRequest(fixture)] {
-                let contents = String(decoding: try Data(contentsOf: capture), as: UTF8.self)
-                XCTAssertFalse(contents.contains(code))
-                XCTAssertTrue(contents.contains("[REDACTED]"))
-            }
+            XCTAssertNil(try journalStore.load())
+            let installed = try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment)
+            XCTAssertNotEqual(installed, oldEnrollment)
+            XCTAssertEqual(
+                try AgentController.persistedCollectorState(
+                    paths: lifecycle.agent,
+                    surfaces: installed.enabledSurfaces
+                ),
+                .disabled
+            )
+            XCTAssertEqual(
+                try Outbox.queuedCount(inExistingDirectory: lifecycle.agent.outboxDirectory),
+                0
+            )
+            let requestCapture = String(
+                decoding: try Data(contentsOf: lifecycleRequest(fixture)),
+                as: UTF8.self
+            )
+            XCTAssertTrue(requestCapture.contains(#""path":"/api/raiders/re-enroll""#))
+            XCTAssertTrue(requestCapture.contains(#""method":"POST""#))
+            XCTAssertTrue(requestCapture.contains(#""contract":"exact""#))
+            XCTAssertTrue(requestCapture.contains("[REDACTED]"))
+            XCTAssertFalse(requestCapture.contains(code))
             try assertOrderedLifecycleActions(
                 [
                     "control:uninstall",
-                    "coordinator:lock",
-                    "coordinator:read-enrollment",
-                    "coordinator:prove-collection-off",
-                    "coordinator:unregister-agent",
-                    "coordinator:count-queue",
-                    "coordinator:confirm-re-enrollment",
-                    "coordinator:write-journal",
-                    "network:request",
-                    "coordinator:persist-enrollment",
-                    "coordinator:reset-collector",
-                    "coordinator:register-agent",
-                    "coordinator:verify-enrollment-off",
-                    "coordinator:remove-journal",
+                    "service:status:enabled",
+                    "service:unregister",
+                    "service:status:not-registered",
+                    "network:request:/api/raiders/re-enroll",
+                    "service:register",
+                    "service:status:enabled",
                 ],
                 in: fixture
             )
             try assertLifecycleOutputIsContentFree(
                 result.stdout + result.stderr + process.terminalTranscript,
                 fixture: fixture,
-                additionalSecrets: [code]
+                additionalSecrets: [code, pending.replacementDeviceToken]
             )
         }
     }
 
-    func testReEnrollmentPTYRejectsMalformedCodeBeforeJournalOrRequest() throws {
+    func testReEnrollmentPTYMalformedCodeRestoresOldStateAndRemovesJournalBeforeRequest() throws {
         try withActualVersionOnlyApp { fixture in
             let malformedCode = "private-\(UUID().uuidString)"
             XCTAssertEqual(malformedCode.utf8.count, 44)
+            let lifecycle = try lifecyclePaths(fixture)
+            let oldEnrollment = try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment)
+            let oldCollector = try Data(
+                contentsOf: lifecycle.agent.stateDirectory.appendingPathComponent(
+                    "collector-state.json"
+                )
+            )
+            let oldOutbox = try treeFingerprint(lifecycle.agent.outboxDirectory)
+            let journalStore = try RecoveryJournalStore(paths: lifecycle)
             let process = try startPTYCLI(
                 fixture,
                 arguments: ["re-enroll"],
@@ -513,6 +591,8 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             try process.waitForPrompt("Type RE-ENROLL to continue: ")
             try process.sendLine("RE-ENROLL")
             try process.waitForPrompt("Enrollment code: ")
+            let pending = try XCTUnwrap(journalStore.load())
+            XCTAssertEqual(pending.phase, .replacementPrepared)
             try process.sendLine(malformedCode)
 
             let result = try process.wait()
@@ -522,13 +602,40 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 "The enrollment code was not accepted. Collection remains OFF.\n" +
                 "Next: create a fresh code and run raiders re-enroll again.\n"
             )
-            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleJournal(fixture).path))
+            XCTAssertNil(try journalStore.load())
+            XCTAssertEqual(
+                try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment),
+                oldEnrollment
+            )
+            XCTAssertEqual(
+                try Data(
+                    contentsOf: lifecycle.agent.stateDirectory.appendingPathComponent(
+                        "collector-state.json"
+                    )
+                ),
+                oldCollector
+            )
+            XCTAssertEqual(try treeFingerprint(lifecycle.agent.outboxDirectory), oldOutbox)
             XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
-            XCTAssertFalse(try lifecycleActionLines(fixture).contains("network:request"))
+            try assertOrderedLifecycleActions(
+                [
+                    "service:status:enabled",
+                    "service:unregister",
+                    "service:status:not-registered",
+                    "service:register",
+                    "service:status:enabled",
+                ],
+                in: fixture
+            )
+            XCTAssertFalse(
+                try lifecycleActionLines(fixture).contains {
+                    $0.hasPrefix("network:request:")
+                }
+            )
             try assertLifecycleOutputIsContentFree(
                 result.stdout + result.stderr + process.terminalTranscript,
                 fixture: fixture,
-                additionalSecrets: [malformedCode]
+                additionalSecrets: [malformedCode, pending.replacementDeviceToken]
             )
         }
     }
@@ -537,10 +644,18 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         for disposition in ["deliver", "discard", "cancel"] {
             try withActualVersionOnlyApp { fixture in
                 let code = syntheticEnrollmentCode()
+                let lifecycle = try lifecyclePaths(fixture)
+                let oldEnrollment = try EnrollmentConfiguration.loadExisting(
+                    from: lifecycle.enrollment
+                )
                 let process = try startPTYCLI(
                     fixture,
                     arguments: ["re-enroll"],
                     lifecycleScenario: "re-enroll-completed-queued"
+                )
+                XCTAssertEqual(
+                    try Outbox.queuedCount(inExistingDirectory: lifecycle.agent.outboxDirectory),
+                    2
                 )
                 try process.waitForPrompt("Type RE-ENROLL to continue: ")
                 try process.sendLine("RE-ENROLL")
@@ -566,6 +681,16 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                         "Next: run raiders status.\n"
                     )
                     XCTAssertFalse(process.terminalTranscript.contains("Enrollment code: "))
+                    XCTAssertEqual(
+                        try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment),
+                        oldEnrollment
+                    )
+                    XCTAssertEqual(
+                        try Outbox.queuedCount(
+                            inExistingDirectory: lifecycle.agent.outboxDirectory
+                        ),
+                        2
+                    )
                 } else {
                     XCTAssertTrue(result.stdout.hasSuffix(
                         "Runtime Raiders re-enrollment succeeded.\n" +
@@ -573,7 +698,28 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                         "History was not transferred; Runs, scores, and rewards remain with their original Raider.\n" +
                         "Next: run raiders status, then deliberately run raiders on.\n"
                     ))
+                    XCTAssertNotEqual(
+                        try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment),
+                        oldEnrollment
+                    )
+                    XCTAssertEqual(
+                        try Outbox.queuedCount(
+                            inExistingDirectory: lifecycle.agent.outboxDirectory
+                        ),
+                        0
+                    )
+                    if disposition == "deliver" {
+                        let capture = String(
+                            decoding: try Data(contentsOf: lifecycleRequest(fixture)),
+                            as: UTF8.self
+                        )
+                        XCTAssertTrue(capture.contains(#""path":"/api/runs/events""#))
+                        XCTAssertTrue(capture.contains(#""contract":"exact""#))
+                    }
                 }
+                XCTAssertFalse(
+                    FileManager.default.fileExists(atPath: lifecycle.recoveryJournal.path)
+                )
                 XCTAssertTrue(try lifecycleActionLines(fixture).contains("queue:\(disposition)"))
                 try assertLifecycleOutputIsContentFree(
                     result.stdout + result.stderr + process.terminalTranscript,
@@ -634,6 +780,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
 
     func testCompleteRemovalPTYRequiresBothExactConfirmationsAndReportsRemovedCategories() throws {
         try withActualVersionOnlyApp { fixture in
+            let outsideBefore = try Data(contentsOf: fixture.versionResponse)
             let process = try startPTYCLI(
                 fixture,
                 arguments: ["uninstall", "--everything"],
@@ -655,23 +802,30 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 "Next: reinstall Runtime Raiders if you want to enroll this device again.\n"
             )
             XCTAssertEqual(result.stderr, "")
-            XCTAssertTrue(try lifecycleActionLines(fixture).contains("queue:discard"))
-            XCTAssertTrue(try lifecycleActionLines(fixture).contains("remove:everything"))
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: fixture.paths.supportDirectory.path)
+            )
+            XCTAssertEqual(try Data(contentsOf: fixture.versionResponse), outsideBefore)
+            let requestCapture = String(
+                decoding: try Data(contentsOf: lifecycleRequest(fixture)),
+                as: UTF8.self
+            )
+            XCTAssertTrue(
+                requestCapture.contains(#""path":"/api/raiders/devices/revoke-current""#)
+            )
+            XCTAssertTrue(requestCapture.contains(#""method":"POST""#))
+            XCTAssertTrue(requestCapture.contains(#""contract":"exact""#))
+            XCTAssertTrue(requestCapture.contains("[REDACTED]"))
             try assertOrderedLifecycleActions(
                 [
-                    "coordinator:lock",
-                    "coordinator:persist-off",
+                    "collection:persist-off",
                     "control:uninstall",
-                    "coordinator:unregister-agent",
-                    "coordinator:prepare-session",
-                    "coordinator:queue-snapshot",
-                    "coordinator:confirm-discard",
-                    "coordinator:confirm-everything",
-                    "coordinator:load-enrollment",
-                    "network:request",
-                    "coordinator:revocation-proof",
-                    "queue:discard",
-                    "remove:everything",
+                    "service:status:enabled",
+                    "service:unregister",
+                    "service:status:not-registered",
+                    "prompt:discard-confirmed",
+                    "prompt:everything-confirmed",
+                    "network:request:/api/raiders/devices/revoke-current",
                 ],
                 in: fixture
             )
@@ -745,6 +899,97 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             )
             XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
             XCTAssertFalse(try lifecycleActionLines(fixture).contains("network:request"))
+        }
+    }
+
+    func testReEnrollmentCodePromptEOFAndSignalPreserveJournalThenResumeSafely() throws {
+        for interruption in ["eof", "signal"] {
+            try withActualVersionOnlyApp { fixture in
+                let lifecycle = try lifecyclePaths(fixture)
+                let oldEnrollment = try EnrollmentConfiguration.loadExisting(
+                    from: lifecycle.enrollment
+                )
+                let outboxBefore = try treeFingerprint(lifecycle.agent.outboxDirectory)
+                let journalStore = try RecoveryJournalStore(paths: lifecycle)
+                let process = try startPTYCLI(
+                    fixture,
+                    arguments: ["re-enroll"],
+                    lifecycleScenario: "re-enroll-completed-empty"
+                )
+                try process.waitForPrompt("Type RE-ENROLL to continue: ")
+                try process.sendLine("RE-ENROLL")
+                try process.waitForPrompt("Enrollment code: ")
+                let pending = try XCTUnwrap(journalStore.load())
+                XCTAssertEqual(pending.phase, .replacementPrepared)
+                XCTAssertFalse(process.echoEnabled)
+
+                if interruption == "eof" {
+                    try process.sendEOF()
+                } else {
+                    try process.sendSignal(SIGINT)
+                }
+                let interrupted = try process.wait()
+
+                XCTAssertNotEqual(interrupted.exitStatus, 0)
+                XCTAssertTrue(process.echoEnabled)
+                XCTAssertEqual(
+                    interrupted.stderr,
+                    "Runtime Raiders needs assisted recovery. Collection remains OFF.\n" +
+                    "Next: run raiders re-enroll again; if it still fails, seek assisted recovery.\n"
+                )
+                XCTAssertEqual(try journalStore.load(), pending)
+                XCTAssertEqual(
+                    try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment),
+                    oldEnrollment
+                )
+                XCTAssertEqual(
+                    try AgentController.persistedCollectorState(
+                        paths: lifecycle.agent,
+                        surfaces: oldEnrollment.enabledSurfaces
+                    ),
+                    .disabled
+                )
+                XCTAssertEqual(try treeFingerprint(lifecycle.agent.outboxDirectory), outboxBefore)
+                let actionsAfterInterruption = try lifecycleActionLines(fixture)
+                XCTAssertTrue(actionsAfterInterruption.contains("service:unregister"))
+                XCTAssertFalse(actionsAfterInterruption.contains("service:register"))
+                XCTAssertFalse(
+                    actionsAfterInterruption.contains { $0.hasPrefix("network:request:") }
+                )
+
+                let resumed = try startPTYCLI(
+                    fixture,
+                    arguments: ["re-enroll"],
+                    lifecycleScenario: "re-enroll-completed-empty"
+                )
+                let resumedResult = try resumed.wait()
+
+                XCTAssertEqual(resumedResult.exitStatus, 0, resumedResult.contentFreeDiagnostics)
+                XCTAssertEqual(
+                    resumedResult.stdout,
+                    "Runtime Raiders re-enrollment succeeded.\n" +
+                    "Collection remains OFF.\n" +
+                    "History was not transferred; Runs, scores, and rewards remain with their original Raider.\n" +
+                    "Next: run raiders status, then deliberately run raiders on.\n"
+                )
+                XCTAssertNil(try journalStore.load())
+                let installed = try EnrollmentConfiguration.loadExisting(from: lifecycle.enrollment)
+                XCTAssertNotEqual(installed, oldEnrollment)
+                XCTAssertEqual(
+                    try AgentController.persistedCollectorState(
+                        paths: lifecycle.agent,
+                        surfaces: installed.enabledSurfaces
+                    ),
+                    .disabled
+                )
+                XCTAssertEqual(try treeFingerprint(lifecycle.agent.outboxDirectory), outboxBefore)
+                try assertLifecycleOutputIsContentFree(
+                    interrupted.stdout + interrupted.stderr + process.terminalTranscript +
+                        resumedResult.stdout + resumedResult.stderr + resumed.terminalTranscript,
+                    fixture: fixture,
+                    additionalSecrets: [pending.replacementDeviceToken]
+                )
+            }
         }
     }
 
@@ -949,7 +1194,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
                 fixture,
                 arguments: ["__runtime-raiders-verify-runtime-inputs"],
                 supportOverridePath: aliasRoot
-                    .appendingPathComponent("home/Library/Application Support", isDirectory: true)
+                    .appendingPathComponent("Library/Application Support", isDirectory: true)
                     .path
             )
             XCTAssertNotEqual(result.exitStatus, 0)
@@ -989,6 +1234,27 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         }
     }
 
+    func testLifecycleVerificationScenarioCannotReachLockSeamWithoutGate() throws {
+        try withActualVersionOnlyApp { fixture in
+            let lifecycle = try lifecyclePaths(fixture)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycle.lifecycleLock.path))
+
+            let result = try runCLI(
+                fixture,
+                arguments: ["re-enroll"],
+                includeVerificationGate: false,
+                lifecycleScenario: "re-enroll-completed-empty"
+            )
+
+            XCTAssertNotEqual(result.exitStatus, 0)
+            XCTAssertTrue(result.stderr.contains("usage:"), result.stderr)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycle.lifecycleLock.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleActions(fixture).path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: lifecycleRequest(fixture).path))
+            XCTAssertNil(try RecoveryJournalStore(paths: lifecycle).load())
+        }
+    }
+
     func testActualCLIRejectsMissingAndWrongVersionOnlyPlists() throws {
         try withActualVersionOnlyApp { fixture in
             for invalid in [
@@ -1010,6 +1276,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         let root: URL
         let home: URL
         let applicationSupport: URL
+        let captureDirectory: URL
         let paths: AgentPaths
         let executable: URL
         let info: URL
@@ -1309,9 +1576,13 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         guard let created else { throw FixtureError.cannotCreateVerificationRoot }
         let root = URL(fileURLWithPath: created, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let home = root.appendingPathComponent("home", isDirectory: true)
+        let home = root
         let applicationSupport = home.appendingPathComponent(
             "Library/Application Support",
+            isDirectory: true
+        )
+        let captureDirectory = root.appendingPathComponent(
+            "lifecycle-verification",
             isDirectory: true
         )
         let paths = AgentPaths(applicationSupportDirectory: applicationSupport)
@@ -1320,13 +1591,13 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         let contents = paths.agentApplication.appendingPathComponent("Contents", isDirectory: true)
         let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
         for directory in [
-            root,
             home,
             home.appendingPathComponent("Library", isDirectory: true),
             applicationSupport,
             paths.supportDirectory,
             paths.stateDirectory,
             paths.outboxDirectory,
+            captureDirectory,
             paths.agentApplication,
             contents,
             macOS,
@@ -1367,7 +1638,27 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             [.posixPermissions: 0o600],
             ofItemAtPath: enrollment.path
         )
-        let versionResponse = paths.stateDirectory.appendingPathComponent(
+        let collectorState = paths.stateDirectory.appendingPathComponent(
+            "collector-state.json",
+            isDirectory: false
+        )
+        try Data(#"{"enabled":false,"files":{},"version":1}"#.utf8).write(
+            to: collectorState
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: collectorState.path
+        )
+        let socketLifetimeLock = paths.supportDirectory.appendingPathComponent(
+            ".agent.sock.runtime-raiders.lock",
+            isDirectory: false
+        )
+        try Data().write(to: socketLifetimeLock)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: socketLifetimeLock.path
+        )
+        let versionResponse = root.appendingPathComponent(
             "version-response.json",
             isDirectory: false
         )
@@ -1381,6 +1672,7 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
             root: root,
             home: home,
             applicationSupport: applicationSupport,
+            captureDirectory: captureDirectory,
             paths: paths,
             executable: paths.agentExecutable,
             info: info,
@@ -1393,7 +1685,8 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         arguments: [String],
         lifecycleScenario: String
     ) throws -> PTYCLIProcess {
-        try PTYCLIProcess(
+        try prepareLifecyclePTYFixture(fixture, scenario: lifecycleScenario)
+        return try PTYCLIProcess(
             executable: fixture.executable,
             arguments: arguments,
             environment: cliEnvironment(fixture, lifecycleScenario: lifecycleScenario)
@@ -1429,24 +1722,25 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
     }
 
     private func lifecycleActions(_ fixture: Fixture) -> URL {
-        fixture.paths.stateDirectory.appendingPathComponent(
+        fixture.captureDirectory.appendingPathComponent(
             "lifecycle-actions.log",
             isDirectory: false
         )
     }
 
     private func lifecycleRequest(_ fixture: Fixture) -> URL {
-        fixture.paths.stateDirectory.appendingPathComponent(
+        fixture.captureDirectory.appendingPathComponent(
             "lifecycle-request-capture.json",
             isDirectory: false
         )
     }
 
     private func lifecycleJournal(_ fixture: Fixture) -> URL {
-        fixture.paths.stateDirectory.appendingPathComponent(
-            "lifecycle-journal-capture.json",
-            isDirectory: false
-        )
+        fixture.paths.stateDirectory.appendingPathComponent("re-enrollment.json")
+    }
+
+    private func lifecyclePaths(_ fixture: Fixture) throws -> CompanionLifecyclePaths {
+        try CompanionLifecyclePaths(homeDirectory: fixture.home)
     }
 
     private func lifecycleActionLines(_ fixture: Fixture) throws -> [String] {
@@ -1482,6 +1776,51 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
 
     private func syntheticEnrollmentCode() -> String {
         "private\(UUID().uuidString)"
+    }
+
+    private func prepareLifecyclePTYFixture(_ fixture: Fixture, scenario: String) throws {
+        if scenario == "re-enroll-collection-on" {
+            let collector = fixture.paths.stateDirectory.appendingPathComponent(
+                "collector-state.json"
+            )
+            try Data(#"{"enabled":true,"files":{},"version":1}"#.utf8).write(to: collector)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: collector.path
+            )
+        }
+        guard scenario == "re-enroll-completed-queued" ||
+                scenario == "uninstall-everything-completed-queued" else {
+            return
+        }
+        let outbox = try Outbox(directory: fixture.paths.outboxDirectory)
+        guard try outbox.queuedCount() == 0 else { return }
+        for sequence in 1...2 {
+            let event = RunEventV1(
+                schemaVersion: 1,
+                companionVersion: "1.2.3",
+                deviceID: "00000000-0000-4000-8000-000000000001",
+                provider: .codex,
+                surface: .codexCLI,
+                runKey: String(repeating: "a", count: 64),
+                sequence: Int64(sequence),
+                eventTimeMS: Int64(sequence),
+                observedAtMS: Int64(sequence),
+                startedAtMS: 1,
+                state: .open,
+                usage: .init(
+                    input: Int64(sequence),
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    reasoningOutput: 0
+                ),
+                model: nil,
+                effort: nil,
+                idempotencyKey: String(format: "%064x", sequence)
+            )
+            _ = try outbox.enqueue(event)
+        }
     }
 
     private func removeLifecycleCaptures(_ fixture: Fixture) throws {

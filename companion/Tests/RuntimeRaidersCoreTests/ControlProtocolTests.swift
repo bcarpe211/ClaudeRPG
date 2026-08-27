@@ -51,6 +51,64 @@ final class ControlProtocolTests: XCTestCase {
         )
     }
 
+    func testLifecycleVerificationLockAcceptsOnlyExactFixtureAndEnforcesExclusion() throws {
+        var template = Array("/private/tmp/rrv.XXXXXX".utf8CString)
+        let created = template.withUnsafeMutableBufferPointer { pointer -> String? in
+            guard let path = Darwin.mkdtemp(pointer.baseAddress) else { return nil }
+            return String(cString: path)
+        }
+        let root = URL(fileURLWithPath: try XCTUnwrap(created), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let applicationSupport = root.appendingPathComponent(
+            "Library/Application Support",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: applicationSupport,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        for directory in [root, root.appendingPathComponent("Library"), applicationSupport] {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directory.path
+            )
+        }
+        let marker = try CompanionLifecyclePaths(homeDirectory: root).lifecycleLock
+
+        do {
+            let held = try LifecycleLock.acquireLifecycleVerification(at: marker)
+            XCTAssertThrowsError(try LifecycleLock.acquireLifecycleVerification(at: marker))
+            withExtendedLifetime(held) {}
+        }
+        do {
+            let reacquired = try LifecycleLock.acquireLifecycleVerification(at: marker)
+            withExtendedLifetime(reacquired) {}
+        }
+        try FileManager.default.removeItem(at: marker)
+        try FileManager.default.createSymbolicLink(
+            at: marker,
+            withDestinationURL: root.appendingPathComponent("outside-lock")
+        )
+        XCTAssertThrowsError(try LifecycleLock.acquireLifecycleVerification(at: marker))
+        try FileManager.default.removeItem(at: marker)
+
+        for rejected in [
+            root.appendingPathComponent("Library/Application Support/not-the-lock"),
+            root.appendingPathComponent(
+                "home/Library/Application Support/.runtime-raiders.lifecycle.lock"
+            ),
+            URL(fileURLWithPath:
+                "/private/tmp/not-rrv/Library/Application Support/.runtime-raiders.lifecycle.lock"
+            ),
+            URL(fileURLWithPath:
+                "/private/tmp/rrv.TOOLONG/Library/Application Support/.runtime-raiders.lifecycle.lock"
+            ),
+        ] {
+            XCTAssertThrowsError(try LifecycleLock.acquireLifecycleVerification(at: rejected))
+        }
+    }
+
     func testAgentPathsExposeOneStableApplicationWithoutChangingStatePaths() {
         let root = URL(fileURLWithPath: "/Users/test/Library/Application Support")
         let paths = AgentPaths(applicationSupportDirectory: root)
@@ -936,6 +994,40 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(commands.values, ["on", "status", "off"])
     }
 
+    func testReEnrollmentInputMappingKeepsJournalUntilMalformedCodeRestoresOldAgent() throws {
+        let state = try LifecycleInputRecoveryState()
+        let base = makeLifecycleInputRecoveryOperations(state: state) {
+            String(repeating: "x", count: 44)
+        }
+        let operations = base.mappingMalformedCodeToInvalidEnrollment { code in
+            guard code.utf8.count == 43 else { throw EnrollmentClientError.invalidRequest }
+        }
+
+        XCTAssertEqual(
+            try ReEnrollmentCoordinator(operations: operations).run(),
+            .invalidEnrollment
+        )
+        XCTAssertEqual(state.journalWrites, [.replacementPrepared])
+        XCTAssertEqual(state.replaceObservedJournal, .replacementPrepared)
+        XCTAssertNil(state.journal)
+        XCTAssertTrue(state.agentRegistered)
+        XCTAssertEqual(state.journalRemovalCount, 1)
+    }
+
+    func testReEnrollmentInputMappingKeepsRecoveryJournalWhenCodePromptEnds() throws {
+        let state = try LifecycleInputRecoveryState()
+        let base = makeLifecycleInputRecoveryOperations(state: state) {
+            throw LifecycleTerminalError.endOfFile
+        }
+        let operations = base.mappingMalformedCodeToInvalidEnrollment { _ in }
+
+        XCTAssertThrowsError(try ReEnrollmentCoordinator(operations: operations).run())
+        XCTAssertEqual(state.journalWrites, [.replacementPrepared])
+        XCTAssertEqual(state.journal?.phase, .replacementPrepared)
+        XCTAssertFalse(state.agentRegistered)
+        XCTAssertEqual(state.journalRemovalCount, 0)
+    }
+
     private func makeRecoveryPaths(_ suffix: String) throws -> AgentPaths {
         let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("rr-stable-recovery-\(suffix)-\(UUID().uuidString)", isDirectory: true)
@@ -978,6 +1070,77 @@ final class ControlProtocolTests: XCTestCase {
             as: UTF8.self
         )
     }
+}
+
+private final class LifecycleInputRecoveryLock: ReEnrollmentLock, @unchecked Sendable {}
+
+private final class LifecycleInputRecoveryState: @unchecked Sendable {
+    let oldEnrollment: EnrollmentConfiguration
+    var agentRegistered = true
+    var journal: RecoveryJournal?
+    var journalWrites: [ReEnrollmentPhase] = []
+    var replaceObservedJournal: ReEnrollmentPhase?
+    var journalRemovalCount = 0
+
+    init() throws {
+        oldEnrollment = try EnrollmentConfiguration(
+            deviceID: "00000000-0000-4000-8000-000000000011",
+            deviceToken: String(repeating: "o", count: 43),
+            dedupeSecret: Data(repeating: 0x11, count: 32),
+            serverURL: URL(string: "https://raiders.redlattice.com")!,
+            cutoverAtMS: 1,
+            enabledSurfaces: [.codexCLI]
+        )
+    }
+}
+
+private func makeLifecycleInputRecoveryOperations(
+    state: LifecycleInputRecoveryState,
+    requestCode: @escaping () throws -> String
+) -> ReEnrollmentOperations {
+    ReEnrollmentOperations(
+        companionVersion: "test",
+        acquireLock: { LifecycleInputRecoveryLock() },
+        loadJournal: { nil },
+        readEnrollment: { state.oldEnrollment },
+        proveCollectionOff: { true },
+        unregisterAgent: { state.agentRegistered = false },
+        verifyAgentUnregistered: { !state.agentRegistered },
+        countQueue: { 0 },
+        summarize: { _ in },
+        confirmReEnrollment: { true },
+        resolveQueue: { _ in .cancel },
+        deliverQueue: { _ in },
+        discardQueue: {},
+        generateMaterial: {
+            ReplacementMaterial(
+                operationID: UUID(uuidString: "00000000-0000-4000-8000-000000000012")!,
+                deviceID: UUID(uuidString: "00000000-0000-4000-8000-000000000013")!,
+                deviceToken: String(repeating: "n", count: 43)
+            )
+        },
+        writeJournal: {
+            state.journal = $0
+            state.journalWrites.append($0.phase)
+        },
+        requestCode: requestCode,
+        replace: { _, _, _, _ in
+            state.replaceObservedJournal = state.journal?.phase
+            throw EnrollmentClientError.invalidRequest
+        },
+        recover: { _ in nil },
+        persistEnrollment: { _ in },
+        resetCollector: { _ in },
+        registerAgent: { state.agentRegistered = true },
+        verifyEnrollmentAndOff: { expected, _ in
+            expected == state.oldEnrollment && state.agentRegistered
+        },
+        delayMilliseconds: { _ in },
+        removeJournal: {
+            state.journal = nil
+            state.journalRemovalCount += 1
+        }
+    )
 }
 
 @_silgen_name("openpty")
