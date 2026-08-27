@@ -528,6 +528,7 @@ describe('Runtime Raiders local integration gate', () => {
       usage: { input: 222, output: 22 },
     });
 
+    vi.mocked(Date.now).mockReturnValue(NOW - 1);
     for (const [device, event] of [
       [oldDevice, oldHistory],
       [targetDevice, targetHistory],
@@ -540,6 +541,7 @@ describe('Runtime Raiders local integration gate', () => {
       expect(accepted.status).toBe(200);
       expect(accepted.body).toEqual({ accepted: 1, duplicate: 0, ignored: 0 });
     }
+    vi.mocked(Date.now).mockReturnValue(NOW);
 
     applyGoldMutation(db, {
       playerId: player.id,
