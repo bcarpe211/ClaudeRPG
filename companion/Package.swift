@@ -10,14 +10,21 @@ let package = Package(
         .executable(name: "raiders", targets: ["RuntimeRaidersCLI"]),
     ],
     targets: [
-        .target(name: "RuntimeRaidersCore"),
+        .target(
+            name: "RuntimeRaidersSignalSupport",
+            publicHeadersPath: "include"
+        ),
+        .target(
+            name: "RuntimeRaidersCore",
+            dependencies: ["RuntimeRaidersSignalSupport"]
+        ),
         .executableTarget(
             name: "RuntimeRaidersCLI",
             dependencies: ["RuntimeRaidersCore"]
         ),
         .testTarget(
             name: "RuntimeRaidersCoreTests",
-            dependencies: ["RuntimeRaidersCore"]
+            dependencies: ["RuntimeRaidersCore", "RuntimeRaidersSignalSupport"]
         ),
     ]
 )

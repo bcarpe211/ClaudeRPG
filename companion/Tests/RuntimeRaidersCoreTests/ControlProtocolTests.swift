@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import RuntimeRaidersSignalSupport
 import XCTest
 @testable import RuntimeRaidersCore
 
@@ -600,6 +601,89 @@ final class ControlProtocolTests: XCTestCase {
             XCTAssertNil(readSignalByte(from: readDescriptor))
             XCTAssertTrue(terminalEchoEnabled(at: path))
         }
+    }
+
+    func testLifecycleTerminalReaderWaitsForEnteredHandlerBeforeFinalDrain() throws {
+        try assertLifecycleHandlerHandoff(
+            pauseStage: RRS_TEST_PAUSE_AFTER_CLAIM,
+            expectsPriorDelivery: false
+        )
+    }
+
+    func testLifecycleTerminalReaderForwardsEnteredHandlerThatObservesClosedGate() throws {
+        try assertLifecycleHandlerHandoff(
+            pauseStage: RRS_TEST_PAUSE_BEFORE_CLAIM,
+            expectsPriorDelivery: true
+        )
+    }
+
+    func testLifecycleSignalSupportPreservesErrnoAndFailsClosedWhenPipeIsFull() throws {
+        let fullPipe = try descriptorPipe()
+        let nextPipe = try descriptorPipe()
+        defer {
+            Darwin.close(fullPipe.read)
+            Darwin.close(fullPipe.write)
+            Darwin.close(nextPipe.read)
+            Darwin.close(nextPipe.write)
+        }
+        let writeFlags = Darwin.fcntl(fullPipe.write, F_GETFL)
+        XCTAssertGreaterThanOrEqual(writeFlags, 0)
+        XCTAssertEqual(Darwin.fcntl(fullPipe.write, F_SETFL, writeFlags | O_NONBLOCK), 0)
+        var filler: UInt8 = 0xA5
+        while Darwin.write(fullPipe.write, &filler, 1) == 1 {}
+        XCTAssertTrue(errno == EAGAIN || errno == EWOULDBLOCK)
+
+        XCTAssertTrue(rrs_terminal_signal_trap_install(fullPipe.write))
+        errno = ERANGE
+        let firstRaiseResult = Darwin.raise(SIGQUIT)
+        let errnoAfterFullPipeHandler = errno
+        var sawDeliveryFailure = false
+        XCTAssertTrue(rrs_terminal_signal_trap_restore(&sawDeliveryFailure))
+        XCTAssertEqual(firstRaiseResult, 0)
+        XCTAssertEqual(errnoAfterFullPipeHandler, ERANGE)
+        XCTAssertTrue(sawDeliveryFailure)
+
+        XCTAssertTrue(rrs_terminal_signal_trap_install(nextPipe.write))
+        errno = EDOM
+        let secondRaiseResult = Darwin.raise(SIGQUIT)
+        let errnoAfterNextHandler = errno
+        var sawSecondFailure = false
+        XCTAssertTrue(rrs_terminal_signal_trap_restore(&sawSecondFailure))
+        XCTAssertEqual(secondRaiseResult, 0)
+        XCTAssertEqual(errnoAfterNextHandler, EDOM)
+        XCTAssertFalse(sawSecondFailure)
+        XCTAssertEqual(readDescriptorByte(nextPipe.read), UInt8(SIGQUIT))
+    }
+
+    func testLifecycleSignalSupportRollsBackPartialInstallationBeforeReuse() throws {
+        let priorDelivery = try descriptorPipe()
+        let signalPipe = try descriptorPipe()
+        defer {
+            Darwin.close(priorDelivery.read)
+            Darwin.close(priorDelivery.write)
+            Darwin.close(signalPipe.read)
+            Darwin.close(signalPipe.write)
+        }
+        lifecycleRestorationSignalWriteDescriptor = priorDelivery.write
+        let previousHandler = Darwin.signal(SIGINT, lifecycleRestorationPriorSignalHandler)
+        defer {
+            rrs_terminal_signal_test_reset()
+            lifecycleRestorationSignalWriteDescriptor = -1
+            _ = Darwin.signal(SIGINT, previousHandler)
+        }
+
+        rrs_terminal_signal_test_fail_install_at(2)
+        XCTAssertFalse(rrs_terminal_signal_trap_install(signalPipe.write))
+        rrs_terminal_signal_test_fail_install_at(-1)
+        XCTAssertEqual(Darwin.raise(SIGINT), 0)
+        XCTAssertEqual(readDescriptorByte(priorDelivery.read), UInt8(SIGINT))
+
+        XCTAssertTrue(rrs_terminal_signal_trap_install(signalPipe.write))
+        XCTAssertEqual(Darwin.raise(SIGQUIT), 0)
+        var sawFailure = false
+        XCTAssertTrue(rrs_terminal_signal_trap_restore(&sawFailure))
+        XCTAssertFalse(sawFailure)
+        XCTAssertEqual(readDescriptorByte(signalPipe.read), UInt8(SIGQUIT))
     }
 
     func testLifecycleTerminalReaderRejectsEmptyInvalidUTF8AndNonCharacterDevice() throws {
@@ -1364,6 +1448,143 @@ private func waitForSignalByte(from descriptor: Int32) -> UInt8? {
 private func readSignalByte(from descriptor: Int32) -> UInt8? {
     var byte: UInt8 = 0
     return Darwin.read(descriptor, &byte, 1) == 1 ? byte : nil
+}
+
+private func assertLifecycleHandlerHandoff(
+    pauseStage: rrs_test_pause_stage,
+    expectsPriorDelivery: Bool
+) throws {
+    let entered = try descriptorPipe()
+    let release = try descriptorPipe()
+    let quiescence = try descriptorPipe()
+    let quiescenceContinue = try descriptorPipe()
+    let readerCompleted = try descriptorPipe()
+    let workerCompleted = try descriptorPipe()
+    let priorDelivery = try descriptorPipe()
+    let allDescriptors = [
+        entered.read, entered.write,
+        release.read, release.write,
+        quiescence.read, quiescence.write,
+        quiescenceContinue.read, quiescenceContinue.write,
+        readerCompleted.read, readerCompleted.write,
+        workerCompleted.read, workerCompleted.write,
+        priorDelivery.read, priorDelivery.write,
+    ]
+    defer { allDescriptors.forEach { Darwin.close($0) } }
+
+    lifecycleRestorationSignalWriteDescriptor = priorDelivery.write
+    let previousHandler = Darwin.signal(SIGQUIT, lifecycleRestorationPriorSignalHandler)
+    defer {
+        rrs_terminal_signal_test_reset()
+        lifecycleRestorationSignalWriteDescriptor = -1
+        _ = Darwin.signal(SIGQUIT, previousHandler)
+    }
+    rrs_terminal_signal_test_configure(
+        pauseStage,
+        SIGQUIT,
+        entered.write,
+        release.read,
+        quiescence.write,
+        quiescenceContinue.read
+    )
+
+    let workerReady = DispatchSemaphore(value: 0)
+    let deliverSignal = DispatchSemaphore(value: 0)
+    Thread {
+        var signalSet = sigset_t()
+        _ = Darwin.sigemptyset(&signalSet)
+        _ = Darwin.sigaddset(&signalSet, SIGQUIT)
+        _ = Darwin.pthread_sigmask(SIG_UNBLOCK, &signalSet, nil)
+        workerReady.signal()
+        deliverSignal.wait()
+        errno = EOVERFLOW
+        _ = Darwin.raise(SIGQUIT)
+        writeDescriptorByte(workerCompleted.write, errno == EOVERFLOW ? 1 : 0)
+    }.start()
+    XCTAssertEqual(workerReady.wait(timeout: .now() + 1), .success)
+
+    try withPseudoTerminal { master, path in
+        let writer = TerminalReadResult()
+        let readerResult = TerminalReadResult()
+        let reader = LifecycleTerminalReader(
+            testPath: path,
+            transitionHook: { transition in
+                guard transition == .signalHandlersRestoring else { return }
+                deliverSignal.signal()
+                _ = readDescriptorByte(entered.read)
+            }
+        )
+        DispatchQueue.global().async {
+            readerResult.start()
+            readerResult.finish(Result {
+                try reader.readLine(prompt: "Private input: ", maximumBytes: 64)
+            })
+            writeDescriptorByte(readerCompleted.write, 1)
+        }
+        DispatchQueue.global().async {
+            writer.start()
+            writer.finish(Result {
+                try waitForPrompt("Private input: ", from: master)
+                try writeAll(Data("CONFIRM\n".utf8), to: master)
+                return "written"
+            })
+        }
+        XCTAssertEqual(readerResult.started.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(writer.started.wait(timeout: .now() + 1), .success)
+
+        var observations = [
+            pollfd(fd: readerCompleted.read, events: Int16(POLLIN), revents: 0),
+            pollfd(fd: quiescence.read, events: Int16(POLLIN), revents: 0),
+        ]
+        XCTAssertEqual(Darwin.poll(&observations, 2, -1), 1)
+        let reachedQuiescence = observations[1].revents & Int16(POLLIN) != 0
+        if reachedQuiescence {
+            _ = readDescriptorByte(quiescence.read)
+        } else {
+            _ = readDescriptorByte(readerCompleted.read)
+        }
+
+        writeDescriptorByte(release.write, 1)
+        XCTAssertEqual(readDescriptorByte(workerCompleted.read), 1)
+        let priorReadFlags = Darwin.fcntl(priorDelivery.read, F_GETFL)
+        XCTAssertGreaterThanOrEqual(priorReadFlags, 0)
+        XCTAssertEqual(
+            Darwin.fcntl(priorDelivery.read, F_SETFL, priorReadFlags | O_NONBLOCK),
+            0
+        )
+        let deliveredToPrior = readSignalByte(from: priorDelivery.read)
+        if expectsPriorDelivery {
+            XCTAssertEqual(deliveredToPrior, UInt8(SIGQUIT))
+        } else {
+            XCTAssertNil(deliveredToPrior)
+        }
+        if reachedQuiescence {
+            writeDescriptorByte(quiescenceContinue.write, 1)
+        }
+
+        XCTAssertTrue(reachedQuiescence, "reader accepted input before handler handoff")
+        XCTAssertThrowsError(try readerResult.value()) { error in
+            XCTAssertEqual(error as? LifecycleTerminalError, .interrupted)
+        }
+        XCTAssertEqual(try writer.value(), "written")
+        XCTAssertTrue(terminalEchoEnabled(at: path))
+    }
+}
+
+private func descriptorPipe() throws -> (read: Int32, write: Int32) {
+    var descriptors = [Int32](repeating: -1, count: 2)
+    guard Darwin.pipe(&descriptors) == 0 else { throw POSIXError(.EIO) }
+    return (descriptors[0], descriptors[1])
+}
+
+private func readDescriptorByte(_ descriptor: Int32) -> UInt8? {
+    var byte: UInt8 = 0
+    return Darwin.read(descriptor, &byte, 1) == 1 ? byte : nil
+}
+
+private func writeDescriptorByte(_ descriptor: Int32, _ byte: UInt8) {
+    var byte = byte
+    _ = Darwin.write(descriptor, &byte, 1)
 }
 
 private func startTerminalRead(path: String, maximumBytes: Int) -> TerminalReadResult {

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import RuntimeRaidersSignalSupport
 
 @_silgen_name("flock")
 private func runtimeRaidersFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
@@ -140,16 +141,6 @@ private struct LifecycleTerminalSignalPipe {
 }
 
 private let lifecycleTerminalSignalPipe = try? LifecycleTerminalSignalPipe()
-private let lifecycleTerminalSignalWriteDescriptor =
-    lifecycleTerminalSignalPipe?.writeDescriptor ?? -1
-
-private func lifecycleTerminalSignalHandler(_ signal: Int32) {
-    let descriptor = lifecycleTerminalSignalWriteDescriptor
-    guard descriptor >= 0 else { return }
-    var byte = UInt8(truncatingIfNeeded: signal)
-    _ = Darwin.write(descriptor, &byte, 1)
-}
-
 public struct LifecycleTerminalReader: @unchecked Sendable {
     private let path: String
     private let setAttributes: TerminalSetAttributes
@@ -300,23 +291,20 @@ enum LifecycleTerminalTransition: Equatable, Sendable {
 private final class LifecycleTerminalSignalTrap {
     private static let signals = [SIGINT, SIGTERM, SIGHUP, SIGQUIT]
     private let readDescriptor: Int32
-    private var previousHandlers: [(Int32, sig_t?)] = []
     private var restored = false
 
     init() throws {
         lifecycleTerminalSignalLock.lock()
-        let signalWriteDescriptor = lifecycleTerminalSignalWriteDescriptor
         guard let signalPipe = lifecycleTerminalSignalPipe,
-              signalWriteDescriptor == signalPipe.writeDescriptor,
-              signalWriteDescriptor >= 0 else {
+              rrs_terminal_signal_atomics_are_lock_free() else {
             lifecycleTerminalSignalLock.unlock()
             throw LifecycleTerminalError.unavailable
         }
         readDescriptor = signalPipe.readDescriptor
         signalPipe.drain()
-        for signalValue in Self.signals {
-            let previous = Darwin.signal(signalValue, lifecycleTerminalSignalHandler)
-            previousHandlers.append((signalValue, previous))
+        guard rrs_terminal_signal_trap_install(signalPipe.writeDescriptor) else {
+            lifecycleTerminalSignalLock.unlock()
+            throw LifecycleTerminalError.unavailable
         }
     }
 
@@ -361,8 +349,9 @@ private final class LifecycleTerminalSignalTrap {
         var protectedSignalArrived = checkForProtectedSignal && consumeSignal()
         restored = true
         transitionHook?()
-        for handler in previousHandlers.reversed() {
-            _ = Darwin.signal(handler.0, handler.1)
+        var lateSignal = false
+        if !rrs_terminal_signal_trap_restore(&lateSignal) || lateSignal {
+            protectedSignalArrived = checkForProtectedSignal
         }
         if checkForProtectedSignal, consumeSignal() {
             protectedSignalArrived = true
@@ -390,9 +379,8 @@ private final class LifecycleTerminalSignalTrap {
 
     private func restoreWithoutSignalBlock() {
         restored = true
-        for (signalValue, previous) in previousHandlers.reversed() {
-            _ = Darwin.signal(signalValue, previous)
-        }
+        var lateSignal = false
+        _ = rrs_terminal_signal_trap_restore(&lateSignal)
         lifecycleTerminalSignalLock.unlock()
     }
 }
