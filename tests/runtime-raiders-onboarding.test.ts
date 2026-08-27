@@ -142,6 +142,27 @@ afterEach(() => {
 });
 
 describe('Runtime Raiders canonical onboarding command', () => {
+  it('documents only the supported local enrollment and removal procedures', () => {
+    const employee = readFileSync(
+      join(process.cwd(), 'docs/runtime-raiders/employee-beta.md'),
+      'utf8',
+    );
+    const operations = readFileSync(
+      join(process.cwd(), 'docs/runtime-raiders/companion-operations.md'),
+      'utf8',
+    );
+    const documented = `${employee}\n${operations}`;
+
+    for (const statement of [
+      'Change Raider: `raiders off`, then `raiders re-enroll`.',
+      'Remove the app but keep recovery state: `raiders uninstall`.',
+      'Revoke and remove every local Runtime Raiders artifact: `raiders uninstall --everything`.',
+      'Browser login alone never changes an installed enrollment.',
+      'Neither removal mode deletes a Raider, account, Run, score, reward, or beta history.',
+    ]) expect(documented).toContain(statement);
+    expect(documented).not.toContain('rm -rf ~/Library/Application Support/Runtime Raiders');
+  });
+
   it('exposes the shared installer bound to non-TypeScript release tools', () => {
     const output = execFileSync(process.execPath, [
       join(process.cwd(), 'scripts/lib/runtime-raiders-artifact-contract.mjs'),

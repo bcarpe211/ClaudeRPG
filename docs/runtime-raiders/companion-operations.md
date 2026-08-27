@@ -1,5 +1,21 @@
 # Runtime Raiders companion operations
 
+## Supported local lifecycle procedures
+
+Employees change an installed device enrollment only with: Change Raider:
+`raiders off`, then `raiders re-enroll`.
+
+The recoverable local removal is: Remove the app but keep recovery state:
+`raiders uninstall`.
+
+The confirmed destructive local removal is: Revoke and remove every local
+Runtime Raiders artifact: `raiders uninstall --everything`.
+
+Browser login alone never changes an installed enrollment. Neither removal mode
+deletes a Raider, account, Run, score, reward, or beta history. Do not prescribe
+manual support-directory cleanup; a valid retained recovery journal is resumed
+only by `raiders re-enroll` after collection is off.
+
 ## Server credential lifecycle boundary
 
 The server exposes three credential-lifecycle endpoints for the supported
@@ -43,8 +59,8 @@ After an ambiguous replacement result, recovery order is fixed:
    deterministic, but it is not a substitute for the replacement-first probe.
 4. If neither credential establishes a coherent state, fail closed, preserve
    the owner-only recovery journal and both local credential materials, keep
-   collection off, and resume the supported coordinator or seek assisted
-   recovery.
+   collection off, and resume the supported `raiders re-enroll` coordinator or
+   seek assisted recovery.
 
 Credential lifecycle never changes account or game history. Replacement may
 change only enrollment, device, and replacement-operation rows; configuration

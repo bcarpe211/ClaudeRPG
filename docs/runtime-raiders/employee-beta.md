@@ -13,6 +13,22 @@ raiders update
 Turn collection off:
 raiders off
 
+## Change or remove a local companion
+
+Change Raider: `raiders off`, then `raiders re-enroll`.
+
+Remove the app but keep recovery state: `raiders uninstall`.
+
+Revoke and remove every local Runtime Raiders artifact: `raiders uninstall --everything`.
+
+Browser login alone never changes an installed enrollment.
+
+Neither removal mode deletes a Raider, account, Run, score, reward, or beta history.
+
+If an interrupted re-enrollment leaves recovery state in place, reinstall the
+official companion if needed, keep collection off, then run `raiders re-enroll`.
+Do not delete support files by hand.
+
 Before a first install, a new player opens
 `https://raiders.redlattice.com/register` and creates a Raider. An existing
 player opens `https://raiders.redlattice.com/character`, signs in with their
@@ -26,8 +42,7 @@ with valid existing enrollment does not require another code.
 The installer starts a new employee with collection off. `raiders status` is
 the human-readable way to check whether collection is on and what to do next.
 A reinstall keeps that employee's enrollment, queued metrics, cursors, and
-previous on/off choice. Publishing a release never turns collection on for
-anyone.
+previous off state. Publishing a release never turns collection on for anyone.
 
 ## Run the one-shot live acceptance gate
 

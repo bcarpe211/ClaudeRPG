@@ -43,6 +43,7 @@ LEGACY_PLIST="$LAUNCH_AGENTS/$LEGACY_LABEL.plist"
 COMMAND_DIRECTORY="$HOME/.local/bin"
 COMMAND="$COMMAND_DIRECTORY/raiders"
 ENROLLMENT="$STATE/enrollment.json"
+RECOVERY_JOURNAL="$STATE/re-enrollment.json"
 RELEASES="$SUPPORT/releases"
 INSTALLATION="$SUPPORT/installation"
 LAUNCHER="$SUPPORT/launcher"
@@ -57,7 +58,7 @@ refuse_symlink() {
 for owned_path in \
   "$HOME/Library" "$HOME/Library/Application Support" "$SUPPORT" "$STATE" "$OUTBOX" \
   "$APP" "$LEGACY_APP" "$LAUNCH_AGENTS" "$LEGACY_PLIST" "$SHIM" "$HOME/.local" "$COMMAND_DIRECTORY" \
-  "$RELEASES" "$INSTALLATION" "$LAUNCHER"; do
+  "$RELEASES" "$INSTALLATION" "$LAUNCHER" "$RECOVERY_JOURNAL"; do
   refuse_symlink "$owned_path"
 done
 
@@ -251,6 +252,49 @@ validate_enrollment() {
     validate_enrollment_contents "$ENROLLMENT"
 }
 
+validate_recovery_journal_contents() {
+  journal_file=$1
+  journal_size="$(/usr/bin/stat -f %z "$journal_file")" || return 1
+  [ "$journal_size" -gt 0 ] && [ "$journal_size" -le 16384 ] || return 1
+  is_bounded_json_dictionary "$journal_file" &&
+    plist_has_exact_keys "$journal_file" 7 \
+      version operation_id replacement_device_id replacement_device_token \
+      companion_version queue_disposition phase &&
+    plist_value_has_type "$journal_file" version integer &&
+    plist_value_has_type "$journal_file" operation_id string &&
+    plist_value_has_type "$journal_file" replacement_device_id string &&
+    plist_value_has_type "$journal_file" replacement_device_token string &&
+    plist_value_has_type "$journal_file" companion_version string &&
+    plist_value_has_type "$journal_file" queue_disposition string &&
+    plist_value_has_type "$journal_file" phase string || return 1
+  journal_version="$(/usr/bin/plutil -extract version raw -o - "$journal_file")" &&
+    journal_operation_id="$(/usr/bin/plutil -extract operation_id raw -o - "$journal_file")" &&
+    journal_replacement_device_id="$(/usr/bin/plutil -extract replacement_device_id raw -o - "$journal_file")" &&
+    journal_replacement_token="$(/usr/bin/plutil -extract replacement_device_token raw -o - "$journal_file")" &&
+    journal_companion_version="$(/usr/bin/plutil -extract companion_version raw -o - "$journal_file")" &&
+    journal_queue_disposition="$(/usr/bin/plutil -extract queue_disposition raw -o - "$journal_file")" &&
+    journal_phase="$(/usr/bin/plutil -extract phase raw -o - "$journal_file")" || return 1
+  valid_uuid "$journal_operation_id" &&
+    valid_uuid "$journal_replacement_device_id" &&
+    [ "$journal_version" = 1 ] || return 1
+  case "$journal_replacement_token" in *[!A-Za-z0-9_-]*|'') return 1;; esac
+  [ "${#journal_replacement_token}" -eq 43 ] || return 1
+  journal_companion_version_bytes="$(printf '%s' "$journal_companion_version" | /usr/bin/wc -c | /usr/bin/tr -d ' ')"
+  [ "$journal_companion_version_bytes" -ge 1 ] && [ "$journal_companion_version_bytes" -le 100 ] || return 1
+  case "$journal_queue_disposition" in delivered|discarded|empty) ;; *) return 1;; esac
+  case "$journal_phase" in
+    replacementPrepared|serverCommitted|configurationInstalled|collectorReset|agentRegistered) ;;
+    *) return 1;;
+  esac
+}
+
+validate_recovery_journal() {
+  [ -f "$RECOVERY_JOURNAL" ] && [ ! -L "$RECOVERY_JOURNAL" ] &&
+    [ "$(/usr/bin/stat -f %u "$RECOVERY_JOURNAL")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f %Lp "$RECOVERY_JOURNAL")" = 600 ] &&
+    validate_recovery_journal_contents "$RECOVERY_JOURNAL"
+}
+
 validate_enrollment_response() {
   response_file=$1
   [ -f "$response_file" ] && [ ! -L "$response_file" ] &&
@@ -386,8 +430,38 @@ if [ -e "$ENROLLMENT" ] || [ -L "$ENROLLMENT" ]; then
     echo 'Runtime Raiders refuses unsafe existing enrollment.' >&2
     exit 1
   }
-  if validate_enrollment; then has_enrollment=1; fi
+  if validate_enrollment; then
+    has_enrollment=1
+  else
+    echo 'Runtime Raiders refuses an invalid existing enrollment.' >&2
+    exit 1
+  fi
 fi
+
+has_recovery_journal=0
+if [ -e "$RECOVERY_JOURNAL" ] || [ -L "$RECOVERY_JOURNAL" ]; then
+  refuse_symlink "$RECOVERY_JOURNAL"
+  [ -f "$RECOVERY_JOURNAL" ] &&
+    [ "$(/usr/bin/stat -f %u "$RECOVERY_JOURNAL")" = "$OWNER" ] &&
+    [ "$(/usr/bin/stat -f %Lp "$RECOVERY_JOURNAL")" = 600 ] || {
+    echo 'Runtime Raiders refuses unsafe existing recovery state.' >&2
+    exit 1
+  }
+  if validate_recovery_journal; then
+    has_recovery_journal=1
+  else
+    echo 'Runtime Raiders refuses invalid existing recovery state.' >&2
+    exit 1
+  fi
+fi
+
+if [ "$has_recovery_journal" -eq 1 ] && [ "$has_enrollment" -eq 0 ]; then
+  echo 'Runtime Raiders refuses recovery state without an existing enrollment.' >&2
+  exit 1
+fi
+
+fresh_enrollment=0
+if [ "$has_enrollment" -eq 0 ] && [ "$has_recovery_journal" -eq 0 ]; then fresh_enrollment=1; fi
 
 WORK="$(/usr/bin/mktemp -d "$SUPPORT/.runtime-raiders-install.XXXXXX")"
 transaction_active=0
@@ -693,7 +767,7 @@ if [ -n "$LOCAL_ARCHIVE" ] && [ "$has_enrollment" -eq 0 ]; then
   exit 1
 fi
 
-if [ "$has_enrollment" -eq 0 ]; then
+if [ "$fresh_enrollment" -eq 1 ]; then
   [ -r /dev/tty ] && [ -w /dev/tty ] || usage
   tty_state="$(/bin/stty -g < /dev/tty)" || usage
   printf '%s\n' \
@@ -843,3 +917,6 @@ printf '%s\n' \
   'Collection is OFF.' \
   'Run `raiders status` to check the setup.' \
   'Run `raiders on` when you want to join the game.'
+if [ "$has_recovery_journal" -eq 1 ]; then
+  printf '%s\n' 'Run `raiders re-enroll` to resume recovery.'
+fi
