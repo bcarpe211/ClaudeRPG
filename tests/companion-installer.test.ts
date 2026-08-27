@@ -164,6 +164,14 @@ function buildFixture() {
     `printf 'agent:%s home=%s verify=%s support=%s response=%s argv=%s\\n' "$operation" "$HOME" "\${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-unset}" "\${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-unset}" "\${RUNTIME_RAIDERS_VERIFY_VERSION_RESPONSE_FILE:-unset}" "$*" >> '${agentLog}'`,
     'expected_support="$HOME/Library/Application Support"',
     '[ "${RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS:-}" = 1 ] && [ "${RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY:-}" = "$expected_support" ] || { echo unsafeVerificationEnvironment >&2; exit 79; }',
+    'if [ "$#" -eq 2 ] && [ "$1" = __runtime-raiders-lifecycle-lock-hold ]; then',
+    '  [ "$2" = "$0" ] || exit 64',
+    '  printf "locked\\n"',
+    '  while IFS= read -r _lock_input; do',
+    '    case "$_lock_input" in held) printf "held\\n";; release) printf "released\\n"; exit 0;; *) exit 64;; esac',
+    '  done',
+    '  exit 0',
+    'fi',
     'managed_state="$HOME/Library/Application Support/Runtime Raiders/state/managed-service-state"',
     'managed_running="$HOME/Library/Application Support/Runtime Raiders/managed-running"',
     'case "${1:-} ${2:-}" in',
@@ -413,6 +421,19 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     : '${RR_FAIL_RESTORED_STATUS:-0}';
   return [
     `printf "agent:${identity}:%s\\n" "$*" >> "$RR_EVENT_LOG"`,
+    'if [ "$#" -eq 2 ] && [ "$1" = __runtime-raiders-lifecycle-lock-hold ]; then',
+    '  [ "$2" = "$0" ] || exit 64',
+    '  [ "${RR_FAIL_LIFECYCLE_LOCK:-0}" != 1 ] || exit 75',
+    `  printf "lock:${identity}:acquired\\n" >> "$RR_EVENT_LOG"`,
+    '  : > "$RR_LOCK_HELD"',
+    `  trap '/bin/rm -f "$RR_LOCK_HELD"; printf "lock:${identity}:released\\n" >> "$RR_EVENT_LOG"' EXIT`,
+    '  printf "locked\\n"',
+    '  [ "${RR_EXIT_LIFECYCLE_LOCK_AFTER_READY:-0}" != 1 ] || exit 75',
+    '  while IFS= read -r _lock_input; do',
+    '    case "$_lock_input" in held) printf "held\\n";; release) printf "released\\n"; exit 0;; *) exit 64;; esac',
+    '  done',
+    '  exit 0',
+    'fi',
     'case "${1:-} ${2:-}" in',
     '  "__runtime-raiders-managed-agent status")',
     ...(identity === 'candidate' ? [
@@ -420,6 +441,7 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ] : []),
     '    /bin/cat "$RR_MANAGED_STATE"; exit 0;;',
     '  "__runtime-raiders-managed-agent register")',
+    '    [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:register\\n" >> "$RR_EVENT_LOG"',
     `    [ "${registerFailure}" != 1 ] || exit 79`,
     '    printf "enabled\\n" > "$RR_MANAGED_STATE"',
     '    : > "$RR_RUNNING"',
@@ -429,6 +451,7 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ] : []),
     '    printf "enabled\\n"; exit 0;;',
     '  "__runtime-raiders-managed-agent unregister")',
+    '    [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:unregister\\n" >> "$RR_EVENT_LOG"',
     `    [ "${unregisterFailure}" != 1 ] || exit 80`,
     '    printf "not-registered\\n" > "$RR_MANAGED_STATE"',
     '    /bin/rm -f "$RR_RUNNING"',
@@ -622,6 +645,7 @@ function fakeTools(root: string): string {
     'fi',
     'if [ -n "$boundary" ]; then',
     '  printf "mv:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
+    '  [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
     'fi',
     'if [ -n "$boundary" ] && { [ "${RR_FAIL_MV_BOUNDARY:-}" = "$boundary" ] || [ "${RR_FAIL_RESTORE_BOUNDARY:-}" = "$boundary" ]; }; then exit 74; fi',
     '/bin/mv "$source" "$destination"',
@@ -657,6 +681,7 @@ function fixture() {
   const enrollmentResponse = join(root, 'enrollment-response.json');
   const tty = join(root, 'tty');
   const history = join(root, 'immutable-history');
+  const lockHeld = join(root, 'lifecycle-lock-held');
   mkdirSync(join(candidate, 'Contents/MacOS'), { recursive: true });
   mkdirSync(join(candidate, 'Contents/Resources'));
   mkdirSync(join(candidate, 'Contents/Library/LaunchAgents'), { recursive: true });
@@ -688,7 +713,7 @@ function fixture() {
   return {
     root, home, support, state, outbox, app, plist: plistPath, shim, command,
     candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running, managedState,
-    legacyJob, statusCalls, dateCalls, history,
+    legacyJob, statusCalls, dateCalls, history, lockHeld,
     environment: {
       ...process.env,
       HOME: home,
@@ -723,6 +748,7 @@ function fixture() {
       RR_TEAM_ID: teamId,
       RR_TTY: tty,
       RR_FAKE_BIN: bin,
+      RR_LOCK_HELD: lockHeld,
     } as NodeJS.ProcessEnv,
   };
 }
@@ -1029,8 +1055,9 @@ describe('Runtime Raiders release build', () => {
     expect(result.status, result.stderr + result.stdout).toBe(0);
 
     const invocations = readFileSync(value.agentLog, 'utf8').trim().split('\n');
-    expect(invocations).toHaveLength(5);
+    expect(invocations).toHaveLength(6);
     expect(invocations.map((line) => line.split(' ')[0])).toEqual([
+      'agent:__runtime-raiders-lifecycle-lock-hold',
       'agent:__runtime-raiders-managed-agent:register',
       'agent:__runtime-raiders-managed-agent:status',
       'agent:status',
@@ -1039,7 +1066,7 @@ describe('Runtime Raiders release build', () => {
     ]);
     for (const line of invocations) {
       const matched = line.match(
-        /^agent:(?:__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
+        /^agent:(?:__runtime-raiders-lifecycle-lock-hold|__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
       );
       expect(matched, line).not.toBeNull();
       expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
@@ -1049,9 +1076,10 @@ describe('Runtime Raiders release build', () => {
     expect(invocations[1]).toContain('response=unset');
     expect(invocations[2]).toContain('response=unset');
     expect(invocations[3]).toContain('response=unset');
-    expect(invocations[4]).not.toContain('response=unset');
-    expect(invocations[2]).toContain('argv=status --json');
+    expect(invocations[4]).toContain('response=unset');
+    expect(invocations[5]).not.toContain('response=unset');
     expect(invocations[3]).toContain('argv=status --json');
+    expect(invocations[4]).toContain('argv=status --json');
   });
 
   it.each([
@@ -1922,6 +1950,70 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(join(value.state, 'collector-state.json'), 'utf8')).toContain('"enabled":false');
   });
 
+  it('holds the shared lifecycle lock continuously across service and filesystem mutation', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+
+    const result = run(value);
+    const log = events(value);
+    const acquired = log.indexOf('lock:candidate:acquired');
+    const firstMutation = log.indexOf('agent:old-managed:__runtime-raiders-managed-agent unregister');
+    const finalProof = log.lastIndexOf('agent:candidate:status --json');
+    const released = log.indexOf('lock:candidate:released');
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(acquired).toBeGreaterThanOrEqual(0);
+    expect(firstMutation).toBeGreaterThan(acquired);
+    expect(released).toBeGreaterThan(finalProof);
+    expect(log.some((line) => line.startsWith('lock:missing:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('fails before service or filesystem mutation when the shared lifecycle lock is busy', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const before = treeSnapshot(value.home);
+    value.environment.RR_FAIL_LIFECYCLE_LOCK = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(treeSnapshot(value.home)).toEqual(before);
+    expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('fails before service or filesystem mutation when the lock holder exits after handshake', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const before = treeSnapshot(value.home);
+    value.environment.RR_EXIT_LIFECYCLE_LOCK_AFTER_READY = '1';
+
+    const result = run(value);
+
+    expect(result.status).not.toBe(0);
+    expect(treeSnapshot(value.home)).toEqual(before);
+    expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
+    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
+  it('releases the lifecycle lock helper after interrupted rollback without a background leak', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    value.environment.RR_SIGNAL_AFTER_MV_BOUNDARY = 'replace-app';
+
+    const result = run(value);
+    const log = events(value);
+
+    expect(result.status).not.toBe(0);
+    expect(log).toContain('lock:candidate:acquired');
+    expect(log).toContain('lock:candidate:released');
+    expect(log.some((line) => line.startsWith('lock:missing:'))).toBe(false);
+    expect(existsSync(value.lockHeld)).toBe(false);
+  });
+
   it.each(
     (['legacy', 'managed'] as const).flatMap((form) =>
       nonDisabledStatuses.map(([state, wire]) => [form, state, wire] as const)),
@@ -2153,6 +2245,39 @@ describe('Runtime Raiders reinstall-safe installer', () => {
       readFileSync(value.eventLog, 'utf8'),
     ]) expect(output).not.toContain(replacementToken);
     assertNoHistoryMutation(value, historyBefore, `${result.stdout}${result.stderr}`);
+  });
+
+  it('installed but unregistered recovery companion is reinstalled without registration or start', () => {
+    const value = fixture();
+    writeManagedInstall(value);
+    const journalPath = join(value.state, 're-enrollment.json');
+    const journalBefore = recoveryJournal();
+    writeFileSync(journalPath, journalBefore, { mode: 0o600 });
+    writeFileSync(value.managedState, 'not-registered\n');
+    rmSync(value.running);
+    value.environment.RR_EXISTING_COLLECTION_STATUS = agentStatus({
+      daemonRunning: false,
+      installedCompanionVersion: '0.4.2',
+    });
+    value.environment.RR_DISABLED_STATUS = agentStatus({ daemonRunning: false });
+    const stateBefore = treeSnapshot(value.state);
+    const outboxBefore = treeSnapshot(value.outbox);
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(treeSnapshot(value.state)).toEqual(stateBefore);
+    expect(treeSnapshot(value.outbox)).toEqual(outboxBefore);
+    expect(readFileSync(journalPath, 'utf8')).toBe(journalBefore);
+    expect(existsSync(value.app)).toBe(true);
+    expect(existsSync(value.shim)).toBe(true);
+    expect(readlinkSync(value.command)).toBe(value.shim);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('not-registered\n');
+    expect(existsSync(value.running)).toBe(false);
+    expect(events(value)).not.toContain('agent:candidate:__runtime-raiders-managed-agent register');
+    expect(events(value)).not.toContain('agent:old-managed:__runtime-raiders-managed-agent unregister');
+    expect(events(value)).not.toContain('curl:enroll');
+    expect(result.stdout).toContain('Run `raiders re-enroll` to resume recovery.');
   });
 
   it.each([

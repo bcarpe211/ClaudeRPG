@@ -5,6 +5,7 @@ import Security
 
 private let runtimeInputsVerificationArgument = "__runtime-raiders-verify-runtime-inputs"
 private let managedAgentArgument = "__runtime-raiders-managed-agent"
+private let installerLifecycleLockArgument = "__runtime-raiders-lifecycle-lock-hold"
 private let runtimeInputsVerificationEnvironment = "RUNTIME_RAIDERS_VERIFY_RUNTIME_INPUTS"
 private let applicationSupportVerificationEnvironment =
     "RUNTIME_RAIDERS_VERIFY_APPLICATION_SUPPORT_DIRECTORY"
@@ -466,7 +467,15 @@ private func run() throws {
         isTTY: Darwin.isatty(STDOUT_FILENO) == 1,
         environment: environment
     )
-    if let verificationPaths = try verificationPaths(environment: environment) {
+    let verifiedPaths = try verificationPaths(environment: environment)
+    if arguments.count == 2, arguments.first == installerLifecycleLockArgument {
+        try runInstallerLifecycleLockHolder(
+            expectedExecutablePath: arguments[1],
+            verificationPaths: verifiedPaths
+        )
+        return
+    }
+    if let verificationPaths = verifiedPaths {
         if let rawScenario = environment[lifecycleVerificationEnvironment] {
             guard let scenario = LifecycleVerificationScenario(rawValue: rawScenario),
                   let executableURL = Bundle.main.executableURL,
@@ -573,6 +582,48 @@ private func run() throws {
         return
     case let .control(command):
         try runUserControlCommand(command, paths: paths, style: style)
+    }
+}
+
+private func runInstallerLifecycleLockHolder(
+    expectedExecutablePath: String,
+    verificationPaths: AgentPaths?
+) throws {
+    guard expectedExecutablePath.hasPrefix("/"),
+          let bundleExecutable = Bundle.main.executableURL,
+          URL(fileURLWithPath: expectedExecutablePath, isDirectory: false)
+            .standardizedFileURL.path == bundleExecutable.standardizedFileURL.path else {
+        throw CLIError.usage
+    }
+    let homeDirectory: URL
+    if let verificationPaths {
+        homeDirectory = verificationPaths.supportDirectory
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    } else {
+        homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+    }
+    let lifecyclePaths = try CompanionLifecyclePaths(homeDirectory: homeDirectory)
+    let lock = try verificationPaths == nil
+        ? LifecycleLock.acquire(at: lifecyclePaths.lifecycleLock)
+        : LifecycleLock.acquireLifecycleVerification(at: lifecyclePaths.lifecycleLock)
+    _ = Darwin.signal(SIGHUP, SIG_IGN)
+    _ = Darwin.signal(SIGINT, SIG_IGN)
+    _ = Darwin.signal(SIGTERM, SIG_IGN)
+    FileHandle.standardOutput.write(Data("locked\n".utf8))
+    try withExtendedLifetime(lock) {
+        while let request = readLine(strippingNewline: true) {
+            switch request {
+            case "held":
+                FileHandle.standardOutput.write(Data("held\n".utf8))
+            case "release":
+                FileHandle.standardOutput.write(Data("released\n".utf8))
+                return
+            default:
+                throw CLIError.usage
+            }
+        }
     }
 }
 

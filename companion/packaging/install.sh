@@ -178,8 +178,6 @@ elif [ "$app_present" -eq 1 ] && [ "$legacy_plist_present" -eq 0 ] && [ "$shim_p
     existing_bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$existing_info")" &&
     [ -n "$existing_bundle_version" ] ||
     reject_existing_layout
-  existing_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || reject_existing_layout
-  [ "$existing_managed_status" = enabled ] || reject_existing_layout
   existing_form=managed
 else
   reject_existing_layout
@@ -462,6 +460,15 @@ if [ "$has_recovery_journal" -eq 1 ] && [ "$has_enrollment" -eq 0 ]; then
   exit 1
 fi
 
+if [ "$existing_form" = managed ]; then
+  existing_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" || reject_existing_layout
+  if [ "$has_recovery_journal" -eq 1 ]; then
+    [ "$existing_managed_status" = not-registered ] || reject_existing_layout
+  else
+    [ "$existing_managed_status" = enabled ] || reject_existing_layout
+  fi
+fi
+
 fresh_enrollment=0
 if [ "$has_enrollment" -eq 0 ] && [ "$has_recovery_journal" -eq 0 ]; then fresh_enrollment=1; fi
 
@@ -485,12 +492,98 @@ original_command=0
 [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ] || original_command=1
 tty_changed=0
 tty_state=''
+lifecycle_lock_active=0
+lifecycle_lock_pid=''
+lifecycle_lock_ready="$WORK/lifecycle-lock.ready"
+lifecycle_lock_fifo="$WORK/lifecycle-lock.fifo"
+lifecycle_lock_ready_bytes=0
 
 restore_tty() {
   if [ "$tty_changed" -eq 1 ]; then
     /bin/stty "$tty_state" < /dev/tty 2>/dev/null || true
     tty_changed=0
   fi
+}
+
+release_lifecycle_lock() {
+  [ "$lifecycle_lock_active" -eq 1 ] || return 0
+  lifecycle_lock_release_ok=1
+  lifecycle_lock_expected_bytes=$((lifecycle_lock_ready_bytes + 9))
+  if ! printf 'release\n' >&9 ||
+     ! wait_for_lifecycle_lock_response "$lifecycle_lock_expected_bytes" released 0; then
+    lifecycle_lock_release_ok=0
+  fi
+  exec 9>&-
+  lifecycle_lock_wait_status=0
+  wait "$lifecycle_lock_pid" || lifecycle_lock_wait_status=$?
+  lifecycle_lock_active=0
+  lifecycle_lock_pid=''
+  /bin/rm -f "$lifecycle_lock_ready" "$lifecycle_lock_fifo" || return 1
+  [ "$lifecycle_lock_release_ok" -eq 1 ] && [ "$lifecycle_lock_wait_status" -eq 0 ]
+}
+
+wait_for_lifecycle_lock_response() {
+  lifecycle_lock_expected_bytes=$1
+  lifecycle_lock_expected_line=$2
+  lifecycle_lock_require_alive=${3:-1}
+  lifecycle_lock_response_attempt=0
+  while [ "$lifecycle_lock_response_attempt" -lt 100 ]; do
+    if [ "$(/usr/bin/stat -f %z "$lifecycle_lock_ready" 2>/dev/null || true)" = \
+         "$lifecycle_lock_expected_bytes" ] &&
+       [ "$(/usr/bin/tail -n 1 "$lifecycle_lock_ready" 2>/dev/null || true)" = \
+         "$lifecycle_lock_expected_line" ]; then
+      if [ "$lifecycle_lock_require_alive" -eq 0 ] ||
+         kill -0 "$lifecycle_lock_pid" 2>/dev/null; then return 0; fi
+    fi
+    if [ "$lifecycle_lock_require_alive" -eq 1 ] &&
+       ! kill -0 "$lifecycle_lock_pid" 2>/dev/null; then break; fi
+    lifecycle_lock_response_attempt=$((lifecycle_lock_response_attempt + 1))
+    /bin/sleep 0.01 || break
+  done
+  return 1
+}
+
+prove_lifecycle_lock() {
+  [ "$lifecycle_lock_active" -eq 1 ] && kill -0 "$lifecycle_lock_pid" 2>/dev/null || return 1
+  lifecycle_lock_expected_bytes=$((lifecycle_lock_ready_bytes + 5))
+  printf 'held\n' >&9 || return 1
+  wait_for_lifecycle_lock_response "$lifecycle_lock_expected_bytes" held 1 || return 1
+  lifecycle_lock_ready_bytes=$lifecycle_lock_expected_bytes
+}
+
+acquire_lifecycle_lock() {
+  lock_agent=$1
+  /usr/bin/mkfifo "$lifecycle_lock_fifo" || return 1
+  /bin/chmod 600 "$lifecycle_lock_fifo" || return 1
+  : > "$lifecycle_lock_ready" || return 1
+  /bin/chmod 600 "$lifecycle_lock_ready" || return 1
+  "$lock_agent" __runtime-raiders-lifecycle-lock-hold "$lock_agent" \
+    < "$lifecycle_lock_fifo" > "$lifecycle_lock_ready" 2>/dev/null &
+  lifecycle_lock_pid=$!
+  exec 9>"$lifecycle_lock_fifo"
+  lifecycle_lock_attempt=0
+  while [ "$lifecycle_lock_attempt" -lt 100 ]; do
+    if [ -f "$lifecycle_lock_ready" ] && [ ! -L "$lifecycle_lock_ready" ] &&
+       [ "$(/usr/bin/stat -f %u "$lifecycle_lock_ready")" = "$OWNER" ] &&
+       [ "$(/usr/bin/stat -f %Lp "$lifecycle_lock_ready")" = 600 ] &&
+       [ "$(/usr/bin/stat -f %l "$lifecycle_lock_ready")" = 1 ] &&
+       [ "$(/usr/bin/stat -f %z "$lifecycle_lock_ready")" = 7 ] &&
+       [ "$(/bin/cat "$lifecycle_lock_ready")" = locked ] &&
+       kill -0 "$lifecycle_lock_pid" 2>/dev/null; then
+      lifecycle_lock_active=1
+      lifecycle_lock_ready_bytes=7
+      /bin/rm -f "$lifecycle_lock_fifo" || return 1
+      return 0
+    fi
+    if ! kill -0 "$lifecycle_lock_pid" 2>/dev/null; then break; fi
+    lifecycle_lock_attempt=$((lifecycle_lock_attempt + 1))
+    /bin/sleep 0.01 || break
+  done
+  exec 9>&-
+  wait "$lifecycle_lock_pid" 2>/dev/null || true
+  lifecycle_lock_pid=''
+  /bin/rm -f "$lifecycle_lock_ready" "$lifecycle_lock_fifo" || true
+  return 1
 }
 
 restore_target() {
@@ -625,6 +718,7 @@ rollback() {
   else
     original_registration_restored=1
   fi
+  if ! release_lifecycle_lock; then restoration_complete=0; fi
   if [ "$restoration_complete" -eq 1 ] && [ "$original_registration_restored" -eq 1 ]; then
     /bin/rm -rf "$WORK"
   else
@@ -640,8 +734,19 @@ trap 'exit 143' TERM
 
 if [ "$existing_form" != fresh ]; then
   existing_status_file="$WORK/existing-status.json"
-  if ! "$SHIM" status --json > "$existing_status_file" ||
-     ! collection_is_conclusively_disabled "$existing_status_file"; then
+  if ! "$SHIM" status --json > "$existing_status_file"; then
+    echo 'Runtime Raiders requires collection to be conclusively disabled before reinstall.' >&2
+    exit 1
+  fi
+  if [ "$has_recovery_journal" -eq 1 ]; then
+    existing_status_valid=0
+    if installation_status_is_ready "$existing_status_file" \
+      "$existing_bundle_version" false; then existing_status_valid=1; fi
+  else
+    existing_status_valid=0
+    if collection_is_conclusively_disabled "$existing_status_file"; then existing_status_valid=1; fi
+  fi
+  if [ "$existing_status_valid" -ne 1 ]; then
     echo 'Runtime Raiders requires collection to be conclusively disabled before reinstall.' >&2
     exit 1
   fi
@@ -698,6 +803,8 @@ CANDIDATE_MANAGED_PLIST="$CANDIDATE_APP/Contents/Library/LaunchAgents/$MANAGED_P
   [ -z "$(/usr/bin/find "$UNPACKED" -type l -print -quit)" ] &&
   [ -f "$CANDIDATE_INFO" ] && [ ! -L "$CANDIDATE_INFO" ] &&
   [ -f "$CANDIDATE_AGENT" ] && [ ! -L "$CANDIDATE_AGENT" ] && [ -x "$CANDIDATE_AGENT" ] &&
+  [ "$(/usr/bin/stat -f %u "$CANDIDATE_AGENT")" = "$OWNER" ] &&
+  [ "$(/usr/bin/stat -f %l "$CANDIDATE_AGENT")" = 1 ] &&
   [ -f "$CANDIDATE_MANAGED_PLIST" ] && [ ! -L "$CANDIDATE_MANAGED_PLIST" ] || {
   echo 'Runtime Raiders archive shape or executable is invalid.' >&2
   exit 1
@@ -752,6 +859,61 @@ CANDIDATE_ICONSET="$WORK/candidate-icon.iconset"
   [ ! -L "$CANDIDATE_ICONSET/icon_512x512@2x.png" ] &&
   [ -s "$CANDIDATE_ICONSET/icon_512x512@2x.png" ] || {
   echo 'Runtime Raiders icon resource is invalid.' >&2
+  exit 1
+}
+
+if ! acquire_lifecycle_lock "$CANDIDATE_AGENT"; then
+  echo 'Runtime Raiders could not acquire the lifecycle lock.' >&2
+  exit 1
+fi
+
+case "$existing_form" in
+  fresh)
+    [ ! -e "$APP" ] && [ ! -e "$LEGACY_PLIST" ] && [ ! -e "$SHIM" ] &&
+      [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ] || reject_existing_layout;;
+  legacy)
+    [ -f "$APP/Contents/Info.plist" ] && [ ! -L "$APP/Contents/Info.plist" ] &&
+      [ -f "$AGENT" ] && [ ! -L "$AGENT" ] && [ -x "$AGENT" ] &&
+      [ -f "$LEGACY_PLIST" ] && [ ! -L "$LEGACY_PLIST" ] &&
+      [ -f "$SHIM" ] && [ ! -L "$SHIM" ] && valid_legacy_plist "$LEGACY_PLIST" ||
+      reject_existing_layout;;
+  managed)
+    [ -f "$APP/Contents/Info.plist" ] && [ ! -L "$APP/Contents/Info.plist" ] &&
+      [ -f "$AGENT" ] && [ ! -L "$AGENT" ] && [ -x "$AGENT" ] &&
+      [ ! -e "$LEGACY_PLIST" ] && [ -f "$SHIM" ] && [ ! -L "$SHIM" ] ||
+      reject_existing_layout
+    locked_managed_status="$("$AGENT" __runtime-raiders-managed-agent status)" ||
+      reject_existing_layout
+    if [ "$has_recovery_journal" -eq 1 ]; then
+      [ "$locked_managed_status" = not-registered ] || reject_existing_layout
+    else
+      [ "$locked_managed_status" = enabled ] || reject_existing_layout
+    fi;;
+esac
+
+if [ "$has_enrollment" -eq 1 ]; then
+  validate_enrollment || reject_existing_layout
+elif [ -e "$ENROLLMENT" ] || [ -L "$ENROLLMENT" ]; then
+  reject_existing_layout
+fi
+if [ "$has_recovery_journal" -eq 1 ]; then
+  validate_recovery_journal || reject_existing_layout
+elif [ -e "$RECOVERY_JOURNAL" ] || [ -L "$RECOVERY_JOURNAL" ]; then
+  reject_existing_layout
+fi
+if [ "$existing_form" != fresh ]; then
+  locked_status_file="$WORK/locked-existing-status.json"
+  "$SHIM" status --json > "$locked_status_file" || reject_existing_layout
+  if [ "$has_recovery_journal" -eq 1 ]; then
+    installation_status_is_ready "$locked_status_file" \
+      "$existing_bundle_version" false || reject_existing_layout
+  else
+    collection_is_conclusively_disabled "$locked_status_file" || reject_existing_layout
+  fi
+fi
+
+prove_lifecycle_lock || {
+  echo 'Runtime Raiders lost the lifecycle lock.' >&2
   exit 1
 }
 
@@ -825,6 +987,7 @@ if [ "$fresh_enrollment" -eq 1 ]; then
     "$device_id" "$device_token" "$dedupe_secret" "$server_url" "$cutover_at" "$enabled_surfaces" > "$staged_enrollment"
   /bin/chmod 600 "$staged_enrollment"
   validate_enrollment_contents "$staged_enrollment" || exit 1
+  prove_lifecycle_lock || exit 1
   /bin/mv "$staged_enrollment" "$ENROLLMENT"
 fi
 
@@ -842,6 +1005,7 @@ if [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ]; then
 fi
 
 transaction_active=1
+prove_lifecycle_lock || exit 1
 case "$existing_form" in
   legacy)
     if [ "$legacy_was_registered" -eq 1 ]; then
@@ -861,19 +1025,22 @@ case "$existing_form" in
     fi
     ;;
   managed)
-    old_managed_unregister_attempted=1
-    if old_managed_result="$("$AGENT" __runtime-raiders-managed-agent unregister)"; then
-      [ "$old_managed_result" = not-registered ] || {
+    if [ "$has_recovery_journal" -eq 0 ]; then
+      old_managed_unregister_attempted=1
+      if old_managed_result="$("$AGENT" __runtime-raiders-managed-agent unregister)"; then
+        [ "$old_managed_result" = not-registered ] || {
+          echo 'Runtime Raiders could not unregister the existing managed agent.' >&2
+          exit 1
+        }
+      else
         echo 'Runtime Raiders could not unregister the existing managed agent.' >&2
         exit 1
-      }
-    else
-      echo 'Runtime Raiders could not unregister the existing managed agent.' >&2
-      exit 1
+      fi
     fi
     ;;
 esac
 
+prove_lifecycle_lock || exit 1
 if [ -e "$APP" ]; then /bin/mv "$APP" "$WORK/old.app"; fi
 if [ -e "$LEGACY_PLIST" ]; then /bin/mv "$LEGACY_PLIST" "$WORK/old.plist"; fi
 if [ -e "$SHIM" ]; then /bin/mv "$SHIM" "$WORK/old.shim"; fi
@@ -920,6 +1087,11 @@ else
   fi
 fi
 
+prove_lifecycle_lock || exit 1
+if ! release_lifecycle_lock; then
+  echo 'Runtime Raiders could not release the lifecycle lock safely.' >&2
+  exit 1
+fi
 transaction_committed=1
 trap - EXIT HUP INT TERM
 /bin/rm -rf "$WORK"

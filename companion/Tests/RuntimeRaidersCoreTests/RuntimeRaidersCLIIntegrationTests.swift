@@ -435,6 +435,91 @@ final class RuntimeRaidersCLIIntegrationTests: XCTestCase {
         }
     }
 
+    func testInstallerLifecycleLockHelperHoldsTheSharedLockUntilInputCloses() throws {
+        try withActualVersionOnlyApp { fixture in
+            let process = Process()
+            process.executableURL = fixture.executable
+            process.arguments = [
+                "__runtime-raiders-lifecycle-lock-hold",
+                fixture.executable.path,
+            ]
+            process.environment = cliEnvironment(fixture)
+            let input = Pipe()
+            let output = Pipe()
+            let error = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = error
+
+            try process.run()
+            let ready = output.fileHandleForReading.readData(ofLength: 7)
+            XCTAssertEqual(String(decoding: ready, as: UTF8.self), "locked\n")
+
+            let lifecycle = try lifecyclePaths(fixture)
+            XCTAssertThrowsError(
+                try LifecycleLock.acquireLifecycleVerification(at: lifecycle.lifecycleLock)
+            )
+
+            input.fileHandleForWriting.write(Data("held\n".utf8))
+            XCTAssertEqual(
+                String(
+                    decoding: output.fileHandleForReading.readData(ofLength: 5),
+                    as: UTF8.self
+                ),
+                "held\n"
+            )
+            XCTAssertThrowsError(
+                try LifecycleLock.acquireLifecycleVerification(at: lifecycle.lifecycleLock)
+            )
+            input.fileHandleForWriting.write(Data("release\n".utf8))
+            XCTAssertEqual(
+                String(
+                    decoding: output.fileHandleForReading.readData(ofLength: 9),
+                    as: UTF8.self
+                ),
+                "released\n"
+            )
+            try input.fileHandleForWriting.close()
+            process.waitUntilExit()
+            XCTAssertEqual(
+                process.terminationStatus,
+                0,
+                String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            )
+            XCTAssertNotNil(
+                try LifecycleLock.acquireLifecycleVerification(at: lifecycle.lifecycleLock)
+            )
+        }
+    }
+
+    func testInstallerLifecycleLockHelperRejectsNonExactExecutableInvocation() throws {
+        try withActualVersionOnlyApp { fixture in
+            let alias = fixture.root.appendingPathComponent("lock-helper", isDirectory: false)
+            try FileManager.default.createSymbolicLink(
+                at: alias,
+                withDestinationURL: fixture.executable
+            )
+            let process = Process()
+            process.executableURL = fixture.executable
+            process.arguments = ["__runtime-raiders-lifecycle-lock-hold", alias.path]
+            process.environment = cliEnvironment(fixture)
+            let output = Pipe()
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = output
+            process.standardError = Pipe()
+
+            try process.run()
+            process.waitUntilExit()
+
+            XCTAssertNotEqual(process.terminationStatus, 0)
+            XCTAssertEqual(output.fileHandleForReading.readDataToEndOfFile(), Data())
+            let lifecycle = try lifecyclePaths(fixture)
+            XCTAssertNotNil(
+                try LifecycleLock.acquireLifecycleVerification(at: lifecycle.lifecycleLock)
+            )
+        }
+    }
+
     func testOrdinaryUninstallRemainsNoninteractiveAndReportsPreservedState() throws {
         try withActualVersionOnlyApp { fixture in
             let lifecycle = try lifecyclePaths(fixture)
