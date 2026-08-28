@@ -601,7 +601,9 @@ The approved 0.4.3 design replaces the copied legacy property list with an
 agent embedded in the signed app and registered using Apple's `SMAppService`.
 It uses distinct new parent-app and managed-agent identifiers so macOS cannot
 reuse the stale legacy relationship. See
-`docs/superpowers/specs/2026-08-21-runtime-raiders-smappservice-branding-design.md`.
+`docs/archive/runtime-raiders/superpowers/specs/2026-08-21-runtime-raiders-smappservice-branding-design.md`
+as historical evidence only; current procedures are in the Runtime Raiders
+documentation authority map.
 The signed `0.4.3` installed-off canary failed closed before registration.
 macOS returned `SMAppService.Status.notFound` for the fresh managed agent
 because no Background Task Management record existed yet; the controller

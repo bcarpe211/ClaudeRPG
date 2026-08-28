@@ -10,7 +10,7 @@
 
 **Tech Stack:** TypeScript, Node.js 20+, Zod, better-sqlite3, Express, Vitest, Supertest.
 
-**Spec:** `docs/superpowers/specs/2026-08-26-runtime-raiders-companion-ux-and-reenrollment-design.md`
+**Spec:** [`design.md`](design.md)
 
 ## Global Constraints
 

@@ -10,9 +10,10 @@
 
 **Tech Stack:** Swift 6, Foundation, Security, Darwin/POSIX file descriptors and `flock`, ServiceManagement, XCTest, POSIX shell, Zsh, Vitest.
 
-**Spec:** `docs/superpowers/specs/2026-08-26-runtime-raiders-companion-ux-and-reenrollment-design.md`
+**Spec:** [`design.md`](design.md)
 
-**Depends on:** `docs/superpowers/plans/2026-08-26-runtime-raiders-command-ux.md` and `docs/superpowers/plans/2026-08-26-runtime-raiders-server-credential-lifecycle.md`.
+**Depends on:** [`command-ux-plan.md`](command-ux-plan.md) and
+[`server-credential-lifecycle-plan.md`](server-credential-lifecycle-plan.md).
 
 ## Global Constraints
 

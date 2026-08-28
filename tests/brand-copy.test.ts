@@ -227,11 +227,9 @@ describe('Runtime Raiders brand copy', () => {
     expect(result.output).toBe('');
   });
 
-  it('rejects restoring, enabling, or starting the moving-main updater in the cutover plan', () => {
+  it('rejects restoring, enabling, or starting the moving-main updater in the active Pi guide', () => {
     const root = copyFixture();
-    const planDir = join(root, 'docs/superpowers/plans');
-    mkdirSync(planDir, { recursive: true });
-    writeFileSync(join(planDir, '2026-08-01-runtime-raiders-internal-deployment-cutover.md'), [
+    writeFileSync(join(root, 'docs/PI_SETUP.md'), [
       'restore the auto-update timer only after acceptance',
       'sudo systemctl enable --now claude-rpg-autoupdate.timer',
       'sudo systemctl start claude-rpg-autoupdate',
@@ -240,9 +238,9 @@ describe('Runtime Raiders brand copy', () => {
     const result = runCopyCheck(root);
 
     expect(result.status).toBe(1);
-    expect(result.output).toContain('docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md:1: stale operator instruction: restore moving-main updater');
-    expect(result.output).toContain('docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md:2: stale operator instruction: enable moving-main updater');
-    expect(result.output).toContain('docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md:3: stale operator instruction: force-run moving-main updater');
+    expect(result.output).toContain('docs/PI_SETUP.md:1: stale operator instruction: restore moving-main updater');
+    expect(result.output).toContain('docs/PI_SETUP.md:2: stale operator instruction: enable moving-main updater');
+    expect(result.output).toContain('docs/PI_SETUP.md:3: stale operator instruction: force-run moving-main updater');
   });
 
   it('allows explicit legacy retirement and compatibility wording', () => {
@@ -260,15 +258,9 @@ describe('Runtime Raiders brand copy', () => {
     expect(result.output).toBe('');
   });
 
-  it('accepts the current Pi guide and cutover plan', () => {
+  it('accepts the current Pi guide without a historical cutover-plan dependency', () => {
     const root = copyFixture();
-    const planDir = join(root, 'docs/superpowers/plans');
-    mkdirSync(planDir, { recursive: true });
     writeFileSync(join(root, 'docs/PI_SETUP.md'), readFileSync(join(process.cwd(), 'docs/PI_SETUP.md')));
-    writeFileSync(
-      join(planDir, '2026-08-01-runtime-raiders-internal-deployment-cutover.md'),
-      readFileSync(join(process.cwd(), 'docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md')),
-    );
 
     const result = runCopyCheck(root);
 

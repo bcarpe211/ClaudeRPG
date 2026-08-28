@@ -24,8 +24,7 @@ const scanTargets = [
   'README.md',
 ];
 const piSetupPath = 'docs/PI_SETUP.md';
-const cutoverPlanPath = 'docs/superpowers/plans/2026-08-01-runtime-raiders-internal-deployment-cutover.md';
-const operatorGuideTargets = [piSetupPath, cutoverPlanPath];
+const operatorGuideTargets = [piSetupPath];
 const rawPullCommandPattern = /\bgit\s+pull(?:\s+--ff-only)?\b/i;
 const gameRestartCommandPattern = /\b(?:sudo\s+)?systemctl\s+restart\s+claude-rpg(?:\.service)?\b/i;
 const safeReleaseContextPattern = /\b(?:do not|never|retired|runbook|pinned[- ]SHA|separately authorized)\b/i;
