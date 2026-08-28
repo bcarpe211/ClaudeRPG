@@ -409,7 +409,10 @@ function legacyLaunchAgentPlist(agent: string): string {
   ].join('\n');
 }
 
-function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
+function managedAgentLines(
+  identity: 'candidate' | 'old-managed',
+  statusInterface: 'current' | 'public-0.4.8' = 'current',
+): string[] {
   const registerFailure = identity === 'candidate'
     ? '${RR_FAIL_NEW_MANAGED_REGISTER:-${RR_FAIL_MANAGED_REGISTER:-0}}'
     : '${RR_FAIL_OLD_MANAGED_REGISTER:-0}';
@@ -448,11 +451,16 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     '    printf "not-registered\\n"; exit 0;;',
     'esac',
     ...(identity === 'candidate' ? [`[ "${statusFailure}" != 1 ] || exit 78`] : []),
-    '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
-    'if [ "${1:-}" = status ] && [ "${2:-}" != --json ]; then',
-    "  printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
-    '  exit 0',
-    'fi',
+    ...(statusInterface === 'public-0.4.8' ? [
+      '[ "${1:-}" = status ] || exit 64',
+      '[ "$#" -eq 1 ] || exit 64',
+    ] : [
+      '[ "${1:-status}" = status ] || [ "${1:-}" = daemon ] || exit 64',
+      'if [ "${1:-}" = status ] && [ "${2:-}" != --json ]; then',
+      "  printf '%s\\n' 'Runtime Raiders' 'Collection: OFF' 'Status: Off'",
+      '  exit 0',
+      'fi',
+    ]),
     ...(identity === 'candidate' ? [
       'status_calls=0',
       'if [ -e "$RR_STATUS_CALLS" ]; then status_calls=$(/bin/cat "$RR_STATUS_CALLS"); fi',
@@ -847,6 +855,18 @@ function writeManagedInstall(value: Fixture): void {
   writeFileSync(join(value.outbox, 'event.json'), '{"opaque":"queued"}\n', { mode: 0o600 });
   writeFileSync(value.managedState, 'enabled\n');
   writeFileSync(value.running, 'old managed daemon running\n');
+}
+
+function writePublic048ManagedInstall(value: Fixture): void {
+  writeManagedInstall(value);
+  writeFileSync(join(value.app, 'Contents/Info.plist'), plist('0.4.8'));
+  executable(
+    join(value.app, 'Contents/MacOS/runtime-raiders-agent'),
+    managedAgentLines('old-managed', 'public-0.4.8'),
+  );
+  value.environment.RR_OLD_DISABLED_STATUS = agentStatus({
+    installedCompanionVersion: '0.4.8',
+  });
 }
 
 function writePreservedUninstall(value: Fixture): void {
@@ -1963,6 +1983,40 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(existsSync(value.running)).toBe(true);
     expect(existsSync(value.plist)).toBe(false);
     expect(readFileSync(join(value.state, 'collector-state.json'), 'utf8')).toContain('"enabled":false');
+  });
+
+  it('upgrades public 0.4.8 with its plain JSON status command and keeps the replacement on status --json', () => {
+    // Catches asking the public 0.4.8 CLI for its unsupported `status --json` form.
+    const value = fixture();
+    writePublic048ManagedInstall(value);
+
+    const result = run(value);
+    const log = events(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(log.filter((line) => line === 'agent:old-managed:status')).toHaveLength(2);
+    expect(log).not.toContain('agent:old-managed:status --json');
+    expect(log).toContain('agent:candidate:status --json');
+  });
+
+  it('checks restored public 0.4.8 with plain JSON status after replacement failure', () => {
+    // Catches rolling the old bytes back but probing them with the replacement CLI syntax.
+    const value = fixture();
+    writePublic048ManagedInstall(value);
+    const before = installedTargets(value);
+    value.environment.RR_FAIL_STATUS = '1';
+
+    const result = run(value);
+    const log = events(value);
+    const failedReplacementStatus = log.lastIndexOf('agent:candidate:status --json');
+    const restoredStatus = log.lastIndexOf('agent:old-managed:status');
+
+    expect(result.status).not.toBe(0);
+    expect(installedTargets(value)).toEqual(before);
+    expect(failedReplacementStatus).toBeGreaterThanOrEqual(0);
+    expect(restoredStatus).toBeGreaterThan(failedReplacementStatus);
+    expect(log).not.toContain('agent:old-managed:status --json');
+    expect(recoveryDirectories(value)).toHaveLength(0);
   });
 
   it('restores the managed install after an interrupted replacement', () => {

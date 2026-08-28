@@ -337,6 +337,16 @@ installation_status_is_ready() {
     [ "$readiness_version" = "$readiness_expected_version" ]
 }
 
+write_installation_status() {
+  status_command=$1
+  status_output=$2
+  status_version=$3
+  case "$status_version" in
+    0.4.8) "$status_command" status > "$status_output";;
+    *) "$status_command" status --json > "$status_output";;
+  esac
+}
+
 wait_for_installation_status() {
   readiness_command=$1
   readiness_output=$2
@@ -345,7 +355,8 @@ wait_for_installation_status() {
   readiness_started="$(/bin/date +%s)" || return 1
   readiness_deadline=$((readiness_started + 30))
   while :; do
-    if "$readiness_command" status --json > "$readiness_output" &&
+    if write_installation_status "$readiness_command" "$readiness_output" \
+         "$readiness_expected_version" &&
        installation_status_is_ready "$readiness_output" \
          "$readiness_expected_version" "$readiness_expected_daemon"; then
       return 0
@@ -665,7 +676,8 @@ trap 'exit 143' TERM
 
 if [ "$existing_form" != fresh ]; then
   existing_status_file="$WORK/existing-status.json"
-  if ! "$SHIM" status --json > "$existing_status_file"; then
+  if ! write_installation_status "$SHIM" "$existing_status_file" \
+    "$existing_bundle_version"; then
     echo 'Runtime Raiders requires collection to be conclusively disabled before reinstall.' >&2
     exit 1
   fi
@@ -829,7 +841,8 @@ elif [ -e "$RECOVERY_JOURNAL" ] || [ -L "$RECOVERY_JOURNAL" ]; then
 fi
 if [ "$existing_form" != fresh ]; then
   locked_status_file="$WORK/locked-existing-status.json"
-  "$SHIM" status --json > "$locked_status_file" || reject_existing_layout
+  write_installation_status "$SHIM" "$locked_status_file" \
+    "$existing_bundle_version" || reject_existing_layout
   if [ "$has_recovery_journal" -eq 1 ]; then
     installation_status_is_ready "$locked_status_file" \
       "$existing_bundle_version" false || reject_existing_layout
