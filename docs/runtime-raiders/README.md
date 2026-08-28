@@ -17,6 +17,8 @@ these documents describe how to use the supported behavior safely.
   server deployment procedure.
 - [0.4.9 release evidence](releases/0.4.9.md) is the immutable acceptance
   record for that release.
+- [Raid Power scoring calibration v1](scoring-calibration-v1.md) is active,
+  immutable generated evidence for policy reviewers; do not edit it by hand.
 
 [`docs/archive/`](../archive/README.md) contains historical evidence only. It
 is non-authoritative and must not be executed or used as an operating procedure.

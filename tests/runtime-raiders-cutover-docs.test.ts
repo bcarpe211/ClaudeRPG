@@ -35,11 +35,13 @@ describe('Runtime Raiders documentation authority contract', () => {
       'companion-operations.md',
       'server-deployment.md',
       'releases/0.4.9.md',
+      'scoring-calibration-v1.md',
       '../archive/README.md',
     ]) {
       expect(authority).toContain(`](${target})`);
       expect(existsSync(resolve(root, dirname(authorityPath), target))).toBe(true);
     }
+    expect(authority).toContain('active,\n  immutable generated evidence for policy reviewers; do not edit it by hand.');
   });
 
   it('records the immutable 0.4.9 receipt facts', () => {
