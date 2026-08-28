@@ -403,7 +403,7 @@ SMOKE_ROOT="$(/usr/bin/mktemp -d /private/tmp/rrv.XXXXXX)"
   echo "signed verifier could not create a safe short smoke root" >&2
   exit 1
 }
-SMOKE_HOME="$SMOKE_ROOT/home"
+SMOKE_HOME="$SMOKE_ROOT"
 SMOKE_SOCKET_PATH="$SMOKE_HOME/Library/Application Support/Runtime Raiders/agent.sock"
 [ "$(printf %s "$SMOKE_SOCKET_PATH" | /usr/bin/wc -c | /usr/bin/tr -d ' ')" -lt 104 ] || {
   echo "signed verifier smoke socket path is unsafe" >&2

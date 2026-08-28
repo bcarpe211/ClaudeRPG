@@ -1013,7 +1013,7 @@ describe('Runtime Raiders release build', () => {
     const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=([^ ]+)/gm)]
       .map((match) => match[1]);
     expect(new Set(homes).size).toBe(1);
-    expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
+    expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}$/);
     expect(existsSync(homes[0])).toBe(false);
   });
 
@@ -1031,7 +1031,7 @@ describe('Runtime Raiders release build', () => {
     const homes = [...readFileSync(value.agentLog, 'utf8').matchAll(/^agent:(?:status|update) home=([^ ]+)/gm)]
       .map((match) => match[1]);
     expect(new Set(homes).size).toBe(1);
-    expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
+    expect(homes[0]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}$/);
     expect(existsSync(homes[0])).toBe(false);
   });
 
@@ -1054,7 +1054,7 @@ describe('Runtime Raiders release build', () => {
         /^agent:(?:__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
       );
       expect(matched, line).not.toBeNull();
-      expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
+      expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}$/);
       expect(matched![2]).toBe(`${matched![1]}/Library/Application Support`);
     }
     expect(invocations[0]).toContain('response=unset');
