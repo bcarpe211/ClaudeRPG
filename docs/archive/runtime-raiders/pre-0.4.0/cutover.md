@@ -17,8 +17,9 @@ or incomplete gate is a **NO-GO**. Leave the current service unchanged and
 reschedule. Never improvise a partial rebrand or mixed scoring deployment.
 
 Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
-reuse, reselect, modify, delete, or repackage it. The authoritative companion
-release contract is [`docs/runtime-raiders/companion-operations.md`](../../../runtime-raiders/companion-operations.md).
+reuse, reselect, modify, delete, or repackage it. The historical companion
+release contract for this retired sequence is the archived
+[companion operations sequence/quartet](companion-operations-sequence-quartet.md).
 The recovery lifecycle is Caddy preparation → sequence-2 publication →
 installed-off sequence-2 canary → sequence-3 build/review/signing → sequence-3
 publication → notification/status proof → manual `raiders update` → bounded

@@ -23,8 +23,8 @@ named boundary.
 
 Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
 reuse, reselect, modify, delete, or repackage it. This packet follows the
-authoritative recovery contract in
-[`companion-operations.md`](../../../runtime-raiders/companion-operations.md): sequence 2 is the initial
+historical recovery contract in the archived
+[companion operations sequence/quartet](companion-operations-sequence-quartet.md): sequence 2 is the initial
 installed-off canary and sequence 3 is the manual update target.
 
 ## Approved release sequence

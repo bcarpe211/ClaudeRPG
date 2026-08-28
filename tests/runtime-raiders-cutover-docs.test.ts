@@ -35,6 +35,7 @@ describe('Runtime Raiders documentation authority contract', () => {
       'companion-operations.md',
       'server-deployment.md',
       'releases/0.4.9.md',
+      'provider-record-evidence.md',
       'scoring-calibration-v1.md',
       '../archive/README.md',
     ]) {
@@ -87,9 +88,29 @@ describe('Runtime Raiders documentation authority contract', () => {
   });
 
   it('labels every archived Runtime Raiders record as non-authoritative and do-not-execute', () => {
+    expect(read('docs/archive/README.md')).toContain('ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE');
+
     for (const path of markdownFiles('docs/archive/runtime-raiders')) {
       expect(read(path)).toContain('ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE');
       expect(statSync(join(root, path)).isFile()).toBe(true);
     }
+  });
+
+  it('preserves historical release evidence and keeps retired sequence links inside the archive', () => {
+    const historicalOperations = 'companion-operations-sequence-quartet.md';
+    const cutover = read('docs/archive/runtime-raiders/pre-0.4.0/cutover.md');
+    const authorization = read('docs/archive/runtime-raiders/pre-0.4.0/cutover-authorization-packet.md');
+    const results = read('docs/archive/runtime-raiders/releases/employee-beta-0.4.5-0.4.6-results.md');
+
+    for (const record of [cutover, authorization]) {
+      expect(record).toContain(`](${historicalOperations})`);
+      expect(record).toMatch(/historical/i);
+    }
+
+    for (const preservedFact of [
+      'System Settings → Login Items showed **Runtime Raiders.app**.',
+      'Direct office-network verification proved `raiders.local` resolution',
+      'Verification passed 2,058 Node tests, the 225-case installer transaction',
+    ]) expect(results).toContain(preservedFact);
   });
 });
