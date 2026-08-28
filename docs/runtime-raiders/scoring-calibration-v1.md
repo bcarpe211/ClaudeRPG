@@ -1,5 +1,10 @@
 # Raid Power scoring calibration v1
 
+**Status:** Active immutable calibration evidence
+**Audience:** Policy and scoring reviewers
+**Applies to:** Raid Power scoring policy v1
+**Last verified:** 2026-08-28
+
 Overall baseline weighted usage: 42715
 
 | Workload | Surface | Samples | Median weighted usage | Median duration ms | Median Raid Power |

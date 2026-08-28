@@ -1,8 +1,10 @@
 # Runtime Raiders cutover authorization packet
 
+> **ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE.**
+
 > **Historical pre-0.4.0 evidence.** This sequence/canary authorization packet
 > is retired and authorizes no current action. Use
-> [`employee-beta.md`](employee-beta.md) for the active beta procedure.
+> [`employee-beta.md`](../../../runtime-raiders/employee-beta.md) for the active beta procedure.
 
 Status: **NO-GO — preparation only**
 
@@ -22,7 +24,7 @@ named boundary.
 Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
 reuse, reselect, modify, delete, or repackage it. This packet follows the
 authoritative recovery contract in
-[`companion-operations.md`](companion-operations.md): sequence 2 is the initial
+[`companion-operations.md`](../../../runtime-raiders/companion-operations.md): sequence 2 is the initial
 installed-off canary and sequence 3 is the manual update target.
 
 ## Approved release sequence
@@ -256,4 +258,4 @@ literal recorded value; do not approve a placeholder.
 > unsupported for this release.
 
 Use the full operational procedure and rollback in
-`docs/RUNTIME_RAIDERS_CUTOVER.md`; this packet does not replace it.
+[`cutover.md`](cutover.md); this packet does not replace it.

@@ -1,9 +1,11 @@
 # Runtime Raiders internal cutover and rollback
 
+> **ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE.**
+
 > **Historical pre-0.4.0 procedure.** The sequence-based companion release and
 > cutover workflow below is retired and must not be run. The current companion
 > procedure is
-> [`docs/runtime-raiders/employee-beta.md`](runtime-raiders/employee-beta.md).
+> [`docs/runtime-raiders/employee-beta.md`](../../../runtime-raiders/employee-beta.md).
 
 This is the human-driven procedure for the first internal Runtime Raiders
 release. It preserves the production SQLite database, changes scoring once, and
@@ -16,7 +18,7 @@ reschedule. Never improvise a partial rebrand or mixed scoring deployment.
 
 Sequence 1 is withdrawn and consumed. Preserve it as immutable evidence; never
 reuse, reselect, modify, delete, or repackage it. The authoritative companion
-release contract is [`docs/runtime-raiders/companion-operations.md`](runtime-raiders/companion-operations.md).
+release contract is [`docs/runtime-raiders/companion-operations.md`](../../../runtime-raiders/companion-operations.md).
 The recovery lifecycle is Caddy preparation → sequence-2 publication →
 installed-off sequence-2 canary → sequence-3 build/review/signing → sequence-3
 publication → notification/status proof → manual `raiders update` → bounded

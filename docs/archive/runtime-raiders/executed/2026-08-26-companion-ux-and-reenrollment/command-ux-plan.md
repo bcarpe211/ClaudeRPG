@@ -1,5 +1,7 @@
 # Runtime Raiders Command UX Implementation Plan
 
+> **ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `raiders status`, `on`, and `off` clear to employees while preserving the existing JSON status contract for automation.

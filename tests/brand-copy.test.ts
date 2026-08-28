@@ -205,7 +205,7 @@ describe('Runtime Raiders brand copy', () => {
     writeFileSync(join(root, 'docs/PI_SETUP.md'), [
       'The old `git pull --ff-only` release shortcut is retired.',
       'Never pair it with `sudo systemctl restart claude-rpg`.',
-      'Follow docs/RUNTIME_RAIDERS_CUTOVER.md for the separately authorized pinned-SHA procedure.',
+      'Follow docs/runtime-raiders/server-deployment.md for the separately authorized pinned-SHA procedure.',
     ].join('\n'));
 
     const result = runCopyCheck(root);

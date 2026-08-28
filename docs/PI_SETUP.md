@@ -51,29 +51,15 @@ After reboot the TV should show the dungeon. From your laptop:
 
 Both names are for internal-network access only; neither creates public ingress.
 
-## 5. Use the employee beta runbook
+## 5. Use the current Runtime Raiders runbooks
 
-The only active companion installation and publication procedure is
-[`docs/runtime-raiders/employee-beta.md`](runtime-raiders/employee-beta.md).
-Fresh Pi setup does not authorize publication or employee collection. The
-operator runs the documented local `prepare` mode first and uses `publish` only
-after separate approval. Before the first beta publication, the separately
-authorized one-time root Caddy bootstrap in that runbook transactionally installs
-the fixed root-owned publisher and narrow user-specific `sudo -n` rule, reloads
-Caddy, and checks both public health hostnames. The release account defaults to
-`rluser`; use the same `RUNTIME_RAIDERS_RELEASE_USER` setting for bootstrap and
-every release command if another existing POSIX account is selected. A failed
-bootstrap restores the prior files and Caddy configuration. Repeat publication
-never reloads Caddy. Bootstrap also requires the manager-loaded Caddy unit to
-use the exact reviewed config, reload command, and Cloudflare environment path;
-that environment must be a root-owned, root-group, single-link regular file at
-mode `0600`. Publishing does not run `raiders on` for anyone.
-
-### Historical companion procedures
-
-The retired pre-0.4.0 sequence, launcher, and canary procedures remain in Git
-history and in clearly marked historical documents. Do not use them for beta
-installation, publication, updates, or activation.
+The [Runtime Raiders documentation authority map](runtime-raiders/README.md)
+is the only active entry point. Use [employee beta](runtime-raiders/employee-beta.md)
+for companion onboarding/publication and [server deployment](runtime-raiders/server-deployment.md)
+for a separately authorized paused-dungeon server change. Fresh Pi setup does
+not authorize publication, deployment, or employee collection. Retired
+sequence, launcher, and canary records are archived evidence and must not be
+executed.
 
 ## On-Pi verification checklist
 - [ ] `systemctl status claude-rpg` → **active (running)**.
@@ -81,8 +67,8 @@ installation, publication, updates, or activation.
 - [ ] From a laptop on the internal network: `ping raiders.local` resolves and
       `https://raiders.redlattice.com` loads.
 - [ ] The TV shows the kiosk (dungeon + leaderboard), no desktop/cursor/bars.
-- [ ] Follow only the employee beta runbook for companion publication,
-      installation, verification, and activation.
+- [ ] Follow the active Runtime Raiders authority map; use only its linked
+      procedure for the requested operation.
 - [ ] Register a character; run the one-line companion installer and confirm
       `raiders status` reports collection disabled before any separate office
       activation decision.
@@ -125,11 +111,10 @@ installation, publication, updates, or activation.
 
 ## Releasing an update
 
-Use the two commands in the active
-[`employee beta runbook`](runtime-raiders/employee-beta.md). The beta publisher
-changes only the three companion files and performs public read-only checks. It
-does not pull or restart the game server, alter the database, change pause or
-scoring state, or enable employee collection.
+Use the current [employee beta runbook](runtime-raiders/employee-beta.md) for
+companion publication. Server changes use the separate
+[server deployment procedure](runtime-raiders/server-deployment.md). Neither
+procedure enables employee collection as a side effect.
 
 ### Release automation is disabled
 

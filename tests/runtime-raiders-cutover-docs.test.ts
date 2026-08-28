@@ -2,90 +2,58 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const runbook = readFileSync(
-  join(process.cwd(), 'docs/RUNTIME_RAIDERS_CUTOVER.md'),
-  'utf8',
-);
-const packet = readFileSync(
-  join(process.cwd(), 'docs/runtime-raiders/cutover-authorization-packet.md'),
-  'utf8',
-);
+const root = process.cwd();
+const read = (path: string) => readFileSync(join(root, path), 'utf8');
 
-describe('Runtime Raiders stable cutover documentation contract', () => {
-  it('uses version-2 rollback records with a stable executable path', () => {
-    expect(runbook).toContain('ROLLBACK_RECORD_VERSION=2');
-    expect(runbook).toContain('test "$ROLLBACK_RECORD_VERSION" = 2');
-    expect(runbook).not.toContain('test "$ROLLBACK_RECORD_VERSION" = 1');
-    expect(runbook).toContain('GAME_EXEC_PATH');
-    expect(runbook).not.toContain('GAME_EXEC_EXPECTED');
-    expect(packet).toContain('rollback record version `2`');
-    expect(packet).toContain('GAME_EXEC_PATH');
+const authority = read('docs/runtime-raiders/README.md');
+const employee = read('docs/runtime-raiders/employee-beta.md');
+const operations = read('docs/runtime-raiders/companion-operations.md');
+const deployment = read('docs/runtime-raiders/server-deployment.md');
+
+describe('Runtime Raiders documentation authority contract', () => {
+  it('maps every current operating surface from one active index', () => {
+    expect(authority).toContain('Executable scripts and their tests are the behavioral truth');
+    expect(authority).toContain('[Employee beta](employee-beta.md)');
+    expect(authority).toContain('[Companion operations](companion-operations.md)');
+    expect(authority).toContain('[Server deployment](server-deployment.md)');
+    expect(authority).toContain('[0.4.9 release evidence](releases/0.4.9.md)');
+    expect(authority).toContain('docs/archive/');
   });
 
-  it('delegates updater and game-unit gates to the executable helper', () => {
-    expect(runbook).toContain(
-      'rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE"',
-    );
-    expect(runbook).toContain(
-      'rr_assert_game_unit "$SERVICE" "$REPO" "$CURRENT_ENV" "$GAME_EXEC_PATH"',
-    );
-    expect(runbook).not.toMatch(
-      /test "\$\(systemctl is-active "\$UPDATER_(?:TIMER|SERVICE)"\)" = inactive/,
-    );
-    expect(runbook).not.toMatch(/test "\$GAME_EXEC" =/);
+  it('keeps current server deployment paused, scoped, and recoverable', () => {
+    expect(deployment).toContain('rluser@clauderpg.redlattice.com');
+    expect(deployment).toContain('clean, reviewed, pinned to the approved commit');
+    expect(deployment).toContain('game_state.paused=1');
+    expect(deployment).toContain('Immediately before any mutation');
+    expect(deployment).toContain('Preserve the existing database');
+    expect(deployment).toContain('recoverable backup');
+    expect(deployment).toContain('approved scoped pull and restart');
+    expect(deployment).toContain('updater state');
+    expect(deployment).toContain('database integrity and retained counts');
+    expect(deployment).toContain('Restore the exact recorded prior checkout');
+    expect(deployment).toContain('Companion publication is a separate procedure');
+    expect(deployment).toContain('never enables collection');
   });
 
-  it('attempts both updater hold actions and the final assertion before failing', () => {
-    const updaterHoldBlock = runbook.match(
-      /### 2\.1 Hold the updater[\s\S]*?```sh\n([\s\S]*?)\n```/,
-    )?.[1];
+  it('does not leave retired sequence/quartet operations on the active surface', () => {
+    const active = `${authority}\n${employee}\n${operations}\n${deployment}`;
 
-    expect(updaterHoldBlock).toBeDefined();
-    expect(updaterHoldBlock).toContain([
-      'hold_failed=0',
-      'sudo systemctl disable --now "$UPDATER_TIMER" || hold_failed=1',
-      'sudo systemctl stop "$UPDATER_SERVICE" || hold_failed=1',
-      'rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || hold_failed=1',
-      'test "$hold_failed" = 0',
-    ].join('\n'));
+    expect(active).not.toContain('runtime-raiders-artifacts.sh publish');
+    expect(active).not.toContain('release_sequence=2');
+    expect(active).not.toContain('companion_version=0.2.0');
+    expect(active).not.toContain('Install the sequence-2 canary');
   });
 
-  it('keeps fail-closed cleanup non-recursive while accumulating failures', () => {
-    expect(runbook).toContain(
-      'sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || cleanup_failed=1',
-    );
-    expect(runbook).toContain(
-      'sudo systemctl stop "$UPDATER_SERVICE" >/dev/null 2>&1 || cleanup_failed=1',
-    );
-  });
-
-  it('does not select a rollback handler as the ordinary fail-closed handler', () => {
-    const rollbackOnly = 'rollback_fail_closed() {\n}\n';
-    const ordinaryHandler = rollbackOnly.match(/^fail_closed\(\) \{[\s\S]*?^\}/m)?.[0];
-
-    expect(ordinaryHandler).toBeUndefined();
-  });
-
-  it('verifies final updater and game-service state before each safe-state claim', () => {
-    const ordinaryHandler = runbook.match(/^fail_closed\(\) \{[\s\S]*?^\}/m)?.[0];
-    const rollbackHandler = runbook.match(/^rollback_fail_closed\(\) \{[\s\S]*?^\}/m)?.[0];
-    const handlers = [ordinaryHandler, rollbackHandler];
-
-    expect(handlers).toHaveLength(2);
-    expect(ordinaryHandler).toBeDefined();
-    expect(rollbackHandler).toBeDefined();
-    expect(ordinaryHandler).not.toBe(rollbackHandler);
-    for (const handler of handlers) {
-      expect(handler).toContain("local service_state=''");
-      expect(handler).toContain(
-        'rr_assert_updater_held "$UPDATER_TIMER" "$UPDATER_SERVICE" || cleanup_failed=1',
-      );
-      expect(handler).toContain(
-        'rr_observe_systemctl service_state is-active "$SERVICE" || cleanup_failed=1',
-      );
-      expect(handler).toContain('test "$service_state" = inactive || cleanup_failed=1');
-      expect(handler).toContain('if test "$cleanup_failed" = 0; then');
-      expect(handler).toContain('safe state could not be verified');
+  it('labels every archive root as non-authoritative and do-not-execute', () => {
+    for (const path of [
+      'docs/archive/README.md',
+      'docs/archive/runtime-raiders/README.md',
+      'docs/archive/runtime-raiders/pre-0.4.0/README.md',
+      'docs/archive/runtime-raiders/releases/README.md',
+      'docs/archive/runtime-raiders/executed/2026-08-26-companion-ux-and-reenrollment/README.md',
+    ]) {
+      const archive = read(path);
+      expect(archive).toContain('ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE');
     }
   });
 });

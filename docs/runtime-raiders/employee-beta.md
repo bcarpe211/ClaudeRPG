@@ -1,17 +1,36 @@
+# Runtime Raiders employee beta
+
+**Status:** Active procedure
+**Audience:** Employees and authorized companion-release operators
+**Applies to:** Current Runtime Raiders companion onboarding, lifecycle, and release work
+**Last verified:** 2026-08-28
+
+The installer starts every employee with collection off. Publishing a release
+never turns collection on for anyone. For lifecycle and credential recovery, use
+[companion operations](companion-operations.md). Historical release results are
+archived and are not operating instructions.
+
+## Employee companion basics
+
 Install or reinstall:
+
+```sh
 curl -fsSL https://raiders.redlattice.com/install.sh | sh
+```
 
-Turn collection on:
+Turn collection on only when the employee chooses to opt in:
+
+```sh
 raiders on
+```
 
-Check it (human-readable):
+Check the human-readable status, an update, or turn collection off:
+
+```sh
 raiders status
-
-Check for an update:
 raiders update
-
-Turn collection off:
 raiders off
+```
 
 ## Change or remove a local companion
 
@@ -37,13 +56,6 @@ fresh installer and code. The installer asks privately for that one-time code;
 it expires after 10 minutes and is not the persistent Raider Key. A reinstall
 with valid existing enrollment does not require another code.
 
-# Runtime Raiders employee beta
-
-The installer starts a new employee with collection off. `raiders status` is
-the human-readable way to check whether collection is on and what to do next.
-A reinstall keeps that employee's enrollment, queued metrics, cursors, and
-previous off state. Publishing a release never turns collection on for anyone.
-
 ## Run the one-shot live acceptance gate
 
 This is an operator check for a newly installed beta, not an employee install
@@ -55,20 +67,18 @@ From the clean reviewed checkout, run:
 ```
 
 The script waits for 60 seconds of quiet provider-file metadata, requires at
-least 816 existing records, checks the installed Apple signature and
-Gatekeeper result, checks that the game is paused and its database is healthy,
-and records aggregate Run and score baselines. It then turns collection on,
-proves that history created no server changes, creates one content-free
-synthetic Codex Desktop completion, and requires exactly one matching scored
-Run.
+least 816 existing records, checks the installed Apple signature and Gatekeeper
+result, checks that the game is paused and its database is healthy, and records
+aggregate Run and score baselines. It then turns collection on, proves that
+history created no server changes, creates one content-free synthetic Codex
+Desktop completion, and requires exactly one matching scored Run.
 
 On success, failure, or interruption, the script removes only its uniquely
 named synthetic fixture and always runs `raiders off` before returning. It
 writes a secret-free, owner-only report at
 `/private/tmp/runtime-raiders-activation-gate-<timestamp>.<random>`. Reopen
 Codex after the command finishes and use that report for the gate record. If
-the script reports a failure, do not continue to the reinstall or publication
-gate.
+the script reports a failure, do not continue to a release decision.
 
 ## Release a beta
 
@@ -80,72 +90,29 @@ values in the repository or this document:
 - `RUNTIME_RAIDERS_NOTARY_PROFILE`
 - `RUNTIME_RAIDERS_TEAM_ID`
 
-The release account defaults to `rluser`. Set `RUNTIME_RAIDERS_RELEASE_USER` if
-the Pi uses a different existing POSIX account. The release target defaults to
-that user at `raiders.redlattice.com`. If necessary, set
-`RUNTIME_RAIDERS_RELEASE_HOST` to a different `user@host`; its user must exactly
-match `RUNTIME_RAIDERS_RELEASE_USER`. Use the same release-user setting for the
-one-time bootstrap and every later `prepare` or `publish` command.
-
-If the selected release host requires the corporate network, stop and ask the
-operator to connect the corporate VPN. Do not start or stop a VPN automatically.
-
-Before every publication, prove the exact candidate locally without SSH, Caddy,
-or a public download:
+The release account is `rluser@raiders.redlattice.com` unless an approved
+environment explicitly selects another existing account. Do not start or stop a
+VPN automatically. Before any publication, prove the exact candidate locally:
 
 ```sh
 /bin/bash scripts/release/install-runtime-raiders-local-canary.sh
 ```
 
-This command runs the normal local `prepare`, installs its exact ZIP through the
-production installer, and requires the expected version, enabled managed
-service, running daemon, disabled collection, zero active Runs, and zero queued
-events. It requires valid existing enrollment so it cannot enroll or contact the
-enrollment endpoint, and collection remains off so it cannot upload telemetry.
-It never publishes or validates the public server paths. The installed service
-retains its normal informational once-daily `/version` check. Do not run
-`publish` until this command passes.
+This local canary installs only the exact prepared ZIP and requires a running
+managed daemon, disabled collection, zero active Runs, and zero queued events.
+It does not publish or validate public server paths. Do not run `publish` until
+it passes.
 
-### One-time Pi bootstrap
+### One-time publication bootstrap
 
-Before the first 0.4.0 publication, Task 7 requires a separate authorization to
-run this once on the Pi checkout:
+The root Caddy bootstrap is separately authorized and is never combined with a
+normal publication decision. It must use an existing release account, validate
+its preconditions before changing anything, and restore the prior files and
+Caddy configuration on failure. Normal publication uses only the fixed
+publisher and does not install code or configuration, validate, reload, or
+restart Caddy.
 
-```sh
-/usr/bin/sudo -n /usr/bin/env RUNTIME_RAIDERS_RELEASE_USER=rluser /bin/bash scripts/pi/setup-caddy.sh runtime-raiders-beta-bootstrap
-```
-
-Run that one-time command from the Pi checkout. The bootstrap itself runs as
-root because it must inspect the protected sudoers directory; `rluser` remains
-the unprivileged account authorized for later releases. The named account must
-already exist on the Pi. Caddy with its Cloudflare DNS
-module must already be installed. Its manager-loaded unit must start and reload
-using exactly `/etc/caddy/Caddyfile` and load exactly
-`/etc/caddy/cloudflare.env`. That environment file must be a single-link,
-root-owned, root-group regular file with mode `0600`. The command checks those
-preconditions before any change and again after reload. It then transactionally
-validates and installs the new Caddy configuration and installs the reviewed
-publisher as the root-owned fixed program
-`/usr/local/sbin/runtime-raiders-publish`, validates and installs this narrow
-sudo rule for the named account, validates the installed Caddy file, reloads
-Caddy, requires the service to be active, and checks both public health
-hostnames. A failed replacement, validation, reload, or health check restores
-the prior files and reloads the prior Caddy configuration:
-
-```text
-RELEASE_USER ALL=(root) NOPASSWD: /usr/local/sbin/runtime-raiders-publish /var/lib/runtime-raiders/staging/release-*
-```
-
-`RELEASE_USER` above means the exact validated value of
-`RUNTIME_RAIDERS_RELEASE_USER`; it is rendered into the root-owned sudoers file.
-
-This is a separately approved one-time migration; do not combine it with normal
-publication authorization. If it has not happened, `publish` fails closed when
-the fixed program or `sudo -n` permission is unavailable. The SSH account uses
-key authentication. After bootstrap, every repeat release uses one SSH session
-and one non-interactive invocation of only that fixed publisher. Normal
-`publish` never installs code or configuration and never validates, reloads, or
-restarts Caddy.
+### Prepare and publish
 
 First build, sign, notarize, staple, and verify locally:
 
@@ -153,14 +120,9 @@ First build, sign, notarize, staple, and verify locally:
 /bin/bash scripts/release/release-runtime-raiders-beta.sh prepare
 ```
 
-Success ends with:
-
-```text
-Prepared Runtime Raiders 0.4.0 locally.
-Nothing was published or installed.
-To publish after approval, run:
-/bin/bash scripts/release/release-runtime-raiders-beta.sh publish
-```
+Expected result: the command identifies the prepared candidate and explicitly
+states that nothing was published or installed. It names the next separately
+approved publication command without embedding a version-specific transcript.
 
 After publication is separately approved, run:
 
@@ -168,77 +130,15 @@ After publication is separately approved, run:
 /bin/bash scripts/release/release-runtime-raiders-beta.sh publish
 ```
 
-`publish` repeats local verification, builds if the matching local output is
-missing, seals one bounded transmission with embedded expected hashes, opens
-one SSH session to the fixed publisher, publishes the ZIP and installer,
-publishes `version` last, and reads the four public endpoints. Its final summary shows
-the version, Git SHA, three public release URLs, and `Employee collection
-remains off.` It does not install on a Mac, enable collection, reload Caddy,
-restart Node, deploy the game, change scoring, change the pause state, or touch
-the database.
+`publish` repeats local verification, transmits only its bounded approved
+release, publishes `version` last, and performs public checks. It does not
+install on a Mac, enable collection, reload Caddy, restart Node, deploy the
+game, change scoring or pause state, or touch the database.
 
 ## If publication fails
 
-The public `version` file is replaced last. A failure before that point leaves
-the previous version visible, so employee clients are not told that the failed
-release is ready. Fix the local or SSH error and run `publish` again; every
-attempt uses a new owner-only remote staging directory.
-
-Keep each verified `dist/runtime-raiders-beta-VERSION` directory with the Git
-commit that produced it. To roll back, check out that prior clean commit in a
-separate worktree, restore its retained release directory at the matching
-deterministic `dist` path, and run `publish`. The verifier must accept the prior
-directory before it can be republished. Rollback still does not enable anyone's
-collector.
-
-## Employee beta result — GO (2026-08-23)
-
-- Version `0.4.5` was built and published from Git SHA
-  `1e1f01540e924ec723b10e7ecec9aec1b5f8bb8f` as one signed app. Apple
-  notarization, stapling, designated-requirement validation, and Gatekeeper
-  acceptance passed.
-- The repeatable local canary installed the exact prepared ZIP before
-  publication. The managed service registered successfully, the daemon ran
-  with collection disabled, and status reported zero active Runs and queued
-  events.
-- The public installer and ZIP matched the locally proven release byte for byte.
-  `/version` returned `0.4.5`; required no-store, content-type, and nosniff
-  headers passed.
-- System Settings → Login Items showed **Runtime Raiders.app**. Bryan Carpenter
-  remains acceptable as the Apple developer attribution, not the product name.
-- The public registration page and installer both returned HTTP 200. New
-  employees create a Raider; existing employees sign in with their Raider Key.
-  Both flows issue a separate one-time 10-minute enrollment code, and the
-  public installer now explains both paths before its private prompt. No
-  administrator-generated batch of codes is required.
-- The earlier live acceptance gate scanned 858 existing provider-history
-  records, uploaded no history, scored exactly one synthetic completion as one
-  Run, and turned collection off. The `0.4.5` release changed only release
-  identity and first-install guidance, not scoring or telemetry behavior.
-- Final verification passed 2,057 Node tests and 219 Swift tests. Employee
-  installation is **GO**. Installation and publication do not enable collection;
-  each employee explicitly starts it with `raiders on`.
-
-## Employee beta patch 0.4.6 (2026-08-24)
-
-- The first employee attempt exposed a real fresh-install blocker: current
-  macOS provides `stty` at `/bin/stty`, while the public `0.4.5` installer used
-  nonexistent `/usr/bin/stty` for its private enrollment-code prompt.
-- Patch `0.4.6` at Git SHA
-  `886ac4036927c5375b418494f96a30460da2dd76` uses `/bin/stty` for capture,
-  echo suppression, and terminal restoration. A regression runs the private
-  prompt through that exact path.
-- The repeatable local canary signed, notarized, stapled, verified, and installed
-  the exact `0.4.6` ZIP. Status proved the managed daemon running with collection
-  disabled, zero active Runs, and zero queued events before publication.
-- The public installer, ZIP, and version checks passed; `/version` returns
-  `0.4.6`. Publication left employee collection off.
-- The game server was fast-forwarded while paused with its updater held. New and
-  existing Raider enrollment now display only
-  `curl -fsSL https://raiders.redlattice.com/install.sh | sh`, not the retired
-  long-form wrapper.
-- Direct office-network verification proved `raiders.local` resolution, trusted
-  SSH login, Avahi activity, mDNS and loopback health, and the loopback TV route.
-  The internal IP is intentionally not retained here.
-- Verification passed 2,058 Node tests, the 225-case installer transaction
-  suite, TypeScript type checking, and both `/bin/sh` and `/bin/zsh` parsers.
+The public `version` file is replaced last, so a failure before that point
+leaves the prior version visible. Preserve the failed evidence, correct the
+local or SSH error, and restart from the appropriate separately approved step.
+For rollback, use the exact prior clean commit and retained verified release
+evidence. Rollback never enables collection.

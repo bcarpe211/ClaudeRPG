@@ -1,5 +1,7 @@
 # Runtime Raiders Server Credential Lifecycle Implementation Plan
 
+> **ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add atomic device replacement, authenticated configuration recovery, and idempotent current-device revocation without changing any Raider or game history.

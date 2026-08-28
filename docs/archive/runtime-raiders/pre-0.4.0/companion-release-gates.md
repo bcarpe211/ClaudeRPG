@@ -1,9 +1,11 @@
 # Runtime Raiders companion release gates
 
+> **ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE.**
+
 > **Historical pre-0.4.0 procedure.** The sequence, launcher, manifest, and
 > canary workflow below is retired and must not be run. The only active
 > employee-beta procedure is
-> [`docs/runtime-raiders/employee-beta.md`](runtime-raiders/employee-beta.md).
+> [`docs/runtime-raiders/employee-beta.md`](../../../runtime-raiders/employee-beta.md).
 
 This runbook keeps behavioral failures before Apple trust work and keeps every
 external change behind a separate approval. Passing a gate permits review of

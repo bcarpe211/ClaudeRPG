@@ -1,5 +1,7 @@
 # Runtime Raiders companion UX, re-enrollment, and removal design
 
+> **ARCHIVED — NON-AUTHORITATIVE — DO NOT EXECUTE.**
+
 **Status:** Approved product direction; implementation, release creation, and
 production deployment remain separately gated.
 

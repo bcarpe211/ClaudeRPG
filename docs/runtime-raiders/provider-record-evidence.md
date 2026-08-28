@@ -1,5 +1,10 @@
 # Runtime Raiders provider record evidence
 
+**Status:** Active evidence record
+**Audience:** Adapter and policy reviewers
+**Applies to:** Enabled Codex Desktop and Codex CLI surfaces
+**Last verified:** 2026-08-28
+
 Evidence date: 2026-08-01
 
 This gate enables only the two Codex launch surfaces proven by controlled local canaries. The canary records remained in their normal local store and were not copied into the repository. Inspection emitted field keys, JSON types, and allowlisted boolean comparisons only; it did not emit scalar record values.

@@ -12,10 +12,10 @@ companion. The current release enables two Run surfaces: **Codex Desktop** and
 **Codex CLI**. Existing package, database, service, route, and migration names
 remain compatibility identifiers; a product rebrand does not rename them.
 
-Employee install, use, and release instructions are in the single active beta
-runbook: **[docs/runtime-raiders/employee-beta.md](docs/runtime-raiders/employee-beta.md)**.
-Historical sequence and canary records remain in Git as evidence; they are not
-the employee-beta release procedure.
+The [Runtime Raiders documentation authority map](docs/runtime-raiders/README.md)
+is the entry point for current procedures. It links employee onboarding and
+companion release, lifecycle/recovery, paused-dungeon deployment, and immutable
+release evidence. Historical material is archived and must not be executed.
 
 ## How it works
 
@@ -150,8 +150,8 @@ intentionally retained for this release are `/home/rluser/ClaudeRPG`, <!-- runti
 `claude-rpg-autoupdate.*`. See
 **[docs/PI_SETUP.md](docs/PI_SETUP.md)** for the established server and Chromium
 kiosk setup on `/tv`, and
-**[docs/runtime-raiders/employee-beta.md](docs/runtime-raiders/employee-beta.md)**
-for companion installation and publication.
+**[docs/runtime-raiders/README.md](docs/runtime-raiders/README.md)** for
+Runtime Raiders operating procedures and release evidence.
 
 Do not treat local candidate verification as authorization to deploy, publish,
 change DNS/Caddy, or replace the currently running Pi service.
