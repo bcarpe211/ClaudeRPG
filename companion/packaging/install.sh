@@ -510,98 +510,12 @@ original_command=0
 [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ] || original_command=1
 tty_changed=0
 tty_state=''
-lifecycle_lock_active=0
-lifecycle_lock_pid=''
-lifecycle_lock_ready="$WORK/lifecycle-lock.ready"
-lifecycle_lock_fifo="$WORK/lifecycle-lock.fifo"
-lifecycle_lock_ready_bytes=0
 
 restore_tty() {
   if [ "$tty_changed" -eq 1 ]; then
     /bin/stty "$tty_state" < /dev/tty 2>/dev/null || true
     tty_changed=0
   fi
-}
-
-release_lifecycle_lock() {
-  [ "$lifecycle_lock_active" -eq 1 ] || return 0
-  lifecycle_lock_release_ok=1
-  lifecycle_lock_expected_bytes=$((lifecycle_lock_ready_bytes + 9))
-  if ! printf 'release\n' >&9 ||
-     ! wait_for_lifecycle_lock_response "$lifecycle_lock_expected_bytes" released 0; then
-    lifecycle_lock_release_ok=0
-  fi
-  exec 9>&-
-  lifecycle_lock_wait_status=0
-  wait "$lifecycle_lock_pid" || lifecycle_lock_wait_status=$?
-  lifecycle_lock_active=0
-  lifecycle_lock_pid=''
-  /bin/rm -f "$lifecycle_lock_ready" "$lifecycle_lock_fifo" || return 1
-  [ "$lifecycle_lock_release_ok" -eq 1 ] && [ "$lifecycle_lock_wait_status" -eq 0 ]
-}
-
-wait_for_lifecycle_lock_response() {
-  lifecycle_lock_expected_bytes=$1
-  lifecycle_lock_expected_line=$2
-  lifecycle_lock_require_alive=${3:-1}
-  lifecycle_lock_response_attempt=0
-  while [ "$lifecycle_lock_response_attempt" -lt 100 ]; do
-    if [ "$(/usr/bin/stat -f %z "$lifecycle_lock_ready" 2>/dev/null || true)" = \
-         "$lifecycle_lock_expected_bytes" ] &&
-       [ "$(/usr/bin/tail -n 1 "$lifecycle_lock_ready" 2>/dev/null || true)" = \
-         "$lifecycle_lock_expected_line" ]; then
-      if [ "$lifecycle_lock_require_alive" -eq 0 ] ||
-         kill -0 "$lifecycle_lock_pid" 2>/dev/null; then return 0; fi
-    fi
-    if [ "$lifecycle_lock_require_alive" -eq 1 ] &&
-       ! kill -0 "$lifecycle_lock_pid" 2>/dev/null; then break; fi
-    lifecycle_lock_response_attempt=$((lifecycle_lock_response_attempt + 1))
-    /bin/sleep 0.01 || break
-  done
-  return 1
-}
-
-prove_lifecycle_lock() {
-  [ "$lifecycle_lock_active" -eq 1 ] && kill -0 "$lifecycle_lock_pid" 2>/dev/null || return 1
-  lifecycle_lock_expected_bytes=$((lifecycle_lock_ready_bytes + 5))
-  printf 'held\n' >&9 || return 1
-  wait_for_lifecycle_lock_response "$lifecycle_lock_expected_bytes" held 1 || return 1
-  lifecycle_lock_ready_bytes=$lifecycle_lock_expected_bytes
-}
-
-acquire_lifecycle_lock() {
-  lock_agent=$1
-  /usr/bin/mkfifo "$lifecycle_lock_fifo" || return 1
-  /bin/chmod 600 "$lifecycle_lock_fifo" || return 1
-  : > "$lifecycle_lock_ready" || return 1
-  /bin/chmod 600 "$lifecycle_lock_ready" || return 1
-  "$lock_agent" __runtime-raiders-lifecycle-lock-hold "$lock_agent" \
-    < "$lifecycle_lock_fifo" > "$lifecycle_lock_ready" 2>/dev/null &
-  lifecycle_lock_pid=$!
-  exec 9>"$lifecycle_lock_fifo"
-  lifecycle_lock_attempt=0
-  while [ "$lifecycle_lock_attempt" -lt 100 ]; do
-    if [ -f "$lifecycle_lock_ready" ] && [ ! -L "$lifecycle_lock_ready" ] &&
-       [ "$(/usr/bin/stat -f %u "$lifecycle_lock_ready")" = "$OWNER" ] &&
-       [ "$(/usr/bin/stat -f %Lp "$lifecycle_lock_ready")" = 600 ] &&
-       [ "$(/usr/bin/stat -f %l "$lifecycle_lock_ready")" = 1 ] &&
-       [ "$(/usr/bin/stat -f %z "$lifecycle_lock_ready")" = 7 ] &&
-       [ "$(/bin/cat "$lifecycle_lock_ready")" = locked ] &&
-       kill -0 "$lifecycle_lock_pid" 2>/dev/null; then
-      lifecycle_lock_active=1
-      lifecycle_lock_ready_bytes=7
-      /bin/rm -f "$lifecycle_lock_fifo" || return 1
-      return 0
-    fi
-    if ! kill -0 "$lifecycle_lock_pid" 2>/dev/null; then break; fi
-    lifecycle_lock_attempt=$((lifecycle_lock_attempt + 1))
-    /bin/sleep 0.01 || break
-  done
-  exec 9>&-
-  wait "$lifecycle_lock_pid" 2>/dev/null || true
-  lifecycle_lock_pid=''
-  /bin/rm -f "$lifecycle_lock_ready" "$lifecycle_lock_fifo" || true
-  return 1
 }
 
 restore_target() {
@@ -736,7 +650,6 @@ rollback() {
   else
     original_registration_restored=1
   fi
-  if ! release_lifecycle_lock; then restoration_complete=0; fi
   if [ "$restoration_complete" -eq 1 ] && [ "$original_registration_restored" -eq 1 ]; then
     /bin/rm -rf "$WORK"
   else
@@ -880,11 +793,6 @@ CANDIDATE_ICONSET="$WORK/candidate-icon.iconset"
   exit 1
 }
 
-if ! acquire_lifecycle_lock "$CANDIDATE_AGENT"; then
-  echo 'Runtime Raiders could not acquire the lifecycle lock.' >&2
-  exit 1
-fi
-
 case "$existing_form" in
   fresh)
     [ ! -e "$APP" ] && [ ! -e "$LEGACY_PLIST" ] && [ ! -e "$SHIM" ] &&
@@ -929,11 +837,6 @@ if [ "$existing_form" != fresh ]; then
     collection_is_conclusively_disabled "$locked_status_file" || reject_existing_layout
   fi
 fi
-
-prove_lifecycle_lock || {
-  echo 'Runtime Raiders lost the lifecycle lock.' >&2
-  exit 1
-}
 
 for owned_path in \
   "$HOME/Library" "$HOME/Library/Application Support" "$SUPPORT" "$STATE" "$OUTBOX" \
@@ -1036,7 +939,6 @@ if [ "$fresh_enrollment" -eq 1 ]; then
     "$device_id" "$device_token" "$dedupe_secret" "$server_url" "$cutover_at" "$enabled_surfaces" > "$staged_enrollment"
   /bin/chmod 600 "$staged_enrollment"
   validate_enrollment_contents "$staged_enrollment" || exit 1
-  prove_lifecycle_lock || exit 1
   /bin/mv "$staged_enrollment" "$ENROLLMENT"
 fi
 
@@ -1054,7 +956,6 @@ if [ ! -e "$COMMAND" ] && [ ! -L "$COMMAND" ]; then
 fi
 
 transaction_active=1
-prove_lifecycle_lock || exit 1
 case "$existing_form" in
   legacy)
     if [ "$legacy_was_registered" -eq 1 ]; then
@@ -1089,7 +990,6 @@ case "$existing_form" in
     ;;
 esac
 
-prove_lifecycle_lock || exit 1
 if [ -e "$APP" ]; then /bin/mv "$APP" "$WORK/old.app"; fi
 if [ -e "$LEGACY_PLIST" ]; then /bin/mv "$LEGACY_PLIST" "$WORK/old.plist"; fi
 if [ -e "$SHIM" ]; then /bin/mv "$SHIM" "$WORK/old.shim"; fi
@@ -1136,11 +1036,6 @@ else
   fi
 fi
 
-prove_lifecycle_lock || exit 1
-if ! release_lifecycle_lock; then
-  echo 'Runtime Raiders could not release the lifecycle lock safely.' >&2
-  exit 1
-fi
 transaction_committed=1
 trap - EXIT HUP INT TERM
 /bin/rm -rf "$WORK"

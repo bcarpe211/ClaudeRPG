@@ -421,25 +421,6 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     : '${RR_FAIL_RESTORED_STATUS:-0}';
   return [
     `printf "agent:${identity}:%s\\n" "$*" >> "$RR_EVENT_LOG"`,
-    'if [ "$#" -eq 2 ] && [ "$1" = __runtime-raiders-lifecycle-lock-hold ]; then',
-    '  [ "$2" = "$0" ] || exit 64',
-    '  [ "${RR_FAIL_LIFECYCLE_LOCK:-0}" != 1 ] || exit 75',
-    '  if [ "${RR_COMPLETE_REMOVAL_BEFORE_LOCK:-0}" = 1 ]; then',
-    '    if /usr/bin/find "$RR_SUPPORT" -mindepth 1 -maxdepth 1 -name \'.runtime-raiders-install.*\' -print -quit 2>/dev/null | /usr/bin/grep . >/dev/null; then',
-    '      printf "removal:prelock-work-present\\n" >> "$RR_EVENT_LOG"',
-    '    fi',
-    '    /bin/rm -rf "$RR_SUPPORT" "$RR_COMMAND_DIRECTORY"',
-    '  fi',
-    `  printf "lock:${identity}:acquired\\n" >> "$RR_EVENT_LOG"`,
-    '  : > "$RR_LOCK_HELD"',
-    `  trap '/bin/rm -f "$RR_LOCK_HELD"; printf "lock:${identity}:released\\n" >> "$RR_EVENT_LOG"' EXIT`,
-    '  printf "locked\\n"',
-    '  [ "${RR_EXIT_LIFECYCLE_LOCK_AFTER_READY:-0}" != 1 ] || exit 75',
-    '  while IFS= read -r _lock_input; do',
-    '    case "$_lock_input" in held) printf "held\\n";; release) printf "released\\n"; exit 0;; *) exit 64;; esac',
-    '  done',
-    '  exit 0',
-    'fi',
     'case "${1:-} ${2:-}" in',
     '  "__runtime-raiders-managed-agent status")',
     ...(identity === 'candidate' ? [
@@ -447,7 +428,6 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ] : []),
     '    /bin/cat "$RR_MANAGED_STATE"; exit 0;;',
     '  "__runtime-raiders-managed-agent register")',
-    '    [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:register\\n" >> "$RR_EVENT_LOG"',
     `    [ "${registerFailure}" != 1 ] || exit 79`,
     '    printf "enabled\\n" > "$RR_MANAGED_STATE"',
     '    : > "$RR_RUNNING"',
@@ -457,7 +437,6 @@ function managedAgentLines(identity: 'candidate' | 'old-managed'): string[] {
     ] : []),
     '    printf "enabled\\n"; exit 0;;',
     '  "__runtime-raiders-managed-agent unregister")',
-    '    [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:unregister\\n" >> "$RR_EVENT_LOG"',
     `    [ "${unregisterFailure}" != 1 ] || exit 80`,
     '    printf "not-registered\\n" > "$RR_MANAGED_STATE"',
     '    /bin/rm -f "$RR_RUNNING"',
@@ -649,10 +628,7 @@ function fakeTools(root: string): string {
     '    *:"$RR_COMMAND") boundary=replace-command;;',
     '  esac',
     'fi',
-    'if [ -n "$boundary" ]; then',
-    '  printf "mv:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
-    '  [ -e "$RR_LOCK_HELD" ] || printf "lock:missing:%s\\n" "$boundary" >> "$RR_EVENT_LOG"',
-    'fi',
+    'if [ -n "$boundary" ]; then printf "mv:%s\\n" "$boundary" >> "$RR_EVENT_LOG"; fi',
     'if [ -n "$boundary" ] && { [ "${RR_FAIL_MV_BOUNDARY:-}" = "$boundary" ] || [ "${RR_FAIL_RESTORE_BOUNDARY:-}" = "$boundary" ]; }; then exit 74; fi',
     '/bin/mv "$source" "$destination"',
     'if [ -n "$boundary" ] && [ "${RR_SIGNAL_AFTER_MV_BOUNDARY:-}" = "$boundary" ]; then kill -TERM "$PPID"; fi',
@@ -687,7 +663,6 @@ function fixture() {
   const enrollmentResponse = join(root, 'enrollment-response.json');
   const tty = join(root, 'tty');
   const history = join(root, 'immutable-history');
-  const lockHeld = join(root, 'lifecycle-lock-held');
   mkdirSync(join(candidate, 'Contents/MacOS'), { recursive: true });
   mkdirSync(join(candidate, 'Contents/Resources'));
   mkdirSync(join(candidate, 'Contents/Library/LaunchAgents'), { recursive: true });
@@ -719,7 +694,7 @@ function fixture() {
   return {
     root, home, support, state, outbox, app, plist: plistPath, shim, command,
     candidate, eventLog, argvLog, enrollmentStdin, enrollmentResponse, running, managedState,
-    legacyJob, statusCalls, dateCalls, history, lockHeld,
+    legacyJob, statusCalls, dateCalls, history,
     environment: {
       ...process.env,
       HOME: home,
@@ -756,7 +731,6 @@ function fixture() {
       RR_TEAM_ID: teamId,
       RR_TTY: tty,
       RR_FAKE_BIN: bin,
-      RR_LOCK_HELD: lockHeld,
     } as NodeJS.ProcessEnv,
   };
 }
@@ -1067,9 +1041,8 @@ describe('Runtime Raiders release build', () => {
     expect(result.status, result.stderr + result.stdout).toBe(0);
 
     const invocations = readFileSync(value.agentLog, 'utf8').trim().split('\n');
-    expect(invocations).toHaveLength(6);
+    expect(invocations).toHaveLength(5);
     expect(invocations.map((line) => line.split(' ')[0])).toEqual([
-      'agent:__runtime-raiders-lifecycle-lock-hold',
       'agent:__runtime-raiders-managed-agent:register',
       'agent:__runtime-raiders-managed-agent:status',
       'agent:status',
@@ -1078,7 +1051,7 @@ describe('Runtime Raiders release build', () => {
     ]);
     for (const line of invocations) {
       const matched = line.match(
-        /^agent:(?:__runtime-raiders-lifecycle-lock-hold|__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
+        /^agent:(?:__runtime-raiders-managed-agent:(?:register|status)|status|update) home=([^ ]+) verify=1 support=(.+) response=/,
       );
       expect(matched, line).not.toBeNull();
       expect(matched![1]).toMatch(/^\/private\/tmp\/rrv\.[A-Za-z0-9]{6}\/home$/);
@@ -1088,10 +1061,9 @@ describe('Runtime Raiders release build', () => {
     expect(invocations[1]).toContain('response=unset');
     expect(invocations[2]).toContain('response=unset');
     expect(invocations[3]).toContain('response=unset');
-    expect(invocations[4]).toContain('response=unset');
-    expect(invocations[5]).not.toContain('response=unset');
+    expect(invocations[4]).not.toContain('response=unset');
+    expect(invocations[2]).toContain('argv=status --json');
     expect(invocations[3]).toContain('argv=status --json');
-    expect(invocations[4]).toContain('argv=status --json');
   });
 
   it.each([
@@ -1829,6 +1801,20 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     ].join('\n'));
   });
 
+  it('installs normally without invoking the lifecycle-lock helper', () => {
+    // Catches restoring the installer-side candidate helper handshake.
+    const value = fixture();
+
+    const result = run(value);
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(events(value).some((line) => line.startsWith(
+      'agent:candidate:__runtime-raiders-lifecycle-lock-hold',
+    ))).toBe(false);
+    expect(existsSync(value.app)).toBe(true);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+  });
+
   it.each([
     ['a stopped daemon', agentStatus({ daemonRunning: false })],
     ['the wrong installed version', agentStatus({ installedCompanionVersion: '0.4.2' })],
@@ -1979,96 +1965,18 @@ describe('Runtime Raiders reinstall-safe installer', () => {
     expect(readFileSync(join(value.state, 'collector-state.json'), 'utf8')).toContain('"enabled":false');
   });
 
-  it('holds the shared lifecycle lock continuously across service and filesystem mutation', () => {
+  it('restores the managed install after an interrupted replacement', () => {
     const value = fixture();
     writeManagedInstall(value);
-
-    const result = run(value);
-    const log = events(value);
-    const acquired = log.indexOf('lock:candidate:acquired');
-    const firstMutation = log.indexOf('agent:old-managed:__runtime-raiders-managed-agent unregister');
-    const finalProof = log.lastIndexOf('agent:candidate:status --json');
-    const released = log.indexOf('lock:candidate:released');
-
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    expect(acquired).toBeGreaterThanOrEqual(0);
-    expect(firstMutation).toBeGreaterThan(acquired);
-    expect(released).toBeGreaterThan(finalProof);
-    expect(log.some((line) => line.startsWith('lock:missing:'))).toBe(false);
-    expect(existsSync(value.lockHeld)).toBe(false);
-  });
-
-  it('fails before service or filesystem mutation when the shared lifecycle lock is busy', () => {
-    const value = fixture();
-    writeManagedInstall(value);
-    const before = treeSnapshot(value.home);
-    value.environment.RR_FAIL_LIFECYCLE_LOCK = '1';
-
-    const result = run(value);
-
-    expect(result.status).not.toBe(0);
-    expect(treeSnapshot(value.home)).toEqual(before);
-    expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
-    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
-    expect(existsSync(value.lockHeld)).toBe(false);
-  });
-
-  it('a busy lifecycle lock cannot create missing Runtime Raiders owned directories', () => {
-    const value = fixture();
-    value.environment.RR_FAIL_LIFECYCLE_LOCK = '1';
-
-    const result = run(value);
-
-    expect(result.status).not.toBe(0);
-    expect(existsSync(value.support)).toBe(false);
-    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
-    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
-    expect(existsSync(value.lockHeld)).toBe(false);
-  });
-
-  it('complete removal before lock acquisition cannot race installer owned mutation', () => {
-    const value = fixture();
-    writeManagedInstall(value);
-    value.environment.RR_COMPLETE_REMOVAL_BEFORE_LOCK = '1';
-
-    const result = run(value);
-
-    expect(result.status).not.toBe(0);
-    expect(events(value)).not.toContain('removal:prelock-work-present');
-    expect(existsSync(value.support)).toBe(false);
-    expect(existsSync(join(value.home, '.local/bin'))).toBe(false);
-    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
-    expect(existsSync(value.lockHeld)).toBe(false);
-  });
-
-  it('fails before service or filesystem mutation when the lock holder exits after handshake', () => {
-    const value = fixture();
-    writeManagedInstall(value);
-    const before = treeSnapshot(value.home);
-    value.environment.RR_EXIT_LIFECYCLE_LOCK_AFTER_READY = '1';
-
-    const result = run(value);
-
-    expect(result.status).not.toBe(0);
-    expect(treeSnapshot(value.home)).toEqual(before);
-    expect(events(value).some((line) => line.endsWith('__runtime-raiders-managed-agent unregister'))).toBe(false);
-    expect(events(value).some((line) => line.startsWith('mv:'))).toBe(false);
-    expect(existsSync(value.lockHeld)).toBe(false);
-  });
-
-  it('releases the lifecycle lock helper after interrupted rollback without a background leak', () => {
-    const value = fixture();
-    writeManagedInstall(value);
+    const before = installedTargets(value);
     value.environment.RR_SIGNAL_AFTER_MV_BOUNDARY = 'replace-app';
 
     const result = run(value);
-    const log = events(value);
 
     expect(result.status).not.toBe(0);
-    expect(log).toContain('lock:candidate:acquired');
-    expect(log).toContain('lock:candidate:released');
-    expect(log.some((line) => line.startsWith('lock:missing:'))).toBe(false);
-    expect(existsSync(value.lockHeld)).toBe(false);
+    expect(installedTargets(value)).toEqual(before);
+    expect(readFileSync(value.managedState, 'utf8')).toBe('enabled\n');
+    expect(existsSync(value.running)).toBe(true);
   });
 
   it.each(
